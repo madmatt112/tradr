@@ -6,10 +6,10 @@ what a running instance connects to, see [External services](../external-service
 
 ## The workflows
 
-| Workflow    | File          | Trigger                  | What it does                                                    |
-| ----------- | ------------- | ------------------------ | --------------------------------------------------------------- |
-| **CI**      | `ci.yml`      | push to `main`; every PR | Lint, typecheck, tests, migrations, docker smoke, e2e           |
-| **Release** | `release.yml` | push of a `v*` tag       | CI gate → multi-arch GHCR images → SPA tarball → GitHub Release |
+| Workflow    | File          | Trigger                  | What it does                                                                          |
+| ----------- | ------------- | ------------------------ | ------------------------------------------------------------------------------------- |
+| **CI**      | `ci.yml`      | push to `main`; every PR | Lint, typecheck, tests, migrations, docker smoke, e2e                                 |
+| **Release** | `release.yml` | push of a `v*` tag       | CI gate → native per-arch GHCR builds → manifest merge → SPA tarball → GitHub Release |
 
 Releasing publishes **artifacts only** — GHCR images, the SPA tarball, and a
 GitHub Release. Deploying those artifacts to a running environment is a
@@ -47,8 +47,23 @@ The push starts two workflows at once:
    and waits for it. Only when CI is green does the release job build and
    publish. If CI fails, nothing is published.
 
-Expect a release to take CI's duration plus the image builds (the multi-arch
-arm64 build under QEMU dominates).
+Expect a release to take CI's duration plus the image builds. Each architecture
+builds **natively and in parallel** — amd64 on `ubuntu-latest`, arm64 on
+`ubuntu-24.04-arm` — so the images take roughly as long as one single-arch
+build rather than the sum of both.
+
+The Release workflow runs in three stages:
+
+1. **`build`** — one job per (image × architecture), each pushing **by digest
+   only**. No tag exists yet, so a half-finished release never leaves a usable
+   `:version` or `:latest` behind. The arm64 api build additionally runs a real
+   bcrypt hash inside the pushed image (natively — bcrypt is the only
+   arch-sensitive runtime module, and a `/api/health` boot would not exercise
+   it).
+2. **`merge`** — assembles the per-arch digests into one manifest list per
+   image and applies the real tags (`X.Y.Z` and `latest`).
+3. **`release`** — extracts the SPA from the published web image (rather than
+   rebuilding it) and creates the GitHub Release with that tarball attached.
 
 ## Assumptions and expectations
 
