@@ -375,6 +375,15 @@ export function PositionDetailView({ positionId }: Props) {
         onOpenChange={setFillDialogOpen}
         positionId={positionId}
         positionStatus={position.status}
+        position={{
+          accountId: position.accountId,
+          assetType: position.assetType,
+          side: position.side,
+          openUnits: position.totalEntryQuantity - position.totalExitQuantity,
+          avgEntryPrice: position.avgEntryPrice,
+          targetPrice: position.targetPrice,
+          stopLoss: position.stopLoss,
+        }}
       />
     </div>
   );

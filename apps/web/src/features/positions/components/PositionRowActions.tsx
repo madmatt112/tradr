@@ -1,4 +1,4 @@
-import { Check, Plus, RotateCcw, Trash2, Play, type LucideIcon } from 'lucide-react';
+import { Check, Minus, Plus, RotateCcw, Trash2, Play, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import type { PositionListItem } from '@tradr/shared';
@@ -105,7 +105,7 @@ export function PositionRowActions({ position }: Props) {
   const closePosition = useClosePosition(position.id);
   const reopenPosition = useReopenPosition(position.id);
 
-  const [fillOpen, setFillOpen] = useState(false);
+  const [fillType, setFillType] = useState<'entry' | 'exit' | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const isDraft = position.status === 'draft';
@@ -116,6 +116,7 @@ export function PositionRowActions({ position }: Props) {
   // when the position is not yet eligible — not hidden. Reopen is different:
   // the R11 amendment scopes it to "only when" the same-day window is open, so
   // it stays conditionally rendered.
+  const openUnits = position.totalEntryQuantity - position.totalExitQuantity;
   const hasEntryQuantity = position.totalEntryQuantity > 0;
   const canOpen = hasEntryQuantity;
   const canClose = hasEntryQuantity && position.totalEntryQuantity === position.totalExitQuantity;
@@ -130,13 +131,29 @@ export function PositionRowActions({ position }: Props) {
 
   return (
     <>
-      <div className="flex items-center justify-end gap-1">
+      {/* data-slot is load-bearing: rowNavigation keys off it so a click on a
+          DISABLED action (which lands on the tooltip's span wrapper, not the
+          button) does not fall through and navigate the row. */}
+      <div data-slot="row-actions" className="flex items-center justify-end gap-1">
+        {/* Single-purpose entry/exit, replacing one dual-purpose "Add fill".
+            Exit is `open`-only — R5-AC3 409s an exit fill on a draft — and is
+            dead once nothing is left open to reduce. */}
         {!isClosed && (
           <RowAction
             icon={Plus}
-            label="Add fill"
+            label="Add to position"
             disabled={isPending}
-            onClick={() => setFillOpen(true)}
+            onClick={() => setFillType('entry')}
+          />
+        )}
+
+        {isOpen && (
+          <RowAction
+            icon={Minus}
+            label="Reduce position"
+            disabledReason="Nothing open to reduce"
+            disabled={isPending || openUnits <= 0}
+            onClick={() => setFillType('exit')}
           />
         )}
 
@@ -179,10 +196,20 @@ export function PositionRowActions({ position }: Props) {
       </div>
 
       <FillDialog
-        open={fillOpen}
-        onOpenChange={setFillOpen}
+        open={fillType !== null}
+        onOpenChange={(next) => !next && setFillType(null)}
         positionId={position.id}
         positionStatus={position.status}
+        defaultType={fillType ?? undefined}
+        position={{
+          accountId: position.accountId,
+          assetType: position.assetType,
+          side: position.side,
+          openUnits,
+          avgEntryPrice: position.avgEntryPrice,
+          targetPrice: position.targetPrice,
+          stopLoss: position.stopLoss,
+        }}
       />
 
       {/* Same closed-position tax warning as the detail page — deleting a

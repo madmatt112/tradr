@@ -7,6 +7,9 @@ type ClickLike = Parameters<typeof shouldNavigateFromRowClick>[0];
 
 /** Minimal stand-in for the React synthetic click the row handler receives. */
 function clickOn(target: HTMLElement, overrides: Partial<ClickLike> = {}): ClickLike {
+  // `currentTarget` defaults to an ancestor that contains the target, matching
+  // a real bubble; the portal test overrides it with a detached row.
+  const row = target.closest('tr') ?? target.parentElement ?? target;
   return {
     defaultPrevented: false,
     button: 0,
@@ -15,13 +18,16 @@ function clickOn(target: HTMLElement, overrides: Partial<ClickLike> = {}): Click
     shiftKey: false,
     altKey: false,
     target,
+    currentTarget: row,
     ...overrides,
   } as ClickLike;
 }
 
 function cellWith(innerHtml: string): { cell: HTMLElement; child: HTMLElement } {
+  const row = document.createElement('tr');
   const cell = document.createElement('td');
   cell.innerHTML = innerHtml;
+  row.appendChild(cell);
   return { cell, child: cell.firstElementChild as HTMLElement };
 }
 
@@ -39,6 +45,23 @@ describe('shouldNavigateFromRowClick', () => {
   it('defers to the actions menu trigger', () => {
     const { child } = cellWith('<button type="button">⋯</button>');
     expect(shouldNavigateFromRowClick(clickOn(child))).toBe(false);
+  });
+
+  // Regression: a disabled button emits no pointer events, so the click lands
+  // on the tooltip's span wrapper — the button's PARENT — and closest('button')
+  // finds nothing. Matching the action strip is what stops the fall-through.
+  it('defers when the click lands on the wrapper around a disabled button', () => {
+    const { cell } = cellWith(
+      '<div data-slot="row-actions"><span id="wrap"><button type="button" disabled>x</button></span></div>',
+    );
+    const wrapper = cell.querySelector('#wrap') as HTMLElement;
+    expect(shouldNavigateFromRowClick(clickOn(wrapper))).toBe(false);
+  });
+
+  it('defers on the gaps between action buttons', () => {
+    const { cell } = cellWith('<div data-slot="row-actions" id="strip"></div>');
+    const strip = cell.querySelector('#strip') as HTMLElement;
+    expect(shouldNavigateFromRowClick(clickOn(strip))).toBe(false);
   });
 
   it('defers when the click lands on an element nested inside a button', () => {
@@ -65,5 +88,22 @@ describe('shouldNavigateFromRowClick', () => {
   it('ignores a click something else already handled', () => {
     const { child } = cellWith('<span>AAPL</span>');
     expect(shouldNavigateFromRowClick(clickOn(child, { defaultPrevented: true }))).toBe(false);
+  });
+
+  // Regression: the row's dialogs are portalled to document.body, but a React
+  // portal keeps the React tree intact, so clicks inside them bubbled to the
+  // row handler and navigated away from the open dialog.
+  it('ignores clicks from portalled content outside the row subtree', () => {
+    const row = document.createElement('tr');
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    dialog.innerHTML = '<label>Quantity</label>';
+    document.body.append(row, dialog);
+
+    const label = dialog.querySelector('label') as HTMLElement;
+    expect(shouldNavigateFromRowClick(clickOn(label, { currentTarget: row }))).toBe(false);
+
+    row.remove();
+    dialog.remove();
   });
 });

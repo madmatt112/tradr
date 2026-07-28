@@ -54,24 +54,43 @@ function action(name: string): HTMLButtonElement {
 describe('PositionRowActions — actions are inline buttons, not a menu', () => {
   it('exposes each action as its own button with an accessible name', () => {
     renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
-    expect(action('Add fill')).toBeTruthy();
+    expect(action('Add to position')).toBeTruthy();
     expect(action('Close position')).toBeTruthy();
     expect(action('Delete')).toBeTruthy();
     // No dropdown trigger stands between the user and the actions.
     expect(screen.queryByRole('menuitem')).toBeNull();
   });
 
-  it('offers Add fill on draft and open, but not on closed', () => {
+  it('offers Add to position on draft and open, but not on closed', () => {
     renderActions({ status: 'draft' });
-    expect(action('Add fill')).toBeTruthy();
+    expect(action('Add to position')).toBeTruthy();
     cleanup();
 
     renderActions({ status: 'open' });
-    expect(action('Add fill')).toBeTruthy();
+    expect(action('Add to position')).toBeTruthy();
     cleanup();
 
     renderActions({ status: 'closed', closedAt: `${TODAY_UTC}T13:00:00.000Z` });
-    expect(screen.queryByRole('button', { name: 'Add fill' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add to position' })).toBeNull();
+  });
+
+  // Exit fills 409 on a draft (R5-AC3), so the "−" button is open-only.
+  it('offers Reduce position only on an open position', () => {
+    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 0 });
+    expect(action('Reduce position').disabled).toBe(false);
+    cleanup();
+
+    renderActions({ status: 'draft', totalEntryQuantity: 100 });
+    expect(screen.queryByRole('button', { name: 'Reduce position' })).toBeNull();
+    cleanup();
+
+    renderActions({ status: 'closed', closedAt: `${TODAY_UTC}T13:00:00.000Z` });
+    expect(screen.queryByRole('button', { name: 'Reduce position' })).toBeNull();
+  });
+
+  it('disables Reduce position when nothing is left open to reduce', () => {
+    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
+    expect(action('Reduce position').disabled).toBe(true);
   });
 });
 
@@ -165,9 +184,9 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     expect(mutate).toHaveBeenCalledWith({});
   });
 
-  it('Add fill opens the fill dialog rather than mutating', () => {
+  it('Add to position opens the fill dialog rather than mutating', () => {
     renderActions({ status: 'open' });
-    fireEvent.click(action('Add fill'));
+    fireEvent.click(action('Add to position'));
 
     expect(screen.getByTestId('fill-dialog')).toBeTruthy();
   });
