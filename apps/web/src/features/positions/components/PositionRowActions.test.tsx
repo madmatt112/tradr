@@ -69,23 +69,34 @@ describe('PositionRowActions — lifecycle gating', () => {
     expect(screen.queryByRole('menuitem', { name: 'Add fill' })).toBeNull();
   });
 
-  it('offers Open position only on a draft that has an entry fill', async () => {
+  // R11-AC4/AC5: shown-and-disabled, never hidden, for their own status.
+  it('enables Open position on a draft that has an entry fill', async () => {
     await openMenu({ status: 'draft', totalEntryQuantity: 100, totalExitQuantity: 0 });
-    expect(screen.getByRole('menuitem', { name: 'Open position' })).toBeTruthy();
+    const item = screen.getByRole('menuitem', { name: 'Open position' });
+    expect(item.getAttribute('data-disabled')).toBeNull();
   });
 
-  it('hides Open position on a draft with no fills yet', async () => {
+  it('shows Open position disabled on a draft with no fills yet', async () => {
     await openMenu({ status: 'draft', totalEntryQuantity: 0, totalExitQuantity: 0 });
+    const item = screen.getByRole('menuitem', { name: 'Open position' });
+    expect(item.getAttribute('data-disabled')).not.toBeNull();
+  });
+
+  it('does not offer Open position on a non-draft position', async () => {
+    await openMenu({ status: 'open' });
     expect(screen.queryByRole('menuitem', { name: 'Open position' })).toBeNull();
   });
 
-  it('offers Close position only once the position is fully exited', async () => {
+  it('enables Close position once the position is fully exited', async () => {
     await openMenu({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
-    expect(screen.getByRole('menuitem', { name: 'Close position' })).toBeTruthy();
-    cleanup();
+    const item = screen.getByRole('menuitem', { name: 'Close position' });
+    expect(item.getAttribute('data-disabled')).toBeNull();
+  });
 
+  it('shows Close position disabled while the position is only partly exited', async () => {
     await openMenu({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 40 });
-    expect(screen.queryByRole('menuitem', { name: 'Close position' })).toBeNull();
+    const item = screen.getByRole('menuitem', { name: 'Close position' });
+    expect(item.getAttribute('data-disabled')).not.toBeNull();
   });
 
   it('offers Reopen for a closed position opened today in the account timezone', async () => {
@@ -198,7 +209,24 @@ describe('PositionRowActions — delete confirmation', () => {
     const user = await openMenu({ status: 'open' });
     await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
 
-    expect(screen.getByText(/Are you sure you want to delete this position\?/i)).toBeTruthy();
+    expect(screen.getByText(/Are you sure you want to delete "AAPL"\?/i)).toBeTruthy();
     expect(screen.queryByText(/wash-sale classification/i)).toBeNull();
+  });
+
+  // R4 amendment: the confirmation dialog SHALL name the position.
+  it('names the position in both the closed and non-closed copy', async () => {
+    const user = await openMenu({ status: 'open', symbol: 'MSFT' });
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    expect(screen.getByText(/"MSFT"/)).toBeTruthy();
+    cleanup();
+
+    const user2 = await openMenu({
+      status: 'closed',
+      symbol: 'NVDA260321C120',
+      accountTimezone: 'UTC',
+      openedAt: '2020-01-01T09:00:00.000Z',
+    });
+    await user2.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    expect(screen.getByText(/"NVDA260321C120"/)).toBeTruthy();
   });
 });

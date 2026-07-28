@@ -60,11 +60,13 @@ export function PositionRowActions({ position }: Props) {
   const isOpen = position.status === 'open';
   const isClosed = position.status === 'closed';
 
-  const canOpen = isDraft && position.totalEntryQuantity > 0;
-  const canClose =
-    isOpen &&
-    position.totalEntryQuantity > 0 &&
-    position.totalEntryQuantity === position.totalExitQuantity;
+  // R11-AC4/AC5: Open and Close are SHOWN for their status and merely disabled
+  // when the position is not yet eligible — not hidden. Reopen is different:
+  // the R11 amendment scopes it to "only when" the same-day window is open, so
+  // it stays conditionally rendered.
+  const hasEntryQuantity = position.totalEntryQuantity > 0;
+  const canOpen = hasEntryQuantity;
+  const canClose = hasEntryQuantity && position.totalEntryQuantity === position.totalExitQuantity;
   const canReopen =
     isClosed && isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date());
 
@@ -101,20 +103,20 @@ export function PositionRowActions({ position }: Props) {
             </DropdownMenuItem>
           )}
 
-          {canOpen && (
+          {isDraft && (
             <DropdownMenuItem
               className="cursor-pointer"
-              disabled={isPending}
+              disabled={isPending || !canOpen}
               onClick={() => openPosition.mutate({})}
             >
               Open position
             </DropdownMenuItem>
           )}
 
-          {canClose && (
+          {isOpen && (
             <DropdownMenuItem
               className="cursor-pointer"
-              disabled={isPending}
+              disabled={isPending || !canClose}
               onClick={() => closePosition.mutate({})}
             >
               Close position
@@ -157,10 +159,11 @@ export function PositionRowActions({ position }: Props) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete position</AlertDialogTitle>
+            {/* R4 amendment: the dialog SHALL name the position. */}
             <AlertDialogDescription>
               {isClosed
-                ? "Deleting this closed position removes its realized P&L from the account balance and from tax and performance summaries — including prior tax years — and may change other positions' wash-sale classification. This cannot be undone."
-                : 'Are you sure you want to delete this position? This cannot be undone.'}
+                ? `Deleting the closed position "${position.symbol}" removes its realized P&L from the account balance and from tax and performance summaries — including prior tax years — and may change other positions' wash-sale classification. This cannot be undone.`
+                : `Are you sure you want to delete "${position.symbol}"? This cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
