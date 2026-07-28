@@ -53,6 +53,7 @@ export function findPositionListByUser(
     SELECT p.*,
       a.name AS account_name,
       a.currency AS account_currency,
+      a.timezone AS account_timezone,
       b.name AS brokerage_name,
       fs.stock_per_share_commission,
       fs.stock_min_per_fill,

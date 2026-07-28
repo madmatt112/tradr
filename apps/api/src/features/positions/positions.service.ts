@@ -433,6 +433,7 @@ export async function listPositions(
       updatedAt: row.updated_at,
       accountName: row.account_name,
       accountCurrency: row.account_currency,
+      accountTimezone: row.account_timezone,
       ...pnl,
       brokerageName,
       grossPnl,

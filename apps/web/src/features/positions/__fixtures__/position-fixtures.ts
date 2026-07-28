@@ -15,6 +15,7 @@ export const makePosition = (overrides: Partial<PositionListItem> = {}): Positio
   accountId: '00000000-0000-0000-0000-000000000010',
   accountName: 'Test Account',
   accountCurrency: 'USD',
+  accountTimezone: 'America/New_York',
   symbol: 'AAPL',
   side: 'long',
   assetType: 'stock',

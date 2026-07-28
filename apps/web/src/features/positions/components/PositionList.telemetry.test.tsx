@@ -11,6 +11,12 @@ vi.mock('@/lib/telemetry/posthog', () => ({
   captureClientEvent: (...args: unknown[]) => captureClientEvent(...args),
 }));
 
+// Stub the router — the list calls useNavigate() for whole-row navigation.
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
+  useNavigate: () => vi.fn(),
+}));
+
 // Mock the data hooks so the component renders without TanStack Query / the API.
 // One account is enough for the enabled "New Position" button to render.
 vi.mock('@/features/accounts/hooks/useAccounts', () => ({
