@@ -7,19 +7,13 @@ import type { PositionListItem } from '@tradr/shared';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
 
-import {
-  useDeletePosition,
-  useOpenPosition,
-  useClosePosition,
-  useReopenPosition,
-} from '../hooks/usePosition';
+import { useDeletePosition, useOpenPosition, useReopenPosition } from '../hooks/usePosition';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('../hooks/usePosition', () => ({
   useDeletePosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useOpenPosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
-  useClosePosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useReopenPosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 
@@ -53,12 +47,27 @@ function action(name: string): HTMLButtonElement {
 
 describe('PositionRowActions — actions are inline buttons, not a menu', () => {
   it('exposes each action as its own button with an accessible name', () => {
-    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
+    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 40 });
     expect(action('Add to position')).toBeTruthy();
-    expect(action('Close position')).toBeTruthy();
+    expect(action('Reduce position')).toBeTruthy();
     expect(action('Delete')).toBeTruthy();
     // No dropdown trigger stands between the user and the actions.
     expect(screen.queryByRole('menuitem')).toBeNull();
+  });
+
+  // A balancing exit auto-closes server-side (R7 amendment), so "−" then All is
+  // the close; a dedicated button could never be reached in an enabled state.
+  it('offers no Close action in any status', () => {
+    for (const overrides of [
+      { status: 'draft' as const },
+      { status: 'open' as const, totalEntryQuantity: 100, totalExitQuantity: 100 },
+      { status: 'open' as const, totalEntryQuantity: 100, totalExitQuantity: 40 },
+      { status: 'closed' as const },
+    ]) {
+      renderActions(overrides);
+      expect(screen.queryByRole('button', { name: 'Close position' })).toBeNull();
+      cleanup();
+    }
   });
 
   it('offers Add to position on draft and open, but not on closed', () => {
@@ -94,7 +103,7 @@ describe('PositionRowActions — actions are inline buttons, not a menu', () => 
   });
 });
 
-// R11-AC4/AC5: shown-and-disabled for their own status, never hidden.
+// R11-AC4: Open is shown-and-disabled on a draft, never hidden.
 describe('PositionRowActions — lifecycle gating', () => {
   it('enables Open position on a draft that has an entry fill', () => {
     renderActions({ status: 'draft', totalEntryQuantity: 100, totalExitQuantity: 0 });
@@ -109,16 +118,6 @@ describe('PositionRowActions — lifecycle gating', () => {
   it('does not offer Open position on a non-draft position', () => {
     renderActions({ status: 'open' });
     expect(screen.queryByRole('button', { name: 'Open position' })).toBeNull();
-  });
-
-  it('enables Close position once fully exited', () => {
-    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
-    expect(action('Close position').disabled).toBe(false);
-  });
-
-  it('shows Close position disabled while only partly exited', () => {
-    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 40 });
-    expect(action('Close position').disabled).toBe(true);
   });
 
   it('offers Reopen for a closed position opened today in the account timezone', () => {
@@ -150,19 +149,6 @@ describe('PositionRowActions — actions fire the right mutation', () => {
 
     renderActions({ status: 'draft', totalEntryQuantity: 100 });
     fireEvent.click(action('Open position'));
-
-    expect(mutate).toHaveBeenCalledWith({});
-  });
-
-  it('Close position calls the close mutation', () => {
-    const mutate = vi.fn();
-    vi.mocked(useClosePosition).mockReturnValue({
-      mutate,
-      isPending: false,
-    } as unknown as ReturnType<typeof useClosePosition>);
-
-    renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
-    fireEvent.click(action('Close position'));
 
     expect(mutate).toHaveBeenCalledWith({});
   });

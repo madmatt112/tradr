@@ -1,4 +1,4 @@
-import { Check, Minus, Plus, RotateCcw, Trash2, Play, type LucideIcon } from 'lucide-react';
+import { Minus, Plus, RotateCcw, Trash2, Play, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 
 import type { PositionListItem } from '@tradr/shared';
@@ -16,12 +16,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
-import {
-  useDeletePosition,
-  useOpenPosition,
-  useClosePosition,
-  useReopenPosition,
-} from '../hooks/usePosition';
+import { useDeletePosition, useOpenPosition, useReopenPosition } from '../hooks/usePosition';
 import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
 import { FillDialog } from './FillDialog';
@@ -102,7 +97,6 @@ function RowAction({
 export function PositionRowActions({ position }: Props) {
   const deletePosition = useDeletePosition(position.id);
   const openPosition = useOpenPosition(position.id);
-  const closePosition = useClosePosition(position.id);
   const reopenPosition = useReopenPosition(position.id);
 
   const [fillType, setFillType] = useState<'entry' | 'exit' | null>(null);
@@ -112,22 +106,22 @@ export function PositionRowActions({ position }: Props) {
   const isOpen = position.status === 'open';
   const isClosed = position.status === 'closed';
 
-  // R11-AC4/AC5: Open and Close are SHOWN for their status and merely disabled
-  // when the position is not yet eligible — not hidden. Reopen is different:
-  // the R11 amendment scopes it to "only when" the same-day window is open, so
-  // it stays conditionally rendered.
+  // R11-AC4: Open is SHOWN on a draft and merely disabled until an entry fill
+  // exists — not hidden. Reopen is different: the R11 amendment scopes it to
+  // "only when" the same-day window is open, so it stays conditionally rendered.
+  //
+  // There is deliberately NO Close action here. A balancing exit auto-closes
+  // the position (R7 amendment), so "−" then All *is* the close; a separate
+  // button would sit permanently disabled except in the instant between full
+  // exit and auto-close, which no user can reach. The detail page keeps one for
+  // the residual path that does not auto-close (editing a fill up to full size).
   const openUnits = position.totalEntryQuantity - position.totalExitQuantity;
   const hasEntryQuantity = position.totalEntryQuantity > 0;
   const canOpen = hasEntryQuantity;
-  const canClose = hasEntryQuantity && position.totalEntryQuantity === position.totalExitQuantity;
   const canReopen =
     isClosed && isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date());
 
-  const isPending =
-    openPosition.isPending ||
-    closePosition.isPending ||
-    reopenPosition.isPending ||
-    deletePosition.isPending;
+  const isPending = openPosition.isPending || reopenPosition.isPending || deletePosition.isPending;
 
   return (
     <>
@@ -164,16 +158,6 @@ export function PositionRowActions({ position }: Props) {
             disabledReason="Add an entry fill first"
             disabled={isPending || !canOpen}
             onClick={() => openPosition.mutate({})}
-          />
-        )}
-
-        {isOpen && (
-          <RowAction
-            icon={Check}
-            label="Close position"
-            disabledReason="Exit the full quantity first"
-            disabled={isPending || !canClose}
-            onClick={() => closePosition.mutate({})}
           />
         )}
 

@@ -877,7 +877,63 @@ export async function addFill(
     filledAt: string;
   },
 ) {
-  return withTransaction(db, (tx) => addFillTx(tx, positionId, userId, data));
+  const { fill, closed } = await withTransaction(db, async (tx) => {
+    const inserted = await addFillTx(tx, positionId, userId, data);
+
+    // Auto-close (R7 amendment): an open position with nothing left open IS
+    // closed, so the exit that balances entry quantity performs the transition
+    // itself. Without this the position sits `open` with zero open units until
+    // the user runs a separate close, which is a step with no decision in it.
+    //
+    // Deliberately here and NOT in addFillTx: the bulk importers (csv-import,
+    // demo seed) call addFillTx directly and drive their own closePositionTx.
+    // Auto-closing underneath them would make that follow-up call 409 against
+    // an already-closed position. Same outer/inner split as
+    // closePosition/closePositionTx.
+    if (data.type !== 'exit') return { fill: inserted, closed: null };
+
+    const [{ total: entryTotal }] = await sumFillQuantityByType(tx, positionId, 'entry');
+    const [{ total: exitTotal }] = await sumFillQuantityByType(tx, positionId, 'exit');
+    if (!reconciles(entryTotal, exitTotal)) return { fill: inserted, closed: null };
+
+    const lockRows = await findPositionForUpdate(tx, positionId, userId);
+    const position = (lockRows as RawRow[])[0];
+    if (position?.status !== 'open') return { fill: inserted, closed: null };
+
+    // closedAt is the fill's own timestamp — the position closed when its last
+    // exit executed, not when the request was made. That accuracy matters:
+    // closedAt feeds the tax and performance summaries, so stamping "now" onto
+    // a trade being journalled after the fact would misreport it.
+    //
+    // Clamped to openedAt, because a backdated exit CAN legitimately precede
+    // it: `POST /open` with no body stamps openedAt as now, so a user who
+    // records historical fills afterwards has fills older than the open. Left
+    // unclamped, closePositionTx's closeNotBeforeOpen guard would reject the
+    // whole request and the fill itself would fail to save.
+    const openedAt = position.opened_at ? new Date(position.opened_at) : null;
+    const filledAt = new Date(data.filledAt);
+    const closedAt = openedAt && filledAt < openedAt ? openedAt : filledAt;
+
+    // closePositionTx re-locks the row (already held by this tx) and fires the
+    // ledger close hook.
+    const closedRow = await closePositionTx(tx, positionId, userId, closedAt.toISOString());
+    return { fill: inserted, closed: closedRow };
+  });
+
+  // Same fire-and-forget business event a manual close emits, so an auto-close
+  // is not invisible to analytics. After commit, never inside the tx.
+  if (closed) {
+    try {
+      captureServerEvent('position_closed', {
+        distinctId: userId,
+        properties: { assetType: closed.assetType },
+      });
+    } catch {
+      // ignore — capture is fire-and-forget
+    }
+  }
+
+  return fill;
 }
 
 // Tx-accepting variant — runs directly on the passed tx (no re-wrap / savepoint).
