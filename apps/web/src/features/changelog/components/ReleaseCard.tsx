@@ -49,7 +49,7 @@ export function ReleaseCard({ release }: ReleaseCardProps) {
       </CardHeader>
       <CardContent>
         <ReleaseMarkdown content={release.body} />
-        <div className="mt-5 border-t border-border pt-4">
+        <div className="mt-6 border-t border-border pt-4">
           <a
             href={release.htmlUrl}
             target="_blank"

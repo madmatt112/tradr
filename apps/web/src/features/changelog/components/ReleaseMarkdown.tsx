@@ -59,7 +59,7 @@ function textOf(children: ReactNode): string | null {
 // separates from the version above and the list below by case and colour
 // rather than by size alone, so the tier still reads at small body sizes.
 const SECTION = 'mt-6 mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground';
-const SUBSECTION = 'mt-5 mb-2 text-sm font-semibold text-foreground';
+const SUBSECTION = 'mt-4 mb-2 text-sm font-semibold text-foreground';
 const LINK = 'text-primary underline-offset-4 hover:underline cursor-pointer';
 
 const components: Components = {
@@ -72,12 +72,11 @@ const components: Components = {
 
   p: ({ children }) => <p className="my-3">{children}</p>,
   ul: ({ children }) => (
-    <ul className="my-3 list-disc space-y-1.5 pl-5 marker:text-border">{children}</ul>
+    <ul className="my-3 list-disc space-y-1.5 pl-6 marker:text-border">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="my-3 list-decimal space-y-1.5 pl-5 marker:text-muted-foreground">{children}</ol>
+    <ol className="my-3 list-decimal space-y-1.5 pl-6 marker:text-muted-foreground">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-1">{children}</li>,
 
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
@@ -86,7 +85,7 @@ const components: Components = {
       {children}
     </blockquote>
   ),
-  hr: () => <hr className="my-5 border-border" />,
+  hr: () => <hr className="my-6 border-border" />,
 
   a: ({ href, children }) => {
     const short = href && textOf(children) === href ? shortenGitHubRef(href) : null;
@@ -95,15 +94,17 @@ const components: Components = {
         href={href}
         target="_blank"
         rel="noreferrer noopener"
-        className={short ? `font-mono text-[0.8125rem] ${LINK}` : LINK}
+        className={short ? `font-mono text-xs ${LINK}` : LINK}
       >
         {short ?? children}
       </a>
     );
   },
 
+  // Mono sits one step down from the surrounding body text — it runs
+  // optically larger at the same nominal size.
   code: ({ children }) => (
-    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.8125rem]">{children}</code>
+    <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{children}</code>
   ),
   pre: ({ children }) => (
     <pre className="my-3 overflow-x-auto rounded-md border bg-muted p-3 text-xs">{children}</pre>
