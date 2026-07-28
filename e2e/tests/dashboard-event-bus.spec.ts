@@ -212,10 +212,13 @@ test.describe('Dashboard — cross-tab close-position event bus', () => {
       },
     });
     expect(closeRes.status(), 'POST exit fill').toBe(201);
-    const finalCloseRes = await tabA.request.post(`/api/positions/${positionId}/close`, {
-      data: { closedAt: '2026-05-02T15:00:00.000Z' },
-    });
-    expect(finalCloseRes.status(), 'POST /positions/:id/close').toBe(200);
+
+    // The balancing exit closes the position by itself — no separate close
+    // call, which would 409. This still exercises what the test is about: the
+    // close-hook writes its ledger row, so Tab B's balances go stale.
+    const detailRes = await tabA.request.get(`/api/positions/${positionId}`);
+    expect(detailRes.status(), 'GET /positions/:id').toBe(200);
+    expect((await detailRes.json()).status, 'auto-closed by the balancing exit').toBe('closed');
 
     // --- Switch focus to Tab B → refetchOnWindowFocus fires ---
     // The cross-tab refresh rides TanStack Query's refetchOnWindowFocus, not the
