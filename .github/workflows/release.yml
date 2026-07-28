@@ -111,6 +111,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # OCI labels must be applied HERE, on the per-arch image config — the
+      # `merge` job's metadata only tags the manifest list. Without this the
+      # images ship with no org.opencontainers.image.source, and GHCR keeps
+      # showing whichever repository last pushed a labelled image.
+      - name: Docker metadata (labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.ns.outputs.owner }}/${{ matrix.image }}
+
       - name: Build + push by digest
         id: build
         uses: docker/build-push-action@v7
@@ -122,6 +132,7 @@ jobs:
           # Dockerfile.web ignores an unknown build-arg.
           build-args: |
             APP_VERSION=${{ github.ref_name }}
+          labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.ns.outputs.owner }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
