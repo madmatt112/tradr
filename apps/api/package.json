@@ -1,0 +1,49 @@
+{
+  "name": "@tradr/api",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tradr": "dist/tradr.js"
+  },
+  "scripts": {
+    "dev": "tsx --env-file=../../.env --watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "build:prod": "node scripts/build.mjs",
+    "check-types": "tsc --noEmit",
+    "migrate:post": "tsx src/db/migrate-post.ts",
+    "seed": "tsx --env-file=../../.env src/db/seed/demo.ts",
+    "bench:performance": "vitest --config ../../bench/vitest.config.bench.ts --run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.100",
+    "@aws-sdk/client-s3": "^3.1077.0",
+    "@hono/node-server": "^1",
+    "@hono/zod-validator": "^0.4",
+    "@tradr/shared": "workspace:*",
+    "bcrypt": "^5.1",
+    "csv-parse": "^5",
+    "decimal.js": "^10.6.0",
+    "drizzle-orm": "^0.38",
+    "hono": "^4",
+    "ioredis": "^5.11.1",
+    "nodemailer": "^9.0.3",
+    "openai": "^4",
+    "postgres": "^3.4",
+    "posthog-node": "^5.38.0",
+    "stripe": "^19",
+    "tiktoken": "^1.0.22",
+    "zod": "^3.24",
+    "zod-to-json-schema": "^3.24"
+  },
+  "devDependencies": {
+    "@smithy/util-stream": "^4.7.4",
+    "@types/bcrypt": "^5",
+    "@types/nodemailer": "^8.0.1",
+    "aws-sdk-client-mock": "^4.1.0",
+    "drizzle-kit": "^0.30",
+    "esbuild": "^0.24",
+    "tsx": "^4",
+    "vitest": "^3"
+  }
+}

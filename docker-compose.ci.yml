@@ -1,0 +1,54 @@
+# CI overlay for the docker-smoke job (task 11).
+#
+# Usage (CI only):
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+#
+# The REAL guarantee that CI tests the local source (not a released GHCR tag) is
+# that the docker-smoke job builds BOTH images locally and loads them into the
+# daemon under the exact refs the base compose resolves, so `up` uses them
+# regardless of image:/build: merge (R5). This overlay additionally pins
+# `build:` on api/web as belt-and-suspenders, so a from-scratch `up --build`
+# also builds from local source and never pulls the released tag. Otherwise it
+# only extends services (e.g. tasks 12/13/14 append here).
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+
+  # CI-only SSE drip stub for the streaming liveness probe (task 12, Req 8.4). A
+  # plain node:22-slim running the bind-mounted server on the tradr network as
+  # `sse-stub`, so nginx's _probe.inc location can proxy to it by DNS name. NOT
+  # a Playwright webServer.
+  sse-stub:
+    image: node:22-slim
+    command: ["node", "/sse-stub.mjs"]
+    volumes:
+      - ./e2e/sse-stub-server.mjs:/sse-stub.mjs:ro
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tradr
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    # Activate the CI-only probe locations: mount _probe.inc into the directory
+    # the shipped default.conf globs (conf.d/probe/*.conf). The shipped image
+    # carries nothing here, so prod serves no probe.
+    volumes:
+      - ./docker/conf.d/_probe.inc:/etc/nginx/conf.d/probe/_probe.conf:ro
+    # nginx resolves `proxy_pass http://sse-stub` at startup, so the stub must be
+    # up before web boots. Restated in map form (the base uses a list) and kept
+    # explicit for `api` so the merge doesn't drop the base dependency.
+    depends_on:
+      api:
+        condition: service_started
+      sse-stub:
+        condition: service_healthy

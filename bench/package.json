@@ -1,0 +1,15 @@
+{
+  "name": "@tradr/bench",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Performance benchmark harness (run via apps/api script `pnpm bench:performance`).",
+  "dependencies": {
+    "@tradr/shared": "workspace:*",
+    "drizzle-orm": "^0.38",
+    "postgres": "^3.4"
+  },
+  "devDependencies": {
+    "vitest": "^3"
+  }
+}

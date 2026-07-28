@@ -1,0 +1,533 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One in-flight run per PR — a rapid successive push cancels the stale run
+# instead of stacking a full duplicate. Main pushes each key on their own sha
+# so a post-merge run is never queued behind or cancelled by a newer push
+# (deploy-staging gates on every green main-push run).
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tradr_test
+  MIGRATE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tradr_test_migrate
+  MIGRATE_TEST_USER_DATABASE_URL: postgresql://tradr_test_user:tradr_test_user@localhost:5432/tradr_test_migrate
+  SESSION_SECRET: ci-test-secret-that-is-at-least-32-characters-long
+  NODE_ENV: test
+  TRUSTED_PROXIES: '127.0.0.1'
+
+jobs:
+  # Lint, types, migration consistency and the frontend build gates —
+  # everything that needs no DB or service containers.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - run: pnpm lint
+
+      - run: pnpm eslint:deps
+
+      - run: pnpm check:migrations
+
+      - run: pnpm check-types
+
+      - name: Migration drift check (drizzle-kit)
+        run: |
+          if pnpm --filter @tradr/api exec drizzle-kit check --help 2>&1 | grep -q '^  check\b\|drizzle-kit check'; then
+            pnpm --filter @tradr/api exec drizzle-kit check
+          else
+            pnpm --filter @tradr/api exec drizzle-kit generate
+            git diff --exit-code apps/api/src/db/migrations
+          fi
+
+      - name: Build frontend
+        run: pnpm --filter @tradr/web build
+
+      - name: Check bundle size (total + dashboard entry + per-widget budgets)
+        run: node apps/web/scripts/check-bundle-size.mjs
+
+      # CI-failing — per-theme AA contrast + ΔEOK distinctness + both-theme
+      # presence (R1.4); exits non-zero on any finding. Subsumes the retired
+      # dark-mode-audit doc-completeness gate (D4 — the real .dark substrate +
+      # this contrast gate are the regression guard).
+      - name: Check contrast + distinctness + both-theme presence
+        run: node apps/web/scripts/check-contrast.mjs
+
+      # CI-failing — raw-palette-class + off-ladder spacing + arbitrary text-[…]
+      # + primitive-bypass (pnlColorClass / inline tabular-nums) as file:line;
+      # exits non-zero on any finding.
+      - name: Check design lint (palette + spacing + type + bypass)
+        run: node apps/web/scripts/check-design-lint.mjs
+
+      # CI-failing — sums emitted dist font transfer against a 150 KB gz budget,
+      # asserts every @font-face has font-display swap/optional + latin subset,
+      # and asserts the global prefers-reduced-motion block; exits non-zero on
+      # any finding.
+      - name: Check fonts (transfer budget + font-display + subset + reduced-motion)
+        run: node apps/web/scripts/check-fonts.mjs
+
+  # The DB-bound half of the vitest workspace: the api + migrations projects.
+  test-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # REDIS_TEST_URL points the hosted-platform real-Redis rate-limit tests
+    # (rate-limit.redis-store.test.ts, REQ-7.3) at the redis:7 service below. It is
+    # deliberately NOT `REDIS_URL` (which the vitest api-project pins to '' so every
+    # OTHER test keeps the process-local MapStore, REQ-1.6); the real-Redis suite
+    # skips when it is unset.
+    env:
+      REDIS_TEST_URL: redis://localhost:6379
+      # The vitest api/migrations projects pin DATABASE_URL to :5433 (matching
+      # docker-compose.dev.yml's 5433:5432 local-dev mapping), so this job's
+      # postgres service is published on host 5433 and every DB URL / psql here
+      # targets 5433 to match. docker-smoke and e2e keep the workflow-level
+      # :5432 (they run their own stacks).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5433/tradr_test
+      MIGRATE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/tradr_test_migrate
+      MIGRATE_TEST_USER_DATABASE_URL: postgresql://tradr_test_user:tradr_test_user@localhost:5433/tradr_test_migrate
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tradr_test
+        ports:
+          # Published on host 5433 to match the vitest api/migrations pin.
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - name: Bootstrap migration test DB + role
+        env:
+          PGPASSWORD: postgres
+          PGPORT: 5433
+        run: |
+          psql -h localhost -U postgres -d postgres -c "CREATE DATABASE tradr_test_migrate;"
+          psql -h localhost -U postgres -d postgres -c "CREATE ROLE tradr_test_user NOINHERIT NOSUPERUSER LOGIN PASSWORD 'tradr_test_user';"
+          psql -h localhost -U postgres -d postgres -c "GRANT CONNECT ON DATABASE tradr_test_migrate TO tradr_test_user;"
+          psql -h localhost -U postgres -d tradr_test_migrate -c "GRANT USAGE ON SCHEMA public TO tradr_test_user;"
+
+      - name: Run api + migrations tests
+        run: pnpm exec vitest run --project api --project migrations
+
+  # The service-free half of the vitest workspace. KEEP IN SYNC with
+  # vitest.workspace.ts: every project not run by test-api must be listed here —
+  # `--project` has no negation syntax (verified against vitest 3.2.4), so a new
+  # workspace project that is added to neither job silently escapes CI. An
+  # unknown --project name fails loudly, so renames are caught.
+  test-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - name: Run web + shared + scripts tests
+        run: pnpm exec vitest run --project web --project shared --project web-scripts
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # ENCRYPTION_KEY is e2e-only (the API requires a 64-hex key on boot). The
+    # other secrets (DATABASE_URL, SESSION_SECRET, NODE_ENV) come from the
+    # top-level workflow env. Playwright's webServer block boots web + api +
+    # the UW stub and points UNUSUAL_WHALES_BASE_URL at the stub.
+    env:
+      ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tradr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - name: Install Playwright browsers
+        # webkit is required by the `Mobile Chrome` + `iphone-13` projects, which
+        # use the iPhone 13 device (defaultBrowserType: webkit). Installing only
+        # chromium left those projects failing with "Executable doesn't exist".
+        run: pnpm --filter @tradr/e2e exec playwright install --with-deps chromium webkit
+
+      - name: Run e2e suite (Playwright boots web + api + UW stub)
+        run: pnpm --filter @tradr/e2e test
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+          if-no-files-found: ignore
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Boot the full compose stack against a FRESH, EMPTY throwaway Postgres
+    # (named volume torn down with `down -v`). The api boots with ONLY
+    # DATABASE_URL, SESSION_SECRET and ENCRYPTION_KEY set — neither encryption
+    # gate is exercised here (no ENCRYPTION_KEY_FINGERPRINT, no
+    # ENCRYPTION_KEY_PREVIOUS), so the api degrades gracefully and runs its
+    # migrations on boot. POSTGRES_* feed both the throwaway postgres init and
+    # the DATABASE_URL the base compose builds in api.environment; they are not
+    # app secrets. WEB_PORT avoids the runner's other dev ports.
+    env:
+      POSTGRES_USER: tradr
+      POSTGRES_PASSWORD: smoke
+      POSTGRES_DB: tradr
+      SESSION_SECRET: ci-smoke-secret-that-is-at-least-32-characters-long
+      ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      WEB_PORT: 8088
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Write the .env the base compose reads (env_file: .env). DATABASE_URL is
+      # built from POSTGRES_* in api.environment, so it is NOT set here.
+      - name: Write CI .env
+        run: |
+          cat > .env <<EOF
+          POSTGRES_USER=${POSTGRES_USER}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          POSTGRES_DB=${POSTGRES_DB}
+          SESSION_SECRET=${SESSION_SECRET}
+          ENCRYPTION_KEY=${ENCRYPTION_KEY}
+          WEB_PORT=${WEB_PORT}
+          EOF
+
+      # Build BOTH images locally and load them into the daemon under the exact
+      # refs the base compose resolves (R5 — this is the real guarantee CI tests
+      # local source, not a released GHCR tag). `up` then uses these regardless
+      # of the image:/build: merge; the overlay's build: blocks are belt-and-
+      # suspenders for a from-scratch `up --build`.
+      - name: Build + load images locally
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml build
+
+      - name: Boot the stack against an empty DB
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+
+      - name: Wait for the api to become healthy
+        run: |
+          for i in $(seq 1 60); do
+            state=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml ps api --format '{{.State}}')
+            health=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml ps api --format '{{.Health}}')
+            echo "api state: ${state:-<none>} health: ${health:-<none>}"
+            if [ "$health" = "healthy" ]; then exit 0; fi
+            # Fail fast on a crash-loop / exit rather than waiting out the full
+            # timeout (a broken image reports state=restarting|exited and an
+            # empty Health field while it relaunches).
+            if [ "$state" = "restarting" ] || [ "$state" = "exited" ] || [ "$health" = "unhealthy" ]; then
+              echo "api is not coming up (state=$state health=$health)"
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "api did not become healthy in time"
+          exit 1
+
+      # (a) Compiled+bundled migrations applied FROM EMPTY (Req 7.1/7.2): the
+      # bundled CLI reports a clean status, and the rowcount is read FROM THE
+      # POSTGRES CONTAINER (the api image has no psql — R2). A Dockerfile that
+      # forgets to copy post-migrations/ or whose bundled __thisDir is wrong
+      # fails here. The drizzle table name is drizzle.__drizzle_migrations.
+      - name: Assert compiled migrations applied from empty (a)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T api tradr migrate --status
+          count=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T postgres \
+            psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+            "SELECT count(*) FROM drizzle.__drizzle_migrations")
+          count=$(echo "$count" | tr -d '[:space:]')
+          echo "applied migrations: $count"
+          if [ -z "$count" ] || [ "$count" -le 0 ]; then
+            echo "expected > 0 applied migrations (empty-DB compiled-migration proof failed)"
+            exit 1
+          fi
+          # A dropped post-migrations/ dir leaves the journal EMPTY (the runner
+          # has no files to apply, yet status still reports clean) — assert the
+          # journal has rows so that failure is caught. Table name needs double
+          # quotes because of its leading underscore.
+          post_count=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T postgres \
+            psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+            "SELECT count(*) FROM \"_post_migrations_journal\"")
+          post_count=$(echo "$post_count" | tr -d '[:space:]')
+          echo "applied post-migrations: $post_count"
+          if [ -z "$post_count" ] || [ "$post_count" -le 0 ]; then
+            echo "expected > 0 post-migrations (dropped post-migrations/ dir?)"
+            exit 1
+          fi
+
+      # (b) GET /api/health through nginx => {status:'ok'}.
+      - name: Assert health through nginx (b)
+        run: |
+          body=$(curl -fsS "http://localhost:${WEB_PORT}/api/health")
+          echo "health body: $body"
+          echo "$body" | grep -q '"status":"ok"'
+
+      # (c) Web root serves index.html.
+      - name: Assert web root serves index.html (c)
+        run: |
+          body=$(curl -fsS "http://localhost:${WEB_PORT}/")
+          echo "$body" | grep -qi '<!doctype html' || echo "$body" | grep -qi '<html'
+
+      # (d) A non-health /api/ prefix is reachable through nginx (proxied to the
+      # api, not served as a static 404 by nginx). Any HTTP response from the
+      # upstream proves the proxy path; we only assert it is not a connection
+      # failure and not nginx's own 404 for an unproxied path.
+      - name: Assert a non-health prefix reachable through nginx (d)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/api/auth/me")
+          echo "/api/auth/me -> $code"
+          if [ "$code" = "000" ]; then echo "no response (proxy unreachable)"; exit 1; fi
+
+      # (e) The api container runs non-root (AC 1.5).
+      - name: Assert api runs non-root (e)
+        run: |
+          uid=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T api id -u)
+          uid=$(echo "$uid" | tr -d '[:space:]')
+          echo "api uid: $uid"
+          if [ "$uid" = "0" ]; then echo "api is running as root"; exit 1; fi
+
+      # (f) Static no-buffering directive assertion (Req 8.4 — the REAL
+      # regression guard). Render the running web container's nginx config with
+      # `nginx -T` and assert the shipped SSE stream snippet carries
+      # `proxy_buffering off;`. This is the only mechanism that fails when the
+      # directive is removed or drifts; it is deterministic and config-layer. A
+      # behavioral negative control is impossible here — nginx does not buffer a
+      # streaming SSE upstream on localhost regardless of proxy_buffering.
+      - name: Assert nginx config disables stream buffering (f)
+        run: |
+          # Strip comments first so a comment that merely mentions the directive
+          # cannot satisfy the assertion (the active directive is what matters).
+          conf=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T web nginx -T \
+            | sed 's/#.*//')
+          echo "$conf" | grep -q 'proxy_buffering[[:space:]]\+off;' || {
+            echo "rendered nginx config is missing an active 'proxy_buffering off;' directive"
+            exit 1
+          }
+
+      # (g) Static no-strip assertion (Req 4.3). nginx passes upstream headers
+      # through by default, so honoring an upstream `X-Accel-Buffering: no` is
+      # documented nginx behavior (not behaviorally re-proven in CI). The guard
+      # is that the rendered config does NOT clear/hide that header in the stream
+      # path. Assert no `proxy_hide_header X-Accel-Buffering` (case-insensitive)
+      # appears anywhere in the rendered config.
+      - name: Assert nginx does not strip X-Accel-Buffering (g)
+        run: |
+          conf=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T web nginx -T)
+          if echo "$conf" | grep -iq 'proxy_hide_header[[:space:]]\+X-Accel-Buffering'; then
+            echo "rendered nginx config strips the upstream X-Accel-Buffering header"
+            exit 1
+          fi
+
+      # (h) Positive-only SSE liveness probe (Req 8.4). The CI overlay mounts
+      # docker/conf.d/_probe.inc into the web container and runs the `sse-stub`
+      # drip service. The client confirms the SSE proxy path delivers frames
+      # incrementally end-to-end (>=2 frames with an inter-arrival gap >=200ms).
+      # This is LIVENESS ONLY: it proves the path streams; it is NOT a negative
+      # control and does not prove buffering is off — that is (f)'s job.
+      - name: Assert SSE proxy path streams incrementally (h)
+        run: |
+          node e2e/sse-probe-client.mjs "http://localhost:${WEB_PORT}/_probe/stream" 200
+
+      # (i) Wrong-key pre-migration gate probe (Req 8.7). Run the SAME api image
+      # that this job built+loaded (the compose-resolved ref for the `api`
+      # service) ONCE with `docker run --rm` — deliberately OUTSIDE compose so
+      # there is no restart policy to relaunch and race the exit assertion. The
+      # env gives a valid-shaped but WRONG ENCRYPTION_KEY plus a set,
+      # non-matching ENCRYPTION_KEY_FINGERPRINT. The fingerprint gate
+      # (encryption.ts runEncryptionFingerprintCheckIfConfigured) runs at
+      # app.ts:88 BEFORE runMigrations() at app.ts:89, so the container must exit
+      # NON-ZERO and emit `encryption_fingerprint_mismatch` before any migration
+      # work — even though DATABASE_URL points at the smoke postgres on the
+      # compose network (the gate fires before any DB use). A CORRECT matching
+      # key would not trip this.
+      - name: Assert wrong key exits pre-migration with fingerprint mismatch (i)
+        run: |
+          api_image=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml config --images \
+            | grep -E '(^|[-/])api$' | head -n1)
+          echo "api image: $api_image"
+          net=$(docker network ls --format '{{.Name}}' | grep -E 'tradr$' | head -n1)
+          # No trailing command: the image ENTRYPOINT is the server entry
+          # (node dist/index.js), which runs bootstrap() and thus the gate.
+          set +e
+          out=$(docker run --rm \
+            --network "$net" \
+            -e DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}" \
+            -e SESSION_SECRET="${SESSION_SECRET}" \
+            -e ENCRYPTION_KEY="1111111111111111111111111111111111111111111111111111111111111111" \
+            -e ENCRYPTION_KEY_FINGERPRINT="0000000000000000000000000000000000000000000000000000000000000000" \
+            "$api_image" 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          echo "exit code: $code"
+          if [ "$code" -eq 0 ]; then
+            echo "expected a NON-ZERO exit on the wrong-key fingerprint gate"
+            exit 1
+          fi
+          echo "$out" | grep -q 'encryption_fingerprint_mismatch' || {
+            echo "logs did not contain the expected encryption_fingerprint_mismatch gate event"
+            exit 1
+          }
+          # The gate is pre-migration (app.ts:88 before app.ts:89): no migration
+          # log line may precede the mismatch event.
+          if echo "$out" | grep -qi 'post-migration\|migrate'; then
+            echo "a migration log line appeared — the gate did not fire pre-migration"
+            exit 1
+          fi
+
+      # (j) Runtime-config wired end-to-end (Req 8.5; design C9.5/D2). Three
+      # assertions, all against the BUILT web image this job built+loaded:
+      #   1. With API_BASE_URL UNSET, the main smoke stack's web serves
+      #      /config.js = `window.__TRADR_CONFIG__={"advisorImageMaxBytes":4500000};`
+      #      — apiBaseUrl absent (resolveApiUrl falls back to /api), and the
+      #      always-on image byte cap (hosted-platform REQ-4.6) emitted with its
+      #      default. Asserted against the already-running stack.
+      #   2. A SEPARATELY-started one-shot web container with
+      #      API_BASE_URL=https://api.example.test serves /config.js reflecting
+      #      that value. Run OUTSIDE compose so the main smoke stack is not
+      #      disturbed; read the file the entrypoint wrote at start.
+      #   3. The BUILT index.html (post-`vite build`, as shipped in the image)
+      #      loads /config.js via a CLASSIC <script> — no type=module, no async,
+      #      no defer. This is the load-bearing guarantee: a classic blocking
+      #      script always runs before deferred module scripts regardless of DOM
+      #      position, so window.__TRADR_CONFIG__ is set before the module entry
+      #      reads it. We assert the script TYPE (not a brittle positional grep)
+      #      and verify Vite did not rewrite the classic script into a module.
+      # No cross-origin credentialed request is asserted (split-origin
+      # unsupported, D2).
+      - name: Assert runtime-config wired (config.js + classic script) (j)
+        run: |
+          web_image=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml config --images \
+            | grep -E '(^|[-/])web$' | head -n1)
+          echo "web image: $web_image"
+
+          # 1. Main stack (API_BASE_URL unset): config.js carries only the
+          # always-on image byte cap (hosted-platform REQ-4.6), apiBaseUrl absent.
+          unset_cfg=$(curl -fsS "http://localhost:${WEB_PORT}/config.js")
+          echo "unset config.js: $unset_cfg"
+          echo "$unset_cfg" | grep -q 'window.__TRADR_CONFIG__={"advisorImageMaxBytes":4500000};' || {
+            echo 'expected config.js = window.__TRADR_CONFIG__={"advisorImageMaxBytes":4500000}; when API_BASE_URL is unset'
+            exit 1
+          }
+
+          # 2. One-shot web container with API_BASE_URL set reflects the value.
+          # The official nginx entrypoint runs 10-runtime-config.sh (writing
+          # config.js) before launching nginx, so the file exists immediately.
+          set_cfg=$(docker run --rm --entrypoint sh \
+            -e API_BASE_URL="https://api.example.test" \
+            "$web_image" -c \
+            '/docker-entrypoint.d/10-runtime-config.sh && cat /usr/share/nginx/html/config.js')
+          echo "set config.js: $set_cfg"
+          echo "$set_cfg" | grep -q '"apiBaseUrl":"https://api.example.test"' || {
+            echo "expected config.js to reflect API_BASE_URL=https://api.example.test"
+            exit 1
+          }
+
+          # 3. The BUILT index.html loads /config.js via a CLASSIC script tag.
+          # Read it straight from the image so we assert the post-Vite artifact.
+          index=$(docker run --rm --entrypoint cat "$web_image" /usr/share/nginx/html/index.html)
+          tag=$(echo "$index" | grep -io '<script[^>]*src="/config.js"[^>]*>')
+          echo "config.js script tag: $tag"
+          if [ -z "$tag" ]; then
+            echo "no <script src=\"/config.js\"> in the built index.html"
+            exit 1
+          fi
+          if echo "$tag" | grep -iqE 'type[[:space:]]*=[[:space:]]*["'\'']module["'\'']'; then
+            echo "config.js script is a module (must be a classic blocking script)"
+            exit 1
+          fi
+          if echo "$tag" | grep -iqE '\basync\b|\bdefer\b'; then
+            echo "config.js script has async/defer (must be a classic blocking script)"
+            exit 1
+          fi
+
+      # Dump container logs on ANY failure above (Req 8.6).
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color
+
+      # Teardown: remove the stack AND the throwaway volume so no DB/volume
+      # state leaks between runs (round-3 Minor).
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v

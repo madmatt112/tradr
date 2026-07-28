@@ -1,0 +1,3 @@
+Symbol,DateTime,Buy/Sell,Quantity,TradePrice,IBCommission,AssetClass
+AAPL,2026-01-05T09:30:00,BUY,100,121.50,1.00,STK
+AAPL,2026-01-05T15:55:00,SELL,100,123.10,1.00,STK

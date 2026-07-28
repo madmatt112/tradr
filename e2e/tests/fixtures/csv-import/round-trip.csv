@@ -1,0 +1,3 @@
+Symbol,AssetType,Side,EntryPrice,EntryQty,EntryDate,ExitPrice,ExitQty,ExitDate
+MSFT,STOCK,LONG,300.00,10,2026-02-01,330.00,10,2026-02-05
+TSLA,STOCK,SHORT,250.00,5,2026-02-02,230.00,5,2026-02-06

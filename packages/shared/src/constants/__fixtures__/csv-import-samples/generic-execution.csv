@@ -1,0 +1,3 @@
+Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees
+SPY,Stock,Buy,100,121.50,2012-01-05T09:30:00,1.00
+SPY,Stock,Sell,100,123.10,2012-01-05T15:55:00,1.00

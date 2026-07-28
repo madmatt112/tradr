@@ -1,0 +1,91 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# Builder: install the workspace, produce the esbuild prod bundle, and
+# assemble a flat, copyable node_modules tree for the two native packages
+# (bcrypt, tiktoken) that the bundle leaves external.
+#
+# This stage runs as the TARGET architecture under buildx/QEMU multi-arch,
+# so bcrypt's native .node is built/fetched for the target arch here. The
+# native tree is therefore assembled INSIDE this RUN — never pre-built on the
+# host or shared via a cross-arch cache mount (would ship an amd64 .node in an
+# arm64 image -> "invalid ELF header" on first bcrypt call).
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /repo
+
+# Pin pnpm to the workspace packageManager version (root package.json).
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+# Copy the whole repo (the bundle inlines @tradr/* workspace source, so we
+# need the full monorepo, not just apps/api). .dockerignore keeps the context
+# slim (no node_modules, no .git, no .env).
+COPY . .
+
+# Install all workspace deps reproducibly, then build the API prod bundle
+# (dist/index.js + dist/tradr.js) with the external-set assertion from task 5.
+# Remove any stale dist carried in from the build context first so the runner
+# ships ONLY the fresh esbuild output (the bundle is produced here, in-builder).
+RUN pnpm install --frozen-lockfile
+RUN rm -rf apps/api/dist && pnpm --filter @tradr/api build:prod
+
+# Assemble the native runtime node_modules in a scratch project. npm yields a
+# flat node_modules (no symlinks), so it is safely COPY-able into the runner.
+# Versions match the workspace-pinned lockfile entries (bcrypt 5.1.1,
+# tiktoken 1.0.22). --omit=dev keeps it to runtime deps only.
+WORKDIR /native
+RUN printf '%s\n' \
+  '{' \
+  '  "name": "tradr-native",' \
+  '  "private": true,' \
+  '  "dependencies": {' \
+  '    "bcrypt": "5.1.1",' \
+  '    "tiktoken": "1.0.22"' \
+  '  }' \
+  '}' > package.json
+RUN npm install --omit=dev --no-audit --no-fund
+
+# Assert the assembled tree is RUNTIME-USABLE, not merely resolvable: both a
+# resolve check (import succeeds) and a named-export shape check. tiktoken's
+# get_encoding must be a function (WASM/CJS named export survives ESM import);
+# bcrypt's CJS default-export object must expose hashSync (ESM<->CJS interop).
+# Fails the build if either native is unusable.
+RUN node --input-type=module -e "const t=await import('tiktoken'); if(typeof t.get_encoding!=='function'){console.error('tiktoken.get_encoding not a function');process.exit(1);} const b=await import('bcrypt'); if(typeof (b.default??b).hashSync!=='function'){console.error('bcrypt.hashSync not a function');process.exit(1);} console.log('native usability assert OK');"
+
+# ---------------------------------------------------------------------------
+# Runner: slim glibc image with only the bundle, the native node_modules, and
+# the migration SQL directories. Runs non-root as the built-in `node` user.
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS runner
+
+# Deployed-version string surfaced by GET /api/health. Stamped by the staging
+# deploy (v<pkg>-<sha>) and release (v<tag>) workflows; empty in local builds.
+ARG APP_VERSION=""
+ENV APP_VERSION=${APP_VERSION}
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+# The esbuild bundle (index.js = server entry, tradr.js = CLI).
+COPY --from=builder /repo/apps/api/dist ./dist
+
+# The flat, copyable native node_modules (bcrypt + tiktoken + transitive deps).
+COPY --from=builder /native/node_modules ./node_modules
+
+# Directory-copy the WHOLE migration trees (incl. migrations/meta/_journal.json
+# which drizzle's migrator requires) next to the bundle, matching the bundled
+# migrate.ts __thisDir resolution (dist/migrations, dist/post-migrations).
+COPY --from=builder /repo/apps/api/src/db/migrations ./dist/migrations
+COPY --from=builder /repo/apps/api/src/db/post-migrations ./dist/post-migrations
+
+# `tradr` CLI shim on PATH -> the bundled CLI.
+RUN printf '%s\n' '#!/bin/sh' 'exec node /app/dist/tradr.js "$@"' > /usr/local/bin/tradr \
+  && chmod +x /usr/local/bin/tradr
+
+EXPOSE 3100
+
+USER node
+
+# node as PID 1 (no shell wrapper) so SIGTERM reaches it directly.
+ENTRYPOINT ["node", "dist/index.js"]

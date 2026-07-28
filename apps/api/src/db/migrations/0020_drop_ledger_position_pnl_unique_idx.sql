@@ -1,0 +1,1 @@
+DROP INDEX "ledger_position_pnl_unique_idx";

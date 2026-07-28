@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Environment
+.env
+.env.production
+.env.staging
+!.env.example
+!.env.test
+
+# Coverage
+coverage/
+
+# Lighthouse CI reports
+.lighthouseci/
+
+# Playwright
+e2e/test-results/
+e2e/playwright-report/
+
+# Logs
+*.log
+
+# Build caches
+.turbo
+.vite
+
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# PID files
+.*.pid
+
+.playwright-mcp/
+
+.codeindex/

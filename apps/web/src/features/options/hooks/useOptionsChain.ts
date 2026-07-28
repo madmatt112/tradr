@@ -1,0 +1,66 @@
+// useOptionsChain — TanStack Query hook for the options-chain viewer
+// (design §Component 12; REQ-12.2/12.3/12.4). Wraps GET /api/advisor/options-chain.
+//
+// The query is disabled until a symbol is supplied so typing does not fire a
+// request per keystroke (the viewer debounces the symbol). The response is
+// either the no-key empty state (`{ configured: false }`) or the parsed chain
+// (`{ configured: true, chain }`). UW failures surface as the thrown API error
+// envelope (`{ error: { code } }`) carrying the REQ-6.5 reason code so the
+// viewer can render the right UI state.
+
+import { useQuery } from '@tanstack/react-query';
+
+import { api } from '@/lib/api';
+
+/** One projected contract row (compact projection; fields optional). */
+export interface OptionContract {
+  option_symbol?: string;
+  option_type?: string;
+  strike?: number;
+  expiry?: string;
+  last_price?: number;
+  bid?: number;
+  ask?: number;
+  volume?: number;
+  open_interest?: number;
+  implied_volatility?: number;
+  delta?: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+}
+
+export interface OptionChain {
+  symbol: string;
+  expiration?: string;
+  count: number;
+  contracts: OptionContract[];
+}
+
+/** GET response — empty state (no key) or the parsed chain. */
+export type OptionsChainResponse = { configured: false } | { configured: true; chain: OptionChain };
+
+export const optionsChainKeys = {
+  chain: (symbol: string, expiration?: string) =>
+    ['options', 'chain', symbol, expiration ?? null] as const,
+};
+
+/**
+ * Fetch the options chain for `symbol` (optionally one `expiration`). The query
+ * is enabled only when a non-empty symbol is supplied (REQ-12.3 — no request on
+ * an empty input). Retries are disabled so UW failure states render immediately
+ * rather than after backoff.
+ */
+export function useOptionsChain(symbol: string, expiration?: string) {
+  const trimmed = symbol.trim();
+  return useQuery<OptionsChainResponse>({
+    queryKey: optionsChainKeys.chain(trimmed, expiration),
+    queryFn: () => {
+      const params = new URLSearchParams({ symbol: trimmed });
+      if (expiration) params.set('expiration', expiration);
+      return api.get<OptionsChainResponse>(`/advisor/options-chain?${params.toString()}`);
+    },
+    enabled: trimmed.length > 0,
+    retry: false,
+  });
+}

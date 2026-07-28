@@ -1,0 +1,3 @@
+# Default owner for everything in the repo. GitHub auto-requests review from the
+# maintainer on every pull request that touches matching paths.
+* @madmatt112

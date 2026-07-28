@@ -1,0 +1,17 @@
+version: 1
+languages:
+    - typescript
+ignore:
+    - node_modules
+    - vendor
+    - .git
+    - dist
+    - build
+query_primitives:
+    - get_file_structure
+    - find_symbol
+    - get_references
+    - get_callers
+    - get_subgraph
+    - reindex
+index_path: .codeindex

@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tradr_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql
+  # Local ephemeral Redis for the hosted-platform centralized rate-limit store
+  # (REQ-7). Optional — self-host dev needs none of it. To run the real-Redis
+  # rate-limit tests locally:
+  #   docker compose -f docker-compose.dev.yml up -d redis
+  #   REDIS_TEST_URL=redis://localhost:6379 pnpm test
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  # Local Mailpit mail catcher for the transactional-email dev loop (REQ-7.4,
+  # D16). Optional — nothing depends on it; start it explicitly:
+  #   docker compose -f docker-compose.dev.yml up -d mailpit
+  # SMTP on :1025, web UI + REST API on http://localhost:8025. Arm the API
+  # with the dev values documented in .env.example's email block
+  # (SMTP_HOST=localhost SMTP_PORT=1025 SMTP_TLS_MODE=none ...).
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+volumes:
+  postgres_data:

@@ -1,0 +1,76 @@
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Upload ceiling at SERVER scope (R1 / NGX-1). It MUST live here, not on the
+    # `/api/` prefix location: the regex stream location below does NOT inherit
+    # client_max_body_size from a sibling prefix location, and advisor image
+    # uploads ride the stream POST body. A value only on `/api/` would leave the
+    # stream route at nginx's 1 MB default and 413 chart-screenshot uploads.
+    client_max_body_size ${MAX_UPLOAD_SIZE};
+
+    # CI-only probe locations (deployment task 12). Optional wildcard include:
+    # the shipped image ships NOTHING under conf.d/probe/ so this glob matches
+    # zero files (nginx tolerates an empty/missing-dir wildcard — `nginx -t`
+    # passes). The CI overlay bind-mounts docker/conf.d/_probe.inc to
+    # conf.d/probe/_probe.conf to activate the streaming probe (Req 8.4 / 4.3).
+    include /etc/nginx/conf.d/probe/*.conf;
+
+    # Runtime config: regenerated each container start, never cached (Req 3.4).
+    location = /config.js {
+        add_header Cache-Control "no-store" always;
+    }
+
+    # SSE streaming: matches both advisor stream routes
+    # (/api/advisor/conversations/<id|new>/messages/stream). [^/]+ matches the
+    # conversation :id and the literal `new`. Response buffering is disabled via
+    # the shared snippet (design C3 / Req 4.1, 4.2, 4.5).
+    location ~ ^/api/advisor/conversations/[^/]+/messages/stream$ {
+        proxy_pass http://api:3100;
+        include conf.d/stream-proxy.inc;
+    }
+
+    # CSV import: a large within-cap synchronous import can run past nginx's
+    # default 60s proxy_read_timeout. This more-specific prefix location (longest
+    # prefix match wins, so it is selected over `/api/` below) raises the read
+    # timeout for this route ONLY. Sibling locations do NOT inherit proxy_*, so
+    # every directive from `/api/` is restated verbatim; only proxy_read_timeout
+    # is added. Default proxy_request_buffering on (this is NOT the SSE path).
+    location /api/csv-import/ {
+        proxy_pass http://api:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout ${CSV_IMPORT_NGINX_PROXY_TIMEOUT};
+    }
+
+    # All other API traffic: single wildcard over every /api/ prefix
+    # (app.ts:37-49). Normal buffering. nginx still honors an upstream
+    # X-Accel-Buffering: no header here and never strips it (Req 4.3).
+    location /api/ {
+        proxy_pass http://api:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Long-lived, content-hashed build assets (Req 2.4).
+    location ~* ^/assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    # SPA fallback (Req 2.3). index.html itself must not be cached so a new
+    # deploy is picked up immediately.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+    }
+}

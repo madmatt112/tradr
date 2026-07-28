@@ -1,0 +1,6 @@
+# Local-dev telemetry on-switch: drop a git-ignored public/config.js
+# (window.__TRADR_CONFIG__ = { posthogPublicKey: '…', plausibleDomain: '…' })
+# that Vite dev serves at /config.js. Production is unaffected — the container
+# entrypoint (docker/docker-entrypoint.d/10-runtime-config.sh) rewrites
+# /config.js on every start.
+config.js

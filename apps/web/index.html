@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tradr</title>
+    <!-- tradr:boot-theme -->
+    <script>
+(function () {
+  var ALLOWED = { light: 1, dark: 1, system: 1 };
+  var match = document.cookie.match(/(?:^|;\s*)tradr_theme=([^;]*)/);
+  var cookie = match ? decodeURIComponent(match[1]) : null;
+  var valid = cookie && ALLOWED[cookie] ? cookie : null;
+  var resolved =
+    valid === 'light' ? 'light'
+    : valid === 'dark' ? 'dark'
+    : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  if (resolved === 'dark') document.documentElement.classList.add('dark');
+  else document.documentElement.classList.remove('dark');
+})();
+    </script>
+    <!-- /tradr:boot-theme -->
+    <!-- Runtime config: classic blocking script — sets window.__TRADR_CONFIG__
+         before the deferred ES-module entry runs. Absent in dev (no /config.js). -->
+    <script src="/config.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

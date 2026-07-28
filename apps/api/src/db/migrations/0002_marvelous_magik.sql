@@ -1,0 +1,1 @@
+ALTER TABLE "fills" ALTER COLUMN "type" SET DATA TYPE varchar(5);

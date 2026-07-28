@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/madmatt112/tradr/security/policy
+    about: Please do not open a public issue for security problems — follow our Security Policy for private disclosure.

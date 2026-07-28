@@ -1,0 +1,174 @@
+# Production stack: postgres + api + web on one fixed-subnet bridge.
+#
+# Usage:
+#   cp .env.example .env   # fill in POSTGRES_* and the secrets
+#   docker compose up -d
+#
+# DATABASE_URL is built HERE, in api.environment — NOT in .env. Compose does not
+# recursively expand ${VAR} written *inside* an .env value (it is treated as a
+# literal), so the URL is composed from the POSTGRES_* vars at compose-render
+# time instead (Restriction M1). postgres and api are intentionally NOT
+# published; only web exposes a host port.
+
+networks:
+  tradr:
+    driver: bridge
+    ipam:
+      config:
+        # Operator-overridable; keep in sync with TRUSTED_PROXIES in .env.
+        - subnet: ${TRADR_SUBNET:-172.28.0.0/24}
+
+volumes:
+  pgdata:
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tradr
+    restart: unless-stopped
+
+  api:
+    # Documented alternative to building locally: pull a pinned, multi-arch
+    # GHCR image published by the release workflow (task 15). Replace the
+    # `build:` block with, e.g.:
+    #   image: ghcr.io/<owner>/tradr-api:1.2.3
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    env_file: .env
+    environment:
+      # Built from POSTGRES_* (M1) — overrides any DATABASE_URL in .env.
+      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      # CSV import (api container). All optional with defaults. Operator
+      # constraints (hand-synced — these timeouts/caps live in the web container):
+      #   MAX_UPLOAD_SIZE (web) >= CSV_IMPORT_MAX_FILE_BYTES
+      #   CSV_IMPORT_CLAIM_TIMEOUT_SECONDS >= 2 * CSV_IMPORT_NGINX_PROXY_TIMEOUT (web)
+      CSV_IMPORT_MAX_FILE_BYTES: ${CSV_IMPORT_MAX_FILE_BYTES:-10485760}
+      CSV_IMPORT_MAX_REQUEST_BYTES: ${CSV_IMPORT_MAX_REQUEST_BYTES:-65536}
+      CSV_IMPORT_MAX_ROWS: ${CSV_IMPORT_MAX_ROWS:-10000}
+      CSV_IMPORT_STAGING_TTL_MINUTES: ${CSV_IMPORT_STAGING_TTL_MINUTES:-30}
+      CSV_IMPORT_MAX_STAGED_BYTES: ${CSV_IMPORT_MAX_STAGED_BYTES:-25165824}
+      CSV_IMPORT_CLAIM_TIMEOUT_SECONDS: ${CSV_IMPORT_CLAIM_TIMEOUT_SECONDS:-600}
+      # Wallet billing (api container). ALL optional — feature absent when unset.
+      # Both STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET required to enable purchases.
+      # RESERVATION_TTL_MS MUST stay strictly above the 480000ms turn wall-clock.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      # Pro subscription Price id (plan-tiers D14). Bare ${VAR:-} is SAFE —
+      # plain z.string().optional(); '' reads falsy via isProSubscriptionConfigured.
+      STRIPE_PRO_PRICE_ID: ${STRIPE_PRO_PRICE_ID:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MIN_RESERVATION_CREDITS: ${MIN_RESERVATION_CREDITS:-1}
+      RESERVATION_TTL_MS: ${RESERVATION_TTL_MS:-600000}
+      PRICING_MARKUP: ${PRICING_MARKUP:-1.2}
+      # Admin platform — feature gating (api container). Value defaults, NOT the
+      # bare ${VAR:-} idiom: that injects '', which is present-not-undefined to
+      # Zod and would crash-loop against the enum/coerced-number schemas.
+      # SEED_ADMIN_EMAIL is intentionally env_file-only (set it in .env).
+      FEATURE_GATING: ${FEATURE_GATING:-false}
+      FEATURE_GATING_ADVISOR_TURNS_PER_MONTH: ${FEATURE_GATING_ADVISOR_TURNS_PER_MONTH:-200}
+      # Changelog (api container). Value defaults — same no-bare-${VAR:-} rule
+      # as above. Base URL is a test/E2E seam; leave unset in production.
+      CHANGELOG_GITHUB_REPO: ${CHANGELOG_GITHUB_REPO:-madmatt112/tradr}
+      CHANGELOG_GITHUB_BASE_URL: ${CHANGELOG_GITHUB_BASE_URL:-https://api.github.com}
+      # Symbol search + delayed quotes (api container). api-only — the frontend
+      # learns configuredness from an authed config endpoint, NOT a web var.
+      # Optional: absent ⇒ last-price affordance off for everyone. Bare ${VAR:-}
+      # is SAFE — STOCK_QUOTE_API_KEY (plain z.string().optional()) reads '' as
+      # unset via its !! predicate (the Stripe/LLM-key precedent). The SEC/base-URL
+      # seams are env_file-only (test/E2E overrides); leave them unset in prod.
+      STOCK_QUOTE_API_KEY: ${STOCK_QUOTE_API_KEY:-}
+      # Observability (api container). ALL optional — the surface is ABSENT when
+      # unset. Bare ${VAR:-} is SAFE here (unlike the enum/number vars above):
+      # POSTHOG_API_KEY (plain z.string().optional()) reads '' as unset via its !!
+      # predicate (the Stripe/LLM-key precedent), and POSTHOG_HOST's
+      # z.preprocess('' → undefined, …url().default()) maps '' to the default.
+      POSTHOG_API_KEY: ${POSTHOG_API_KEY:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
+      # Hosted platform (api container). ALL optional — self-host leaves them unset
+      # and behaves exactly as today (REQ-1 parity). Bare ${VAR:-} is SAFE for the
+      # URL/preprocess vars (REDIS_URL / DIRECT_DATABASE_URL / OBJECT_STORAGE_ENDPOINT:
+      # '' → undefined) and the plain optional strings (BUCKET/REGION/keys/CORS: ''
+      # read falsy by the isXConfigured predicates — the Stripe-key precedent). The
+      # two enum vars need VALUE defaults, NOT ${VAR:-}: '' is present-not-undefined
+      # and crash-loops the enum (the FEATURE_GATING rule above).
+      REDIS_URL: ${REDIS_URL:-}
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-}
+      DB_TRANSACTION_POOLER: ${DB_TRANSACTION_POOLER:-false}
+      OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-}
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-}
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}
+      OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-true}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # ADVISOR_IMAGE_MAX_BYTES / ADVISOR_MAX_REQUEST_BYTES are coerce-number and
+      # optional with NO default, so bare ${VAR:-} ('') would coerce to 0 and fail
+      # .positive(), boot-crashing an unconfigured self-host. They are therefore
+      # env_file-only: set them in .env to override; leave unset for the derived
+      # defaults. Do NOT add them here as ${VAR:-}.
+      # Transactional email (api container). ALL optional — email is enabled only
+      # when the SMTP_HOST + EMAIL_FROM + WEB_BASE_URL trio is complete; a partial
+      # set fails loud at startup naming the vars. Bare ${VAR:-} is SAFE for the
+      # string/preprocess vars ('' ≡ unset). SMTP_PORT / SMTP_TLS_MODE are
+      # coerced/enum vars and get VALUE defaults per the FEATURE_GATING rule above
+      # (their schemas are also ''-preprocess-tolerant — belt-and-braces).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_TLS_MODE: ${SMTP_TLS_MODE:-starttls}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-}
+      WEB_BASE_URL: ${WEB_BASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      start_period: 180s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tradr
+    restart: unless-stopped
+
+  web:
+    # Documented alternative (see api): replace `build:` with
+    #   image: ghcr.io/<owner>/tradr-web:1.2.3
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-}
+      ADVISOR_NGINX_PROXY_TIMEOUT: ${ADVISOR_NGINX_PROXY_TIMEOUT:-180s}
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-20m}
+      # Observability (web container). ALL optional — the surface is ABSENT when
+      # unset. The entrypoint (10-runtime-config.sh) reads these from container
+      # env and omits the field when empty, so bare ${VAR:-} is safe; NO
+      # NGINX_ENVSUBST_FILTER change is needed (it governs *.template, not config.js).
+      POSTHOG_PUBLIC_KEY: ${POSTHOG_PUBLIC_KEY:-}
+      POSTHOG_PUBLIC_HOST: ${POSTHOG_PUBLIC_HOST:-}
+    networks:
+      - tradr
+    restart: unless-stopped

@@ -1,0 +1,152 @@
+name: Security Review
+
+# AI security review of pull-request diffs using Anthropic's
+# claude-code-security-review action. Complements — does not replace — the
+# in-session security-guidance plugin, dependency scanning, and secret scanning.
+#
+# SETUP (one-time):
+#   Add the repository secret CLAUDE_API_KEY (an Anthropic API key enabled for
+#   Claude Code). Settings → Secrets and variables → Actions → New secret.
+#
+# SECURITY NOTES:
+#   - Uses `pull_request` (NOT `pull_request_target`): fork PRs run without repo
+#     secrets, so CLAUDE_API_KEY is absent and the review simply skips on forks.
+#     This avoids the prompt-injection-to-secret-exfiltration class
+#     (cf. CVE-2025-59536, where PR content drives the scanner). The job is
+#     additionally guarded to same-repo PRs only.
+#   - Pin the action below to a reviewed commit SHA before depending on it in a
+#     gate — `@main` is unpinned third-party code. (Left as @main to match the
+#     official docs; replace with `@<sha>` once reviewed.)
+#
+# REPORTING:
+#   The action only posts inline diff comments, and only when it finds
+#   something — a clean pass is completely silent, and so is a scan that broke.
+#   The summary step below always posts a verdict (pass / findings /
+#   inconclusive) as a PR comment so results don't have to be dug out of logs.
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  security-review:
+    name: Claude security review
+    runs-on: ubuntu-latest
+    # Skip on fork PRs (no secret available; avoids running the reviewer on
+    # untrusted code with credentials in scope).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - name: Run Claude security review
+        id: review
+        uses: anthropics/claude-code-security-review@main
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          comment-pr: true
+          upload-results: true
+          # Without this the action caches a per-PR marker and disables itself
+          # on every push after the first, so later commits ship unreviewed
+          # while the job still reports green. Costs one scan per push.
+          run-every-commit: true
+          # Skip vendored, generated, and non-application trees to cut noise.
+          exclude-directories: node_modules,docs,bench,e2e
+          # claude-model and claudecode-timeout use action defaults; override
+          # here if scans time out on large diffs.
+
+      - name: Post review summary to the PR
+        # always() so a scan that crashed still reports rather than going quiet.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FINDINGS_COUNT: ${{ steps.review.outputs.findings-count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          results=claudecode-results.json
+          findings=findings.json
+          export MARKER="<!-- claude-security-review sha=${HEAD_SHA} -->"
+
+          # The action reports findings_count=0 on every failure path too
+          # (scan crashed, results file missing or unparseable, API error), so
+          # a count of 0 is only a pass once the results file confirms the
+          # review actually completed. An empty count means it never ran.
+          if [ -z "${FINDINGS_COUNT}" ]; then
+            verdict=skipped
+          elif [ ! -s "$results" ] \
+            || jq -e 'has("error")' "$results" >/dev/null 2>&1 \
+            || ! jq -e '.analysis_summary.review_completed == true' "$results" >/dev/null 2>&1; then
+            verdict=inconclusive
+          elif [ "${FINDINGS_COUNT}" -gt 0 ]; then
+            verdict=findings
+          else
+            verdict=pass
+          fi
+
+          {
+            echo "$MARKER"
+            echo "### Claude security review — \`${HEAD_SHA:0:7}\`"
+            echo
+            case "$verdict" in
+              pass)
+                reviewed=$(jq -r '.analysis_summary.files_reviewed // "?"' "$results")
+                echo "✅ **Pass** — no findings across ${reviewed} reviewed file(s)."
+                ;;
+              findings)
+                echo "❌ **${FINDINGS_COUNT} finding(s)** — resolve before merging."
+                echo
+                echo "| Severity | Location | Issue |"
+                echo "| --- | --- | --- |"
+                jq -r '.[] | "| \(.severity // "HIGH") | `\(.file // .path // "?"):\(.line // .start.line // "?")` | \((.description // .extra.message // "Security vulnerability detected") | gsub("[\r\n|]"; " ")) |"' "$findings"
+                echo
+                echo "Details are on the diff as inline review comments."
+                ;;
+              inconclusive)
+                echo "⚠️ **Inconclusive** — the scan did not complete, so this is **not** a pass. Treat the diff as unreviewed."
+                ;;
+              skipped)
+                echo "⏭️ **Skipped** — the reviewer did not run for this commit."
+                ;;
+            esac
+            echo
+            echo "[Job log](${RUN_URL}) · one comment per commit; re-runs of the same commit edit it in place."
+          } > comment.md
+
+          # Upsert keyed on the head SHA: a new push adds a comment, a re-run
+          # of the same commit updates its own instead of duplicating.
+          ids=$(gh api "/repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '.[] | select(.body | contains(env.MARKER)) | .id')
+          id=$(printf '%s\n' "$ids" | head -n 1)
+
+          if [ -n "$id" ]; then
+            jq -Rs '{body: .}' comment.md \
+              | gh api -X PATCH "/repos/${REPO}/issues/comments/${id}" --input - >/dev/null
+          else
+            jq -Rs '{body: .}' comment.md \
+              | gh api -X POST "/repos/${REPO}/issues/${PR_NUMBER}/comments" --input - >/dev/null
+          fi
+
+          echo "Posted verdict: ${verdict}"
+
+          # A scanner that broke must not read as a green check. Findings
+          # themselves stay non-blocking until the action is pinned to a SHA.
+          if [ "$verdict" = inconclusive ]; then
+            echo "::error::Security review did not complete — see the job log."
+            exit 1
+          fi

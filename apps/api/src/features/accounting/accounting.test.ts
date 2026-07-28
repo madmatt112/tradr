@@ -1,0 +1,817 @@
+import { eq, sql as drizzleSql } from 'drizzle-orm';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+
+import app, { bootstrap } from '@/app';
+import { db } from '@/db';
+import { ledgerEntries, positions as positionsTbl } from '@/db/schema';
+import {
+  registerCloseHook,
+  unregisterCloseHook,
+  listCloseHooks,
+} from '@/features/positions/positions.service';
+
+// ---------------------------------------------------------------------------
+// Bootstrap opt-in (design.md §Testing Strategy > Integration Testing)
+// ---------------------------------------------------------------------------
+//
+// This file installs the production 'ledger' close hook for the whole file
+// via `bootstrap()`, and cleans it up in `afterAll`. Task 18's global
+// `afterAll` registry sweep is a belt-and-suspenders net; per-file cleanup
+// is still required.
+beforeAll(() => {
+  // .catch swallows the async advisor-startup tail's rejection: in tests `@/db`
+  // is mocked to `undefined` outside the per-test tx window, so the
+  // fire-and-forget decrypt-canary would otherwise leak an unhandled rejection
+  // and fail `pnpm test`. The synchronous prelude (Decimal pin + ledger hook) —
+  // all this file needs — has already run by the time .catch attaches.
+  bootstrap().catch(() => {});
+});
+
+afterAll(() => {
+  unregisterCloseHook('ledger');
+});
+
+// ---------------------------------------------------------------------------
+// HTTP fixture helpers (mirrors brokerages.test.ts / positions.test.ts).
+// ---------------------------------------------------------------------------
+
+let testCounter = 0;
+const testRunId = Date.now();
+function uniqueEmail() {
+  return `acct-int${testRunId}-${++testCounter}@example.com`;
+}
+
+let ipCounter = 400;
+function uniqueIp() {
+  return `10.4.${Math.floor(++ipCounter / 256)}.${ipCounter % 256}`;
+}
+
+function getCookieValue(res: Response, name: string): string | undefined {
+  const setCookieHeaders = res.headers.getSetCookie();
+  for (const header of setCookieHeaders) {
+    const match = header.match(new RegExp(`${name}=([^;]*)`));
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+async function registerAndGetCookie(): Promise<{ cookie: string }> {
+  const res = await app.request('/api/auth/register', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': uniqueIp(),
+    },
+    body: JSON.stringify({ email: uniqueEmail(), password: 'password123' }),
+  });
+  expect(res.status).toBe(201);
+  const cookie = getCookieValue(res, 'session')!;
+  expect(cookie).toBeDefined();
+  return { cookie };
+}
+
+function authedRequest(method: string, path: string, cookie: string, body?: unknown) {
+  const headers: Record<string, string> = {
+    Cookie: `session=${cookie}`,
+    'X-Forwarded-For': uniqueIp(),
+  };
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+  return app.request(path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+}
+
+async function getMe(cookie: string): Promise<{ id: string }> {
+  const res = await authedRequest('GET', '/api/auth/me', cookie);
+  expect(res.status).toBe(200);
+  const data = await res.json();
+  return data.user ?? data;
+}
+
+async function createAccount(cookie: string, name = 'Test Account', currency = 'USD') {
+  const res = await authedRequest('POST', '/api/accounts', cookie, { name, currency });
+  expect(res.status).toBe(201);
+  return res.json();
+}
+
+async function createPosition(
+  cookie: string,
+  accountId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const res = await authedRequest('POST', '/api/positions', cookie, {
+    accountId,
+    symbol: 'AAPL',
+    side: 'long',
+    assetType: 'stock',
+    ...overrides,
+  });
+  expect(res.status).toBe(201);
+  return res.json();
+}
+
+async function addFill(
+  cookie: string,
+  positionId: string,
+  data: { type: string; price: string; quantity: string; fees?: string; filledAt: string },
+) {
+  const res = await authedRequest('POST', `/api/positions/${positionId}/fills`, cookie, data);
+  expect(res.status).toBe(201);
+  return res.json();
+}
+
+async function openPosition(cookie: string, positionId: string, openedAt?: string) {
+  const res = await authedRequest('POST', `/api/positions/${positionId}/open`, cookie, {
+    openedAt,
+  });
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
+async function closePosition(cookie: string, positionId: string, closedAt?: string) {
+  const res = await authedRequest('POST', `/api/positions/${positionId}/close`, cookie, {
+    closedAt,
+  });
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
+/**
+ * Open + close a position whose net P&L = (exit - entry) * qty - entryFees - exitFees.
+ * Returns the closed position row.
+ */
+async function openAndClosePosition(
+  cookie: string,
+  accountId: string,
+  opts: {
+    entryPrice: string;
+    exitPrice: string;
+    quantity: string;
+    entryFees?: string;
+    exitFees?: string;
+    symbol?: string;
+  },
+) {
+  const pos = await createPosition(cookie, accountId, { symbol: opts.symbol ?? 'AAPL' });
+  await addFill(cookie, pos.id, {
+    type: 'entry',
+    price: opts.entryPrice,
+    quantity: opts.quantity,
+    fees: opts.entryFees ?? '0',
+    filledAt: '2026-01-01T00:00:00Z',
+  });
+  await openPosition(cookie, pos.id, '2026-01-01T00:00:00Z');
+  await addFill(cookie, pos.id, {
+    type: 'exit',
+    price: opts.exitPrice,
+    quantity: opts.quantity,
+    fees: opts.exitFees ?? '0',
+    filledAt: '2026-01-02T00:00:00Z',
+  });
+  await closePosition(cookie, pos.id, '2026-01-02T00:00:00Z');
+  return pos;
+}
+
+// ---------------------------------------------------------------------------
+// 1. GET /api/ledger/:accountId — pagination, ordering, running balance
+// ---------------------------------------------------------------------------
+
+describe('GET /api/ledger/:accountId', () => {
+  it('paginates and returns entries in (occurred_at DESC, created_at DESC) order with hasMore', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccount(cookie, 'L Account', 'USD');
+
+    // Close three profitable positions producing three credit ledger rows.
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+      symbol: 'A',
+    });
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '10',
+      exitPrice: '30',
+      quantity: '1',
+      symbol: 'B',
+    });
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '10',
+      exitPrice: '40',
+      quantity: '1',
+      symbol: 'C',
+    });
+
+    // pageSize=2 → first page returns 2 entries, hasMore=true.
+    const page1Res = await authedRequest(
+      'GET',
+      `/api/ledger/${account.id}?page=1&pageSize=2`,
+      cookie,
+    );
+    expect(page1Res.status).toBe(200);
+    const page1 = await page1Res.json();
+    expect(page1.entries).toHaveLength(2);
+    expect(page1.hasMore).toBe(true);
+    expect(page1.page).toBe(1);
+    expect(page1.pageSize).toBe(2);
+
+    // Page 2 returns the third entry; hasMore=false.
+    const page2Res = await authedRequest(
+      'GET',
+      `/api/ledger/${account.id}?page=2&pageSize=2`,
+      cookie,
+    );
+    expect(page2Res.status).toBe(200);
+    const page2 = await page2Res.json();
+    expect(page2.entries).toHaveLength(1);
+    expect(page2.hasMore).toBe(false);
+
+    // The first row of page2 corresponds to the oldest entry (the first
+    // close, symbol 'A'); the running balance up to (exclusive) that row
+    // sums all newer rows' credits − debits. With three +N credits all
+    // older than... wait — the ordering is DESC. So page1[0] is the newest
+    // close (symbol 'C'), page2[0] is the oldest (symbol 'A').
+    // runningBalanceAtFirstRow on page2 = SUM over rows OLDER than page2[0]
+    // = 0 entries → '0.00'.
+    expect(page2.runningBalanceAtFirstRow).toBe('0.00');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2. Deleted-position row rendering via manual UPDATE position_id = NULL
+// ---------------------------------------------------------------------------
+
+describe('GET /api/ledger/:accountId — deleted position rendering', () => {
+  it('returns the ledger row with positionId:null when the column was nulled', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccount(cookie, 'Acct', 'USD');
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    // Manually NULL out the position_id (no v1 flow exercises the cascade).
+    await db
+      .update(ledgerEntries)
+      .set({ positionId: null })
+      .where(eq(ledgerEntries.accountId, account.id));
+
+    const res = await authedRequest('GET', `/api/ledger/${account.id}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0].positionId).toBeNull();
+    // The row still carries `symbol` so the FE can render "<symbol> (deleted)".
+    expect(body.entries[0].symbol).toBe('AAPL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. ON DELETE SET NULL cascade + close-hook scoping
+// ---------------------------------------------------------------------------
+
+describe('positions ON DELETE SET NULL cascade + close-hook scoping', () => {
+  it('raw tx.delete(positions) flips position_id → NULL AND adds zero new ledger rows', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccount(cookie, 'Cascade Acct', 'USD');
+    const pos = await openAndClosePosition(cookie, account.id, {
+      entryPrice: '10',
+      exitPrice: '15',
+      quantity: '1',
+    });
+
+    // Pre-DELETE: one ledger row with non-null position_id.
+    const preRows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(preRows).toHaveLength(1);
+    expect(preRows[0].positionId).toBe(pos.id);
+
+    // Raw query-layer DELETE bypassing removePosition's "rejects closed" guard.
+    // This is a contract test — the close-hook is closePosition-scoped, NOT
+    // raw-delete-scoped. A future hook wired on the registry that fires for
+    // deletes would break this assertion.
+    await db.delete(positionsTbl).where(eq(positionsTbl.id, pos.id));
+
+    const postRows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    // (a) cascade fired — position_id NULLed.
+    expect(postRows).toHaveLength(1);
+    expect(postRows[0].positionId).toBeNull();
+    // (b) hook did NOT fire — row count unchanged.
+    expect(postRows.length).toBe(preRows.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Real removePosition path — reversal + ON DELETE SET NULL cascade (Req 7.11)
+// ---------------------------------------------------------------------------
+//
+// Task 27 pays the cascade test "owed by Open Design Question 6". Section 3
+// above drives a RAW `db.delete(positions)` with no reversal; this one goes
+// through the production `DELETE /api/positions/:id` endpoint with the live
+// close + reverse hooks (installed by `bootstrap()` in `beforeAll`), so it
+// asserts the full owed contract via the REAL path (not a manual UPDATE):
+//   (a) a `position_pnl_reversal` links back to the original close via
+//       `reversesGroupId`;
+//   (b) the `positions.positionId ON DELETE SET NULL` cascade NULLs `positionId`
+//       on BOTH the original close row AND its reversal;
+//   (c) the account balance returns to its pre-close value;
+//   (d) the position is gone.
+
+describe('DELETE /api/positions/:id — ledger reversal + ON DELETE SET NULL cascade (Req 7.11)', () => {
+  async function getBalance(cookie: string, accountId: string): Promise<string> {
+    const res = await authedRequest('GET', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(200);
+    return (await res.json()).balance;
+  }
+
+  it('reverses the close, NULLs positionId on original + reversal, and restores the pre-close balance', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccount(cookie, 'Cascade+Reversal Acct', 'USD');
+
+    const preClose = await getBalance(cookie, account.id);
+    expect(preClose).toBe('0.0000');
+
+    // Close a +$10 position (entry 100, exit 110, qty 1).
+    const pos = await openAndClosePosition(cookie, account.id, {
+      entryPrice: '100',
+      exitPrice: '110',
+      quantity: '1',
+    });
+
+    // The close posted exactly one credit position_pnl row; capture its groupId.
+    const closeRows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, pos.id));
+    expect(closeRows).toHaveLength(1);
+    expect(closeRows[0].entryType).toBe('position_pnl');
+    expect(closeRows[0].direction).toBe('credit');
+    const originalGroupId = closeRows[0].groupId;
+    // Balance moved off its pre-close value.
+    expect(await getBalance(cookie, account.id)).toBe('10.0000');
+
+    // Real delete path: the reverse hook fires FIRST (posting the reversal),
+    // then the position hard-deletes, firing the ON DELETE SET NULL cascade.
+    const del = await authedRequest('DELETE', `/api/positions/${pos.id}`, cookie);
+    expect(del.status).toBe(204);
+
+    // positionId is NULL now, so query by account.
+    const postRows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    // Two append-only rows survive: the original close + its reversal.
+    expect(postRows).toHaveLength(2);
+
+    const original = postRows.find((r) => r.entryType === 'position_pnl');
+    const reversal = postRows.find((r) => r.entryType === 'position_pnl_reversal');
+    expect(original).toBeDefined();
+    expect(reversal).toBeDefined();
+
+    // (a) the reversal links back to the original close via reversesGroupId,
+    //     with a flipped direction and the same magnitude.
+    expect(reversal!.reversesGroupId).toBe(originalGroupId);
+    expect(reversal!.direction).toBe('debit');
+    expect(reversal!.amount).toBe(original!.amount);
+
+    // (b) the ON DELETE SET NULL cascade fired via the REAL delete — positionId
+    //     is NULL on BOTH rows (not a hand-written UPDATE).
+    expect(original!.positionId).toBeNull();
+    expect(reversal!.positionId).toBeNull();
+
+    // (c) the balance nets back to the pre-close value.
+    expect(await getBalance(cookie, account.id)).toBe(preClose);
+
+    // (d) the position is gone.
+    const getRes = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect(getRes.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. POST /api/exchange-rates upsert
+// ---------------------------------------------------------------------------
+
+describe('POST /api/exchange-rates — upsert', () => {
+  it('re-entry of the same (base, quote, effectiveDate) replaces the rate', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const first = await authedRequest('POST', '/api/exchange-rates', cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'EUR',
+      rate: '0.90',
+      effectiveDate: '2026-01-01',
+    });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody.rate).toBe('0.900000000000');
+
+    const second = await authedRequest('POST', '/api/exchange-rates', cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'EUR',
+      rate: '0.95',
+      effectiveDate: '2026-01-01',
+    });
+    expect(second.status).toBe(201);
+    const secondBody = await second.json();
+    expect(secondBody.id).toBe(firstBody.id);
+    expect(secondBody.rate).toBe('0.950000000000');
+
+    const list = await authedRequest('GET', '/api/exchange-rates', cookie);
+    const rows = await list.json();
+    expect(rows.filter((r: { id: string }) => r.id === firstBody.id)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. DELETE /api/exchange-rates/:id
+// ---------------------------------------------------------------------------
+
+describe('DELETE /api/exchange-rates/:id', () => {
+  it('deletes a rate, second delete returns 404', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const create = await authedRequest('POST', '/api/exchange-rates', cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'EUR',
+      rate: '0.9',
+      effectiveDate: '2026-01-01',
+    });
+    const rate = await create.json();
+
+    const del = await authedRequest('DELETE', `/api/exchange-rates/${rate.id}`, cookie);
+    expect(del.status).toBe(204);
+
+    const del2 = await authedRequest('DELETE', `/api/exchange-rates/${rate.id}`, cookie);
+    expect(del2.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. POST /api/exchange-rates/preview
+// ---------------------------------------------------------------------------
+
+describe('POST /api/exchange-rates/preview', () => {
+  it('upsert intent: first-rate-entry → before:null, after:non-null, exceedsThreshold:true', async () => {
+    const { cookie } = await registerAndGetCookie();
+    // Materialize display_currency=USD by creating an account.
+    await createAccount(cookie, 'USD acct', 'USD');
+    // EUR account holds a balance (close a profitable EUR position so the
+    // aggregate has something to convert).
+    const eur = await createAccount(cookie, 'EUR acct', 'EUR');
+    await openAndClosePosition(cookie, eur.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('POST', '/api/exchange-rates/preview', cookie, {
+      intent: 'upsert',
+      rate: {
+        baseCurrency: 'EUR',
+        quoteCurrency: 'USD',
+        rate: '1.10',
+        effectiveDate: '2026-01-01',
+      },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.beforeTotal).toBeNull();
+    expect(body.afterTotal).not.toBeNull();
+    expect(body.exceedsThreshold).toBe(true);
+  });
+
+  it('delete intent: removing the only rate flips after to null and exceedsThreshold true', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await createAccount(cookie, 'USD acct', 'USD');
+    const eur = await createAccount(cookie, 'EUR acct', 'EUR');
+    await openAndClosePosition(cookie, eur.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    const createRate = await authedRequest('POST', '/api/exchange-rates', cookie, {
+      baseCurrency: 'EUR',
+      quoteCurrency: 'USD',
+      rate: '1.00',
+      effectiveDate: '2026-01-01',
+    });
+    const rate = await createRate.json();
+
+    const res = await authedRequest('POST', '/api/exchange-rates/preview', cookie, {
+      intent: 'delete',
+      rateId: rate.id,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.beforeTotal).not.toBeNull();
+    expect(body.afterTotal).toBeNull();
+    expect(body.exceedsThreshold).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. GET /api/dashboard/totals
+// ---------------------------------------------------------------------------
+
+describe('GET /api/dashboard/totals', () => {
+  it('happy path: returns aggregate total in display currency', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const usd = await createAccount(cookie, 'USD acct', 'USD');
+    await openAndClosePosition(cookie, usd.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', '/api/dashboard/totals', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.displayCurrency).toBe('USD');
+    expect(body.total).not.toBeNull();
+    // single account, single $10 profit
+    expect(body.total).toBe('10.0000');
+    // missingPairs is omitted when empty (route contract).
+    expect(body.missingPairs).toBeUndefined();
+  });
+
+  it('missing-rate scenario: returns total:null + missingPairs sorted (base ASC, quote ASC)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    // First account → materializes display_currency=USD.
+    await createAccount(cookie, 'USD acct', 'USD');
+    // Second account in a different currency, with a balance, no rate.
+    const eur = await createAccount(cookie, 'EUR acct', 'EUR');
+    await openAndClosePosition(cookie, eur.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', '/api/dashboard/totals', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.displayCurrency).toBe('USD');
+    expect(body.total).toBeNull();
+    expect(body.missingPairs).toBeDefined();
+    expect(body.missingPairs).toEqual([{ baseCurrency: 'EUR', quoteCurrency: 'USD' }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. GET /api/accounts and GET /api/accounts/:id include balance
+// ---------------------------------------------------------------------------
+
+describe('GET /api/accounts — balance field', () => {
+  it('list response includes per-account balance derived from ledger', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'B Account', 'USD');
+    await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '10',
+      exitPrice: '15',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', '/api/accounts', cookie);
+    expect(res.status).toBe(200);
+    const rows = await res.json();
+    const row = rows.find((r: { id: string }) => r.id === acct.id);
+    expect(row).toBeDefined();
+    expect(row).toHaveProperty('balance');
+    // Profit of $5; balance projection is numeric(18,4)::text COALESCEd.
+    expect(row.balance).toBe('5.0000');
+  });
+
+  it('accounts with no ledger entries report balance "0.0000"', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'Empty Account', 'USD');
+    const res = await authedRequest('GET', '/api/accounts', cookie);
+    const rows = await res.json();
+    const row = rows.find((r: { id: string }) => r.id === acct.id);
+    expect(row.balance).toBe('0.0000');
+  });
+
+  it('balance = starting balance + ledger P&L', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Seeded Account',
+      currency: 'USD',
+      startingBalance: '1000.5',
+    });
+    expect(createRes.status).toBe(201);
+    const acct = await createRes.json();
+    // Profit of $5 on top of the 1000.50 starting balance.
+    await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '10',
+      exitPrice: '15',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', '/api/accounts', cookie);
+    const rows = await res.json();
+    const row = rows.find((r: { id: string }) => r.id === acct.id);
+    expect(row.balance).toBe('1005.5000');
+  });
+
+  it('starting balance is included in dashboard totals', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Seeded USD acct',
+      currency: 'USD',
+      startingBalance: '100',
+    });
+    expect(createRes.status).toBe(201);
+    const acct = await createRes.json();
+    await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', '/api/dashboard/totals', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // 100 starting + $10 profit.
+    expect(body.total).toBe('110.0000');
+  });
+
+  it('starting balance anchors the ledger running balance', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Seeded Ledger acct',
+      currency: 'USD',
+      startingBalance: '100',
+    });
+    expect(createRes.status).toBe(201);
+    const acct = await createRes.json();
+    await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '10',
+      exitPrice: '20',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', `/api/ledger/${acct.id}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.entries).toHaveLength(1);
+    // No rows older than the page's first row, so the anchor is exactly the
+    // starting balance — folding the page's single +10 entry forward lands on
+    // the account's derived balance of 110.
+    expect(body.runningBalanceAtFirstRow).toBe('100.00');
+  });
+});
+
+describe('GET /api/accounts/:id — balance field', () => {
+  it('detail response includes balance (Task 21 useAccount data source)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'D Account', 'USD');
+    await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '10',
+      exitPrice: '17',
+      quantity: '1',
+    });
+
+    const res = await authedRequest('GET', `/api/accounts/${acct.id}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.id).toBe(acct.id);
+    expect(body).toHaveProperty('balance');
+    expect(body.balance).toBe('7.0000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Cross-spec close: profit, loss, zero P&L → correct ledger rows
+// ---------------------------------------------------------------------------
+
+describe('cross-spec close → ledger row shape (production hook installed)', () => {
+  it('profit → exactly one credit position_pnl row with correct magnitude', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'Profit Acct', 'USD');
+    const pos = await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '100',
+      exitPrice: '120',
+      quantity: '1',
+    });
+    const rows = await db.select().from(ledgerEntries).where(eq(ledgerEntries.positionId, pos.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].entryType).toBe('position_pnl');
+    expect(rows[0].direction).toBe('credit');
+    expect(rows[0].amount).toBe('20.0000');
+    expect(rows[0].currency).toBe('USD');
+  });
+
+  it('loss → exactly one debit position_pnl row with positive magnitude', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'Loss Acct', 'USD');
+    const pos = await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '100',
+      exitPrice: '70',
+      quantity: '1',
+    });
+    const rows = await db.select().from(ledgerEntries).where(eq(ledgerEntries.positionId, pos.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].direction).toBe('debit');
+    expect(rows[0].amount).toBe('30.0000');
+  });
+
+  it('zero P&L → exactly one credit row with amount "0.0000"', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'Zero Acct', 'USD');
+    const pos = await openAndClosePosition(cookie, acct.id, {
+      entryPrice: '100',
+      exitPrice: '100',
+      quantity: '1',
+    });
+    const rows = await db.select().from(ledgerEntries).where(eq(ledgerEntries.positionId, pos.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].direction).toBe('credit');
+    expect(rows[0].amount).toBe('0.0000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Mid-hook failure → position remains 'open', no ledger row persisted.
+// ---------------------------------------------------------------------------
+//
+// The task spec asks for a "duplicate-key violation mid-hook" — but the v1
+// schema has no unique constraint on the ledger row a second hook could
+// duplicate. The functionally-equivalent guarantee the spec actually cares
+// about is: ANY mid-hook failure → full transactional rollback. We register
+// an extra test-scoped hook that throws unconditionally; the production
+// 'ledger' hook runs first, the extra hook throws second, and we assert the
+// entire transaction (position update + production-hook ledger insert) was
+// rolled back. The duplicate-key mechanism is unavailable; this throw is
+// the safe, deterministic proxy for "transient mid-hook failure".
+
+describe('mid-hook failure leaves the position open with zero ledger rows', () => {
+  afterEach(() => {
+    // The production 'ledger' hook is kept across tests; this teardown
+    // removes any test-scoped extras and never touches 'ledger'.
+    for (const name of listCloseHooks()) {
+      if (name !== 'ledger') unregisterCloseHook(name);
+    }
+  });
+
+  it('second hook throws → ledger row from first hook AND status update both reverted', async () => {
+    // Sanity: production hook is registered, no test-scoped extras.
+    expect(listCloseHooks()).toEqual(['ledger']);
+
+    registerCloseHook('test-bomb', async () => {
+      throw new Error('intentional mid-hook failure');
+    });
+
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'Rollback Acct', 'USD');
+    const me = await getMe(cookie);
+
+    // Build a fully-closable position via the API, then issue the close;
+    // the close MUST fail because the bomb hook throws.
+    const pos = await createPosition(cookie, acct.id, { symbol: 'AAPL' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '1',
+      fees: '0',
+      filledAt: '2026-01-01T00:00:00Z',
+    });
+    await openPosition(cookie, pos.id, '2026-01-01T00:00:00Z');
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '1',
+      fees: '0',
+      filledAt: '2026-01-02T00:00:00Z',
+    });
+
+    const closeRes = await authedRequest('POST', `/api/positions/${pos.id}/close`, cookie, {
+      closedAt: '2026-01-02T00:00:00Z',
+    });
+    // The error handler maps thrown Error → 500.
+    expect(closeRes.status).toBeGreaterThanOrEqual(500);
+
+    // Position status reverted to 'open' (close transaction rolled back).
+    const positionRows = await db.select().from(positionsTbl).where(eq(positionsTbl.id, pos.id));
+    expect(positionRows).toHaveLength(1);
+    expect(positionRows[0].status).toBe('open');
+
+    // No ledger row was persisted — the production 'ledger' hook's insert
+    // and the bomb hook's throw rolled back atomically.
+    const ledgerRows = await db
+      .select({ count: drizzleSql<number>`count(*)::int` })
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, pos.id));
+    expect(ledgerRows[0].count).toBe(0);
+
+    // User scoping pin (caught at compile time below: typeof me.id is string).
+    expect(typeof me.id).toBe('string');
+  });
+});

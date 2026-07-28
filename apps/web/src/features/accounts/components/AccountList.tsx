@@ -1,0 +1,219 @@
+import { useState } from 'react';
+
+import type { Account } from '@tradr/shared';
+
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { writabilityRestricted } from '@/features/billing/tier-usage';
+import { UpgradeLink } from '@/features/billing/UpgradeLink';
+import { useTierState } from '@/features/billing/useTierState';
+
+import { useAccounts, useDeleteAccount, useSetWritableAccount } from '../hooks/useAccounts';
+
+import { AccountDialog } from './AccountDialog';
+
+export function AccountList() {
+  const { data: accounts, isLoading } = useAccounts();
+  const deleteAccount = useDeleteAccount();
+  const setWritable = useSetWritableAccount();
+  const { data: tierState } = useTierState();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editAccount, setEditAccount] = useState<Account | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
+
+  // Writability designation (plan-tiers D18/REQ-6.6): badges + the
+  // make-writable action appear only while the restriction is active
+  // (over-cap ∧ free ∧ gated) — nothing renders on self-host/Pro/admin.
+  const restricted = writabilityRestricted(tierState);
+  const writableAccountId = tierState?.usage?.accounts.writableAccountId ?? null;
+
+  // L1 cap-edge banner (REQ-6.4/11.6): usage is populated only when gating is
+  // on and the user is non-exempt, so its presence carries the gating leg;
+  // `null` caps (unlimited) never banner.
+  const accountsCap = tierState?.usage ? tierState.limits[tierState.tier].accounts : null;
+  const accountsUsed = tierState?.usage?.accounts.used ?? 0;
+  const atCap = accountsCap !== null && accountsUsed >= accountsCap;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Accounts</h1>
+        <Button
+          className="cursor-pointer"
+          onClick={() => {
+            setEditAccount(null);
+            setDialogOpen(true);
+          }}
+        >
+          New Account
+        </Button>
+      </div>
+
+      {atCap && (
+        <Alert
+          data-testid="accounts-cap-banner"
+          aria-live="polite"
+          className="mb-4 flex items-start justify-between gap-4"
+        >
+          <div>
+            <AlertTitle>Account limit reached</AlertTitle>
+            <AlertDescription>
+              You&apos;re using {accountsUsed} of {accountsCap} account
+              {accountsCap === 1 ? '' : 's'} on your plan.
+              {restricted ? ' Only the writable account accepts new positions.' : ''}
+            </AlertDescription>
+          </div>
+          {tierState?.purchasable && <UpgradeLink surface="accounts" className="shrink-0" />}
+        </Alert>
+      )}
+
+      {!accounts?.length ? (
+        <div className="py-12 text-center text-muted-foreground">
+          No accounts yet. Create one to start tracking positions.
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Currency</TableHead>
+              <TableHead className="w-12" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {accounts.map((account) => (
+              <TableRow key={account.id}>
+                <TableCell className="font-medium">
+                  <div className="flex items-center gap-2">
+                    <span>{account.name}</span>
+                    {/* Writability badge + make-writable action (D18) — only
+                        while the restriction is active; the action is the
+                        in-place remedy instead of a 403 at position create. */}
+                    {restricted &&
+                      (account.id === writableAccountId ? (
+                        <Badge variant="secondary" data-testid={`writable-badge-${account.id}`}>
+                          Writable
+                        </Badge>
+                      ) : (
+                        <>
+                          <Badge variant="outline" data-testid={`readonly-badge-${account.id}`}>
+                            Read-only
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="cursor-pointer"
+                            disabled={setWritable.isPending}
+                            onClick={() => setWritable.mutate(account.id)}
+                          >
+                            Make writable
+                          </Button>
+                        </>
+                      ))}
+                  </div>
+                </TableCell>
+                <TableCell>{account.currency}</TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon-sm" className="cursor-pointer">
+                        ⋯
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        className="cursor-pointer"
+                        onClick={() => {
+                          setEditAccount(account);
+                          setDialogOpen(true);
+                        }}
+                      >
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="cursor-pointer text-destructive"
+                        onClick={() => setDeleteTarget(account)}
+                      >
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <AccountDialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) setEditAccount(null);
+        }}
+        account={editAccount}
+      />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete account</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deleteTarget?.name}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="cursor-pointer"
+              onClick={() => {
+                if (deleteTarget) {
+                  deleteAccount.mutate(deleteTarget.id);
+                  setDeleteTarget(null);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}

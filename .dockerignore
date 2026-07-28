@@ -1,0 +1,13 @@
+# Keep the build context slim. The API bundle is produced in-builder and
+# inlines @tradr/* workspace source, so we must NOT exclude apps/*/src,
+# packages/shared, or pnpm-lock.yaml.
+
+.env
+node_modules
+.git
+# Anchored to the repo root so it cannot also match apps/api/dist (which is
+# emitted in-builder and never read from the build context anyway).
+/dist
+# Per-app build output is regenerated in-builder; never ship the host's copy.
+apps/*/dist
+*.log

@@ -1,0 +1,3 @@
+Date,Time,Symbol,Buy/Sell,Quantity,Price,Spread,Expiration,Strike,Call/Put,Commission,Fees
+1/5/2012,09:30:00,SPY,Buy,100,121.50,Stock,,,,1.00,0.10
+1/5/2012,15:55:00,SPY,Sell,100,123.10,Stock,,,,1.00,0.10

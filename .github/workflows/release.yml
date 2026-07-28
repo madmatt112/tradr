@@ -1,0 +1,181 @@
+name: Release
+
+# Build + push multi-arch (amd64 + arm64) tradr-api and tradr-web images to
+# GHCR on tagged releases (design C11; Req 9.1/9.2, R5 — tech.md Hetzner ARM).
+on:
+  push:
+    tags: ['v*']
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Nothing publishes unless the CI workflow is green for the tagged commit.
+  # `make release` tags a fresh version-bump commit, so when commit and tag are
+  # pushed together the commit's CI (triggered by the main push) is still
+  # running when this starts — hence wait-and-watch, not a point-in-time check.
+  # Fails if no CI run appears within ~5 minutes (tag pushed without pushing
+  # the commit to main) or if CI finishes red. See docs/runbooks/release.md.
+  ci-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # gh run list / gh run watch
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Wait for green CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # rev-parse, not github.sha: for annotated tags github.sha can be the
+          # tag object, and CI runs are keyed by the peeled commit.
+          SHA=$(git rev-parse HEAD)
+          echo "Gating release of ${GITHUB_REF_NAME} on CI for ${SHA}"
+          RUN_ID=""
+          for i in $(seq 1 20); do
+            RUN_ID=$(gh run list --commit "$SHA" --workflow ci.yml \
+                       --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$RUN_ID" ] && break
+            echo "No CI run for this commit yet — retrying in 15s ($i/20)"
+            sleep 15
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No CI run found for ${SHA}. Push the commit to main (so CI runs on it) before or together with the tag."
+            exit 1
+          fi
+          echo "Watching CI run ${RUN_ID}"
+          gh run watch "$RUN_ID" --interval 30 --exit-status
+
+  release:
+    runs-on: ubuntu-latest
+    needs: ci-gate
+
+    permissions:
+      contents: write # create the GitHub Release (+ attach the SPA bundle)
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Lowercase the owner so the GHCR namespace is valid (GHCR rejects
+      # uppercase repository names; github.repository_owner can be mixed case).
+      - name: Resolve GHCR namespace (lowercased owner)
+        id: ns
+        run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      # corepack reads the root package.json packageManager pin (pnpm@9.15.0,
+      # task 5). Enabling it here keeps the runner's pnpm aligned with the
+      # Dockerfiles' corepack-pinned pnpm.
+      - name: Enable corepack (pnpm pinned via packageManager)
+        run: corepack enable
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derive semver + latest tags for both images from the pushed git tag.
+      - name: Docker metadata (api)
+        id: meta_api
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.ns.outputs.owner }}/tradr-api
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Docker metadata (web)
+        id: meta_web
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.ns.outputs.owner }}/tradr-web
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      # Build a SINGLE-ARCH arm64 api image and --load it into the local daemon
+      # so the bcrypt verification can run the actual arm64 binary under QEMU.
+      # buildx cannot --load a multi-arch manifest, so this is a separate build
+      # from the multi-arch push below (R3 — the arm64 bcrypt binary is the
+      # riskiest claim; bcrypt is the ONLY arch-sensitive runtime module —
+      # tiktoken is arch-neutral WASM, so it is not verified per-arch, C1).
+      - name: Build arm64 api image for bcrypt verification
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          platforms: linux/arm64
+          load: true
+          tags: tradr-api:arm64-verify
+          push: false
+
+      # Exercise bcrypt INSIDE the arm64 image under emulation — a real hash
+      # call, NOT a /api/health boot (which never touches bcrypt and would miss
+      # an amd64-binary-in-arm64-image gap). --entrypoint node overrides the
+      # image's server entrypoint (node dist/index.js, which validates env and
+      # would otherwise reject our -e script as a server arg).
+      - name: Verify arm64 bcrypt runs under emulation
+        run: |
+          docker run --rm --platform linux/arm64 --entrypoint node tradr-api:arm64-verify \
+            -e "const h=require('bcrypt').hashSync('x',10); if(!h||h.length<20){console.error('bcrypt produced no hash');process.exit(1);} if(process.arch!=='arm64'){console.error('not arm64:',process.arch);process.exit(1);} console.log('arm64 bcrypt OK:', h.slice(0,7))"
+
+      # Multi-arch build + push of the api image (semver + latest).
+      - name: Build + push api (multi-arch)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_api.outputs.tags }}
+          labels: ${{ steps.meta_api.outputs.labels }}
+          # Deployed-version string surfaced by GET /api/health (self-host
+          # images report the release tag they were built from).
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+
+      # Multi-arch build + push of the web image (semver + latest).
+      - name: Build + push web (multi-arch)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_web.outputs.tags }}
+          labels: ${{ steps.meta_web.outputs.labels }}
+
+      # ── SPA static bundle + GitHub Release ──────────────────────────────────
+      # The hosted deploy (Cloudflare Pages) needs the built static SPA, not the
+      # nginx web image. Publish it as a release asset so a downstream deploy can ship
+      # the exact released frontend. The GitHub Release also feeds the in-app
+      # Changelog (CHANGELOG_GITHUB_REPO reads GitHub Releases).
+      - name: Set up Node 22 (SPA build)
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm # corepack (enabled above) provides pnpm for the cache probe
+
+      - name: Build + package the SPA bundle
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @tradr/web build
+          tar -C apps/web/dist -czf "tradr-web-dist-${{ github.ref_name }}.tar.gz" .
+
+      - name: Create GitHub Release (notes + SPA asset)
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: tradr-web-dist-${{ github.ref_name }}.tar.gz

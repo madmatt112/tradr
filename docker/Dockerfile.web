@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1
+
+# ---------------------------------------------------------------------------
+# Builder: install the workspace and produce the SPA bundle with the UNALTERED
+# `vite build`. The command/inputs must equal the bundle-size gate's
+# (apps/web/scripts/check-bundle-size.mjs in ci.yml) so the same artifact is
+# measured — do NOT change the vite config here.
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /repo
+
+# Pin pnpm to the workspace packageManager version (root package.json, task 5).
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+# Copy the whole monorepo (Vite resolves @tradr/shared from workspace source).
+# .dockerignore keeps the context slim (no node_modules, no .git, no .env).
+COPY . .
+
+# Reproducible install, then the unaltered prod build (vite build -> apps/web/dist).
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @tradr/web build
+
+# ---------------------------------------------------------------------------
+# Runner: stock nginx:alpine. No Node. The official entrypoint runs
+# /docker-entrypoint.d/*.sh and envsubst-renders /etc/nginx/templates/*.template
+# into /etc/nginx/conf.d/, substituting ONLY the vars in NGINX_ENVSUBST_FILTER.
+#
+# Both nginx.conf.template (-> conf.d/default.conf) and stream-proxy.inc.template
+# (-> conf.d/stream-proxy.inc) are rendered there, so the rendered default.conf's
+# `include conf.d/stream-proxy.inc` resolves AND the ${ADVISOR_NGINX_PROXY_TIMEOUT}
+# inside the snippet is substituted by the same envsubst pass.
+# ---------------------------------------------------------------------------
+FROM nginx:1.27-alpine AS runner
+
+# Restrict envsubst to the two runtime vars; leaves $host/$uri/$proxy_add_x_forwarded_for intact.
+ENV NGINX_ENVSUBST_FILTER="ADVISOR_NGINX_PROXY_TIMEOUT|MAX_UPLOAD_SIZE|CSV_IMPORT_NGINX_PROXY_TIMEOUT"
+
+# Image-level defaults so the rendered config is valid standalone (no compose).
+# Compose overrides these from .env (Component 4); the documented ceilings are
+# MAX_UPLOAD_SIZE=20m (R1) and ADVISOR_NGINX_PROXY_TIMEOUT=180s (Req 4.4).
+ENV MAX_UPLOAD_SIZE="20m"
+ENV ADVISOR_NGINX_PROXY_TIMEOUT="180s"
+ENV CSV_IMPORT_NGINX_PROXY_TIMEOUT="300s"
+
+# Static SPA bundle.
+COPY --from=builder /repo/apps/web/dist /usr/share/nginx/html
+
+# Server config + the shared streaming snippet, both as templates so the official
+# entrypoint renders them into /etc/nginx/conf.d/ (timeout var substituted, include path resolved).
+COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY docker/conf.d/stream-proxy.inc /etc/nginx/templates/stream-proxy.inc.template
+
+# Runtime-config entrypoint: writes /usr/share/nginx/html/config.js at start (Req 3).
+COPY docker/docker-entrypoint.d/10-runtime-config.sh /docker-entrypoint.d/10-runtime-config.sh
+
+EXPOSE 80

@@ -1,0 +1,627 @@
+// @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// ---- Mutable query fixtures (rebound per test) ------------------------------
+// The form's ONLY network dependencies are useAccounts / useBrokerages; mock
+// just those (NOT the shared calculateTrade — the real function drives every
+// results assertion below). Hoisted so the vi.mock factories can read them.
+const state = vi.hoisted(() => ({
+  accounts: { current: { data: [], isLoading: false, isError: false } as Record<string, unknown> },
+  brokerages: {
+    current: { data: [], isLoading: false, isError: false } as Record<string, unknown>,
+  },
+}));
+
+vi.mock('@/features/accounts/hooks/useAccounts', () => ({
+  useAccounts: () => state.accounts.current,
+}));
+vi.mock('@/features/brokerages/hooks/useBrokerages', () => ({
+  useBrokerages: () => state.brokerages.current,
+}));
+
+// Stub the shadcn Select primitive as a native <select> so options are clickable
+// and onValueChange fires in jsdom (Radix's pointer-capture machinery is
+// browser-only). SelectValue → a placeholder <option> (so the loading/error
+// placeholder text is assertable); SelectItem → <option>.
+vi.mock('@/components/ui/select', () => ({
+  Select: ({
+    value,
+    onValueChange,
+    disabled,
+    children,
+  }: {
+    value?: string;
+    onValueChange?: (v: string) => void;
+    disabled?: boolean;
+    children?: ReactNode;
+  }) => (
+    <select
+      value={value ?? ''}
+      disabled={disabled}
+      onChange={(e) => onValueChange?.(e.currentTarget.value)}
+    >
+      {children}
+    </select>
+  ),
+  SelectTrigger: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  SelectValue: ({ placeholder }: { placeholder?: string }) => (
+    <option value="">{placeholder}</option>
+  ),
+  SelectContent: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children?: ReactNode }) => (
+    <option value={value}>{children}</option>
+  ),
+}));
+
+// ---- Symbol-search / quote fixtures (Task 13) -------------------------------
+// The quote hooks, the SymbolAutocomplete combobox, and the OptionsChainViewer
+// are mocked so no network is hit and each test controls configured-ness, the
+// mutation outcome, and the chain rows. The OptionsChainViewer stub reproduces
+// the Task-11 selectability gate: a "Use" button only for rows with a non-empty
+// option_symbol.
+const quote = vi.hoisted(() => ({
+  config: { current: { data: undefined, isLoading: true } as Record<string, unknown> },
+  isPending: { current: false },
+  mutate: {
+    current: (() => {}) as (
+      s: string,
+      opts?: { onSuccess?: (r: unknown) => void; onError?: (e: unknown) => void },
+    ) => void,
+  },
+  contracts: { current: [] as Array<Record<string, unknown>> },
+}));
+
+vi.mock('@/hooks/useStockQuoteConfig', () => ({
+  useStockQuoteConfig: () => quote.config.current,
+}));
+
+vi.mock('@/hooks/useStockQuote', () => ({
+  useStockQuote: () => ({
+    mutate: (
+      s: string,
+      opts?: { onSuccess?: (r: unknown) => void; onError?: (e: unknown) => void },
+    ) => quote.mutate.current(s, opts),
+    isPending: quote.isPending.current,
+  }),
+}));
+
+vi.mock('@/components/SymbolAutocomplete', () => ({
+  SymbolAutocomplete: ({
+    value,
+    onChange,
+    id,
+  }: {
+    value: string;
+    onChange: (t: string) => void;
+    id?: string;
+  }) => (
+    <input
+      id={id}
+      aria-label="Symbol"
+      value={value}
+      onChange={(e) => onChange(e.currentTarget.value.toUpperCase())}
+    />
+  ),
+}));
+
+vi.mock('@/features/options/components/OptionsChainViewer', () => ({
+  OptionsChainViewer: ({
+    onSelectContract,
+  }: {
+    onSelectContract?: (c: Record<string, unknown>) => void;
+  }) => (
+    <div data-slot="options-chain-viewer">
+      {quote.contracts.current.map((c, i) =>
+        c.option_symbol ? (
+          <button key={i} type="button" onClick={() => onSelectContract?.(c)}>
+            {`Use ${String(c.option_symbol)}`}
+          </button>
+        ) : (
+          <span key={i} data-testid={`no-symbol-row-${i}`}>
+            {String(c.label ?? 'no symbol')}
+          </span>
+        ),
+      )}
+    </div>
+  ),
+}));
+
+import { CalculatorForm } from './CalculatorForm';
+
+// ---- Fixtures ---------------------------------------------------------------
+
+const CAD_ACCOUNT = { id: 'acc-cad', name: 'Maple Margin', currency: 'CAD', balance: '50000' };
+// A selected account whose balance is not yet derived (REQ-3.5) — no `balance`.
+const NO_BALANCE_ACCOUNT = { id: 'acc-nobal', name: 'Fresh', currency: 'USD' };
+
+// ---- Harness ----------------------------------------------------------------
+
+/** Same Intl call the Numeric primitive uses, so assertions match regardless of locale. */
+function fmtMoney(n: number, currency = 'USD'): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+function setAccounts(q: Record<string, unknown>): void {
+  state.accounts.current = { data: [], isLoading: false, isError: false, ...q };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Re-host the form under a fresh router so its <Link>s resolve (the settings
+// account test's re-host pattern). Wrapped in a QueryClientProvider per the
+// task harness convention (inert here since the hooks are mocked).
+async function mount(): Promise<void> {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const rootRoute = createRootRoute();
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute as any,
+    path: '/',
+    component: () => <CalculatorForm />,
+  });
+  const accountsRoute = createRoute({
+    getParentRoute: () => rootRoute as any,
+    path: '/accounts',
+    component: () => null,
+  });
+  const brokeragesRoute = createRoute({
+    getParentRoute: () => rootRoute as any,
+    path: '/brokerages',
+    component: () => null,
+  });
+  const routeTree = rootRoute.addChildren([indexRoute, accountsRoute, brokeragesRoute] as any);
+  const router = createRouter({
+    routeTree: routeTree as any,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  });
+  render(
+    <QueryClientProvider client={qc}>
+      <RouterProvider router={router as any} />
+    </QueryClientProvider>,
+  );
+  // RouterProvider resolves the initial match on a microtask — wait for mount.
+  await screen.findByLabelText('Entry price');
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+type User = ReturnType<typeof userEvent.setup>;
+
+function input(label: string): HTMLInputElement {
+  return screen.getByLabelText(label) as HTMLInputElement;
+}
+
+function fill(label: string, value: string): void {
+  fireEvent.change(input(label), { target: { value } });
+}
+
+/**
+ * The form validates on blur (never submits), and `isValid` is blur-only. Fill
+ * every field first, then blur ONCE — a single resolver pass over the complete
+ * form (interleaving blur-per-field races validation snapshots of incomplete
+ * inputs, which can leave `isValid` stale-false).
+ */
+async function results(user: User, name: 'Dollar' | 'Percent', fields: Record<string, string>) {
+  await switchBasis(user, name);
+  const labels = Object.keys(fields);
+  for (const label of labels) fill(label, fields[label]);
+  fireEvent.blur(input(labels[labels.length - 1]));
+}
+
+async function switchBasis(user: User, name: 'Dollar' | 'Percent'): Promise<void> {
+  // Radix Tabs activate on focus+click — userEvent reproduces that (fireEvent.click alone won't).
+  await user.click(screen.getByRole('tab', { name }));
+}
+
+/** Find the native <select> carrying an option with the given value (the account picker). */
+function selectByOptionValue(optionValue: string): HTMLSelectElement {
+  const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[];
+  for (const s of selects) {
+    if (Array.from(s.options).some((o) => o.value === optionValue)) return s;
+  }
+  throw new Error(`no <select> with option value="${optionValue}"`);
+}
+
+async function fillPercentBasis(
+  user: User,
+  v: { entry: string; stop: string; balance: string; riskPercent: string },
+): Promise<void> {
+  await results(user, 'Percent', {
+    'Entry price': v.entry,
+    'Stop loss': v.stop,
+    Balance: v.balance,
+    'Risk percent': v.riskPercent,
+  });
+}
+
+beforeEach(() => {
+  setAccounts({ data: [] });
+  state.brokerages.current = { data: [], isLoading: false, isError: false };
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+// -----------------------------------------------------------------------------
+
+describe('CalculatorForm — risk-basis switching (REQ-1.3)', () => {
+  it('clears the inactive basis fields on switch (dollar→percent clears dollarRisk; percent→dollar clears balance/percent)', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    // Dollar mode (default) — fill the dollar risk.
+    fireEvent.change(input('Dollar risk'), { target: { value: '1000' } });
+    expect(input('Dollar risk').value).toBe('1000');
+
+    // → percent: dollarRisk is hidden; the balance + percent inputs appear.
+    await switchBasis(user, 'Percent');
+    expect(screen.queryByLabelText('Dollar risk')).toBeNull();
+    fireEvent.change(input('Balance'), { target: { value: '50000' } });
+    fireEvent.change(input('Risk percent'), { target: { value: '2' } });
+
+    // → back to dollar: dollarRisk reappears CLEARED (undefined'd on the percent switch).
+    await switchBasis(user, 'Dollar');
+    expect(input('Dollar risk').value).toBe('');
+    expect(screen.queryByLabelText('Balance')).toBeNull();
+
+    // → percent again: balance + percent are CLEARED (undefined'd on the dollar switch).
+    await switchBasis(user, 'Percent');
+    expect(input('Balance').value).toBe('');
+    expect(input('Risk percent').value).toBe('');
+  });
+});
+
+describe('CalculatorForm — account sourcing (REQ-3, REQ-5.2)', () => {
+  it('selecting a non-USD account fills the balance, shows the currency note, and switches money to that currency', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    // Fill the non-balance fields first, then select the account LAST — its
+    // setValue(shouldValidate) then runs the final validation over a COMPLETE
+    // form (selecting first would race an incomplete validation → stale isValid).
+    // The balance is populated by the account, NOT typed (so the association survives).
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fill('Risk percent', '2');
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    fireEvent.blur(input('Risk percent'));
+
+    // Balance populated from account.balance (read as-is, REQ-3.2).
+    expect(input('Balance').value).toBe('50000');
+    // Non-USD currency note (REQ-5.2). Its presence also guards the D8 trap: the
+    // account-select setValue does NOT fire the balance register onChange, so the
+    // association it just set survives.
+    expect(screen.getByText(/Balance is in CAD/)).toBeTruthy();
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    // derived = 50000 × 2 ÷ 100 = 1000, displayed in CAD (money switched), not USD.
+    expect(screen.getAllByText(fmtMoney(1000, 'CAD')).length).toBeGreaterThan(0);
+  });
+
+  it('selecting an account with an ABSENT balance yields the neutral incomplete state (REQ-3.5)', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [NO_BALANCE_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    fireEvent.change(selectByOptionValue(NO_BALANCE_ACCOUNT.id), {
+      target: { value: NO_BALANCE_ACCOUNT.id },
+    });
+    expect(input('Balance').value).toBe('');
+
+    // A valid percent + prices cannot size against a missing balance.
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fill('Risk percent', '2');
+    fireEvent.blur(input('Risk percent'));
+
+    expect(screen.getByText('Enter trade parameters to see results')).toBeTruthy();
+    expect(screen.queryByText('Derived Dollar Risk')).toBeNull();
+  });
+
+  it('manually editing the balance clears the account association / currency note — but account selection does not (REQ-3.6, D8)', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    // Account selection (setValue) sets the association — the register onChange
+    // does NOT fire, so the note is shown.
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    expect(screen.getByText(/Balance is in CAD/)).toBeTruthy();
+
+    // A user keystroke fires the register onChange → the association is cleared.
+    fireEvent.change(input('Balance'), { target: { value: '60000' } });
+    expect(screen.queryByText(/Balance is in CAD/)).toBeNull();
+  });
+});
+
+describe('CalculatorForm — percent results + buying-power flag (REQ-4)', () => {
+  it('renders the derived-risk row and the buying-power flag when the cap binds', async () => {
+    const user = userEvent.setup();
+    await mount();
+    // entry 100, stop 99, balance 10000, 50% ⇒ derived 5000 (size 5000) but the
+    // balance funds only floor(10000/100)=100 ⇒ cap binds at 100.
+    await fillPercentBasis(user, {
+      entry: '100',
+      stop: '99',
+      balance: '10000',
+      riskPercent: '50',
+    });
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    expect(screen.getByText('Position size limited by account buying power')).toBeTruthy();
+    expect(screen.getAllByText(fmtMoney(5000)).length).toBeGreaterThan(0); // echoed derivedDollarRisk
+  });
+
+  it.each([
+    {
+      name: 'exceeds-maximum',
+      entry: '50',
+      stop: '48',
+      balance: '250000000',
+      riskPercent: '100',
+      message: /exceeds the calculator/,
+      derived: 250000000,
+    },
+    {
+      name: 'buying-power-zero',
+      entry: '100',
+      stop: '99',
+      balance: '50',
+      riskPercent: '100',
+      message: /cannot fund one share/,
+      derived: 50,
+    },
+    {
+      name: 'insufficient-risk-in-percent',
+      entry: '50',
+      stop: '40',
+      balance: '100',
+      riskPercent: '1',
+      message: /insufficient for one share/,
+      derived: 1,
+    },
+  ])(
+    'zero-position state ($name) still shows the echoed derived-risk row (REQ-4.1)',
+    async ({ entry, stop, balance, riskPercent, message, derived }) => {
+      const user = userEvent.setup();
+      await mount();
+      await fillPercentBasis(user, { entry, stop, balance, riskPercent });
+
+      await screen.findByText(message, undefined, { timeout: 2000 });
+      // The REQ-4.1 fix: the derived-risk row renders even in the zero-position states.
+      expect(screen.getByText('Derived Dollar Risk')).toBeTruthy();
+      expect(screen.getAllByText(fmtMoney(derived)).length).toBeGreaterThan(0);
+    },
+  );
+});
+
+describe('CalculatorForm — live-clear gate (D4, NFR Usability)', () => {
+  it('clearing an active percent field falls back to the neutral placeholder, never a DecimalError', async () => {
+    const user = userEvent.setup();
+    await mount();
+    await fillPercentBasis(user, {
+      entry: '50',
+      stop: '48',
+      balance: '50000',
+      riskPercent: '2',
+    });
+
+    // Precondition: a complete, blurred percent basis renders results.
+    await screen.findByText('Position Sizing', undefined, { timeout: 2000 });
+
+    // Empty the balance via a change event (no blur — isValid stays stale-true);
+    // the watch-derived basisComplete gate must still close.
+    fireEvent.change(input('Balance'), { target: { value: '' } });
+
+    await screen.findByText('Enter trade parameters to see results');
+    expect(screen.queryByText(/DecimalError/i)).toBeNull();
+    expect(screen.queryByText(/Invalid argument/i)).toBeNull();
+    expect(screen.queryByText('Position Sizing')).toBeNull();
+  });
+
+  it('clearing the dollar risk field falls back to the neutral placeholder, never a DecimalError', async () => {
+    await mount();
+    // Default dollar mode.
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fill('Dollar risk', '1000');
+    fireEvent.blur(input('Dollar risk'));
+
+    await screen.findByText('Position Sizing', undefined, { timeout: 2000 });
+
+    fireEvent.change(input('Dollar risk'), { target: { value: '' } });
+
+    await screen.findByText('Enter trade parameters to see results');
+    expect(screen.queryByText(/DecimalError/i)).toBeNull();
+    expect(screen.queryByText('Position Sizing')).toBeNull();
+  });
+});
+
+describe('CalculatorForm — account picker async states mirror the brokerage selector (REQ-3.4)', () => {
+  it('loading state', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: undefined, isLoading: true });
+    await mount();
+    await switchBasis(user, 'Percent');
+    expect(screen.getByText(/Loading accounts/)).toBeTruthy();
+  });
+
+  it('error state', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: undefined, isError: true });
+    await mount();
+    await switchBasis(user, 'Percent');
+    expect(screen.getAllByText(/Failed to load accounts/).length).toBeGreaterThan(0);
+  });
+
+  it('empty state links to account setup', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [] });
+    await mount();
+    await switchBasis(user, 'Percent');
+    expect(screen.getByText(/No accounts configured/)).toBeTruthy();
+    expect(screen.getByText('set one up')).toBeTruthy();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Task 13 — symbol-search / quote integration
+// -----------------------------------------------------------------------------
+
+function resetQuoteFixtures(): void {
+  quote.config.current = { data: undefined, isLoading: true };
+  quote.isPending.current = false;
+  quote.mutate.current = () => {};
+  quote.contracts.current = [];
+}
+
+describe('CalculatorForm — mode-switch clear (REQ-5.5)', () => {
+  beforeEach(resetQuoteFixtures);
+
+  it('clears entry/stop/target on switch, keeps dollar-risk, and never flashes a DecimalError', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    // A complete dollar-basis stock calc.
+    fill('Entry price', '100');
+    fill('Stop loss', '99');
+    fill('Target price (optional)', '110');
+    fill('Dollar risk', '1000');
+    fireEvent.blur(input('Dollar risk'));
+    await screen.findByText('Position Sizing', undefined, { timeout: 2000 });
+
+    // Stock → options clears the three mode-scaled per-share inputs.
+    await user.click(screen.getByRole('tab', { name: 'Options' }));
+
+    expect(input('Entry price').value).toBe('');
+    expect(input('Stop loss').value).toBe('');
+    expect(input('Target price (optional)').value).toBe('');
+    // Mode-independent input is untouched.
+    expect(input('Dollar risk').value).toBe('1000');
+
+    // Gate closed cleanly — neutral placeholder, NEVER a raw DecimalError.
+    await screen.findByText('Enter trade parameters to see results');
+    expect(screen.queryByText(/DecimalError/i)).toBeNull();
+    expect(screen.queryByText(/Invalid argument/i)).toBeNull();
+    expect(screen.queryByText('Position Sizing')).toBeNull();
+  });
+});
+
+describe('CalculatorForm — pull-quote gating + populate (REQ-5.2/5.3/5.4)', () => {
+  beforeEach(resetQuoteFixtures);
+
+  it('is absent while the config query is loading, even with a symbol', async () => {
+    quote.config.current = { data: undefined, isLoading: true };
+    await mount();
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    expect(screen.queryByRole('button', { name: 'Pull last price' })).toBeNull();
+  });
+
+  it('is absent when configured=false', async () => {
+    quote.config.current = { data: { stockQuoteConfigured: false } };
+    await mount();
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    expect(screen.queryByRole('button', { name: 'Pull last price' })).toBeNull();
+  });
+
+  it('is absent when configured but the symbol is empty, and appears once a symbol is entered', async () => {
+    quote.config.current = { data: { stockQuoteConfigured: true } };
+    await mount();
+    expect(screen.queryByRole('button', { name: 'Pull last price' })).toBeNull();
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    expect(screen.getByRole('button', { name: 'Pull last price' })).toBeTruthy();
+  });
+
+  it('on success populates entry from lastPrice and shows the ~15-min delayed disclaimer', async () => {
+    const user = userEvent.setup();
+    quote.config.current = { data: { stockQuoteConfigured: true } };
+    quote.mutate.current = (_s, opts) =>
+      opts?.onSuccess?.({
+        configured: true,
+        symbol: 'AAPL',
+        lastPrice: '187.42',
+        change: null,
+        delayed: true,
+      });
+    await mount();
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    await user.click(screen.getByRole('button', { name: 'Pull last price' }));
+
+    expect(input('Entry price').value).toBe('187.42');
+    expect(screen.getByText(/15 minutes delayed/i)).toBeTruthy();
+  });
+
+  it('on error shows the distinct coded message and leaves any existing entry untouched', async () => {
+    const user = userEvent.setup();
+    quote.config.current = { data: { stockQuoteConfigured: true } };
+    quote.mutate.current = (_s, opts) => opts?.onError?.({ error: { code: 'NOT_FOUND' } });
+    await mount();
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    fill('Entry price', '50');
+    await user.click(screen.getByRole('button', { name: 'Pull last price' }));
+
+    expect(screen.getByText('Symbol not found.')).toBeTruthy();
+    expect(input('Entry price').value).toBe('50');
+  });
+});
+
+describe('CalculatorForm — option contract hand-off (REQ-6.3/6.5)', () => {
+  beforeEach(resetQuoteFixtures);
+
+  it('populates entry from the contract premium (last_price) and shows the OCC symbol', async () => {
+    const user = userEvent.setup();
+    quote.contracts.current = [{ option_symbol: 'AAPL  250620C00150000', last_price: 3.25 }];
+    await mount();
+    await user.click(screen.getByRole('tab', { name: 'Options' }));
+    await user.click(screen.getByRole('button', { name: 'Select from options chain' }));
+    await user.click(screen.getByRole('button', { name: /Use AAPL/ }));
+
+    expect(input('Entry price').value).toBe('3.25');
+    expect(screen.getByText(/Selected contract:/)).toBeTruthy();
+  });
+
+  it('leaves entry blank with a manual-entry note when the contract has no last_price', async () => {
+    const user = userEvent.setup();
+    quote.contracts.current = [{ option_symbol: 'AAPL  250620C00150000' }];
+    await mount();
+    await user.click(screen.getByRole('tab', { name: 'Options' }));
+    await user.click(screen.getByRole('button', { name: 'Select from options chain' }));
+    await user.click(screen.getByRole('button', { name: /Use AAPL/ }));
+
+    expect(input('Entry price').value).toBe('');
+    expect(screen.getByText(/enter the premium manually/i)).toBeTruthy();
+  });
+
+  it('does not render a selection control for rows without an option_symbol', async () => {
+    const user = userEvent.setup();
+    quote.contracts.current = [{ label: 'no-occ-row' }];
+    await mount();
+    await user.click(screen.getByRole('tab', { name: 'Options' }));
+    await user.click(screen.getByRole('button', { name: 'Select from options chain' }));
+
+    expect(screen.getByText('no-occ-row')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Use/ })).toBeNull();
+  });
+});

@@ -1,0 +1,16 @@
+{
+  "name": "@tradr/e2e",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:list": "playwright test --list"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^22.10.0",
+    "postgres": "^3.4",
+    "typescript": "^5.8.2"
+  }
+}
