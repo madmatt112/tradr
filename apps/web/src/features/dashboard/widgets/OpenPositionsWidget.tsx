@@ -66,7 +66,7 @@ function OpenPositionsWidget() {
             <TableHead>Asset</TableHead>
             <TableHead className="text-right">Quantity</TableHead>
             <TableHead>Opened</TableHead>
-            <TableHead className="w-12" />
+            <TableHead className="w-24 text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

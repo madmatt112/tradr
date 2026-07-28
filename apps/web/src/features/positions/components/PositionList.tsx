@@ -111,7 +111,7 @@ export function PositionList() {
               <TableHead className="text-right"># Open</TableHead>
               <TableHead className="text-right"># Closed</TableHead>
               <TableHead className="text-right">P&L</TableHead>
-              <TableHead className="w-12" />
+              <TableHead className="w-32 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
