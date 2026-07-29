@@ -109,45 +109,72 @@ function DashboardPage(): ReactElement {
   // scheduleLayoutWrite. NEVER call it on every render.
   const widgets: WidgetPlacement[] = data?.widgets ?? [];
 
+  // `scheduleLayoutWrite` debounces for 300ms and keeps ONE pending body, so a
+  // handler that ignores the pending value silently discards whatever edit is
+  // already queued. Two ways that bites:
+  //
+  //   - A widget's config fix-up (§K) fires on mount, off a render-scoped
+  //     callback. If it lands after a drag it would re-send the pre-drag
+  //     positions and the drag is lost — reproducibly, for any drag within
+  //     ~1.5s of load.
+  //   - A `theme` write pending from `useAppTheme` would be dropped by the next
+  //     layout edit, since these handlers only ever set `widgets`.
+  //
+  // So every handler now merges onto the pending body, and computes from
+  // `pending.widgets` when one is queued. `widgetsRef` supplies the fallback so
+  // a stale render closure cannot resurrect an old layout either.
+  const widgetsRef = useRef<WidgetPlacement[]>(widgets);
+  widgetsRef.current = widgets;
+
   const handleAdd = useCallback(
     (placement: WidgetPlacement) => {
-      // The popover packs against an empty grid because it only knows the
-      // placed TYPES, so every widget it emits is positioned at (0, 0). Re-slot
-      // it here against the real placements — otherwise the new widget overlaps
-      // whatever is already at the origin and the PUT fails `checkNoOverlap`.
-      const { x, y } = findFirstSlot(widgets, { w: placement.w, h: placement.h });
-      const next = [...widgets, { ...placement, x, y }];
-      scheduleLayoutWrite(() => ({ widgets: next }));
+      scheduleLayoutWrite((pending) => {
+        // The popover packs against an empty grid because it only knows the
+        // placed TYPES, so every widget it emits is positioned at (0, 0).
+        // Re-slot it here against the real placements — otherwise the new
+        // widget overlaps whatever is at the origin and the PUT fails
+        // `checkNoOverlap`.
+        const base = pending.widgets ?? widgetsRef.current;
+        const { x, y } = findFirstSlot(base, { w: placement.w, h: placement.h });
+        return { ...pending, widgets: [...base, { ...placement, x, y }] };
+      });
     },
-    [widgets, scheduleLayoutWrite],
+    [scheduleLayoutWrite],
   );
 
   const handleRemove = useCallback(
     (id: string) => {
-      const next = widgets.filter((w) => w.id !== id);
-      scheduleLayoutWrite(() => ({ widgets: next }));
+      scheduleLayoutWrite((pending) => {
+        const base = pending.widgets ?? widgetsRef.current;
+        return { ...pending, widgets: base.filter((w) => w.id !== id) };
+      });
     },
-    [widgets, scheduleLayoutWrite],
+    [scheduleLayoutWrite],
   );
 
   const handleGridChange = useCallback(
     (next: WidgetPlacement[]) => {
-      scheduleLayoutWrite(() => ({ widgets: next }));
+      // The grid resolved these placements from its own live echo, so they are
+      // authoritative for geometry; only `theme` is carried over.
+      scheduleLayoutWrite((pending) => ({ ...pending, widgets: next }));
     },
     [scheduleLayoutWrite],
   );
 
   const handleUpdateConfig = useCallback(
     (widgetId: string, config: Record<string, unknown>) => {
-      const next = widgets.map((w) => {
-        if (w.id !== widgetId) return w;
-        const prev =
-          w.config && typeof w.config === 'object' ? (w.config as Record<string, unknown>) : {};
-        return { ...w, config: { ...prev, ...config } };
+      scheduleLayoutWrite((pending) => {
+        const base = pending.widgets ?? widgetsRef.current;
+        const next = base.map((w) => {
+          if (w.id !== widgetId) return w;
+          const prev =
+            w.config && typeof w.config === 'object' ? (w.config as Record<string, unknown>) : {};
+          return { ...w, config: { ...prev, ...config } };
+        });
+        return { ...pending, widgets: next };
       });
-      scheduleLayoutWrite(() => ({ widgets: next }));
     },
-    [widgets, scheduleLayoutWrite],
+    [scheduleLayoutWrite],
   );
 
   const handleUseDefaultLayout = useCallback(async () => {

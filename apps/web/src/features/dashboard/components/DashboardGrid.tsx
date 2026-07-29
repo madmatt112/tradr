@@ -241,6 +241,19 @@ function SortableWidgetCell({
     id: widget.id,
   });
 
+  // Stable identity per widget. A widget's config fix-up effect (§K) lists its
+  // `onUpdateConfig` in its dependency array, so an inline arrow here re-runs
+  // that effect on EVERY render of the grid — each one re-queueing a layout
+  // write and extending the window in which a pending write can clobber an
+  // unrelated edit.
+  const boundUpdateConfig = useMemo(
+    () =>
+      onUpdateConfig
+        ? (config: Record<string, unknown>) => onUpdateConfig(widget.id, config)
+        : undefined,
+    [onUpdateConfig, widget.id],
+  );
+
   // dnd-kit does not report a drag until the PointerSensor's 4px activation
   // distance is met, so the edit state would otherwise only appear once the
   // widget was already moving. Announce the press first, then hand the event on.
@@ -274,7 +287,7 @@ function SortableWidgetCell({
         onResize={(rect) => onResize(widget.id, rect)}
         onResizeStart={onResizeStart}
         onResizeEnd={onResizeEnd}
-        onUpdateConfig={onUpdateConfig ? (config) => onUpdateConfig(widget.id, config) : undefined}
+        onUpdateConfig={boundUpdateConfig}
         dragHandleProps={dragHandleProps}
       />
     </div>
