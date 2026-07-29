@@ -49,22 +49,31 @@ export interface TranscriptProps {
 
 const IDLE: StreamState = { kind: 'idle' };
 
-// Chat bubbles. The row owns the side (the BUBBLE is justified, never the text
-// inside it) and the bubble owns the fill, so the two speakers are told apart
-// twice over — by position and by colour.
+// Chat bubbles: you on the left, the advisor on the right. Three nested
+// elements, each with one job —
+//   ROW    justifies to a side. It is the STACK that moves, never the text
+//          inside the bubble, which stays left-read on both sides.
+//   STACK  holds the nametag over the bubble and caps the pair's width. It
+//          shrinks to its content, so a short message gets a short bubble.
+//   BUBBLE carries the fill, so the speakers are told apart twice over — by
+//          position and by colour.
 //
-// `min-w-0` matters: the bubble is a flex item, whose default `min-width: auto`
-// would refuse to shrink below its content and let a wide table or code block
-// push the whole transcript sideways. With it, those keep their own
-// `overflow-x-auto` and scroll inside the bubble.
-const ROW_USER = 'flex justify-end';
-const ROW_ASSISTANT = 'flex justify-start';
-const BUBBLE = 'min-w-0 max-w-[85%] rounded-xl px-4 py-3 break-words';
+// `min-w-0` on both STACK and BUBBLE is load-bearing: a flex item's default
+// `min-width: auto` refuses to shrink below its content, so a wide table or a
+// long code line would push the whole transcript sideways instead of scrolling
+// inside its own `overflow-x-auto` container.
+const ROW_USER = 'flex justify-start';
+const ROW_ASSISTANT = 'flex justify-end';
+const STACK = 'flex min-w-0 max-w-[85%] flex-col gap-1';
+const BUBBLE = 'min-w-0 rounded-xl px-4 py-3 break-words';
 const BUBBLE_USER = 'bg-primary text-primary-foreground';
 // Deliberately a bordered card, NOT a grey fill: `muted` and `secondary` hold
 // the same value in both themes, and MarkdownRenderer's inline code and code
 // fallback are `bg-muted` — on a muted bubble they would vanish into it.
 const BUBBLE_ASSISTANT = 'border border-border bg-card';
+// Quiet enough to read as an attribution rather than content. Aligned to the
+// bubble's own edge, so it sits over the side its speaker occupies.
+const LABEL = 'px-1 text-xs text-muted-foreground';
 
 function userText(message: Message): string {
   return message.contentParts
@@ -261,15 +270,21 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
       {messages.map((message) =>
         message.role === 'user' ? (
           <div key={message.id} className={ROW_USER}>
-            <div data-role="user" className={`${BUBBLE} ${BUBBLE_USER} whitespace-pre-wrap`}>
-              {userText(message)}
-              {renderImageParts(message, conversationId)}
+            <div className={STACK}>
+              <span className={`${LABEL} text-left`}>Me</span>
+              <div data-role="user" className={`${BUBBLE} ${BUBBLE_USER} whitespace-pre-wrap`}>
+                {userText(message)}
+                {renderImageParts(message, conversationId)}
+              </div>
             </div>
           </div>
         ) : (
           <div key={message.id} className={ROW_ASSISTANT}>
-            <div data-role="assistant" className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}>
-              {renderAssistantParts(message, conversationId)}
+            <div className={STACK}>
+              <span className={`${LABEL} text-right`}>Advisor</span>
+              <div data-role="assistant" className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}>
+                {renderAssistantParts(message, conversationId)}
+              </div>
             </div>
           </div>
         ),
@@ -277,41 +292,44 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
 
       {showStreamEntry && (
         <div className={ROW_ASSISTANT}>
-          <div
-            data-role="assistant"
-            data-testid="stream-entry"
-            className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}
-          >
-            {billingMode && (
-              <div data-testid="billing-mode" className="mb-1 text-xs text-muted-foreground">
-                {billingMode.mode === 'platform'
-                  ? billingMode.fellThrough
-                    ? 'Billed with platform credits (no key for this provider).'
-                    : 'Billed with platform credits.'
-                  : 'Using your own provider key (no credits charged).'}
-              </div>
-            )}
+          <div className={STACK}>
+            <span className={`${LABEL} text-right`}>Advisor</span>
+            <div
+              data-role="assistant"
+              data-testid="stream-entry"
+              className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}
+            >
+              {billingMode && (
+                <div data-testid="billing-mode" className="mb-1 text-xs text-muted-foreground">
+                  {billingMode.mode === 'platform'
+                    ? billingMode.fellThrough
+                      ? 'Billed with platform credits (no key for this provider).'
+                      : 'Billed with platform credits.'
+                    : 'Using your own provider key (no credits charged).'}
+                </div>
+              )}
 
-            {tools.map((t) => (
-              <StreamingToolAffordance key={t.id} tool={t} />
-            ))}
+              {tools.map((t) => (
+                <StreamingToolAffordance key={t.id} tool={t} />
+              ))}
 
-            {stream.text.length > 0 && <MarkdownRenderer content={stream.text} />}
+              {stream.text.length > 0 && <MarkdownRenderer content={stream.text} />}
 
-            {stream.kind === 'error' && (
-              <div data-testid="stream-error" className="mt-2 flex items-center gap-3">
-                <span className="text-sm text-destructive">Response interrupted — retry?</span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="cursor-pointer"
-                  onClick={onRetry}
-                >
-                  Retry
-                </Button>
-              </div>
-            )}
+              {stream.kind === 'error' && (
+                <div data-testid="stream-error" className="mt-2 flex items-center gap-3">
+                  <span className="text-sm text-destructive">Response interrupted — retry?</span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="cursor-pointer"
+                    onClick={onRetry}
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

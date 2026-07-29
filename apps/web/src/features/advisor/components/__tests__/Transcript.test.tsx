@@ -114,7 +114,7 @@ afterEach(() => {
 });
 
 describe('Transcript chat bubbles', () => {
-  it('puts each speaker on its own side, justifying the bubble and not the text', () => {
+  it('puts you on the left and the advisor on the right, moving the bubble not the text', () => {
     conversationMessages = [
       textMessage({ id: 'u1', role: 'user', text: 'question' }),
       textMessage({ id: 'a1', role: 'assistant', text: 'answer' }),
@@ -124,16 +124,36 @@ describe('Transcript chat bubbles', () => {
     const userBubble = document.querySelector('[data-role="user"]')!;
     const assistantBubble = document.querySelector('[data-role="assistant"]')!;
 
-    // The row is what carries the side; the bubble itself never sets
-    // text-alignment, so wrapped lines stay left-read inside both bubbles.
-    expect(userBubble.parentElement!.className).toContain('justify-end');
-    expect(assistantBubble.parentElement!.className).toContain('justify-start');
+    // The row (bubble → stack → row) is what carries the side. The bubble
+    // itself never sets text-alignment, so wrapped lines stay left-read on
+    // both sides.
+    expect(userBubble.parentElement!.parentElement!.className).toContain('justify-start');
+    expect(assistantBubble.parentElement!.parentElement!.className).toContain('justify-end');
     expect(userBubble.className).not.toContain('text-right');
+    expect(assistantBubble.className).not.toContain('text-right');
 
     // Distinct fills, so the speakers are told apart by colour as well as side.
     expect(userBubble.className).toContain('bg-primary');
     expect(assistantBubble.className).toContain('bg-card');
     expect(assistantBubble.className).not.toContain('bg-primary');
+  });
+
+  it('labels each bubble with its speaker, on that speaker’s side', () => {
+    conversationMessages = [
+      textMessage({ id: 'u1', role: 'user', text: 'question' }),
+      textMessage({ id: 'a1', role: 'assistant', text: 'answer' }),
+    ];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const userLabel = document.querySelector('[data-role="user"]')!.previousElementSibling!;
+    const assistantLabel =
+      document.querySelector('[data-role="assistant"]')!.previousElementSibling!;
+
+    expect(userLabel.textContent).toBe('Me');
+    expect(assistantLabel.textContent).toBe('Advisor');
+    // Each nametag hugs the edge its bubble sits on.
+    expect(userLabel.className).toContain('text-left');
+    expect(assistantLabel.className).toContain('text-right');
   });
 
   it('constrains bubbles so wide content scrolls inside instead of stretching them', () => {
@@ -142,19 +162,22 @@ describe('Transcript chat bubbles', () => {
 
     const bubble = document.querySelector('[data-role="assistant"]')!;
     // Without min-w-0 a flex item refuses to shrink below its content, and a
-    // wide table or code block would push the whole transcript sideways.
+    // wide table or code block would push the whole transcript sideways. The
+    // width cap lives on the stack, which wraps the nametag and the bubble.
     expect(bubble.className).toContain('min-w-0');
-    expect(bubble.className).toContain('max-w-[85%]');
+    expect(bubble.parentElement!.className).toContain('min-w-0');
+    expect(bubble.parentElement!.className).toContain('max-w-[85%]');
   });
 
-  it('bubbles the in-flight stream entry the same way as a persisted reply', () => {
+  it('bubbles and labels the in-flight stream entry like a persisted reply', () => {
     conversationMessages = [];
     streamSlice = { kind: 'streaming', text: 'thinking' };
     mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
 
     const entry = document.querySelector('[data-testid="stream-entry"]')!;
     expect(entry.className).toContain('bg-card');
-    expect(entry.parentElement!.className).toContain('justify-start');
+    expect(entry.previousElementSibling!.textContent).toBe('Advisor');
+    expect(entry.parentElement!.parentElement!.className).toContain('justify-end');
   });
 });
 
