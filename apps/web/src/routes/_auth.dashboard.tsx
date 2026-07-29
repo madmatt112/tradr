@@ -15,6 +15,7 @@ import { DashboardGrid } from '@/features/dashboard/components/DashboardGrid';
 import { DashboardHeader } from '@/features/dashboard/components/DashboardHeader';
 import { GRID_COLUMNS } from '@/features/dashboard/grid.constants';
 import { useDashboardLayout } from '@/features/dashboard/hooks/useDashboardLayout';
+import { findFirstSlot } from '@/features/dashboard/layout';
 import { useAuth } from '@/hooks/useAuth';
 
 /**
@@ -78,14 +79,7 @@ function DashboardPage(): ReactElement {
   const { user } = useAuth();
   const userId = user?.id ?? '';
   const layout = useDashboardLayout();
-  const {
-    data,
-    isLoading,
-    isError,
-    refetch,
-    flushPending,
-    scheduleLayoutWrite,
-  } = layout;
+  const { data, isLoading, isError, refetch, flushPending, scheduleLayoutWrite } = layout;
 
   // beforeunload: flush any pending debounced PUT (Req 1.9).
   useEffect(() => {
@@ -117,7 +111,12 @@ function DashboardPage(): ReactElement {
 
   const handleAdd = useCallback(
     (placement: WidgetPlacement) => {
-      const next = [...widgets, placement];
+      // The popover packs against an empty grid because it only knows the
+      // placed TYPES, so every widget it emits is positioned at (0, 0). Re-slot
+      // it here against the real placements — otherwise the new widget overlaps
+      // whatever is already at the origin and the PUT fails `checkNoOverlap`.
+      const { x, y } = findFirstSlot(widgets, { w: placement.w, h: placement.h });
+      const next = [...widgets, { ...placement, x, y }];
       scheduleLayoutWrite(() => ({ widgets: next }));
     },
     [widgets, scheduleLayoutWrite],
@@ -143,9 +142,7 @@ function DashboardPage(): ReactElement {
       const next = widgets.map((w) => {
         if (w.id !== widgetId) return w;
         const prev =
-          w.config && typeof w.config === 'object'
-            ? (w.config as Record<string, unknown>)
-            : {};
+          w.config && typeof w.config === 'object' ? (w.config as Record<string, unknown>) : {};
         return { ...w, config: { ...prev, ...config } };
       });
       scheduleLayoutWrite(() => ({ widgets: next }));
@@ -195,11 +192,7 @@ function DashboardPage(): ReactElement {
           title="Couldn't load your dashboard"
           description="Showing the default layout. Your changes will not be saved until we can reach the server."
           action={
-            <Button
-              type="button"
-              className="cursor-pointer"
-              onClick={() => refetch()}
-            >
+            <Button type="button" className="cursor-pointer" onClick={() => refetch()}>
               Retry
             </Button>
           }
@@ -251,7 +244,14 @@ function DashboardPage(): ReactElement {
   const placedTypes = widgets.map((w) => w.type);
   return (
     <div className="space-y-4">
-      <DashboardHeader placedTypes={placedTypes} onAdd={handleAdd} />
+      <DashboardHeader
+        placedTypes={placedTypes}
+        onAdd={handleAdd}
+        onResetLayout={() => {
+          void handleUseDefaultLayout();
+        }}
+        resetBusy={defaultBusy}
+      />
       <DashboardGrid
         widgets={widgets}
         onRemove={handleRemove}

@@ -305,36 +305,59 @@ test.describe('Dashboard — desktop', () => {
     await loginViaUi(page, user.email);
     await ensureDefaultLayoutPopulated(page);
 
-    // Capture (data-widget-id, x, y) for the first two widgets.
+    // Capture the rendered order before the drag.
     const widgets = page.locator(WIDGET);
-    const first = widgets.nth(0);
-    const second = widgets.nth(1);
-    const firstId = await first.getAttribute('data-widget-id');
-    const secondId = await second.getAttribute('data-widget-id');
-    expect(firstId).toBeTruthy();
-    expect(secondId).toBeTruthy();
+    const idsBefore = (await widgets.evaluateAll((nodes) =>
+      nodes.map((n) => n.getAttribute('data-widget-id')),
+    )) as string[];
+    expect(idsBefore.length).toBeGreaterThan(1);
+    const [firstId, secondId] = idsBefore;
 
-    // Drag the first widget's drag handle onto the second widget.
+    const first = page.locator(`section[data-widget-id="${firstId}"]`);
+    const second = page.locator(`section[data-widget-id="${secondId}"]`);
     const firstHandle = first.locator('[data-drag-handle="true"]');
     await firstHandle.scrollIntoViewIfNeeded();
-    await firstHandle.dragTo(second);
 
-    // The debounced PUT fires ~300ms after the drag-end. Reload after a short
-    // settle — `expect.poll` loops the reload to ride out the debounce.
+    // Drive the drag with explicit mouse steps rather than `dragTo`. dnd-kit's
+    // PointerSensor arms on a 4px activation distance and then needs further
+    // pointermove events to resolve a droppable under the cursor; a single
+    // jump would drop with `over === null` and silently do nothing.
+    const handleBox = await firstHandle.boundingBox();
+    const targetBox = await second.boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(targetBox).not.toBeNull();
+    await page.mouse.move(
+      handleBox!.x + handleBox!.width / 2,
+      handleBox!.y + handleBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      handleBox!.x + handleBox!.width / 2 + 12,
+      handleBox!.y + handleBox!.height / 2 + 12,
+      { steps: 5 },
+    );
+    await page.mouse.move(
+      targetBox!.x + targetBox!.width / 2,
+      targetBox!.y + targetBox!.height / 2,
+      { steps: 15 },
+    );
+    await page.mouse.up();
+
+    // The debounced PUT fires ~300ms after the drag-end.
     await page.waitForTimeout(500); // < 2s, allows debounce flush.
     await page.reload();
     await ensureDefaultLayoutPopulated(page);
 
-    // After reload, the two widgets should have swapped (x, y) — assert via
-    // the first widget's data-widget-id position relative to the second.
-    const firstAfter = page.locator(`section[data-widget-id="${firstId}"]`);
-    const secondAfter = page.locator(`section[data-widget-id="${secondId}"]`);
-    const firstBox = await firstAfter.boundingBox();
-    const secondBox = await secondAfter.boundingBox();
-    expect(firstBox).not.toBeNull();
-    expect(secondBox).not.toBeNull();
-    // Different positions — swap occurred.
-    expect(firstBox!.x !== secondBox!.x || firstBox!.y !== secondBox!.y).toBe(true);
+    const idsAfter = (await widgets.evaluateAll((nodes) =>
+      nodes.map((n) => n.getAttribute('data-widget-id')),
+    )) as string[];
+    expect(idsAfter).toHaveLength(idsBefore.length);
+    // The drop target took over the leading slot, and the dragged widget no
+    // longer holds it. Asserting the ORDER changed — not merely that two
+    // widgets sit at different coordinates, which is true of any grid and so
+    // passed even while the drag handle was inert.
+    expect(idsAfter[0]).toBe(secondId);
+    expect(idsAfter.indexOf(firstId)).toBeGreaterThan(0);
   });
 
   // -------------------------------------------------------------------------
