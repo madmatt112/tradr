@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DashboardLayoutResponseSchema,
+  GRID_MAX_ROWS,
   PutDashboardLayoutRequestSchema,
   WidgetPlacementSchema,
 } from './dashboard';
@@ -21,12 +22,12 @@ const UUID_G = '77777777-7777-4777-8777-777777777777';
 // Canonical six-widget default layout that satisfies all refinements.
 function canonicalWidgets() {
   return [
-    { id: UUID_A, type: 'stats-summary' as const, x: 0, y: 0, w: 12, h: 1 },
-    { id: UUID_B, type: 'performance-chart' as const, x: 0, y: 1, w: 6, h: 3 },
-    { id: UUID_C, type: 'equity-curve' as const, x: 0, y: 4, w: 6, h: 2 },
-    { id: UUID_D, type: 'account-balances' as const, x: 6, y: 1, w: 6, h: 2 },
-    { id: UUID_E, type: 'position-sizing' as const, x: 6, y: 3, w: 6, h: 3 },
-    { id: UUID_F, type: 'open-positions' as const, x: 0, y: 6, w: 12, h: 2 },
+    { id: UUID_A, type: 'stats-summary' as const, x: 0, y: 0, w: 12, h: 2 },
+    { id: UUID_B, type: 'performance-chart' as const, x: 0, y: 2, w: 6, h: 6 },
+    { id: UUID_C, type: 'equity-curve' as const, x: 0, y: 8, w: 6, h: 4 },
+    { id: UUID_D, type: 'account-balances' as const, x: 6, y: 2, w: 6, h: 4 },
+    { id: UUID_E, type: 'position-sizing' as const, x: 6, y: 6, w: 6, h: 6 },
+    { id: UUID_F, type: 'open-positions' as const, x: 0, y: 12, w: 12, h: 4 },
   ];
 }
 
@@ -71,17 +72,22 @@ describe('PutDashboardLayoutRequestSchema refinements', () => {
     expect(result.success).toBe(false);
   });
 
-  // 4. h .max(6)
-  it('rejects h: 7 via the schema .max(6)', () => {
-    const result = WidgetPlacementSchema.safeParse({
-      id: UUID_A,
-      type: 'stats-summary',
-      x: 0,
-      y: 0,
-      w: 12,
-      h: 7,
-    });
-    expect(result.success).toBe(false);
+  // 4. h .max(GRID_MAX_ROWS)
+  it('rejects h past GRID_MAX_ROWS, and accepts exactly GRID_MAX_ROWS', () => {
+    const at = (h: number) =>
+      WidgetPlacementSchema.safeParse({
+        id: UUID_A,
+        type: 'stats-summary',
+        x: 0,
+        y: 0,
+        w: 12,
+        h,
+      }).success;
+    // The bound moved with the row unit (80px -> 40px, Req 1.10) so the
+    // reachable pixel height is unchanged; a full-page widget is 24 rows.
+    expect(GRID_MAX_ROWS).toBe(24);
+    expect(at(GRID_MAX_ROWS)).toBe(true);
+    expect(at(GRID_MAX_ROWS + 1)).toBe(false);
   });
 
   // 5. h .min(1)
@@ -197,7 +203,7 @@ describe('PutDashboardLayoutRequestSchema refinements', () => {
       x: 0,
       y: 0,
       w: 12,
-      h: 1,
+      h: 2,
       config: {},
     });
     expect(result.success).toBe(true);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { GRID_MAX_ROWS } from './grid.constants';
 import { resolveResizeRect, snapDeltaToCells, type GridRect } from './resize';
 
 // Unit pitch: 100px per column, 80px per row, so a delta in pixels maps
@@ -99,8 +100,10 @@ describe('resolveResizeRect — clamps to what the schema accepts', () => {
     expect(next.x + next.w).toBe(start.x + start.w);
   });
 
-  it('caps height at the 6-row maximum', () => {
-    expect(resize({ bottom: true }, { x: 0, y: 5000 }).h).toBe(6);
+  it('caps height at GRID_MAX_ROWS', () => {
+    // The bound tracks the schema, which moved with the row unit (80px -> 40px,
+    // Req 1.10) so the reachable pixel height is unchanged.
+    expect(resize({ bottom: true }, { x: 0, y: 5000 }).h).toBe(GRID_MAX_ROWS);
   });
 
   it('never lets a top-edge drag push y negative', () => {

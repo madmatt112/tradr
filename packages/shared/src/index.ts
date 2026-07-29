@@ -143,6 +143,7 @@ export type {
 export {
   WidgetTypeSchema,
   ThemeSchema,
+  GRID_MAX_ROWS,
   PerWidgetMinSize,
   WidgetPlacementSchema,
   DashboardLayoutResponseSchema,

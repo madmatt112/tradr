@@ -85,15 +85,15 @@ function makeValidWidgets() {
       x: 0,
       y: 0,
       w: 12,
-      h: 1,
+      h: 2,
     },
     {
       id: randomUUID(),
       type: 'performance-chart' as const,
       x: 0,
-      y: 1,
+      y: 2,
       w: 6,
-      h: 2,
+      h: 4,
     },
   ];
 }
@@ -421,7 +421,7 @@ describe('dashboard routes', () => {
         x: 0,
         y: 0,
         w: 12,
-        h: 1,
+        h: 2,
       },
       {
         id: randomUUID(),

@@ -520,7 +520,7 @@ export function DashboardGrid({
             // MINIMUM, not an exact height. Widgets sharing a row band share
             // its height — which is why DEFAULT_WIDGETS pairs each chart with
             // a rail widget of the same row span.
-            gridAutoRows: `minmax(${GRID_ROW_HEIGHT_PX}px, auto)`,
+            gridAutoRows: `${GRID_ROW_HEIGHT_PX}px`,
           }}
         >
           {/* First in DOM order so the widgets paint over the outlines. */}

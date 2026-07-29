@@ -148,6 +148,13 @@
       "when": 1784830539521,
       "tag": "0020_drop_ledger_position_pnl_unique_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1784830539522,
+      "tag": "0021_dashboard_forty_px_rows",
+      "breakpoints": true
     }
   ]
 }
