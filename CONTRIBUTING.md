@@ -121,6 +121,32 @@ If you add, remove, or modify an API endpoint, update its OpenAPI/Swagger defini
 request**, and update the relevant documentation. Docs live in the repo — changes to how the app is built,
 configured, or self-hosted should land alongside the code that changes them.
 
+## Database migrations
+
+Migrations run automatically when the API boots, and Drizzle migrations are **forward-only** —
+there are no down-migrations. Downgrading to an earlier image therefore leaves the schema ahead
+of the code, so the old code has to keep working against the new schema. That is what makes
+"redeploy the previous version" a viable recovery, both for the hosted deployment and for a
+self-hoster who upgrades and needs to step back.
+
+To keep that true, split schema changes across releases — **expand, then contract:**
+
+- **Expand (release N):** add the new column, table, or index. Additive changes only. Backfill
+  and dual-write if the data has to move. The previous release's code still runs unmodified.
+- **Contract (release N+1 or later):** drop the old column, table, or constraint — only once
+  release N is deployed and known good.
+
+In practice: **never drop or rename in the same release that stops using the thing.** A pull
+request that adds a `DROP COLUMN`, `DROP TABLE`, or a rename alongside the code change that made
+it unused should be split in two.
+
+Renames are the easy trap — a rename is a drop plus an add. Add the new column, write to both,
+then remove the old one in a later release.
+
+No migration in the repo drops or renames a column or table; the only removal so far is an index
+(`0020`). Keep it that way unless you are deliberately doing the contract half of a change that
+shipped in an earlier release.
+
 ## Reporting security issues
 
 Please do **not** open a public issue for security vulnerabilities. Instead, report them privately per
