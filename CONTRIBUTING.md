@@ -112,7 +112,8 @@ Tradr favors **simple, boring, readable code over clever abstractions.** A few g
 - **Types are documentation** — prefer explicit types; let the compiler catch mistakes.
 - **Tests live next to the code they test.** Add or update tests for behavior you change.
 - **Conventional Commits** for commit messages (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, …), first
-  line under 72 characters.
+  line under 72 characters. If the change breaks a documented compatibility surface, mark it `feat!:` with a
+  `BREAKING CHANGE:` footer — see the [versioning policy](docs/versioning.md).
 - Formatting and linting are enforced via a pre-commit hook and in CI.
 
 ## API and documentation changes
