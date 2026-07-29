@@ -194,6 +194,34 @@ describe('FillDialog — submitted fees avoid double-counting', () => {
   });
 });
 
+// The row chains "open the position" off a successful add, and cancels that
+// intent from onOpenChange — so the ordering here is load-bearing.
+describe('FillDialog — onAdded', () => {
+  it('fires on a successful add, before the dialog closes', async () => {
+    const calls: string[] = [];
+    renderDialog({
+      defaultType: 'entry',
+      onAdded: () => calls.push('added'),
+      onOpenChange: (open: boolean) => calls.push(open ? 'open' : 'close'),
+    });
+
+    fireEvent.change(field('Quantity'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(calls).toContain('added'));
+    expect(calls).toEqual(['added', 'close']);
+  });
+
+  it('does not fire when the dialog is cancelled', () => {
+    const onAdded = vi.fn();
+    renderDialog({ defaultType: 'entry', onAdded });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(onAdded).not.toHaveBeenCalled();
+  });
+});
+
 describe('FillDialog — single-purpose type', () => {
   it('hides the type picker when the caller fixed the direction', () => {
     renderDialog({ defaultType: 'exit' });

@@ -17,8 +17,35 @@ vi.mock('../hooks/usePosition', () => ({
   useReopenPosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 
+// Stub exposes the two outcomes the row chains off: a successful add (onAdded
+// fires BEFORE the close, per its contract) and a cancel (close only).
 vi.mock('./FillDialog', () => ({
-  FillDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="fill-dialog" /> : null),
+  FillDialog: ({
+    open,
+    onAdded,
+    onOpenChange,
+  }: {
+    open: boolean;
+    onAdded?: () => void;
+    onOpenChange: (open: boolean) => void;
+  }) =>
+    open ? (
+      <div data-testid="fill-dialog">
+        <button
+          type="button"
+          data-testid="fill-dialog-added"
+          onClick={() => {
+            onAdded?.();
+            onOpenChange(false);
+          }}
+        />
+        <button
+          type="button"
+          data-testid="fill-dialog-cancel"
+          onClick={() => onOpenChange(false)}
+        />
+      </div>
+    ) : null,
 }));
 
 import { PositionRowActions } from './PositionRowActions';
@@ -70,17 +97,27 @@ describe('PositionRowActions — actions are inline buttons, not a menu', () => 
     }
   });
 
-  it('offers Add to position on draft and open, but not on closed', () => {
-    renderActions({ status: 'draft' });
-    expect(action('Add to position')).toBeTruthy();
-    cleanup();
-
+  // A draft is a plan with no units, so there is nothing to add to or reduce.
+  it('offers Add to position only on an open position', () => {
     renderActions({ status: 'open' });
     expect(action('Add to position')).toBeTruthy();
     cleanup();
 
+    renderActions({ status: 'draft' });
+    expect(screen.queryByRole('button', { name: 'Add to position' })).toBeNull();
+    cleanup();
+
     renderActions({ status: 'closed', closedAt: `${TODAY_UTC}T13:00:00.000Z` });
     expect(screen.queryByRole('button', { name: 'Add to position' })).toBeNull();
+  });
+
+  it('leaves a draft row with only Open position and Delete', () => {
+    renderActions({ status: 'draft', totalEntryQuantity: 0, totalExitQuantity: 0 });
+    const labels = screen
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('aria-label'))
+      .filter(Boolean);
+    expect(labels).toEqual(['Open position', 'Delete']);
   });
 
   // Exit fills 409 on a draft (R5-AC3), so the "−" button is open-only.
@@ -105,14 +142,16 @@ describe('PositionRowActions — actions are inline buttons, not a menu', () => 
 
 // R11-AC4: Open is shown-and-disabled on a draft, never hidden.
 describe('PositionRowActions — lifecycle gating', () => {
+  // Play is never disabled on a draft — with no entry fill it collects one
+  // first, so a freshly created draft is never stranded in the list.
   it('enables Open position on a draft that has an entry fill', () => {
     renderActions({ status: 'draft', totalEntryQuantity: 100, totalExitQuantity: 0 });
     expect(action('Open position').disabled).toBe(false);
   });
 
-  it('shows Open position disabled on a draft with no fills yet', () => {
+  it('enables Open position on a draft with no fills yet', () => {
     renderActions({ status: 'draft', totalEntryQuantity: 0, totalExitQuantity: 0 });
-    expect(action('Open position').disabled).toBe(true);
+    expect(action('Open position').disabled).toBe(false);
   });
 
   it('does not offer Open position on a non-draft position', () => {
@@ -140,7 +179,7 @@ describe('PositionRowActions — lifecycle gating', () => {
 });
 
 describe('PositionRowActions — actions fire the right mutation', () => {
-  it('Open position calls the open mutation', () => {
+  it('Open position calls the open mutation when an entry fill already exists', () => {
     const mutate = vi.fn();
     vi.mocked(useOpenPosition).mockReturnValue({
       mutate,
@@ -151,6 +190,67 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     fireEvent.click(action('Open position'));
 
     expect(mutate).toHaveBeenCalledWith({});
+    expect(screen.queryByTestId('fill-dialog')).toBeNull();
+  });
+
+  // The server rejects an open with no entry fill, so play collects one first
+  // rather than sitting disabled.
+  it('Open position on an empty draft collects the entry instead of mutating', () => {
+    const mutate = vi.fn();
+    vi.mocked(useOpenPosition).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useOpenPosition>);
+
+    renderActions({ status: 'draft', totalEntryQuantity: 0 });
+    fireEvent.click(action('Open position'));
+
+    expect(screen.getByTestId('fill-dialog')).toBeTruthy();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('opens the position once that entry fill saves', () => {
+    const mutate = vi.fn();
+    vi.mocked(useOpenPosition).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useOpenPosition>);
+
+    renderActions({ status: 'draft', totalEntryQuantity: 0 });
+    fireEvent.click(action('Open position'));
+    fireEvent.click(screen.getByTestId('fill-dialog-added'));
+
+    expect(mutate).toHaveBeenCalledWith({});
+  });
+
+  it('does not open the position if the entry dialog is cancelled', () => {
+    const mutate = vi.fn();
+    vi.mocked(useOpenPosition).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useOpenPosition>);
+
+    renderActions({ status: 'draft', totalEntryQuantity: 0 });
+    fireEvent.click(action('Open position'));
+    fireEvent.click(screen.getByTestId('fill-dialog-cancel'));
+
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  // "+" on an open position must not chain an open — that intent belongs to
+  // play alone, and an open position has nothing to transition to.
+  it('does not open the position when a fill is added via "+"', () => {
+    const mutate = vi.fn();
+    vi.mocked(useOpenPosition).mockReturnValue({
+      mutate,
+      isPending: false,
+    } as unknown as ReturnType<typeof useOpenPosition>);
+
+    renderActions({ status: 'open', totalEntryQuantity: 100 });
+    fireEvent.click(action('Add to position'));
+    fireEvent.click(screen.getByTestId('fill-dialog-added'));
+
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it('Reopen calls the reopen mutation', () => {
