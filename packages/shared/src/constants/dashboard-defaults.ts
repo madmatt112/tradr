@@ -20,13 +20,16 @@ export type DefaultWidgetSpec = {
 //
 // This list is also a valid left-to-right top-to-bottom packing of itself, in
 // declared order; `repackLayout` pins that (see layout.test.ts).
+// Denominated in 40px rows (Req 1.10). Every `y` and `h` is double the value
+// it held under the 80px unit, which is the same transform Req 1.11 applies to
+// saved layouts — so defaults and migrated user layouts stay consistent.
 export const DEFAULT_WIDGETS: readonly DefaultWidgetSpec[] = [
-  { type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 },
-  { type: 'performance-chart', x: 0, y: 1, w: 8, h: 3 },
-  { type: 'account-balances', x: 8, y: 1, w: 4, h: 3 },
-  { type: 'equity-curve', x: 0, y: 4, w: 8, h: 3 },
-  { type: 'position-sizing', x: 8, y: 4, w: 4, h: 3 },
-  { type: 'open-positions', x: 0, y: 7, w: 12, h: 3 },
+  { type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 },
+  { type: 'performance-chart', x: 0, y: 2, w: 8, h: 6 },
+  { type: 'account-balances', x: 8, y: 2, w: 4, h: 6 },
+  { type: 'equity-curve', x: 0, y: 8, w: 8, h: 6 },
+  { type: 'position-sizing', x: 8, y: 8, w: 4, h: 6 },
+  { type: 'open-positions', x: 0, y: 14, w: 12, h: 6 },
 ] as const;
 
 // Maximum size of a PUT /dashboard/layout request body. Enforced by the

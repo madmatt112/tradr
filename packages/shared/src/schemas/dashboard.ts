@@ -13,15 +13,25 @@ export type WidgetType = z.infer<typeof WidgetTypeSchema>;
 export const ThemeSchema = z.enum(['light', 'dark', 'system']);
 export type Theme = z.infer<typeof ThemeSchema>;
 
+// Absolute row bound. A row is 40px (Req 1.10), so 24 rows is a full-page
+// widget. `h` was capped at 6 when a row was 80px tall; the cap moved with the
+// unit so the reachable pixel height is unchanged.
+export const GRID_MAX_ROWS = 24;
+
 // Canonical per-widget minimum sizes (per design §F). The frontend widget
 // registry imports from here, not vice versa.
+//
+// Heights are denominated in the SAME rows as `h`, so they doubled with the
+// row unit (Req 1.11). Leaving them at the 80px values would have halved every
+// effective minimum — a chart could be shrunk to half the height the spec
+// intends. Widths are unaffected; columns did not change.
 export const PerWidgetMinSize: Record<WidgetType, { w: number; h: number }> = {
-  'stats-summary': { w: 4, h: 1 },
-  'open-positions': { w: 4, h: 2 },
-  'performance-chart': { w: 4, h: 2 },
-  'account-balances': { w: 3, h: 2 },
-  'position-sizing': { w: 3, h: 3 },
-  'equity-curve': { w: 4, h: 2 },
+  'stats-summary': { w: 4, h: 2 },
+  'open-positions': { w: 4, h: 4 },
+  'performance-chart': { w: 4, h: 4 },
+  'account-balances': { w: 3, h: 4 },
+  'position-sizing': { w: 3, h: 6 },
+  'equity-curve': { w: 4, h: 4 },
 };
 
 export const WidgetPlacementSchema = z
@@ -31,7 +41,7 @@ export const WidgetPlacementSchema = z
     x: z.number().int().min(0).max(11),
     y: z.number().int().min(0),
     w: z.number().int().min(1).max(12),
-    h: z.number().int().min(1).max(6),
+    h: z.number().int().min(1).max(GRID_MAX_ROWS),
     config: z.unknown().optional(),
   })
   .strict()
