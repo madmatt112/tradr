@@ -94,6 +94,15 @@ export function useDashboardLayout() {
     },
   });
 
+  // `mutation` is a fresh object on every mutation-state transition, so a
+  // `scheduleLayoutWrite` that closed over it directly would change identity
+  // mid-write. Widget config fix-ups (§K) list their callback in an effect
+  // dependency array, and that churn re-fires them — each re-queueing a layout
+  // write. Holding the mutation in a ref keeps `scheduleLayoutWrite` stable for
+  // the lifetime of the hook.
+  const mutationRef = useRef(mutation);
+  mutationRef.current = mutation;
+
   const scheduleLayoutWrite = useCallback(
     (merge: (prev: PutDashboardLayoutRequest) => PutDashboardLayoutRequest) => {
       const state = debounceRef.current;
@@ -107,11 +116,11 @@ export function useDashboardLayout() {
         state.timeout = null;
         state.pending = null;
         if (body) {
-          mutation.mutate(body);
+          mutationRef.current.mutate(body);
         }
       }, DEBOUNCE_PUT_MS);
     },
-    [mutation],
+    [],
   );
 
   const flushPending = useCallback(() => {

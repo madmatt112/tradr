@@ -182,6 +182,46 @@ describe('_auth.dashboard route', () => {
     expect(names).toEqual(DEFAULT_WIDGETS.map((d) => `user-1:${d.type}`));
   });
 
+  it('case 5b: layout mergers compose onto the pending write instead of replacing it', async () => {
+    // Regression guard. `scheduleLayoutWrite` debounces 300ms behind ONE pending
+    // body, so a handler that ignores the pending value discards whatever edit
+    // is already queued. A widget config fix-up landing just after a drag used
+    // to re-send the pre-drag positions, silently reverting the drag — for any
+    // drag within ~1.5s of page load. It also dropped a queued `theme` write.
+    const scheduleLayoutWrite = vi.fn();
+    // One type missing so the Add Widget picker has an entry to click.
+    const placed = sixDefaultWidgets.filter((w) => w.type !== 'equity-curve');
+    layoutMockValue = baseLayout({
+      data: { widgets: placed, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
+      scheduleLayoutWrite,
+    });
+    renderRoute();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Add Widget/i })[0]);
+    fireEvent.click(await screen.findByText('Equity Curve'));
+    expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
+
+    const merger = scheduleLayoutWrite.mock.calls[0][0] as (prev: {
+      widgets?: WidgetPlacement[];
+      theme?: string;
+    }) => { widgets: WidgetPlacement[]; theme?: string };
+
+    // A drag is already queued: same widgets, moved. The merger must build on
+    // THOSE positions, not resurrect the ones from the query cache.
+    const dragged = placed.map((w) => ({ ...w, y: w.y + 20 }));
+    const result = merger({ widgets: dragged, theme: 'dark' });
+
+    // The queued theme survives.
+    expect(result.theme).toBe('dark');
+    // Every pre-existing widget keeps its DRAGGED position.
+    for (const w of dragged) {
+      expect(result.widgets.find((r) => r.id === w.id)?.y).toBe(w.y);
+    }
+    // And the add still happened.
+    expect(result.widgets).toHaveLength(dragged.length + 1);
+    expect(result.widgets.map((w) => w.type)).toContain('equity-curve');
+  });
+
   it('case 6: beforeunload listener fires flushPending on unload', () => {
     const flushPending = vi.fn();
     layoutMockValue = baseLayout({

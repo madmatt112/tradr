@@ -5,38 +5,10 @@ import type { WidgetPlacement, WidgetType } from '@tradr/shared';
 
 import { newWidgetId } from '@/lib/uuid-fallback';
 
-import { GRID_COLUMNS } from '../grid.constants';
+import { findFirstSlot } from '../layout';
 import { widgetRegistry } from '../widgets/registry';
 
-const GRID_MAX_ROWS = 6;
-
-/**
- * Pure helper: left-to-right top-to-bottom packing.
- *
- * Scans cells row-by-row (y ascending) then column-by-column (x ascending)
- * and returns the first `(x, y)` where a rectangle of size `minSize` fits
- * without overlapping `existing`. Correct for n ≤ 6 widgets.
- */
-export function findFirstSlot(
-  existing: WidgetPlacement[],
-  minSize: { w: number; h: number },
-): { x: number; y: number } {
-  function overlaps(x: number, y: number): boolean {
-    for (const p of existing) {
-      const a = { x, y, w: minSize.w, h: minSize.h };
-      const overlapsX = a.x < p.x + p.w && p.x < a.x + a.w;
-      const overlapsY = a.y < p.y + p.h && p.y < a.y + a.h;
-      if (overlapsX && overlapsY) return true;
-    }
-    return false;
-  }
-  for (let y = 0; y <= GRID_MAX_ROWS * 4; y++) {
-    for (let x = 0; x + minSize.w <= GRID_COLUMNS; x++) {
-      if (!overlaps(x, y)) return { x, y };
-    }
-  }
-  return { x: 0, y: 0 };
-}
+export { findFirstSlot };
 
 export interface AddWidgetPopoverProps {
   placedTypes: WidgetType[];
@@ -92,18 +64,11 @@ export function AddWidgetPopover({
           className="z-50 w-64 rounded-md border bg-popover p-2 text-popover-foreground shadow-md outline-none"
         >
           {allPlaced ? (
-            <p
-              data-slot="add-widget-empty"
-              className="px-2 py-3 text-sm text-muted-foreground"
-            >
+            <p data-slot="add-widget-empty" className="px-2 py-3 text-sm text-muted-foreground">
               All widgets added.
             </p>
           ) : (
-            <ul
-              data-slot="add-widget-list"
-              className="flex flex-col"
-              role="list"
-            >
+            <ul data-slot="add-widget-list" className="flex flex-col" role="list">
               {available.map((def) => (
                 <li key={def.type} role="listitem">
                   <button

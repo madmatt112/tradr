@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { WidgetPlacement } from '@tradr/shared';
 
-import { applyDragEnd, buildAnnouncements, DashboardGrid } from './DashboardGrid';
+import { applyDragEnd, applyResize, buildAnnouncements, DashboardGrid } from './DashboardGrid';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -171,6 +171,102 @@ describe('DashboardGrid — DragOverlay mounts for active state', () => {
   });
 });
 
+describe('DashboardGrid — cell backdrop during a gesture', () => {
+  function firePointer(el: Element, type: string): void {
+    const event = new MouseEvent(type, { bubbles: true, clientX: 0, clientY: 0 });
+    Object.defineProperty(event, 'pointerId', { value: 1 });
+    el.dispatchEvent(event);
+  }
+
+  it('appears the moment a drag zone is pressed, before any movement', () => {
+    // dnd-kit withholds onDragStart until its 4px activation distance is met,
+    // so keying the edit state off the drag alone made the grid appear late.
+    installMatchMediaSpy({});
+    const widgets: WidgetPlacement[] = [
+      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 }),
+    ];
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <DashboardGrid
+          widgets={widgets}
+          onRemove={() => undefined}
+          scheduleLayoutWrite={() => undefined}
+        />,
+      );
+    });
+    const editing = (): string | null =>
+      container.querySelector('[data-grid-mode="grid"]')?.getAttribute('data-editing') ?? null;
+
+    expect(editing()).toBeNull();
+
+    const zone = container.querySelector('[data-drag-zone="true"]')!;
+    act(() => {
+      firePointer(zone, 'pointerdown');
+    });
+    // No pointermove at all — the press alone is enough.
+    expect(editing()).toBe('true');
+    expect(container.querySelectorAll('[data-grid-backdrop-cell="true"]').length).toBeGreaterThan(
+      0,
+    );
+
+    // Releasing without ever dragging clears it, even though the release
+    // lands on the window rather than the pressed element.
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+    });
+    expect(editing()).toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('is hidden at rest, covers the occupied rows during a resize, and clears after', () => {
+    installMatchMediaSpy({});
+    const widgets: WidgetPlacement[] = [
+      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 }),
+      W({ id: 'b', type: 'open-positions', x: 0, y: 1, w: 12, h: 2 }),
+    ];
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <DashboardGrid
+          widgets={widgets}
+          onRemove={() => undefined}
+          scheduleLayoutWrite={() => undefined}
+        />,
+      );
+    });
+    const backdrop = (): number =>
+      container.querySelectorAll('[data-grid-backdrop-cell="true"]').length;
+
+    expect(backdrop()).toBe(0);
+
+    const handle = container.querySelector('[data-resize-handle="true"]');
+    expect(handle).not.toBeNull();
+    act(() => {
+      firePointer(handle!, 'pointerdown');
+    });
+    // Occupied rows = max(y + h) = 3 → 3 rows × 12 columns.
+    expect(backdrop()).toBe(36);
+    expect(container.querySelector('[data-grid-mode="grid"]')?.getAttribute('data-editing')).toBe(
+      'true',
+    );
+
+    act(() => {
+      firePointer(handle!, 'pointerup');
+    });
+    expect(backdrop()).toBe(0);
+
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+});
+
 describe('DashboardGrid — ResizeObserver lifecycle', () => {
   let observeSpy: ReturnType<typeof vi.fn>;
   let disconnectSpy: ReturnType<typeof vi.fn>;
@@ -238,5 +334,147 @@ describe('applyDragEnd — drag-end merge (v3-7 / v4-4)', () => {
     // Sizes preserved.
     expect({ w: a.w, h: a.h }).toEqual({ w: 6, h: 2 });
     expect({ w: b.w, h: b.h }).toEqual({ w: 6, h: 2 });
+  });
+
+  it('does not produce an overlapping layout when the two widgets are different sizes', () => {
+    // A bare (x, y) swap of a 12×1 and a 6×2 overlaps, and the server rejects
+    // overlapping layouts (`checkNoOverlap`), so the write would 400 and roll
+    // back. Re-packing keeps the result valid.
+    const prev: WidgetPlacement[] = [
+      W({ id: 'stats', type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 }),
+      W({ id: 'perf', type: 'performance-chart', x: 0, y: 1, w: 6, h: 2 }),
+      W({ id: 'bal', type: 'account-balances', x: 6, y: 1, w: 6, h: 2 }),
+    ];
+    const next = applyDragEnd(prev, 'stats', 'perf');
+    for (let i = 0; i < next.length; i++) {
+      for (let j = i + 1; j < next.length; j++) {
+        const a = next[i];
+        const b = next[j];
+        const overlaps = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+        expect(overlaps).toBe(false);
+      }
+    }
+    // The dragged widget really moved — it is no longer first in reading order.
+    const byReadingOrder = [...next].sort((p, q) => p.y - q.y || p.x - q.x);
+    expect(byReadingOrder[0].id).not.toBe('stats');
+  });
+});
+
+describe('applyResize — growing reflows neighbours instead of stopping', () => {
+  const layout: WidgetPlacement[] = [
+    W({ id: 'stats', type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 }),
+    W({ id: 'perf', type: 'performance-chart', x: 0, y: 1, w: 8, h: 3 }),
+    W({ id: 'bal', type: 'account-balances', x: 8, y: 1, w: 4, h: 3 }),
+  ];
+
+  function overlapping(widgets: WidgetPlacement[]): boolean {
+    for (let i = 0; i < widgets.length; i++) {
+      for (let j = i + 1; j < widgets.length; j++) {
+        const a = widgets[i];
+        const b = widgets[j];
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  it('pushes a blocking neighbour aside and keeps the layout overlap-free', () => {
+    // 'perf' is boxed in by 'bal' to its east. A clamp-only rule would refuse
+    // to grow it at all — which is what made the corner handle look dead.
+    const next = applyResize(layout, 'perf', { x: 0, y: 1, w: 12, h: 3 });
+    const perf = next.find((w) => w.id === 'perf')!;
+    const bal = next.find((w) => w.id === 'bal')!;
+    expect({ w: perf.w, h: perf.h }).toEqual({ w: 12, h: 3 });
+    // The resized widget stays where it was; the neighbour is the one that moves.
+    expect({ x: perf.x, y: perf.y }).toEqual({ x: 0, y: 1 });
+    expect(bal.y).toBeGreaterThanOrEqual(perf.y + perf.h);
+    expect(overlapping(next)).toBe(false);
+  });
+
+  it('lets neighbours close the gap when a widget shrinks', () => {
+    const grown = applyResize(layout, 'perf', { x: 0, y: 1, w: 12, h: 3 });
+    const shrunk = applyResize(grown, 'perf', { x: 0, y: 1, w: 8, h: 3 });
+    const bal = shrunk.find((w) => w.id === 'bal')!;
+    // Back beside 'perf' rather than stranded on its own row band.
+    expect(bal.y).toBe(1);
+    expect(bal.x).toBe(8);
+    expect(overlapping(shrunk)).toBe(false);
+  });
+
+  it('honours a moved origin from a left-edge or top-corner drag', () => {
+    // Dragging 'bal' by its left edge widens it leftward into 'perf'.
+    const next = applyResize(layout, 'bal', { x: 6, y: 1, w: 6, h: 3 });
+    const bal = next.find((w) => w.id === 'bal')!;
+    expect({ x: bal.x, y: bal.y, w: bal.w, h: bal.h }).toEqual({
+      x: 6,
+      y: 1,
+      w: 6,
+      h: 3,
+    });
+    expect(overlapping(next)).toBe(false);
+  });
+
+  it('is a no-op when the rect is unchanged or the id is unknown', () => {
+    expect(applyResize(layout, 'perf', { x: 0, y: 1, w: 8, h: 3 })).toBe(layout);
+    expect(applyResize(layout, 'nope', { x: 0, y: 0, w: 4, h: 4 })).toBe(layout);
+  });
+});
+
+describe('DashboardGrid — drag handle is wired to dnd-kit', () => {
+  it('threads useSortable activator props onto the drag handle button', () => {
+    // Regression guard: the grid previously rendered SortableContext without
+    // ever calling useSortable, so the handle was inert and no widget could
+    // be dragged. dnd-kit stamps aria-roledescription="sortable" onto the
+    // activator attributes, so its presence proves the wiring exists.
+    installMatchMediaSpy({});
+    const widgets: WidgetPlacement[] = [
+      W({ id: 'a', type: 'stats-summary', x: 0, y: 0 }),
+      W({ id: 'b', type: 'open-positions', x: 6, y: 0 }),
+    ];
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <DashboardGrid
+          widgets={widgets}
+          onRemove={() => undefined}
+          scheduleLayoutWrite={() => undefined}
+        />,
+      );
+    });
+    const handles = container.querySelectorAll('button[data-drag-handle="true"]');
+    expect(handles).toHaveLength(2);
+    for (const handle of handles) {
+      expect(handle.getAttribute('aria-roledescription')).toBe('sortable');
+      // Must not be marked disabled — that is the mobile-only shape.
+      expect(handle.getAttribute('aria-disabled')).toBeNull();
+    }
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('marks the handle aria-disabled and drops the resize handle in the mobile stack', () => {
+    installMatchMediaSpy({ '(pointer: coarse)': true });
+    const widgets: WidgetPlacement[] = [W({ id: 'a', type: 'stats-summary' })];
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <DashboardGrid
+          widgets={widgets}
+          onRemove={() => undefined}
+          scheduleLayoutWrite={() => undefined}
+        />,
+      );
+    });
+    const handle = container.querySelector('button[data-drag-handle="true"]');
+    expect(handle?.getAttribute('aria-disabled')).toBe('true');
+    expect(container.querySelector('[data-resize-handle="true"]')).toBeNull();
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
   });
 });
