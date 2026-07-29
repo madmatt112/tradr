@@ -38,6 +38,69 @@ describe('ReleaseMarkdown', () => {
     expect(container.textContent).toContain('alert("xss")');
     expect(container.textContent).toContain('bold');
   });
+
+  it('gives headings, lists, and links a real style tier (no inert prose classes)', () => {
+    const md = "## What's Changed\n\n* a change\n* another change\n";
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    // The `prose` plugin is not installed, so the tiers must come from the
+    // element styles themselves — an unstyled heading/list is the bug.
+    const heading = container.querySelector('h2');
+    expect(heading?.className).toContain('uppercase');
+    const list = container.querySelector('ul');
+    expect(list?.className).toContain('list-disc');
+    expect(list!.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  it('shortens auto-linked GitHub URLs to their identifier', () => {
+    const md = [
+      'ci: something by @someone in https://github.com/madmatt112/tradr/pull/12',
+      '',
+      '**Full Changelog**: https://github.com/madmatt112/tradr/compare/v0.1.0...v0.5.0',
+    ].join('\n');
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    const links = [...container.querySelectorAll('a')];
+    expect(links.map((a) => a.textContent)).toEqual(['#12', 'v0.1.0…v0.5.0']);
+    // The href is untouched — only the visible text is shortened.
+    expect(links[0].getAttribute('href')).toBe('https://github.com/madmatt112/tradr/pull/12');
+    expect(links[0].getAttribute('rel')).toBe('noreferrer noopener');
+  });
+
+  it('mutes the trailing "by @user in" attribution, leaving the change text and link alone', () => {
+    const md =
+      '* ci(release): build each arch natively by @madmatt112 in https://github.com/madmatt112/tradr/pull/12';
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    const muted = container.querySelector('li span');
+    expect(muted?.className).toContain('text-muted-foreground');
+    expect(muted?.textContent?.trim()).toBe('by @madmatt112 in');
+
+    // The change description stays out of the muted span, and the PR link
+    // keeps its own colour rather than inheriting the de-emphasis.
+    const li = container.querySelector('li');
+    expect(li!.firstChild?.textContent).toBe('ci(release): build each arch natively');
+    const link = container.querySelector('a');
+    expect(link!.textContent).toBe('#12');
+    expect(link!.className).not.toContain('text-muted-foreground');
+  });
+
+  it('leaves lines without the attribution pattern fully emphasised', () => {
+    const md =
+      '* @madmatt112 made their first contribution in https://github.com/madmatt112/tradr/pull/1';
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    expect(container.querySelector('li span')).toBeNull();
+  });
+
+  it('leaves authored link text and non-GitHub URLs alone', () => {
+    const md =
+      '[see the PR](https://github.com/madmatt112/tradr/pull/12) and https://example.com/a/b';
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    const links = [...container.querySelectorAll('a')];
+    expect(links.map((a) => a.textContent)).toEqual(['see the PR', 'https://example.com/a/b']);
+  });
 });
 
 function makeRelease(overrides: Partial<ChangelogRelease> = {}): ChangelogRelease {
