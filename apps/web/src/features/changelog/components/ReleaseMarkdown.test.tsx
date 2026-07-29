@@ -67,6 +67,32 @@ describe('ReleaseMarkdown', () => {
     expect(links[0].getAttribute('rel')).toBe('noreferrer noopener');
   });
 
+  it('mutes the trailing "by @user in" attribution, leaving the change text and link alone', () => {
+    const md =
+      '* ci(release): build each arch natively by @madmatt112 in https://github.com/madmatt112/tradr/pull/12';
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    const muted = container.querySelector('li span');
+    expect(muted?.className).toContain('text-muted-foreground');
+    expect(muted?.textContent?.trim()).toBe('by @madmatt112 in');
+
+    // The change description stays out of the muted span, and the PR link
+    // keeps its own colour rather than inheriting the de-emphasis.
+    const li = container.querySelector('li');
+    expect(li!.firstChild?.textContent).toBe('ci(release): build each arch natively');
+    const link = container.querySelector('a');
+    expect(link!.textContent).toBe('#12');
+    expect(link!.className).not.toContain('text-muted-foreground');
+  });
+
+  it('leaves lines without the attribution pattern fully emphasised', () => {
+    const md =
+      '* @madmatt112 made their first contribution in https://github.com/madmatt112/tradr/pull/1';
+    const { container } = render(<ReleaseMarkdown content={md} />);
+
+    expect(container.querySelector('li span')).toBeNull();
+  });
+
   it('leaves authored link text and non-GitHub URLs alone', () => {
     const md =
       '[see the PR](https://github.com/madmatt112/tradr/pull/12) and https://example.com/a/b';

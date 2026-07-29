@@ -23,7 +23,7 @@
 // hierarchy on the app's own tokens and adds no dependency to the
 // lazy-loaded changelog chunk.
 
-import type { ReactNode } from 'react';
+import { Children, Fragment, type ReactNode } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
@@ -54,6 +54,32 @@ function textOf(children: ReactNode): string | null {
   return null;
 }
 
+// Every generated bullet ends with the same attribution — "…<the actual
+// change> by @user in <link>". It repeats verbatim down the whole list and is
+// never what the line is about, so it drops to the muted role and the change
+// description keeps the foreground. Anchored at the end of a text run, so it
+// only ever matches the tail that immediately precedes the PR link; the link
+// itself is untouched and keeps its own colour.
+const ATTRIBUTION = /^([\s\S]*?)(\s+by\s+@[A-Za-z0-9-]+\s+in\s*)$/;
+
+function mutedAttribution(children: ReactNode): ReactNode {
+  const items = Children.toArray(children);
+  let matched = false;
+  const next = items.map((child, i) => {
+    if (typeof child !== 'string') return child;
+    const m = ATTRIBUTION.exec(child);
+    if (!m) return child;
+    matched = true;
+    return (
+      <Fragment key={i}>
+        {m[1]}
+        <span className="text-muted-foreground">{m[2]}</span>
+      </Fragment>
+    );
+  });
+  return matched ? next : children;
+}
+
 // `##` is the spine of a GitHub release body ("What's Changed", "New
 // Contributors"). Set as an eyebrow — small, uppercase, tracked, muted — it
 // separates from the version above and the list below by case and colour
@@ -70,13 +96,17 @@ const components: Components = {
   h5: ({ children }) => <h5 className={SUBSECTION}>{children}</h5>,
   h6: ({ children }) => <h6 className={SUBSECTION}>{children}</h6>,
 
-  p: ({ children }) => <p className="my-3">{children}</p>,
+  // `li` covers tight lists (text sits directly in the item), `p` covers loose
+  // ones (remark wraps the item's text in a paragraph) — the attribution can
+  // land in either, and the match is anchored so neither double-applies.
+  p: ({ children }) => <p className="my-3">{mutedAttribution(children)}</p>,
   ul: ({ children }) => (
     <ul className="my-3 list-disc space-y-1.5 pl-6 marker:text-border">{children}</ul>
   ),
   ol: ({ children }) => (
     <ol className="my-3 list-decimal space-y-1.5 pl-6 marker:text-muted-foreground">{children}</ol>
   ),
+  li: ({ children }) => <li>{mutedAttribution(children)}</li>,
 
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
