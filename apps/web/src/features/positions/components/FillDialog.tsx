@@ -76,6 +76,13 @@ interface Props {
    * none of those apply and the recorded fee must stay editable.
    */
   position?: FillPositionContext;
+  /**
+   * Fired after a fill is successfully ADDED (never on edit, never on cancel),
+   * and deliberately BEFORE `onOpenChange(false)` — callers that chain a
+   * follow-up action off the save use `onOpenChange` to cancel that intent, so
+   * the close must not run first and clear it.
+   */
+  onAdded?: () => void;
 }
 
 export function FillDialog({
@@ -87,6 +94,7 @@ export function FillDialog({
   fill,
   defaultType,
   position,
+  onAdded,
 }: Props) {
   const isEdit = !!fill;
   const addFill = useAddFill(positionId);
@@ -180,6 +188,8 @@ export function FillDialog({
       // number here would have the position count it twice.
       const fees = feeIsCalculable && !feeOverride ? '0' : data.fees;
       await addFill.mutateAsync({ ...data, fees, filledAt });
+      // Before the close, per onAdded's contract.
+      onAdded?.();
     }
     onOpenChange(false);
     form.reset();

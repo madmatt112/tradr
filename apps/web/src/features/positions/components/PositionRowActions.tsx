@@ -100,15 +100,20 @@ export function PositionRowActions({ position }: Props) {
   const reopenPosition = useReopenPosition(position.id);
 
   const [fillType, setFillType] = useState<'entry' | 'exit' | null>(null);
+  /** Play opened the fill dialog to collect a draft's entry — open once it saves. */
+  const [openAfterFill, setOpenAfterFill] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const isDraft = position.status === 'draft';
   const isOpen = position.status === 'open';
   const isClosed = position.status === 'closed';
 
-  // R11-AC4: Open is SHOWN on a draft and merely disabled until an entry fill
-  // exists — not hidden. Reopen is different: the R11 amendment scopes it to
-  // "only when" the same-day window is open, so it stays conditionally rendered.
+  // A draft is a PLAN, not a position holding units, so there is nothing to
+  // "add to" — "+" is open-only. Play is the whole draft workflow instead: on a
+  // draft that has no entry fill yet it collects the entry first (the server
+  // rejects an open without one), then performs the transition. One button, one
+  // meaning — "start this trade" — and never disabled, so a fresh draft is never
+  // stranded in the list.
   //
   // There is deliberately NO Close action here. A balancing exit auto-closes
   // the position (R7 amendment), so "−" then All *is* the close; a separate
@@ -117,7 +122,6 @@ export function PositionRowActions({ position }: Props) {
   // the residual path that does not auto-close (editing a fill up to full size).
   const openUnits = position.totalEntryQuantity - position.totalExitQuantity;
   const hasEntryQuantity = position.totalEntryQuantity > 0;
-  const canOpen = hasEntryQuantity;
   const canReopen =
     isClosed && isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date());
 
@@ -129,10 +133,9 @@ export function PositionRowActions({ position }: Props) {
           DISABLED action (which lands on the tooltip's span wrapper, not the
           button) does not fall through and navigate the row. */}
       <div data-slot="row-actions" className="flex items-center justify-end gap-1">
-        {/* Single-purpose entry/exit, replacing one dual-purpose "Add fill".
-            Exit is `open`-only — R5-AC3 409s an exit fill on a draft — and is
-            dead once nothing is left open to reduce. */}
-        {!isClosed && (
+        {/* Single-purpose entry/exit. Both are `open`-only: a draft has no
+            units to add to or reduce, and R5-AC3 409s an exit on a draft. */}
+        {isOpen && (
           <RowAction
             icon={Plus}
             label="Add to position"
@@ -155,9 +158,16 @@ export function PositionRowActions({ position }: Props) {
           <RowAction
             icon={Play}
             label="Open position"
-            disabledReason="Add an entry fill first"
-            disabled={isPending || !canOpen}
-            onClick={() => openPosition.mutate({})}
+            disabled={isPending}
+            onClick={() => {
+              if (hasEntryQuantity) {
+                openPosition.mutate({});
+                return;
+              }
+              // No entry fill yet: collect it, then open once it saves.
+              setOpenAfterFill(true);
+              setFillType('entry');
+            }}
           />
         )}
 
@@ -181,7 +191,17 @@ export function PositionRowActions({ position }: Props) {
 
       <FillDialog
         open={fillType !== null}
-        onOpenChange={(next) => !next && setFillType(null)}
+        onOpenChange={(next) => {
+          if (next) return;
+          setFillType(null);
+          // Cancelled rather than saved — drop the pending open.
+          setOpenAfterFill(false);
+        }}
+        onAdded={() => {
+          if (!openAfterFill) return;
+          setOpenAfterFill(false);
+          openPosition.mutate({});
+        }}
         positionId={position.id}
         positionStatus={position.status}
         defaultType={fillType ?? undefined}
