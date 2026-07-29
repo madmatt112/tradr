@@ -113,6 +113,51 @@ afterEach(() => {
   }
 });
 
+describe('Transcript chat bubbles', () => {
+  it('puts each speaker on its own side, justifying the bubble and not the text', () => {
+    conversationMessages = [
+      textMessage({ id: 'u1', role: 'user', text: 'question' }),
+      textMessage({ id: 'a1', role: 'assistant', text: 'answer' }),
+    ];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const userBubble = document.querySelector('[data-role="user"]')!;
+    const assistantBubble = document.querySelector('[data-role="assistant"]')!;
+
+    // The row is what carries the side; the bubble itself never sets
+    // text-alignment, so wrapped lines stay left-read inside both bubbles.
+    expect(userBubble.parentElement!.className).toContain('justify-end');
+    expect(assistantBubble.parentElement!.className).toContain('justify-start');
+    expect(userBubble.className).not.toContain('text-right');
+
+    // Distinct fills, so the speakers are told apart by colour as well as side.
+    expect(userBubble.className).toContain('bg-primary');
+    expect(assistantBubble.className).toContain('bg-card');
+    expect(assistantBubble.className).not.toContain('bg-primary');
+  });
+
+  it('constrains bubbles so wide content scrolls inside instead of stretching them', () => {
+    conversationMessages = [textMessage({ id: 'a1', role: 'assistant', text: 'answer' })];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const bubble = document.querySelector('[data-role="assistant"]')!;
+    // Without min-w-0 a flex item refuses to shrink below its content, and a
+    // wide table or code block would push the whole transcript sideways.
+    expect(bubble.className).toContain('min-w-0');
+    expect(bubble.className).toContain('max-w-[85%]');
+  });
+
+  it('bubbles the in-flight stream entry the same way as a persisted reply', () => {
+    conversationMessages = [];
+    streamSlice = { kind: 'streaming', text: 'thinking' };
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const entry = document.querySelector('[data-testid="stream-entry"]')!;
+    expect(entry.className).toContain('bg-card');
+    expect(entry.parentElement!.className).toContain('justify-start');
+  });
+});
+
 describe('Transcript', () => {
   it('renders user messages as plain text, not Markdown', () => {
     conversationMessages = [textMessage({ id: 'u1', role: 'user', text: '**not bold**' })];

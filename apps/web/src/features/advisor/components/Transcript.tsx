@@ -49,6 +49,23 @@ export interface TranscriptProps {
 
 const IDLE: StreamState = { kind: 'idle' };
 
+// Chat bubbles. The row owns the side (the BUBBLE is justified, never the text
+// inside it) and the bubble owns the fill, so the two speakers are told apart
+// twice over — by position and by colour.
+//
+// `min-w-0` matters: the bubble is a flex item, whose default `min-width: auto`
+// would refuse to shrink below its content and let a wide table or code block
+// push the whole transcript sideways. With it, those keep their own
+// `overflow-x-auto` and scroll inside the bubble.
+const ROW_USER = 'flex justify-end';
+const ROW_ASSISTANT = 'flex justify-start';
+const BUBBLE = 'min-w-0 max-w-[85%] rounded-xl px-4 py-3 break-words';
+const BUBBLE_USER = 'bg-primary text-primary-foreground';
+// Deliberately a bordered card, NOT a grey fill: `muted` and `secondary` hold
+// the same value in both themes, and MarkdownRenderer's inline code and code
+// fallback are `bg-muted` — on a muted bubble they would vanish into it.
+const BUBBLE_ASSISTANT = 'border border-border bg-card';
+
 function userText(message: Message): string {
   return message.contentParts
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
@@ -243,49 +260,59 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
     <div data-testid="transcript" className="flex flex-col gap-4 p-4">
       {messages.map((message) =>
         message.role === 'user' ? (
-          <div key={message.id} data-role="user" className="whitespace-pre-wrap break-words">
-            {userText(message)}
-            {renderImageParts(message, conversationId)}
+          <div key={message.id} className={ROW_USER}>
+            <div data-role="user" className={`${BUBBLE} ${BUBBLE_USER} whitespace-pre-wrap`}>
+              {userText(message)}
+              {renderImageParts(message, conversationId)}
+            </div>
           </div>
         ) : (
-          <div key={message.id} data-role="assistant">
-            {renderAssistantParts(message, conversationId)}
+          <div key={message.id} className={ROW_ASSISTANT}>
+            <div data-role="assistant" className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}>
+              {renderAssistantParts(message, conversationId)}
+            </div>
           </div>
         ),
       )}
 
       {showStreamEntry && (
-        <div data-role="assistant" data-testid="stream-entry">
-          {billingMode && (
-            <div data-testid="billing-mode" className="mb-1 text-xs text-muted-foreground">
-              {billingMode.mode === 'platform'
-                ? billingMode.fellThrough
-                  ? 'Billed with platform credits (no key for this provider).'
-                  : 'Billed with platform credits.'
-                : 'Using your own provider key (no credits charged).'}
-            </div>
-          )}
+        <div className={ROW_ASSISTANT}>
+          <div
+            data-role="assistant"
+            data-testid="stream-entry"
+            className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}
+          >
+            {billingMode && (
+              <div data-testid="billing-mode" className="mb-1 text-xs text-muted-foreground">
+                {billingMode.mode === 'platform'
+                  ? billingMode.fellThrough
+                    ? 'Billed with platform credits (no key for this provider).'
+                    : 'Billed with platform credits.'
+                  : 'Using your own provider key (no credits charged).'}
+              </div>
+            )}
 
-          {tools.map((t) => (
-            <StreamingToolAffordance key={t.id} tool={t} />
-          ))}
+            {tools.map((t) => (
+              <StreamingToolAffordance key={t.id} tool={t} />
+            ))}
 
-          {stream.text.length > 0 && <MarkdownRenderer content={stream.text} />}
+            {stream.text.length > 0 && <MarkdownRenderer content={stream.text} />}
 
-          {stream.kind === 'error' && (
-            <div data-testid="stream-error" className="mt-2 flex items-center gap-3">
-              <span className="text-sm text-destructive">Response interrupted — retry?</span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="cursor-pointer"
-                onClick={onRetry}
-              >
-                Retry
-              </Button>
-            </div>
-          )}
+            {stream.kind === 'error' && (
+              <div data-testid="stream-error" className="mt-2 flex items-center gap-3">
+                <span className="text-sm text-destructive">Response interrupted — retry?</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="cursor-pointer"
+                  onClick={onRetry}
+                >
+                  Retry
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
