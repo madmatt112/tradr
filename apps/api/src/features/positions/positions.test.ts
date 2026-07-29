@@ -114,7 +114,19 @@ async function openTestPosition(cookie: string, positionId: string, openedAt?: s
   return res.json();
 }
 
+/**
+ * Ensures the position is closed, whichever way it got there.
+ *
+ * A full exit now auto-closes (R7 amendment), so most callers find the position
+ * already closed and the explicit route call would 409. Tests that exercise the
+ * close ROUTE itself call it directly rather than through this helper.
+ */
 async function closeTestPosition(cookie: string, positionId: string, closedAt?: string) {
+  const existing = await authedRequest('GET', `/api/positions/${positionId}`, cookie);
+  expect(existing.status).toBe(200);
+  const position = await existing.json();
+  if (position.status === 'closed') return position;
+
   const res = await authedRequest('POST', `/api/positions/${positionId}/close`, cookie, {
     closedAt,
   });
@@ -510,12 +522,26 @@ describe('positions', () => {
     });
     await openTestPosition(cookie, pos.id, '2025-01-01T00:00:00Z');
 
-    await addFill(cookie, pos.id, {
+    // Exit only PART of the position, then edit that fill up to full size.
+    // A balancing exit auto-closes (R7 amendment), so the explicit close route
+    // is now reachable only via a path that does not auto-close — editing a
+    // fill is that path, and it is why the route survives the amendment.
+    const partialExit = await addFill(cookie, pos.id, {
       type: 'exit',
       price: '120',
-      quantity: '10',
+      quantity: '4',
       filledAt: '2025-01-02T00:00:00Z',
     });
+    const edit = await authedRequest(
+      'PUT',
+      `/api/positions/${pos.id}/fills/${partialExit.id}`,
+      cookie,
+      { quantity: '10' },
+    );
+    expect(edit.status).toBe(200);
+
+    const stillOpen = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect((await stillOpen.json()).status).toBe('open');
 
     const res = await authedRequest('POST', `/api/positions/${pos.id}/close`, cookie, {
       closedAt: '2025-01-02T00:00:00Z',
@@ -561,6 +587,88 @@ describe('positions', () => {
   });
 
   // 15. Close with closedAt before openedAt → 400
+  // R7 amendment — a balancing exit closes the position by itself.
+  it('auto-closes an open position when an exit balances the entry quantity', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createTestPosition(cookie, account.id);
+
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, pos.id, '2025-01-01T00:00:00Z');
+
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '120',
+      quantity: '10',
+      filledAt: '2025-01-02T00:00:00Z',
+    });
+
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    const body = await res.json();
+    expect(body.status).toBe('closed');
+    // closedAt is the final exit's own timestamp, not the request time.
+    expect(new Date(body.closedAt).toISOString()).toBe('2025-01-02T00:00:00.000Z');
+  });
+
+  it('leaves the position open on a partial exit', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createTestPosition(cookie, account.id);
+
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, pos.id, '2025-01-01T00:00:00Z');
+
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '120',
+      quantity: '4',
+      filledAt: '2025-01-02T00:00:00Z',
+    });
+
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect((await res.json()).status).toBe('open');
+  });
+
+  // The auto-close must never reject the fill it rides on: `POST /open` with no
+  // body stamps openedAt as now, so a journalled backdated exit predates it.
+  it('clamps the auto-close to openedAt when the final exit predates it', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createTestPosition(cookie, account.id);
+
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, pos.id, '2025-06-01T00:00:00Z');
+
+    const exit = await authedRequest('POST', `/api/positions/${pos.id}/fills`, cookie, {
+      type: 'exit',
+      price: '120',
+      quantity: '10',
+      fees: '0',
+      filledAt: '2025-01-02T00:00:00Z',
+    });
+    expect(exit.status).toBe(201);
+
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    const body = await res.json();
+    expect(body.status).toBe('closed');
+    expect(new Date(body.closedAt).toISOString()).toBe('2025-06-01T00:00:00.000Z');
+  });
+
   it('rejects closing with closedAt before openedAt', async () => {
     const { cookie } = await registerAndGetCookie();
     const account = await createTestAccount(cookie);
@@ -574,12 +682,21 @@ describe('positions', () => {
     });
     await openTestPosition(cookie, pos.id, '2025-06-01T00:00:00Z');
 
-    await addFill(cookie, pos.id, {
+    // Partial exit then edit to full, so the position is fully exited but still
+    // open — a balancing exit would auto-close it and the route would 409.
+    const partialExit = await addFill(cookie, pos.id, {
       type: 'exit',
       price: '120',
-      quantity: '10',
+      quantity: '4',
       filledAt: '2025-01-02T00:00:00Z',
     });
+    const edit = await authedRequest(
+      'PUT',
+      `/api/positions/${pos.id}/fills/${partialExit.id}`,
+      cookie,
+      { quantity: '10' },
+    );
+    expect(edit.status).toBe(200);
 
     const res = await authedRequest('POST', `/api/positions/${pos.id}/close`, cookie, {
       closedAt: '2025-01-01T00:00:00Z',

@@ -11,6 +11,13 @@ import { usePositions } from '@/features/positions/hooks/usePositions';
 // Stub the router <Link> with a plain anchor — no router context needed.
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
+  useNavigate: () => vi.fn(),
+}));
+
+// Row actions need TanStack Query + Radix portals; this suite is about the P&L
+// cell only, so stub them out.
+vi.mock('./PositionRowActions', () => ({
+  PositionRowActions: () => null,
 }));
 
 vi.mock('@/features/accounts/hooks/useAccounts', () => ({

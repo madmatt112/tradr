@@ -155,6 +155,10 @@ export const PositionListItemSchema = z.object({
   updatedAt: z.string(),
   accountName: z.string(),
   accountCurrency: z.string(),
+  // Account IANA timezone — same role as on the detail: it defines the trading
+  // day for R13's same-day reopen rule, so a list row can decide whether to
+  // offer Reopen without refetching the detail.
+  accountTimezone: z.string(),
   realizedPnl: z.number().nullable(),
   returnPercentage: z.number().nullable(),
   avgEntryPrice: z.number().nullable(),

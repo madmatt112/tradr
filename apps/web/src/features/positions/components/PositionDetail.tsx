@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatCurrency } from '@/lib/format';
 
 import {
@@ -26,29 +27,7 @@ import {
   useReopenPosition,
 } from '../hooks/usePosition';
 import { decodeOptionContract } from '../utils/optionContract';
-
-// R13 same-day reopen visibility: a closed position may be reopened only while
-// its openedAt still falls on the current trading day in the ACCOUNT's timezone
-// (never UTC — a US-Eastern evening session crosses UTC midnight but stays one
-// trading day). Compares the zone-local YYYY-MM-DD keys of openedAt and now via
-// Intl 'en-CA' (ISO order), mirroring the server's authoritative zonedDateKey.
-// Fallback: if the account timezone is somehow unavailable, show the button and
-// let the server's 409 surface as a toast rather than hiding a valid action.
-function isOpenedTodayInAccountTz(
-  openedAt: string | null,
-  accountTimezone: string | undefined,
-  now: Date,
-): boolean {
-  if (!accountTimezone) return true;
-  if (openedAt === null) return false;
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: accountTimezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-  return fmt.format(new Date(openedAt)) === fmt.format(now);
-}
+import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
@@ -93,11 +72,16 @@ export function PositionDetailView({ positionId }: Props) {
   const optionContract =
     position.assetType === 'option' ? decodeOptionContract(position.symbol) : null;
 
+  // R11-AC4/AC5: Open and Close are SHOWN for their status and disabled until
+  // the position is eligible — the reason rides on a tooltip, mirroring the
+  // disabled "New Position" affordance in PositionList (R10-AC6). Reopen is
+  // different: the R11 amendment scopes it to "only when" the same-day window
+  // is open, so it stays conditionally rendered.
   const hasEntryFills = position.fills.some((f) => f.type === 'entry');
-  const canOpen = isDraft && hasEntryFills;
+  const canOpen = hasEntryFills;
   const isFullyExited =
     position.totalEntryQuantity > 0 && position.totalEntryQuantity === position.totalExitQuantity;
-  const canClose = isOpen && isFullyExited;
+  const canClose = isFullyExited;
 
   // Reopen (R13): closed positions whose openedAt is still the current trading
   // day in the account's timezone. Server is authoritative and 409s a prior-day
@@ -143,23 +127,37 @@ export function PositionDetailView({ positionId }: Props) {
           <Button variant="outline" className="cursor-pointer" onClick={() => setEditOpen(true)}>
             Edit
           </Button>
-          {canOpen && (
-            <Button
-              className="cursor-pointer"
-              onClick={() => openPosition.mutate({})}
-              disabled={openPosition.isPending}
-            >
-              {openPosition.isPending ? 'Opening...' : 'Open Position'}
-            </Button>
+          {isDraft && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <Button
+                    className="cursor-pointer"
+                    onClick={() => openPosition.mutate({})}
+                    disabled={openPosition.isPending || !canOpen}
+                  >
+                    {openPosition.isPending ? 'Opening...' : 'Open Position'}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              {!canOpen && <TooltipContent>Add an entry fill first</TooltipContent>}
+            </Tooltip>
           )}
-          {canClose && (
-            <Button
-              className="cursor-pointer"
-              onClick={() => closePosition.mutate({})}
-              disabled={closePosition.isPending}
-            >
-              {closePosition.isPending ? 'Closing...' : 'Close Position'}
-            </Button>
+          {isOpen && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <Button
+                    className="cursor-pointer"
+                    onClick={() => closePosition.mutate({})}
+                    disabled={closePosition.isPending || !canClose}
+                  >
+                    {closePosition.isPending ? 'Closing...' : 'Close Position'}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              {!canClose && <TooltipContent>Exit the full quantity first</TooltipContent>}
+            </Tooltip>
           )}
           {canReopen && (
             <Button
@@ -355,10 +353,11 @@ export function PositionDetailView({ positionId }: Props) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete position</AlertDialogTitle>
+            {/* R4 amendment: the dialog SHALL name the position. */}
             <AlertDialogDescription>
               {isClosed
-                ? "Deleting this closed position removes its realized P&L from the account balance and from tax and performance summaries — including prior tax years — and may change other positions' wash-sale classification. This cannot be undone."
-                : 'Are you sure you want to delete this position? This cannot be undone.'}
+                ? `Deleting the closed position "${position.symbol}" removes its realized P&L from the account balance and from tax and performance summaries — including prior tax years — and may change other positions' wash-sale classification. This cannot be undone.`
+                : `Are you sure you want to delete "${position.symbol}"? This cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -376,6 +375,15 @@ export function PositionDetailView({ positionId }: Props) {
         onOpenChange={setFillDialogOpen}
         positionId={positionId}
         positionStatus={position.status}
+        position={{
+          accountId: position.accountId,
+          assetType: position.assetType,
+          side: position.side,
+          openUnits: position.totalEntryQuantity - position.totalExitQuantity,
+          avgEntryPrice: position.avgEntryPrice,
+          targetPrice: position.targetPrice,
+          stopLoss: position.stopLoss,
+        }}
       />
     </div>
   );

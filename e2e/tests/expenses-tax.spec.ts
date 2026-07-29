@@ -207,11 +207,20 @@ async function createClosedPosition(
   });
   expect(exitRes.status(), 'POST exit fill').toBe(201);
 
-  // 5. Close (fires the ledger close-hook → realised P&L → wash-sale check)
-  const closeRes = await req.post(`/api/positions/${position.id}/close`, {
-    data: { closedAt: input.exitAt },
-  });
-  expect(closeRes.status(), 'POST /positions/:id/close').toBe(200);
+  // 5. The balancing exit above auto-closes the position, which is what fires
+  //    the ledger close-hook → realised P&L → wash-sale check. There is no
+  //    separate close step: the route would 409 against an already-closed
+  //    position. Assert the resulting state instead — these fixtures key off
+  //    the exact closedAt for tax-year and wash-sale windows, so a drift
+  //    between the final exit and the close must fail loudly rather than
+  //    silently move a position into another period.
+  const detailRes = await req.get(`/api/positions/${position.id}`);
+  expect(detailRes.status(), 'GET /positions/:id').toBe(200);
+  const detail = await detailRes.json();
+  expect(detail.status, 'auto-closed by the balancing exit').toBe('closed');
+  expect(new Date(detail.closedAt).toISOString(), 'closedAt == final exit fill').toBe(
+    new Date(input.exitAt).toISOString(),
+  );
 
   return { positionId: position.id };
 }

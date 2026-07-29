@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 
 import { EmptyState } from '@/components/EmptyState';
 import { Numeric } from '@/components/Numeric';
@@ -11,7 +11,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { PositionRowActions } from '@/features/positions/components/PositionRowActions';
 import { usePositions } from '@/features/positions/hooks/usePositions';
+import { shouldNavigateFromRowClick } from '@/features/positions/utils/rowNavigation';
 
 const MAX_ROWS = 10;
 
@@ -24,6 +26,7 @@ const MAX_ROWS = 10;
  * the `ibkr-integration` spec.
  */
 function OpenPositionsWidget() {
+  const navigate = useNavigate();
   const { data: positions, isLoading } = usePositions({ status: 'open' });
 
   if (isLoading) {
@@ -63,11 +66,19 @@ function OpenPositionsWidget() {
             <TableHead>Asset</TableHead>
             <TableHead className="text-right">Quantity</TableHead>
             <TableHead>Opened</TableHead>
+            <TableHead className="w-24 text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((pos) => (
-            <TableRow key={pos.id}>
+            <TableRow
+              key={pos.id}
+              className="cursor-pointer"
+              onClick={(e) => {
+                if (!shouldNavigateFromRowClick(e)) return;
+                navigate({ to: '/positions/$positionId', params: { positionId: pos.id } });
+              }}
+            >
               <TableCell className="font-medium">
                 <Link
                   to="/positions/$positionId"
@@ -88,6 +99,9 @@ function OpenPositionsWidget() {
               </TableCell>
               <TableCell>
                 {pos.openedAt ? new Date(pos.openedAt).toLocaleDateString() : '—'}
+              </TableCell>
+              <TableCell>
+                <PositionRowActions position={pos} />
               </TableCell>
             </TableRow>
           ))}

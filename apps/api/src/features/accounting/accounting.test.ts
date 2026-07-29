@@ -132,7 +132,17 @@ async function openPosition(cookie: string, positionId: string, openedAt?: strin
   return res.json();
 }
 
+/**
+ * Ensures the position is closed. A balancing exit auto-closes it (R7
+ * amendment), so callers that fully exit find it already closed and the
+ * explicit route would 409.
+ */
 async function closePosition(cookie: string, positionId: string, closedAt?: string) {
+  const existing = await authedRequest('GET', `/api/positions/${positionId}`, cookie);
+  expect(existing.status).toBe(200);
+  const position = await existing.json();
+  if (position.status === 'closed') return position;
+
   const res = await authedRequest('POST', `/api/positions/${positionId}/close`, cookie, {
     closedAt,
   });
@@ -784,19 +794,27 @@ describe('mid-hook failure leaves the position open with zero ledger rows', () =
       filledAt: '2026-01-01T00:00:00Z',
     });
     await openPosition(cookie, pos.id, '2026-01-01T00:00:00Z');
-    await addFill(cookie, pos.id, {
+
+    // The balancing exit auto-closes the position (R7 amendment), so the bomb
+    // hook now fires inside the FILL request rather than a separate close.
+    // Everything rides one transaction, so the fill that triggered the close
+    // must roll back with it — a saved exit whose close never landed would
+    // leave a fully-exited-but-open position and no ledger row.
+    const exitRes = await authedRequest('POST', `/api/positions/${pos.id}/fills`, cookie, {
       type: 'exit',
       price: '110',
       quantity: '1',
       fees: '0',
       filledAt: '2026-01-02T00:00:00Z',
     });
-
-    const closeRes = await authedRequest('POST', `/api/positions/${pos.id}/close`, cookie, {
-      closedAt: '2026-01-02T00:00:00Z',
-    });
     // The error handler maps thrown Error → 500.
-    expect(closeRes.status).toBeGreaterThanOrEqual(500);
+    expect(exitRes.status).toBeGreaterThanOrEqual(500);
+
+    // The exit fill itself was rolled back — only the entry survives.
+    const detail = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect(detail.status).toBe(200);
+    const detailBody = await detail.json();
+    expect(detailBody.fills.filter((f: { type: string }) => f.type === 'exit')).toHaveLength(0);
 
     // Position status reverted to 'open' (close transaction rolled back).
     const positionRows = await db.select().from(positionsTbl).where(eq(positionsTbl.id, pos.id));

@@ -111,19 +111,22 @@ async function openPos(cookie: string, positionId: string) {
   return res.json();
 }
 
-async function closePos(cookie: string, positionId: string) {
-  const res = await authedRequest('POST', `/api/positions/${positionId}/close`, cookie, {});
-  expect(res.status).toBe(200);
-  return res.json();
-}
-
-/** Creates a closed position: draft -> add entry -> open -> add exit -> close */
+/**
+ * Creates a closed position: draft -> add entry -> open -> add exit.
+ *
+ * The balancing exit auto-closes the position (R7 amendment), so there is no
+ * explicit close step — calling the route here would 409 against an
+ * already-closed position.
+ */
 async function createClosedPosition(cookie: string, accountId: string) {
   const pos = await createDraftPosition(cookie, accountId);
   await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '10' }));
   await openPos(cookie, pos.id);
   await addFill(cookie, pos.id, makeFill({ type: 'exit', quantity: '10', price: '160.00' }));
-  await closePos(cookie, pos.id);
+
+  const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+  expect(res.status).toBe(200);
+  expect((await res.json()).status).toBe('closed');
   return pos;
 }
 
@@ -254,7 +257,6 @@ describe('fills', () => {
     const fill = await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '10' }));
     await openPos(cookie, pos.id);
     await addFill(cookie, pos.id, makeFill({ type: 'exit', quantity: '10', price: '160.00' }));
-    await closePos(cookie, pos.id);
 
     const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${fill.id}`, cookie, {
       price: '151.00',
@@ -277,7 +279,6 @@ describe('fills', () => {
     const fill = await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '10' }));
     await openPos(cookie, pos.id);
     await addFill(cookie, pos.id, makeFill({ type: 'exit', quantity: '10', price: '160.00' }));
-    await closePos(cookie, pos.id);
 
     const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${fill.id}`, cookie, {
       quantity: '15',
@@ -345,7 +346,6 @@ describe('fills', () => {
     const fill = await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '10' }));
     await openPos(cookie, pos.id);
     await addFill(cookie, pos.id, makeFill({ type: 'exit', quantity: '10', price: '160.00' }));
-    await closePos(cookie, pos.id);
 
     const res = await authedRequest('DELETE', `/api/positions/${pos.id}/fills/${fill.id}`, cookie);
     expect(res.status).toBe(409);

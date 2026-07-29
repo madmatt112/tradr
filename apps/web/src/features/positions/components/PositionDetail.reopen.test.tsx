@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PositionDetail } from '@tradr/shared';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
+
 import { usePosition, useReopenPosition } from '../hooks/usePosition';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,6 +28,16 @@ vi.mock('./FillTable', () => ({ FillTable: () => null }));
 vi.mock('./PositionEditDialog', () => ({ PositionEditDialog: () => null }));
 
 import { PositionDetailView } from './PositionDetail';
+
+// The disabled Open/Close affordances carry tooltips; __root.tsx provides the
+// TooltipProvider at runtime, so supply one here as the dashboard route test does.
+function renderDetail() {
+  return render(
+    <TooltipProvider>
+      <PositionDetailView positionId="p1" />
+    </TooltipProvider>,
+  );
+}
 
 type PositionResult = ReturnType<typeof usePosition>;
 
@@ -89,7 +101,7 @@ describe('PositionDetail — Reopen button (R13 same-day)', () => {
       accountTimezone: 'UTC',
       openedAt: `${TODAY_UTC}T09:00:00.000Z`,
     });
-    render(<PositionDetailView positionId="p1" />);
+    renderDetail();
     expect(screen.getByRole('button', { name: 'Reopen' })).toBeTruthy();
   });
 
@@ -99,13 +111,13 @@ describe('PositionDetail — Reopen button (R13 same-day)', () => {
       accountTimezone: 'UTC',
       openedAt: '2020-01-01T09:00:00.000Z',
     });
-    render(<PositionDetailView positionId="p1" />);
+    renderDetail();
     expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
   });
 
   it('does not show Reopen for a non-closed (open) position', () => {
     mockDetail({ status: 'open', openedAt: `${TODAY_UTC}T09:00:00.000Z`, closedAt: null });
-    render(<PositionDetailView positionId="p1" />);
+    renderDetail();
     expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
   });
 
@@ -121,7 +133,7 @@ describe('PositionDetail — Reopen button (R13 same-day)', () => {
       openedAt: `${TODAY_UTC}T09:00:00.000Z`,
     });
 
-    render(<PositionDetailView positionId="p1" />);
+    renderDetail();
     fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
 
     expect(mutate).toHaveBeenCalledTimes(1);
@@ -132,7 +144,7 @@ describe('PositionDetail — Reopen button (R13 same-day)', () => {
 describe('PositionDetail — delete confirmation copy', () => {
   it('warns about balance, tax/performance (incl. prior tax years) and wash-sale on a closed position', () => {
     mockDetail({ status: 'closed', openedAt: '2020-01-01T09:00:00.000Z' });
-    render(<PositionDetailView positionId="p1" />);
+    renderDetail();
 
     // Only the header Delete exists before the dialog opens.
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -145,11 +157,57 @@ describe('PositionDetail — delete confirmation copy', () => {
 
   it('keeps the lighter copy for a non-closed (open) position', () => {
     mockDetail({ status: 'open', openedAt: `${TODAY_UTC}T09:00:00.000Z`, closedAt: null });
-    render(<PositionDetailView positionId="p1" />);
+    renderDetail();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    expect(screen.getByText(/Are you sure you want to delete this position\?/i)).toBeTruthy();
+    expect(screen.getByText(/Are you sure you want to delete "AAPL"\?/i)).toBeTruthy();
     expect(screen.queryByText(/wash-sale classification/i)).toBeNull();
+  });
+});
+
+// R11-AC4/AC5: Open/Close are shown for their status and disabled until the
+// position is eligible, rather than hidden (the pre-amendment behavior).
+describe('PositionDetail — Open/Close shown-and-disabled', () => {
+  function openButton(name: string): HTMLButtonElement {
+    return screen.getByRole('button', { name }) as HTMLButtonElement;
+  }
+
+  it('shows Open Position disabled on a draft with no entry fills', () => {
+    mockDetail({ status: 'draft', fills: [], closedAt: null });
+    renderDetail();
+    expect(openButton('Open Position').disabled).toBe(true);
+  });
+
+  it('enables Open Position once an entry fill exists', () => {
+    mockDetail({
+      status: 'draft',
+      closedAt: null,
+      fills: [{ id: 'f1', type: 'entry' }] as unknown as PositionDetail['fills'],
+    });
+    renderDetail();
+    expect(openButton('Open Position').disabled).toBe(false);
+  });
+
+  it('shows Close Position disabled while only partly exited', () => {
+    mockDetail({
+      status: 'open',
+      closedAt: null,
+      totalEntryQuantity: 100,
+      totalExitQuantity: 40,
+    });
+    renderDetail();
+    expect(openButton('Close Position').disabled).toBe(true);
+  });
+
+  it('enables Close Position once fully exited', () => {
+    mockDetail({
+      status: 'open',
+      closedAt: null,
+      totalEntryQuantity: 100,
+      totalExitQuantity: 100,
+    });
+    renderDetail();
+    expect(openButton('Close Position').disabled).toBe(false);
   });
 });

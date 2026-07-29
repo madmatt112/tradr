@@ -17,3 +17,16 @@ if (typeof window !== 'undefined') {
     dispatchEvent: vi.fn(),
   });
 }
+
+// jsdom does not implement ResizeObserver either, and several Radix primitives
+// (Switch, Select, Popover) construct one on mount — without this any test
+// rendering them dies with "ResizeObserver is not defined". A no-op observer is
+// enough: nothing under test asserts on resize callbacks. `DashboardGrid.test`
+// installs its own instrumented double over the top and restores this one.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}

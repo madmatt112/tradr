@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 
 import { Numeric } from '@/components/Numeric';
@@ -21,8 +21,10 @@ import { captureClientEvent } from '@/lib/telemetry/posthog';
 
 import { usePositions } from '../hooks/usePositions';
 import { decodeOptionContract } from '../utils/optionContract';
+import { shouldNavigateFromRowClick } from '../utils/rowNavigation';
 
 import { CreatePositionDialog } from './CreatePositionDialog';
+import { PositionRowActions } from './PositionRowActions';
 
 const STATUS_TABS = [
   { value: 'all', label: 'All' },
@@ -32,6 +34,7 @@ const STATUS_TABS = [
 ] as const;
 
 export function PositionList() {
+  const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const { data: accounts } = useAccounts();
@@ -108,6 +111,7 @@ export function PositionList() {
               <TableHead className="text-right"># Open</TableHead>
               <TableHead className="text-right"># Closed</TableHead>
               <TableHead className="text-right">P&L</TableHead>
+              <TableHead className="w-32 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -115,7 +119,14 @@ export function PositionList() {
               const optionContract =
                 pos.assetType === 'option' ? decodeOptionContract(pos.symbol) : null;
               return (
-                <TableRow key={pos.id} className="cursor-pointer">
+                <TableRow
+                  key={pos.id}
+                  className="cursor-pointer"
+                  onClick={(e) => {
+                    if (!shouldNavigateFromRowClick(e)) return;
+                    navigate({ to: '/positions/$positionId', params: { positionId: pos.id } });
+                  }}
+                >
                   <TableCell>
                     <Link
                       to="/positions/$positionId"
@@ -188,6 +199,9 @@ export function PositionList() {
                         Fees: {formatCurrency(pos.brokerageFees, pos.accountCurrency)}
                       </span>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    <PositionRowActions position={pos} />
                   </TableCell>
                 </TableRow>
               );

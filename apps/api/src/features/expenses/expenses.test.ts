@@ -448,7 +448,25 @@ async function openPositionFor(cookie: string, positionId: string, openedAt: str
   return res.json();
 }
 
+/**
+ * Ensures the position is closed at `closedAt`.
+ *
+ * A balancing exit auto-closes at that fill's own timestamp (R7 amendment), and
+ * every caller here gives the exit the same timestamp it wants the close at —
+ * so the position is normally already closed, correctly. Asserting that here
+ * keeps these tax-year-boundary tests honest: they depend on the exact closedAt,
+ * so a drift between the fill time and the close time must fail loudly rather
+ * than silently shifting a position into another tax year.
+ */
 async function closePositionFor(cookie: string, positionId: string, closedAt: string) {
+  const existing = await authedRequest('GET', `/api/positions/${positionId}`, cookie);
+  expect(existing.status).toBe(200);
+  const position = await existing.json();
+  if (position.status === 'closed') {
+    expect(new Date(position.closedAt).toISOString()).toBe(new Date(closedAt).toISOString());
+    return position;
+  }
+
   const res = await authedRequest('POST', `/api/positions/${positionId}/close`, cookie, {
     closedAt,
   });
