@@ -91,6 +91,10 @@ after CI passes on the tagged commit (a gate in the Release workflow blocks
 publishing otherwise). The full process, assumptions, and failure modes are in
 [`docs/runbooks/release.md`](docs/runbooks/release.md).
 
+What that version number promises — which surfaces are covered, what counts as
+a breaking change, and when to pin `:X.Y.Z` rather than track `:latest` — is in
+[`docs/versioning.md`](docs/versioning.md).
+
 ## License & Trademark
 
 Tradr is open source under the **[Apache License 2.0](./LICENSE)** — free to use, self-host, modify, and
