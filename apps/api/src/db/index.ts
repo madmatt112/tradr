@@ -20,8 +20,27 @@ export function poolerDriverOptions(transactionPooler: boolean): { prepare?: fal
   return transactionPooler ? { prepare: false } : {};
 }
 
+/**
+ * Seconds an unused pooled connection is kept open. postgres.js defaults to
+ * `null` — idle connections are NEVER closed — which leaves the pool holding
+ * sockets the server may already have dropped: a pooler that reaps idle
+ * backends, a NAT that expires the flow, or a host that suspends. The next
+ * query then writes into a dead socket and blocks on TCP retransmit for
+ * minutes rather than failing fast or dialing fresh.
+ *
+ * postgres.js's own staleness guards do not cover the suspend case:
+ * `max_lifetime` (30–60min) and `keep_alive` (60s) are in-process timers, so
+ * they freeze with the host. Closing the connection ourselves while still
+ * running is what makes resume safe.
+ *
+ * 60s sits below every idle reaper we run behind while staying far above
+ * normal request spacing, so a warm instance re-dials rarely.
+ */
+const IDLE_TIMEOUT_SECONDS = 60;
+
 const sql = postgres(config.DATABASE_URL, {
   max: config.DB_POOL_SIZE,
+  idle_timeout: IDLE_TIMEOUT_SECONDS,
   ...poolerDriverOptions(config.DB_TRANSACTION_POOLER),
 });
 
