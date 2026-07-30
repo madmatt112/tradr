@@ -364,6 +364,75 @@ test.describe('Dashboard — desktop', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Case 3b — free placement: a drop into empty space below the layout stays
+  // put, and nothing floats up into the space it vacated.
+  //
+  // This is the property the whole revision exists for and the one no unit test
+  // can reach: under vertical compaction RGL would pull the widget straight back
+  // to the first row that fits, so the drop would look like it did nothing.
+  // `compactor` = noCompactor is what makes it stick.
+  // -------------------------------------------------------------------------
+  test('drop below the layout stays put and neighbours do not float up', async ({
+    page,
+    request,
+  }) => {
+    const user = await registerUser(request, 'freeplace');
+    await loginViaUi(page, user.email);
+    await ensureDefaultLayoutPopulated(page);
+
+    const readLayout = async (): Promise<Map<string, { x: number; y: number }>> => {
+      const res = await request.get('/api/dashboard/layout');
+      expect(res.status(), 'GET layout').toBe(200);
+      const body = (await res.json()) as {
+        widgets: Array<{ type: string; x: number; y: number }>;
+      };
+      return new Map(body.widgets.map((w) => [w.type, { x: w.x, y: w.y }]));
+    };
+
+    const before = await readLayout();
+    const target = before.get('open-positions');
+    expect(target, 'default layout contains open-positions').toBeDefined();
+
+    // Open Positions is the bottom-most widget in DEFAULT_WIDGETS (y 14, h 6),
+    // so dragging it DOWN moves it into empty canvas with nothing to collide
+    // with — no push, so any change to another widget can only be compaction.
+    const card = page.locator('section[data-widget-type="open-positions"]');
+    const zone = card.locator('[data-drag-zone="true"]');
+    await zone.scrollIntoViewIfNeeded();
+    const zoneBox = await zone.boundingBox();
+    expect(zoneBox).not.toBeNull();
+
+    const startX = zoneBox!.x + 24; // left of the drag-cancel overflow menu
+    const startY = zoneBox!.y + zoneBox!.height / 2;
+    const ROW_PX = 40 + 16; // GRID_ROW_HEIGHT_PX + GRID_GAP_PX
+    const rowsDown = 2;
+
+    // Explicit steps: react-draggable needs a real mousedown, a move past its
+    // 3px threshold, then travel before mouseup, or the gesture reads as a click.
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX, startY + 8, { steps: 3 });
+    await page.mouse.move(startX, startY + rowsDown * ROW_PX, { steps: 15 });
+    await page.mouse.up();
+
+    await page.waitForTimeout(500); // debounced PUT is ~300ms
+    await page.reload();
+    await ensureDefaultLayoutPopulated(page);
+
+    const after = await readLayout();
+
+    // It landed where it was dropped and STAYED there across the reload.
+    expect(after.get('open-positions')!.y).toBe(target!.y + rowsDown);
+
+    // Nothing else moved. Under vertical compaction the widgets above would
+    // have been pulled up to close the gap; free placement leaves them alone.
+    for (const [type, pos] of before) {
+      if (type === 'open-positions') continue;
+      expect(after.get(type), `${type} still present`).toEqual(pos);
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // Case 4 — Theme toggle + reload persistence + first-paint .dark assertion.
   // -------------------------------------------------------------------------
   test('theme toggle Light → Dark → System persists across reload (no flash)', async ({
