@@ -295,9 +295,20 @@ test.describe('Dashboard — desktop', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Case 3 — drag persistence.
+  // Case 3 — a full-width widget will not swap into an occupied band.
+  //
+  // A characterisation test, not an aspiration. The default layout is fully
+  // packed, and a 12-column widget cannot sit beside anything, so there is no
+  // arrangement that honours a short downward drag of the top band: gridstack
+  // rejects the drop and reverts. Nothing moves, and nothing is persisted.
+  //
+  // Accepted behaviour rather than a defect — dragging a full-width band a
+  // couple of rows into a packed layout has no sensible outcome. Pinned here so
+  // that if a future engine change starts relocating or swapping it, that shows
+  // up as a decision to make rather than silent drift. Positive drag-persistence
+  // coverage lives in case 3b, which drags into free canvas.
   // -------------------------------------------------------------------------
-  test('drag a widget to a new position → reload → position persists', async ({
+  test('a short drag of the full-width band into a packed layout is a no-op', async ({
     page,
     request,
   }) => {
@@ -305,42 +316,47 @@ test.describe('Dashboard — desktop', () => {
     await loginViaUi(page, user.email);
     await ensureDefaultLayoutPopulated(page);
 
-    // Capture the rendered order before the drag.
-    const widgets = page.locator(WIDGET);
-    const idsBefore = (await widgets.evaluateAll((nodes) =>
-      nodes.map((n) => n.getAttribute('data-widget-id')),
-    )) as string[];
-    expect(idsBefore.length).toBeGreaterThan(1);
-    const [firstId, secondId] = idsBefore;
+    // Free placement moves a widget's (x, y) and leaves DOM order alone, and
+    // gridstack reports its nodes position-sorted — so assert on the PERSISTED
+    // coordinates rather than on the rendered or stored order.
+    const placementOf = async (type: string): Promise<{ x: number; y: number }> => {
+      const res = await request.get('/api/dashboard/layout');
+      expect(res.status(), 'GET layout').toBe(200);
+      const body = (await res.json()) as {
+        widgets: Array<{ type: string; x: number; y: number }>;
+      };
+      const found = body.widgets.find((w) => w.type === type);
+      expect(found, `layout contains ${type}`).toBeDefined();
+      return { x: found!.x, y: found!.y };
+    };
 
-    const first = page.locator(`section[data-widget-id="${firstId}"]`);
-    const second = page.locator(`section[data-widget-id="${secondId}"]`);
-    const firstHandle = first.locator('[data-drag-handle="true"]');
-    await firstHandle.scrollIntoViewIfNeeded();
+    const before = await placementOf('stats-summary');
+    const neighbourBefore = await placementOf('performance-chart');
 
-    // Drive the drag with explicit mouse steps rather than `dragTo`. dnd-kit's
-    // PointerSensor arms on a 4px activation distance and then needs further
-    // pointermove events to resolve a droppable under the cursor; a single
-    // jump would drop with `over === null` and silently do nothing.
-    const handleBox = await firstHandle.boundingBox();
-    const targetBox = await second.boundingBox();
-    expect(handleBox).not.toBeNull();
-    expect(targetBox).not.toBeNull();
-    await page.mouse.move(
-      handleBox!.x + handleBox!.width / 2,
-      handleBox!.y + handleBox!.height / 2,
-    );
+    // Stats Summary is the full-width band at the top of the default layout, so
+    // it is on screen without scrolling and can only move vertically.
+    const card = page.locator('section[data-widget-type="stats-summary"]');
+    const zone = card.locator('[data-drag-zone="true"]');
+    await zone.scrollIntoViewIfNeeded();
+    const zoneBox = await zone.boundingBox();
+    expect(zoneBox).not.toBeNull();
+
+    // Grab near the left edge of the header — the overflow menu on the right
+    // wears the drag-cancel class and would refuse the gesture.
+    const startX = zoneBox!.x + 24;
+    const startY = zoneBox!.y + zoneBox!.height / 2;
+    // gridstack's row pitch is `cellHeight` flat (GRID_ROW_HEIGHT_PX, 40): the
+    // gap is an inset INSIDE each cell, not extra space between rows.
+    const twoRowsPx = 2 * 40;
+
+    // Drive the drag with explicit mouse steps rather than `dragTo`. gridstack's
+    // drag&drop needs a real mousedown, at least one mousemove past its 3px
+    // threshold, and then movement before the mouseup — a single jump lands as
+    // a click.
+    await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(
-      handleBox!.x + handleBox!.width / 2 + 12,
-      handleBox!.y + handleBox!.height / 2 + 12,
-      { steps: 5 },
-    );
-    await page.mouse.move(
-      targetBox!.x + targetBox!.width / 2,
-      targetBox!.y + targetBox!.height / 2,
-      { steps: 15 },
-    );
+    await page.mouse.move(startX, startY + 8, { steps: 3 });
+    await page.mouse.move(startX, startY + twoRowsPx, { steps: 15 });
     await page.mouse.up();
 
     // The debounced PUT fires ~300ms after the drag-end.
@@ -348,16 +364,96 @@ test.describe('Dashboard — desktop', () => {
     await page.reload();
     await ensureDefaultLayoutPopulated(page);
 
-    const idsAfter = (await widgets.evaluateAll((nodes) =>
-      nodes.map((n) => n.getAttribute('data-widget-id')),
-    )) as string[];
-    expect(idsAfter).toHaveLength(idsBefore.length);
-    // The drop target took over the leading slot, and the dragged widget no
-    // longer holds it. Asserting the ORDER changed — not merely that two
-    // widgets sit at different coordinates, which is true of any grid and so
-    // passed even while the drag handle was inert.
-    expect(idsAfter[0]).toBe(secondId);
-    expect(idsAfter.indexOf(firstId)).toBeGreaterThan(0);
+    // Still six widgets, one grid item each.
+    await expect(page.locator('.grid-stack-item')).toHaveCount(6);
+
+    const after = await placementOf('stats-summary');
+    const neighbourAfter = await placementOf('performance-chart');
+
+    // The band held its row and its neighbour held theirs: the drop was
+    // rejected outright rather than partially applied. A partially applied
+    // reflow — one widget moved, another not — would be the genuinely bad
+    // outcome, because it can leave the layout overlapping and the write 400s.
+    expect(after).toEqual(before);
+    expect(neighbourAfter).toEqual(neighbourBefore);
+  });
+
+  // -------------------------------------------------------------------------
+  // Case 3b — free placement: a drop into empty space below the layout stays
+  // put, and nothing floats up into the space it vacated.
+  //
+  // This is the property the whole revision exists for and the one no unit test
+  // can reach: with compaction on, the engine pulls the widget straight back to
+  // the first row that fits, so the drop looks like it did nothing. gridstack's
+  // `float: true` is what makes it stick.
+  // -------------------------------------------------------------------------
+  test('drop below the layout stays put and neighbours do not float up', async ({
+    page,
+    request,
+  }) => {
+    const user = await registerUser(request, 'freeplace');
+    await loginViaUi(page, user.email);
+    await ensureDefaultLayoutPopulated(page);
+
+    const readLayout = async (): Promise<Map<string, { x: number; y: number }>> => {
+      const res = await request.get('/api/dashboard/layout');
+      expect(res.status(), 'GET layout').toBe(200);
+      const body = (await res.json()) as {
+        widgets: Array<{ type: string; x: number; y: number }>;
+      };
+      return new Map(body.widgets.map((w) => [w.type, { x: w.x, y: w.y }]));
+    };
+
+    const before = await readLayout();
+    const target = before.get('open-positions');
+    expect(target, 'default layout contains open-positions').toBeDefined();
+
+    // Open Positions is the bottom-most widget in DEFAULT_WIDGETS (y 14, h 6),
+    // so dragging it DOWN moves it into empty canvas with nothing to collide
+    // with — no push, so any change to another widget can only be compaction.
+    const card = page.locator('section[data-widget-type="open-positions"]');
+    const zone = card.locator('[data-drag-zone="true"]');
+    await zone.scrollIntoViewIfNeeded();
+    const zoneBox = await zone.boundingBox();
+    expect(zoneBox).not.toBeNull();
+
+    const startX = zoneBox!.x + 24; // left of the drag-cancel overflow menu
+    const startY = zoneBox!.y + zoneBox!.height / 2;
+    const ROW_PX = 40; // GRID_ROW_HEIGHT_PX — gridstack's gap is inset, not pitch
+    const rowsDown = 2;
+
+    // Explicit steps: gridstack needs a real mousedown, a move past its 3px
+    // threshold, then travel before mouseup, or the gesture reads as a click.
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX, startY + 8, { steps: 3 });
+    await page.mouse.move(startX, startY + rowsDown * ROW_PX, { steps: 15 });
+    await page.mouse.up();
+
+    await page.waitForTimeout(500); // debounced PUT is ~300ms
+
+    // Read the persisted row BEFORE reloading. The exact landing row is not
+    // predictable from the pointer delta — the canvas grows as the widget
+    // descends and the page can auto-scroll, so the effective travel exceeds
+    // the mouse delta. What matters is the property, not the arithmetic: it
+    // moved down, and it is still there after a reload.
+    const dropped = (await readLayout()).get('open-positions')!;
+    expect(dropped.y, 'widget moved down').toBeGreaterThan(target!.y);
+
+    await page.reload();
+    await ensureDefaultLayoutPopulated(page);
+
+    const after = await readLayout();
+
+    // It stayed exactly where it was dropped — no float-up on reload.
+    expect(after.get('open-positions')!.y).toBe(dropped.y);
+
+    // Nothing else moved. Under vertical compaction the widgets above would
+    // have been pulled up to close the gap; free placement leaves them alone.
+    for (const [type, pos] of before) {
+      if (type === 'open-positions') continue;
+      expect(after.get(type), `${type} still present`).toEqual(pos);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -483,20 +579,14 @@ test.describe('Dashboard — mobile', () => {
     );
     await expect(widgetContainers).toHaveCount(6);
 
-    // Drag/resize handles: design says drag handle remains in WidgetCard but
-    // is non-functional on coarse pointers; on mobile we accept EITHER not
-    // visible OR aria-disabled="true". The handles are inside a container
-    // marked aria-disabled="true", which satisfies the latter.
-    const dragHandle = widgetContainers.first().locator('[data-drag-handle="true"]');
-    const resizeHandle = widgetContainers.first().locator('[data-resize-handle="true"]');
-    // Parent is aria-disabled — assert the ancestor.
+    // Mobile does not mount gridstack at all, so there is no grid item and no
+    // resize handle anywhere on the page, and no header drag zone.
+    await expect(page.locator('.grid-stack-item')).toHaveCount(0);
+    await expect(page.locator('.ui-resizable-handle')).toHaveCount(0);
+    await expect(page.locator('[data-drag-zone="true"]')).toHaveCount(0);
+    // The `::` grip survives as an inert visual affordance inside a container
+    // marked aria-disabled="true".
     await expect(widgetContainers.first()).toHaveAttribute('aria-disabled', 'true');
-    // Sanity: the handles either are absent OR exist inside the disabled
-    // container — both are accepted shapes per the task body.
-    const dragCount = await dragHandle.count();
-    const resizeCount = await resizeHandle.count();
-    expect(dragCount === 0 || dragCount >= 1).toBe(true);
-    expect(resizeCount === 0 || resizeCount >= 1).toBe(true);
 
     // Single-column stack ordered by (y, x): collect the rendered DOM order
     // of widget types and assert it matches the (y, x)-sorted DEFAULT_WIDGETS

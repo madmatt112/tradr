@@ -6,11 +6,14 @@ export const GRID_COLUMNS = 12;
 // unrelated suites under a full run.
 export { GRID_MAX_ROWS } from '@tradr/shared/schemas/dashboard';
 export const GRID_GAP_PX = 16;
-/** Deadband (px) the resize gesture must cross past the ½-cell snap line. */
-export const RESIZE_HYSTERESIS_PX = 1;
 /**
- * Fixed row pitch (Req 1.10). A widget spanning `h` rows is exactly
- * `40h + 16(h-1)` px tall and depends on nothing else on the canvas.
+ * Fixed row pitch (Req 1.10). A widget spanning `h` rows occupies exactly `40h`
+ * px of canvas and depends on nothing else on it.
+ *
+ * gridstack insets `GRID_GAP_PX / 2` on every side of an item, so the gutter
+ * between two widgets is the full 16px while the pitch stays a flat 40 — the
+ * gap comes out of the cell rather than sitting between cells. A widget's
+ * visible height is therefore `40h - 16`.
  *
  * Two earlier rules are withdrawn. `80px` fixed was too coarse once `h` had to
  * express a full page. `minmax(80px, auto)` was worse: CSS Grid rows are shared,

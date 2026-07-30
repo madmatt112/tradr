@@ -36,11 +36,11 @@ export interface DashboardHeaderProps {
  * Renders the Add Widget popover (Task 36.3) and, once widgets are placed, a
  * Reset layout action.
  *
- * The `?` keyboard-reorder tooltip that used to live here has been REMOVED: it
- * documented a Tab → Space → arrows → Space flow that does not actually work,
- * so it was actively misleading. Either the keyboard path gets implemented or
- * the affordance goes for good — tracked separately; see Req 4.11.2, which
- * still specifies the binding and is currently out of step with the code.
+ * The `?` keyboard-reorder tooltip that used to live here is gone for good. It
+ * documented a Tab → Space → arrows → Space flow that never worked, and
+ * keyboard operation of the grid is now explicitly OUT OF SCOPE — not pending
+ * implementation. Req 4.11.2 is withdrawn, so there is nothing left to
+ * document here.
  *
  * Does NOT mount `<ThemeToggle />` — Task 26 mounts it in the sidebar; per
  * Task 43 restrictions we must not double-mount it here.

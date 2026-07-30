@@ -18,8 +18,6 @@ export type DefaultWidgetSpec = {
 // are shared, so a 3-row chart beside a 2-row panel would stretch that panel
 // into a tall near-empty box.
 //
-// This list is also a valid left-to-right top-to-bottom packing of itself, in
-// declared order; `repackLayout` pins that (see layout.test.ts).
 // Denominated in 40px rows (Req 1.10). Every `y` and `h` is double the value
 // it held under the 80px unit, which is the same transform Req 1.11 applies to
 // saved layouts — so defaults and migrated user layouts stay consistent.

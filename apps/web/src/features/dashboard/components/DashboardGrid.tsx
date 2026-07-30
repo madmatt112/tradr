@@ -1,131 +1,134 @@
+import 'gridstack/dist/gridstack.css';
+
 import {
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  MeasuringStrategy,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type Announcements,
-  type DragEndEvent,
-  type DragOverEvent,
-  type DragStartEvent,
-} from '@dnd-kit/core';
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from '@dnd-kit/sortable';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+  GridStack,
+  type GridItemHTMLElement,
+  type GridStackOptions,
+  type GridStackWidget,
+} from 'gridstack';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { createPortal } from 'react-dom';
 
-import type { WidgetPlacement } from '@tradr/shared';
+import { PerWidgetMinSize, type WidgetPlacement } from '@tradr/shared/schemas/dashboard';
 
-import { GRID_COLUMNS, GRID_ROW_HEIGHT_PX } from '../grid.constants';
-import { findFirstSlot, repackLayout, sortByYThenX } from '../layout';
-import type { GridRect } from '../resize';
-import { widgetRegistry } from '../widgets/registry';
+import { GRID_COLUMNS, GRID_GAP_PX, GRID_MAX_ROWS, GRID_ROW_HEIGHT_PX } from '../grid.constants';
+import { sortByYThenX } from '../layout';
 
-import { WidgetCard } from './WidgetCard';
+import { WidgetCard, WIDGET_DRAG_CANCEL_CLASS, WIDGET_DRAG_HANDLE_CLASS } from './WidgetCard';
+
+/** A gridstack widget descriptor that is guaranteed to carry its `id`. */
+type IdentifiedGridWidget = GridStackWidget & { id: string };
 
 /**
- * Pure helper extracted for unit testing (Task 36.2 case 5 / v3-7 / v4-4).
+ * `WidgetPlacement[]` → gridstack widget descriptors.
  *
- * Moves `activeId` into `overId`'s place in reading order — top-to-bottom then
- * left-to-right — and re-packs the layout from that new order. Each widget
- * keeps its own `w`/`h`; only the cell origins move.
+ * The two models already agree field for field — `x`/`y`/`w`/`h` are grid units
+ * on both sides — so this only attaches the per-type minimums, which makes
+ * gridstack refuse to shrink a widget past what `WidgetPlacementSchema` accepts
+ * rather than letting the PUT 400.
  *
- * Re-packing rather than swapping `(x, y)` outright is what keeps the result
- * overlap-free when the two widgets are different sizes. A bare position swap
- * of, say, a 12×1 widget and a 6×2 widget produces an overlapping layout,
- * which the server rejects (`checkNoOverlap` in
- * `PutDashboardLayoutRequestSchema`) and the client then rolls back. For
- * equal-sized widgets the two are the same operation — the pair trades slots.
+ * Exported and unit-tested directly: jsdom has no layout, so a gridstack drag
+ * resolves every pixel delta to zero and cannot exercise this through the DOM.
  */
-export function applyDragEnd(
-  prev: WidgetPlacement[],
-  activeId: string,
-  overId: string,
-): WidgetPlacement[] {
-  if (activeId === overId) return prev;
-  const ordered = sortByYThenX(prev);
-  const from = ordered.findIndex((w) => w.id === activeId);
-  const to = ordered.findIndex((w) => w.id === overId);
-  if (from === -1 || to === -1) return prev;
-  return repackLayout(arrayMove(ordered, from, to));
+export function toGridWidgets(widgets: WidgetPlacement[]): IdentifiedGridWidget[] {
+  return widgets.map((widget) => {
+    const min = PerWidgetMinSize[widget.type];
+    return {
+      id: widget.id,
+      x: widget.x,
+      y: widget.y,
+      w: widget.w,
+      h: widget.h,
+      minW: min.w,
+      minH: min.h,
+      // Mirrors the schema's `h <= GRID_MAX_ROWS`. A per-item cap, not a canvas
+      // one — see `createGridOptions` on why `maxRow` is left unset.
+      maxH: GRID_MAX_ROWS,
+    };
+  });
 }
 
 /**
- * Applies a new grid rect to one widget and reflows the rest around it
- * (Req 4.6.5).
+ * gridstack nodes (as returned by `grid.save(false)`) → `WidgetPlacement[]`.
  *
- * The resized widget is pinned at the rect the gesture resolved — position
- * included, since dragging a left edge or a top corner moves the origin as
- * well as the span — and every other widget is re-packed around it in reading
- * order. Growing therefore pushes neighbors down and along, and shrinking lets
- * them close the gap. Reflowing rather than clamping at the boundary is what
- * makes resize usable at all: a full 12-column layout leaves no free cell, so
- * a clamp-only rule blocks every outward drag.
+ * A gridstack node carries geometry and nothing else we persist, so `type` and
+ * `config` come from the matching widget. Nodes with no match are dropped: the
+ * grid can still hold an entry for a widget that has just been removed, and a
+ * placement with no `type` fails `WidgetPlacementSchema` on the write.
+ *
+ * Geometry is defaulted the way gridstack itself defaults it (`x`/`y` to 0,
+ * `w`/`h` to 1) — it omits `w`/`h` from a node once they are 1.
  */
-export function applyResize(
-  prev: WidgetPlacement[],
-  id: string,
-  rect: GridRect,
-): WidgetPlacement[] {
-  const target = prev.find((w) => w.id === id);
-  if (!target) return prev;
-  if (target.x === rect.x && target.y === rect.y && target.w === rect.w && target.h === rect.h) {
-    return prev;
-  }
-  const placed: WidgetPlacement[] = [{ ...target, ...rect }];
-  for (const widget of sortByYThenX(prev.filter((w) => w.id !== id))) {
-    const { x, y } = findFirstSlot(placed, { w: widget.w, h: widget.h });
-    placed.push({ ...widget, x, y });
-  }
-  return placed;
-}
-
-/**
- * Builds the four dnd-kit announcement strings per Req 4.11.1.
- * Exported pure for unit testing — the strings are VERBATIM.
- */
-export function buildAnnouncements(
+export function fromGridWidgets(
+  nodes: GridStackWidget[],
   widgets: WidgetPlacement[],
-  displayNameLookup: (type: WidgetPlacement['type']) => string,
-): Announcements {
-  const displayNameFor = (id: string | null): string => {
-    if (!id) return '';
-    const w = widgets.find((x) => x.id === id);
-    if (!w) return '';
-    return displayNameLookup(w.type);
-  };
-  const positionFor = (id: string | null): { x: number; y: number } => {
-    if (!id) return { x: 0, y: 0 };
-    const w = widgets.find((x) => x.id === id);
-    if (!w) return { x: 0, y: 0 };
-    return { x: w.x, y: w.y };
-  };
+): WidgetPlacement[] {
+  const byId = new Map(widgets.map((widget) => [widget.id, widget]));
+  const next: WidgetPlacement[] = [];
+  for (const node of nodes) {
+    const widget = node.id === undefined ? undefined : byId.get(node.id);
+    if (!widget) continue;
+    next.push({ ...widget, x: node.x ?? 0, y: node.y ?? 0, w: node.w ?? 1, h: node.h ?? 1 });
+  }
+  return next;
+}
+
+/**
+ * Seven handles, as the bespoke implementation had (Req 4.6.2), and there is
+ * still deliberately no `n`: the whole header is the drag zone, and a
+ * full-width resize strip along its top edge would swallow the start of every
+ * drag. The two top corners are small enough to coexist with it.
+ */
+const RESIZE_HANDLES = 'e,se,s,sw,w,ne,nw';
+
+/**
+ * gridstack's `margin` is an inset applied to EACH SIDE of every item, so the
+ * gutter a user sees between two neighbours is `2 * margin`. `GRID_GAP_PX` is
+ * that visible gutter, so the option is half of it — 8, not 16. Passing 16
+ * would render every gutter at 32px.
+ */
+const GRID_MARGIN_PX = GRID_GAP_PX / 2;
+
+/**
+ * gridstack's own built-in "never start a drag from here" list. Supplying
+ * `cancel` REPLACES it rather than extending it, so it is repeated here.
+ */
+const DRAG_CANCEL_BUILTIN = 'input,textarea,button,select,option';
+
+/**
+ * Built fresh per grid, because `GridStack.init` MUTATES the options object it
+ * is handed (it fills in defaults and splits `margin` into four sides). A
+ * shared module constant would be rewritten by the first init and reused in
+ * that state by the next — which a StrictMode double-mount guarantees there is.
+ *
+ * Exported so the unit tests assert the configuration rather than the pixels.
+ */
+export function createGridOptions(): GridStackOptions {
   return {
-    onDragStart: ({ active }) => {
-      const name = displayNameFor(String(active.id));
-      const { x, y } = positionFor(String(active.id));
-      return `Picked up ${name} at column ${x}, row ${y}.`;
-    },
-    onDragOver: ({ active, over }) => {
-      const name = displayNameFor(String(active.id));
-      const overPos = positionFor(over ? String(over.id) : null);
-      return `${name} is over column ${overPos.x}, row ${overPos.y}.`;
-    },
-    onDragEnd: ({ active, over }) => {
-      const name = displayNameFor(String(active.id));
-      const overPos = positionFor(over ? String(over.id) : String(active.id));
-      return `${name} dropped at column ${overPos.x}, row ${overPos.y}.`;
-    },
-    onDragCancel: ({ active }) => {
-      const name = displayNameFor(String(active.id));
-      return `Picking up ${name} was cancelled.`;
-    },
+    column: GRID_COLUMNS,
+    cellHeight: GRID_ROW_HEIGHT_PX,
+    margin: GRID_MARGIN_PX,
+    // Free placement: a widget dropped into empty space below the layout stays
+    // where it was dropped instead of floating up to the first gap, while a
+    // widget dropped onto another still pushes that one out of the way.
+    // Overlap is never produced — the server rejects overlapping layouts
+    // (`checkNoOverlap` in `PutDashboardLayoutRequestSchema`) and the write
+    // would 400.
+    float: true,
+    handle: `.${WIDGET_DRAG_HANDLE_CLASS}`,
+    // The header's overflow menu sits inside the drag zone; without this,
+    // opening the menu would also arm a drag.
+    draggable: { cancel: `${DRAG_CANCEL_BUILTIN},.${WIDGET_DRAG_CANCEL_CLASS}` },
+    resizable: { handles: RESIZE_HANDLES },
+    // gridstack hides the resize handles until hover; keep them visible, as the
+    // previous grid did.
+    alwaysShowResizeHandle: true,
+    // `maxRow` is deliberately NOT set. The schema caps a widget's HEIGHT at
+    // GRID_MAX_ROWS and leaves `y` unbounded; gridstack's `maxRow` is a
+    // whole-canvas ceiling. Setting it would box free placement into 24 rows
+    // total, and the default layout already reaches row 20 — leaving four rows
+    // of headroom on a canvas meant to be open. The per-widget cap is expressed
+    // as `maxH` on each item instead (`toGridWidgets`).
   };
 }
 
@@ -133,14 +136,14 @@ export interface DashboardGridProps {
   widgets: WidgetPlacement[];
   onRemove: (id: string) => void;
   /**
-   * Called with the next `widgets[]` after a drag-end or resize. The route is
-   * expected to debounce the persistence write (300ms).
+   * Called with the next `widgets[]` after a drag-end or resize-end. The route
+   * is expected to debounce the persistence write (300ms).
    */
   scheduleLayoutWrite: (next: WidgetPlacement[]) => void;
   /**
    * Per-widget config update (e.g. PerformanceChartWidget timeframe change).
-   * The route merges the partial config into the matching widget and
-   * schedules a debounced layout write.
+   * The route merges the partial config into the matching widget and schedules
+   * a debounced layout write.
    */
   onUpdateConfig?: (widgetId: string, config: Record<string, unknown>) => void;
 }
@@ -163,84 +166,33 @@ function readMediaState(): MediaState {
   };
 }
 
-/**
- * The empty cell outlines shown behind the widgets while a drag or resize is
- * in flight, so the 12-column grid the gesture snaps to is visible.
- *
- * Each cell is placed into a grid area so it lines up with the real,
- * content-sized rows, but is **absolutely positioned** so it takes no part in
- * track sizing. That distinction is load-bearing, not stylistic. As in-flow
- * items these were single-row spans, which gives every row track a finite
- * growth limit; without them the tracks that a multi-row widget spans have an
- * infinite growth limit, and CSS Grid distributes that widget's height across
- * its tracks differently in the two cases. A short widget sharing rows with a
- * tall neighbour therefore grew the instant edit mode turned on — measured at
- * 176px → 281px for an 8x2 beside a 3-row 430px widget, back to 176px once
- * absolutely positioned.
- *
- * That reflow also broke dropping: dnd-kit measures droppable rects when the
- * drag begins, so a layout that shifts as edit mode engages leaves every rect
- * stale and the drop resolves against the wrong geometry.
- *
- * Cells cover only rows the layout already occupies — a spare row would resize
- * the container mid-gesture and shift every drop target for the same reason.
- */
-function GridBackdrop({ rows }: { rows: number }): ReactElement {
-  return (
-    <>
-      {Array.from({ length: rows * GRID_COLUMNS }, (_, i) => (
-        <div
-          key={`backdrop-${i}`}
-          aria-hidden="true"
-          data-grid-backdrop-cell="true"
-          className="pointer-events-none absolute inset-0 rounded-sm border border-dashed border-muted-foreground/35 bg-muted-foreground/[0.07]"
-          style={{
-            gridColumn: `${(i % GRID_COLUMNS) + 1} / span 1`,
-            gridRow: `${Math.floor(i / GRID_COLUMNS) + 1} / span 1`,
-          }}
-        />
-      ))}
-    </>
-  );
-}
-
-interface SortableWidgetCellProps {
+interface WidgetPortalProps {
+  grid: GridStack;
+  /** The `.grid-stack-item-content` element gridstack created for this widget. */
+  host: HTMLElement;
   widget: WidgetPlacement;
-  isDropTarget: boolean;
   onRemove: (id: string) => void;
-  onResize: (id: string, rect: GridRect) => void;
-  onResizeStart: () => void;
-  onResizeEnd: () => void;
-  /** Fired the instant the drag zone is pressed, before dnd-kit activates. */
-  onDragPress: () => void;
   onUpdateConfig?: (widgetId: string, config: Record<string, unknown>) => void;
 }
 
 /**
- * One grid cell. Owns the dnd-kit `useSortable` registration (Req 4.6.1 —
- * `useSortable` composes `useDraggable` + `useDroppable`) and threads the
- * activator props down into `<WidgetCard>`'s drag handle, which stays
- * presentational per design 9.3.
+ * One widget's React tree, rendered into the `.grid-stack-item-content` element
+ * gridstack made for it.
  *
- * The sortable `transform` is deliberately NOT applied to the cell. Widgets
- * have heterogeneous spans, so a live shuffle preview reflows unpredictably;
- * the `<DragOverlay>` snapshot plus a drop-target ring is the readable
- * feedback. The authoritative placement is computed once, on drop.
+ * The portal IS the ownership boundary. gridstack owns `.grid-stack-item` and
+ * its direct children — it creates them, positions them (inline `top`/`left`/
+ * `width`/`height` plus `gs-*` attributes) and appends the resize handles as
+ * siblings of the content div. React owns everything *inside*
+ * `.grid-stack-item-content` and never touches the item element itself, so the
+ * two never patch the same node.
  */
-function SortableWidgetCell({
+function WidgetPortal({
+  grid,
+  host,
   widget,
-  isDropTarget,
   onRemove,
-  onResize,
-  onResizeStart,
-  onResizeEnd,
-  onDragPress,
   onUpdateConfig,
-}: SortableWidgetCellProps): ReactElement {
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
-    id: widget.id,
-  });
-
+}: WidgetPortalProps): ReactElement {
   // Stable identity per widget. A widget's config fix-up effect (§K) lists its
   // `onUpdateConfig` in its dependency array, so an inline arrow here re-runs
   // that effect on EVERY render of the grid — each one re-queueing a layout
@@ -254,42 +206,169 @@ function SortableWidgetCell({
     [onUpdateConfig, widget.id],
   );
 
-  // dnd-kit does not report a drag until the PointerSensor's 4px activation
-  // distance is met, so the edit state would otherwise only appear once the
-  // widget was already moving. Announce the press first, then hand the event on.
-  const dragHandleProps = {
-    ...attributes,
-    ...listeners,
-    ref: setActivatorNodeRef,
-    onPointerDown: (event: React.PointerEvent<Element>) => {
-      onDragPress();
-      listeners?.onPointerDown?.(event);
-    },
-  };
+  // The drag handle is rendered by this portal, so it does not exist yet when
+  // gridstack wires the item up for drag & drop and its `handle` selector finds
+  // nothing. Re-scan once the card is committed to the DOM.
+  useEffect(() => {
+    const item = host.parentElement;
+    if (item) grid.refreshDragHandles(item);
+  }, [grid, host]);
+
+  return createPortal(
+    <WidgetCard widget={widget} onRemove={onRemove} onUpdateConfig={boundUpdateConfig} draggable />,
+    host,
+    widget.id,
+  );
+}
+
+const NO_HOSTS: ReadonlyMap<string, HTMLElement> = new Map();
+
+/**
+ * The gridstack canvas. Mounted only on a fine-pointer, ≥ md viewport — the
+ * mobile fallback below renders no grid at all (Req 4.9).
+ */
+function DashboardGridCanvas({
+  widgets,
+  onRemove,
+  scheduleLayoutWrite,
+  onUpdateConfig,
+}: DashboardGridProps): ReactElement {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [grid, setGrid] = useState<GridStack | null>(null);
+  /**
+   * Portal targets, by widget id. State rather than a ref because the elements
+   * only exist once the sync effect below has created them, which is one commit
+   * later than the render that asked for them.
+   */
+  const [contentHosts, setContentHosts] = useState<ReadonlyMap<string, HTMLElement>>(NO_HOSTS);
+
+  // gridstack reports geometry only, so `type` and `config` are read back from
+  // here when a gesture completes. Refs because the gridstack callbacks are
+  // registered once, at init, and would otherwise close over a stale render.
+  const widgetsRef = useRef(widgets);
+  widgetsRef.current = widgets;
+  const scheduleLayoutWriteRef = useRef(scheduleLayoutWrite);
+  scheduleLayoutWriteRef.current = scheduleLayoutWrite;
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const instance = GridStack.init(createGridOptions(), root);
+    if (!instance) return;
+
+    /**
+     * The ONLY write path. `dragstop` and `resizestop` fire exactly once per
+     * completed gesture, after gridstack has written the settled geometry back
+     * to its engine — including any neighbour the gesture pushed.
+     *
+     * Nothing else writes. `added` and `change` also fire while the grid is
+     * being populated (init, and every `addWidget` in the sync effect below),
+     * so a write from there would PUT on every single dashboard visit.
+     */
+    const commit = (): void => {
+      const nodes = instance.save(false, false, (node, saved) => {
+        // `save` drops `w`/`h` from a node whenever they equal 1 OR the item's
+        // own `minW`/`minH` — which every widget sitting at its minimum does.
+        // Put them back, or the placement we persist silently shrinks to 1x1.
+        saved.w = node.w;
+        saved.h = node.h;
+      }) as GridStackWidget[];
+      scheduleLayoutWriteRef.current(fromGridWidgets(nodes, widgetsRef.current));
+    };
+    instance.on('dragstop', commit);
+    instance.on('resizestop', commit);
+    setGrid(instance);
+
+    return () => {
+      instance.offAll();
+      // gridstack created every `.grid-stack-item`, so gridstack removes them…
+      instance.removeAll(true, false);
+      // …but not the root element: React owns that one.
+      instance.destroy(false);
+      setGrid(null);
+      setContentHosts(NO_HOSTS);
+    };
+  }, []);
+
+  // Reconcile gridstack with the persisted layout: add widgets that appeared,
+  // remove widgets that went, and push geometry back only where it actually
+  // differs. After a gesture the route echoes our own placements back as
+  // `widgets`, so the common case is a no-op; a failed PUT rolls the query
+  // cache back and this is what returns the widget to where it was.
+  useEffect(() => {
+    if (!grid) return;
+    const desired = toGridWidgets(widgets);
+    const desiredIds = new Set(desired.map((widget) => widget.id));
+
+    const existing = new Map<string, GridItemHTMLElement>();
+    for (const el of grid.getGridItems()) {
+      const id = el.gridstackNode?.id;
+      if (id !== undefined) existing.set(id, el);
+    }
+
+    let membershipChanged = false;
+    grid.batchUpdate();
+    try {
+      for (const [id, el] of existing) {
+        if (desiredIds.has(id)) continue;
+        grid.removeWidget(el, true, false);
+        existing.delete(id);
+        membershipChanged = true;
+      }
+      for (const widget of desired) {
+        const el = existing.get(widget.id);
+        if (!el) {
+          // No `content`: gridstack 13 escapes that string, and the content is
+          // React's anyway. It only has to create the empty item + content divs.
+          const created = grid.addWidget(widget);
+          if (created) {
+            created.setAttribute('data-widget-id', widget.id);
+            existing.set(widget.id, created);
+            membershipChanged = true;
+          }
+          continue;
+        }
+        const node = el.gridstackNode;
+        if (
+          node &&
+          (node.x !== widget.x || node.y !== widget.y || node.w !== widget.w || node.h !== widget.h)
+        ) {
+          grid.update(el, { x: widget.x, y: widget.y, w: widget.w, h: widget.h });
+        }
+      }
+    } finally {
+      grid.batchUpdate(false);
+    }
+
+    // Only re-render the portals when the item elements themselves changed.
+    if (!membershipChanged) return;
+    const hosts = new Map<string, HTMLElement>();
+    for (const [id, el] of existing) {
+      const content = el.querySelector<HTMLElement>('.grid-stack-item-content');
+      if (content) hosts.set(id, content);
+    }
+    setContentHosts(hosts);
+  }, [grid, widgets]);
 
   return (
-    <div
-      ref={setNodeRef}
-      data-widget-id={widget.id}
-      data-drop-target={isDropTarget ? 'true' : undefined}
-      className={isDropTarget ? 'rounded-md outline-2 outline-offset-2 outline-ring' : undefined}
-      style={{
-        gridColumn: `${widget.x + 1} / span ${widget.w}`,
-        gridRow: `${widget.y + 1} / span ${widget.h}`,
-        // The DragOverlay carries the moving snapshot (Req 4.6.4); the source
-        // cell just dims so the drop target stays readable underneath.
-        opacity: isDragging ? 0.4 : undefined,
-      }}
-    >
-      <WidgetCard
-        widget={widget}
-        onRemove={onRemove}
-        onResize={(rect) => onResize(widget.id, rect)}
-        onResizeStart={onResizeStart}
-        onResizeEnd={onResizeEnd}
-        onUpdateConfig={boundUpdateConfig}
-        dragHandleProps={dragHandleProps}
-      />
+    <div data-grid-mode="grid" className="w-full">
+      <div ref={rootRef} className="grid-stack" />
+      {grid
+        ? widgets.map((widget) => {
+            const host = contentHosts.get(widget.id);
+            if (!host) return null;
+            return (
+              <WidgetPortal
+                key={widget.id}
+                grid={grid}
+                host={host}
+                widget={widget}
+                onRemove={onRemove}
+                onUpdateConfig={onUpdateConfig}
+              />
+            );
+          })
+        : null}
     </div>
   );
 }
@@ -300,50 +379,7 @@ export function DashboardGrid({
   scheduleLayoutWrite,
   onUpdateConfig,
 }: DashboardGridProps): ReactElement {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
-  const [isResizing, setIsResizing] = useState(false);
-  const [isPressing, setIsPressing] = useState(false);
   const [media, setMedia] = useState<MediaState>(() => readMediaState());
-
-  // A press that never becomes a drag still has to end. The release can land
-  // anywhere — outside the handle, outside the window — so it is watched
-  // globally rather than on the element that was pressed. This also backstops
-  // the resize gesture on any browser lacking pointer capture, which would
-  // otherwise strand the edit state on.
-  useEffect(() => {
-    if (!isPressing && !isResizing) return;
-    const release = (): void => {
-      setIsPressing(false);
-      setIsResizing(false);
-    };
-    window.addEventListener('pointerup', release);
-    window.addEventListener('pointercancel', release);
-    return () => {
-      window.removeEventListener('pointerup', release);
-      window.removeEventListener('pointercancel', release);
-    };
-  }, [isPressing, isResizing]);
-
-  // Local echo of the persisted layout. `scheduleLayoutWrite` debounces the
-  // PUT by 300ms and the query cache only updates once that fires, so without
-  // this the widget would snap back to its old cell for a third of a second
-  // after every drop, and the resize gesture would have no live feedback.
-  // Server responses and error rollbacks both arrive as a new `widgets` prop,
-  // which resets the echo.
-  const [localWidgets, setLocalWidgets] = useState<WidgetPlacement[]>(widgets);
-  useEffect(() => {
-    setLocalWidgets(widgets);
-  }, [widgets]);
-
-  const commit = useCallback(
-    (next: WidgetPlacement[]) => {
-      setLocalWidgets(next);
-      scheduleLayoutWrite(next);
-    },
-    [scheduleLayoutWrite],
-  );
 
   // Re-read media state on changes. Listen on the three queries we care about.
   useEffect(() => {
@@ -373,88 +409,13 @@ export function DashboardGrid({
     };
   }, []);
 
-  // ResizeObserver on the grid container — recompute dnd-kit's coordinate
-  // system on width change (Req 4.12). dnd-kit's measuringConfiguration
-  // re-runs `getBoundingClientRect()` lazily on the next drag; we force an
-  // explicit measurement by bumping a state key on width change so
-  // SortableContext re-renders with fresh node layouts.
-  const [measureKey, setMeasureKey] = useState(0);
-  useEffect(() => {
-    const node = containerRef.current;
-    if (!node || typeof ResizeObserver === 'undefined') return;
-    let lastWidth = node.clientWidth;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const width = entry.contentRect.width;
-        if (width !== lastWidth) {
-          lastWidth = width;
-          setMeasureKey((k) => k + 1);
-        }
-      }
-    });
-    observer.observe(node);
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
+  const sortedForMobile = useMemo(() => sortByYThenX(widgets), [widgets]);
 
-  const sortedForMobile = useMemo(() => sortByYThenX(localWidgets), [localWidgets]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
-  const announcements = useMemo(
-    () => buildAnnouncements(localWidgets, (type) => widgetRegistry[type].displayName),
-    [localWidgets],
-  );
-
-  function handleDragStart(event: DragStartEvent): void {
-    setActiveId(String(event.active.id));
-  }
-
-  function handleDragOver(event: DragOverEvent): void {
-    setOverId(event.over ? String(event.over.id) : null);
-  }
-
-  function handleDragEnd(event: DragEndEvent): void {
-    setActiveId(null);
-    setOverId(null);
-    const { active, over } = event;
-    if (!over) return;
-    const next = applyDragEnd(localWidgets, String(active.id), String(over.id));
-    if (next !== localWidgets) {
-      commit(next);
-    }
-  }
-
-  function handleDragCancel(): void {
-    setActiveId(null);
-    setOverId(null);
-  }
-
-  const handleResize = useCallback(
-    (id: string, rect: GridRect) => {
-      const next = applyResize(localWidgets, id, rect);
-      if (next !== localWidgets) {
-        commit(next);
-      }
-    },
-    [commit, localWidgets],
-  );
-
-  const activeWidget = activeId ? (localWidgets.find((w) => w.id === activeId) ?? null) : null;
-
-  // Show the cell grid while a gesture is in flight (Req 4.6.6) — from the
-  // moment a handle is pressed, not from the moment the widget starts moving.
-  const isEditing = activeId !== null || isResizing || isPressing;
-  const occupiedRows = localWidgets.reduce((max, w) => Math.max(max, w.y + w.h), 0);
-
-  // Mobile fallback (Req 4.9): single-column stack, drag/resize disabled.
+  // Mobile fallback (Req 4.9): single-column stack, drag/resize disabled and no
+  // gridstack instance at all.
   if (media.isMobile) {
     return (
-      <div ref={containerRef} className="flex w-full flex-col gap-4" data-grid-mode="mobile">
+      <div className="flex w-full flex-col gap-4" data-grid-mode="mobile">
         <span id="dashboard-grid-mobile-instructions" className="sr-only">
           Reorder requires a pointer-fine device
         </span>
@@ -480,80 +441,12 @@ export function DashboardGrid({
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      accessibility={{ announcements }}
-      // dnd-kit's default measures droppable rects once, when the drag begins.
-      // Anything that reflows the grid after that point — the edit wash turning
-      // on, a row band resizing, the sidebar collapsing — leaves every rect
-      // stale, and the drop then resolves against geometry the user cannot see,
-      // landing on the wrong widget or on nothing at all. Re-measuring keeps
-      // the collision rects honest; n <= 6 widgets makes the cost negligible.
-      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
-      onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      <SortableContext items={localWidgets.map((w) => w.id)} strategy={rectSortingStrategy}>
-        <div
-          ref={containerRef}
-          data-measure-key={measureKey}
-          data-grid-mode="grid"
-          data-editing={isEditing ? 'true' : undefined}
-          // The edit wash reads in the gutters between widgets and in the
-          // outline standing off the whole grid, because the backdrop cells
-          // themselves are covered wherever a widget sits. `outline` is used
-          // rather than a border so nothing reflows when the mode turns on.
-          // `relative` makes this the containing block for the absolutely
-          // positioned backdrop cells, so each resolves against its grid area.
-          className={`relative grid w-full gap-4 rounded-lg transition-colors ${
-            isEditing
-              ? 'bg-muted/60 outline-2 outline-dashed outline-offset-8 outline-muted-foreground/30'
-              : ''
-          }`}
-          style={{
-            gridTemplateColumns: `repeat(${GRID_COLUMNS}, minmax(0, 1fr))`,
-            // Content-aware rows: at least GRID_ROW_HEIGHT_PX, growing to fit
-            // whatever the tallest widget in the band renders, so nothing is
-            // clipped or forced to scroll internally. `h` is therefore a row
-            // MINIMUM, not an exact height. Widgets sharing a row band share
-            // its height — which is why DEFAULT_WIDGETS pairs each chart with
-            // a rail widget of the same row span.
-            gridAutoRows: `${GRID_ROW_HEIGHT_PX}px`,
-          }}
-        >
-          {/* First in DOM order so the widgets paint over the outlines. */}
-          {isEditing ? <GridBackdrop rows={occupiedRows} /> : null}
-          {localWidgets.map((widget) => (
-            <SortableWidgetCell
-              key={widget.id}
-              widget={widget}
-              isDropTarget={overId === widget.id && activeId !== widget.id}
-              onRemove={onRemove}
-              onResize={handleResize}
-              onResizeStart={() => setIsResizing(true)}
-              onResizeEnd={() => setIsResizing(false)}
-              onDragPress={() => setIsPressing(true)}
-              onUpdateConfig={onUpdateConfig}
-            />
-          ))}
-        </div>
-      </SortableContext>
-      <DragOverlay>
-        {activeWidget ? (
-          <div data-drag-overlay="true" data-active-widget-id={activeWidget.id}>
-            <WidgetCard
-              widget={activeWidget}
-              onRemove={() => undefined}
-              // Empty activator props: the snapshot keeps the live handle
-              // styling but carries no listeners of its own.
-              dragHandleProps={{}}
-            />
-          </div>
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+    <DashboardGridCanvas
+      widgets={widgets}
+      onRemove={onRemove}
+      scheduleLayoutWrite={scheduleLayoutWrite}
+      onUpdateConfig={onUpdateConfig}
+    />
   );
 }
 
