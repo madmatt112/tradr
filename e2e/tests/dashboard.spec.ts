@@ -383,9 +383,9 @@ test.describe('Dashboard — desktop', () => {
   // put, and nothing floats up into the space it vacated.
   //
   // This is the property the whole revision exists for and the one no unit test
-  // can reach: under vertical compaction RGL would pull the widget straight back
-  // to the first row that fits, so the drop would look like it did nothing.
-  // `compactType` = null is what makes it stick.
+  // can reach: with compaction on, the engine pulls the widget straight back to
+  // the first row that fits, so the drop looks like it did nothing. gridstack's
+  // `float: true` is what makes it stick.
   // -------------------------------------------------------------------------
   test('drop below the layout stays put and neighbours do not float up', async ({
     page,
