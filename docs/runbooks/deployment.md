@@ -1,22 +1,21 @@
 # Deployment runbook
 
-Operational reference for self-hosting Tradr with the shipped
-`docker-compose.yml`. For first-time setup see the
-[Self-hosting quickstart](../../README.md#self-hosting-quickstart) in the README.
-For what the containers connect out to (and which keys enable each connection)
-see [External services](../external-services.md).
+**Day-two** operations for a self-hosted instance: health, upgrades, backups, and
+the failure modes worth recognising early.
 
-The stack has three services on one bridge network:
+This is not the install guide. First-time setup is
+[`docker/quickstart.sh`](../../docker/quickstart.sh) — the script CI executes — and
+the [self-hosting guide](https://www.tradr.cloud/docs/self-hosting/docker-compose/)
+covers the three-service layout, prerequisites, and configuration in full. Setup
+instructions used to be restated here as well, and the two copies drifted; this
+page now links rather than repeats.
 
-| Service    | Image                              | Published?             |
-| ---------- | ---------------------------------- | ---------------------- |
-| `postgres` | `postgres:16`                      | no (internal only)     |
-| `api`      | built from `docker/Dockerfile.api` | no (internal only)     |
-| `web`      | built from `docker/Dockerfile.web` | `${WEB_PORT:-8080}:80` |
+For what the containers connect out to, and which keys enable each connection, see
+[External services](../external-services.md).
 
-Only `web` exposes a host port. `DATABASE_URL` for `api` is built from the
-`POSTGRES_*` vars inside `docker-compose.yml`; any `DATABASE_URL` in `.env` is
-ignored by the compose stack.
+Two facts to keep in mind while reading the rest of this page: only `web` exposes a
+host port, and `DATABASE_URL` for `api` is built from the `POSTGRES_*` vars inside
+`docker-compose.yml` — any `DATABASE_URL` in `.env` is ignored by the compose stack.
 
 ## Health and migration status
 
@@ -34,7 +33,15 @@ docker compose exec api tradr migrate --status
 ```
 
 Exit codes: `0` schema current, `1` pending migrations, `2` cannot connect.
-This is the only subcommand the CLI accepts (`tradr migrate --status`).
+The `tradr` CLI ships four subcommands, all runnable with
+`docker compose exec api tradr <subcommand>`:
+
+| Subcommand                                    | Does                                                                                                 |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `migrate --status`                            | Reports schema state via the exit codes above.                                                       |
+| `reset-password <email> [--password <value>]` | Resets a user's password from the server — the recovery path on an instance with no SMTP configured. |
+| `storage migrate-to-inline`                   | Moves object-storage-backed uploads back into the database.                                          |
+| `storage gc`                                  | Deletes orphaned upload blobs.                                                                       |
 
 ## Upgrades, migrations, and backups
 

@@ -103,6 +103,15 @@ describe('envSchema.ENCRYPTION_KEY_PREVIOUS', () => {
     const result = envSchema.safeParse({ ...baseEnv, ENCRYPTION_KEY_PREVIOUS: 'a'.repeat(63) });
     expect(result.success).toBe(false);
   });
+
+  // .env.example ships `ENCRYPTION_KEY_PREVIOUS=` uncommented and empty, and the
+  // documented install is `cp .env.example .env`. That hands the schema '', which
+  // `.optional()` does NOT cover — it only tolerates undefined. Before the
+  // empty-tolerant preprocess, a stock install crash-looped the api on boot.
+  it('treats an empty value as unset (blank .env line, not a boot crash)', () => {
+    const parsed = envSchema.parse({ ...baseEnv, ENCRYPTION_KEY_PREVIOUS: '' });
+    expect(parsed.ENCRYPTION_KEY_PREVIOUS).toBeUndefined();
+  });
 });
 
 describe('envSchema.ENCRYPTION_KEY_FINGERPRINT', () => {
@@ -120,6 +129,14 @@ describe('envSchema.ENCRYPTION_KEY_FINGERPRINT', () => {
   it('rejects an uppercase fingerprint', () => {
     const result = envSchema.safeParse({ ...baseEnv, ENCRYPTION_KEY_FINGERPRINT: 'A'.repeat(64) });
     expect(result.success).toBe(false);
+  });
+
+  // Same blank-line trap as ENCRYPTION_KEY_PREVIOUS above: shipped uncommented
+  // and empty in .env.example, and documented as optional, so leaving it blank
+  // must mean "unset" rather than "fail validation".
+  it('treats an empty value as unset (blank .env line, not a boot crash)', () => {
+    const parsed = envSchema.parse({ ...baseEnv, ENCRYPTION_KEY_FINGERPRINT: '' });
+    expect(parsed.ENCRYPTION_KEY_FINGERPRINT).toBeUndefined();
   });
 });
 
