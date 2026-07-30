@@ -19,10 +19,10 @@ if (typeof window !== 'undefined') {
 }
 
 // jsdom does not implement ResizeObserver either, and several Radix primitives
-// (Switch, Select, Popover) construct one on mount — without this any test
-// rendering them dies with "ResizeObserver is not defined". A no-op observer is
-// enough: nothing under test asserts on resize callbacks. `DashboardGrid.test`
-// installs its own instrumented double over the top and restores this one.
+// (Switch, Select, Popover) construct one on mount — as does
+// react-grid-layout's `useContainerWidth`. Without this any test rendering them
+// dies with "ResizeObserver is not defined". A no-op observer is enough:
+// nothing under test asserts on resize callbacks.
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class {
     observe() {}

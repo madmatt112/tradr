@@ -6,8 +6,6 @@ export const GRID_COLUMNS = 12;
 // unrelated suites under a full run.
 export { GRID_MAX_ROWS } from '@tradr/shared/schemas/dashboard';
 export const GRID_GAP_PX = 16;
-/** Deadband (px) the resize gesture must cross past the ½-cell snap line. */
-export const RESIZE_HYSTERESIS_PX = 1;
 /**
  * Fixed row pitch (Req 1.10). A widget spanning `h` rows is exactly
  * `40h + 16(h-1)` px tall and depends on nothing else on the canvas.

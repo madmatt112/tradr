@@ -305,42 +305,47 @@ test.describe('Dashboard — desktop', () => {
     await loginViaUi(page, user.email);
     await ensureDefaultLayoutPopulated(page);
 
-    // Capture the rendered order before the drag.
-    const widgets = page.locator(WIDGET);
-    const idsBefore = (await widgets.evaluateAll((nodes) =>
-      nodes.map((n) => n.getAttribute('data-widget-id')),
-    )) as string[];
-    expect(idsBefore.length).toBeGreaterThan(1);
-    const [firstId, secondId] = idsBefore;
+    // react-grid-layout does not reorder the widgets array — free placement
+    // moves a widget's (x, y) and leaves DOM order alone — so assert on the
+    // PERSISTED coordinates rather than on the rendered order.
+    const placementOf = async (type: string): Promise<{ x: number; y: number }> => {
+      const res = await request.get('/api/dashboard/layout');
+      expect(res.status(), 'GET layout').toBe(200);
+      const body = (await res.json()) as {
+        widgets: Array<{ type: string; x: number; y: number }>;
+      };
+      const found = body.widgets.find((w) => w.type === type);
+      expect(found, `layout contains ${type}`).toBeDefined();
+      return { x: found!.x, y: found!.y };
+    };
 
-    const first = page.locator(`section[data-widget-id="${firstId}"]`);
-    const second = page.locator(`section[data-widget-id="${secondId}"]`);
-    const firstHandle = first.locator('[data-drag-handle="true"]');
-    await firstHandle.scrollIntoViewIfNeeded();
+    const before = await placementOf('stats-summary');
 
-    // Drive the drag with explicit mouse steps rather than `dragTo`. dnd-kit's
-    // PointerSensor arms on a 4px activation distance and then needs further
-    // pointermove events to resolve a droppable under the cursor; a single
-    // jump would drop with `over === null` and silently do nothing.
-    const handleBox = await firstHandle.boundingBox();
-    const targetBox = await second.boundingBox();
-    expect(handleBox).not.toBeNull();
-    expect(targetBox).not.toBeNull();
-    await page.mouse.move(
-      handleBox!.x + handleBox!.width / 2,
-      handleBox!.y + handleBox!.height / 2,
-    );
+    // Stats Summary is the full-width band at the top of the default layout, so
+    // it is on screen without scrolling and can only move vertically. Drag it
+    // down two rows; the widgets below get pushed out of the way rather than
+    // overlapped (`compactor` = noCompactor, allowOverlap false).
+    const card = page.locator('section[data-widget-type="stats-summary"]');
+    const zone = card.locator('[data-drag-zone="true"]');
+    await zone.scrollIntoViewIfNeeded();
+    const zoneBox = await zone.boundingBox();
+    expect(zoneBox).not.toBeNull();
+
+    // Grab near the left edge of the header — the overflow menu on the right
+    // wears the drag-cancel class and would refuse the gesture.
+    const startX = zoneBox!.x + 24;
+    const startY = zoneBox!.y + zoneBox!.height / 2;
+    // Two rows: GRID_ROW_HEIGHT_PX (40) + GRID_GAP_PX (16) per row.
+    const twoRowsPx = 2 * (40 + 16);
+
+    // Drive the drag with explicit mouse steps rather than `dragTo`.
+    // react-draggable (which RGL uses) needs a real mousedown, at least one
+    // mousemove past its 3px threshold, and then movement before the mouseup —
+    // a single jump lands as a click.
+    await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(
-      handleBox!.x + handleBox!.width / 2 + 12,
-      handleBox!.y + handleBox!.height / 2 + 12,
-      { steps: 5 },
-    );
-    await page.mouse.move(
-      targetBox!.x + targetBox!.width / 2,
-      targetBox!.y + targetBox!.height / 2,
-      { steps: 15 },
-    );
+    await page.mouse.move(startX, startY + 8, { steps: 3 });
+    await page.mouse.move(startX, startY + twoRowsPx, { steps: 15 });
     await page.mouse.up();
 
     // The debounced PUT fires ~300ms after the drag-end.
@@ -348,16 +353,14 @@ test.describe('Dashboard — desktop', () => {
     await page.reload();
     await ensureDefaultLayoutPopulated(page);
 
-    const idsAfter = (await widgets.evaluateAll((nodes) =>
-      nodes.map((n) => n.getAttribute('data-widget-id')),
-    )) as string[];
-    expect(idsAfter).toHaveLength(idsBefore.length);
-    // The drop target took over the leading slot, and the dragged widget no
-    // longer holds it. Asserting the ORDER changed — not merely that two
-    // widgets sit at different coordinates, which is true of any grid and so
-    // passed even while the drag handle was inert.
-    expect(idsAfter[0]).toBe(secondId);
-    expect(idsAfter.indexOf(firstId)).toBeGreaterThan(0);
+    // Still six widgets, one grid item each.
+    await expect(page.locator('.react-grid-item')).toHaveCount(6);
+
+    const after = await placementOf('stats-summary');
+    // The widget really moved and the move survived the reload — asserting the
+    // row changed, not merely that two widgets sit at different coordinates,
+    // which is true of any grid and so passed even while the handle was inert.
+    expect(after.y).toBeGreaterThan(before.y);
   });
 
   // -------------------------------------------------------------------------
@@ -483,20 +486,14 @@ test.describe('Dashboard — mobile', () => {
     );
     await expect(widgetContainers).toHaveCount(6);
 
-    // Drag/resize handles: design says drag handle remains in WidgetCard but
-    // is non-functional on coarse pointers; on mobile we accept EITHER not
-    // visible OR aria-disabled="true". The handles are inside a container
-    // marked aria-disabled="true", which satisfies the latter.
-    const dragHandle = widgetContainers.first().locator('[data-drag-handle="true"]');
-    const resizeHandle = widgetContainers.first().locator('[data-resize-handle="true"]');
-    // Parent is aria-disabled — assert the ancestor.
+    // Mobile does not mount react-grid-layout at all, so there is no grid item
+    // and no resize handle anywhere on the page, and no header drag zone.
+    await expect(page.locator('.react-grid-item')).toHaveCount(0);
+    await expect(page.locator('.react-resizable-handle')).toHaveCount(0);
+    await expect(page.locator('[data-drag-zone="true"]')).toHaveCount(0);
+    // The `::` grip survives as an inert visual affordance inside a container
+    // marked aria-disabled="true".
     await expect(widgetContainers.first()).toHaveAttribute('aria-disabled', 'true');
-    // Sanity: the handles either are absent OR exist inside the disabled
-    // container — both are accepted shapes per the task body.
-    const dragCount = await dragHandle.count();
-    const resizeCount = await resizeHandle.count();
-    expect(dragCount === 0 || dragCount >= 1).toBe(true);
-    expect(resizeCount === 0 || resizeCount >= 1).toBe(true);
 
     // Single-column stack ordered by (y, x): collect the rendered DOM order
     // of widget types and assert it matches the (y, x)-sorted DEFAULT_WIDGETS
