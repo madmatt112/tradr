@@ -25,6 +25,20 @@ import { defineConfig, devices } from '@playwright/test';
 // scope here.
 /* eslint-disable no-restricted-syntax */
 const isCI = Boolean(process.env.CI);
+
+/**
+ * Reusing an already-running server is opt-in rather than the default.
+ *
+ * It used to be on for every local run, and it attaches to whatever happens to
+ * hold the port — including a dev server from a DIFFERENT checkout. The suite
+ * then exercises code that is not the code under test and reports confident,
+ * wrong results, with no signal that anything is amiss. Off by default a busy
+ * port fails loudly instead, which is the outcome you want.
+ *
+ * CI never reused (it sets CI, and this stays false there), so this changes
+ * nothing about the GitHub Actions run.
+ */
+const reuseExistingServer = !isCI && process.env.E2E_REUSE_SERVER === '1';
 const baseURL = process.env.BASE_URL ?? 'http://localhost:5173';
 
 const apiPort = Number(process.env.API_PORT ?? 3100);
@@ -44,8 +58,12 @@ const webPort = new URL(baseURL).port || '5173';
 const apiEnv: Record<string, string> = {
   NODE_ENV: 'development',
   PORT: String(apiPort),
+  // 5433, not 5432: a native Postgres owns 5433 locally and shadows the compose
+  // container, which is why every vitest project points there too. CI overrides
+  // DATABASE_URL from the workflow env (its service container is on 5432), so
+  // this default is only ever the local path.
   DATABASE_URL:
-    process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/tradr_test',
+    process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5433/tradr_test',
   SESSION_SECRET:
     process.env.SESSION_SECRET ?? 'e2e-session-secret-that-is-at-least-32-characters-long',
   ENCRYPTION_KEY:
@@ -134,14 +152,14 @@ export default defineConfig({
         {
           command: 'pnpm --filter @tradr/e2e exec tsx support/uw-stub-server.ts',
           url: `http://localhost:${uwStubPort}/__health`,
-          reuseExistingServer: !isCI,
+          reuseExistingServer,
           timeout: 30_000,
           env: { UW_STUB_PORT: String(uwStubPort) },
         },
         {
           command: 'pnpm --filter @tradr/e2e exec tsx support/github-stub-server.ts',
           url: `http://localhost:${githubStubPort}/__health`,
-          reuseExistingServer: !isCI,
+          reuseExistingServer,
           timeout: 30_000,
           env: { GITHUB_STUB_PORT: String(githubStubPort) },
         },
@@ -150,7 +168,7 @@ export default defineConfig({
           // bootstrap symbol population is deterministic and never hits live SEC.
           command: 'pnpm --filter @tradr/e2e exec tsx support/sec-tickers-stub-server.ts',
           url: `http://localhost:${secStubPort}/__health`,
-          reuseExistingServer: !isCI,
+          reuseExistingServer,
           timeout: 30_000,
           env: { SEC_STUB_PORT: String(secStubPort) },
         },
@@ -160,14 +178,14 @@ export default defineConfig({
           // Ninjas. Only reached when STOCK_QUOTE_API_KEY arms the capability.
           command: 'pnpm --filter @tradr/e2e exec tsx support/stock-quote-stub-server.ts',
           url: `http://localhost:${quoteStubPort}/__health`,
-          reuseExistingServer: !isCI,
+          reuseExistingServer,
           timeout: 30_000,
           env: { QUOTE_STUB_PORT: String(quoteStubPort) },
         },
         {
           command: 'pnpm --filter @tradr/api exec tsx src/index.ts',
           url: `http://localhost:${apiPort}/api/health`,
-          reuseExistingServer: !isCI,
+          reuseExistingServer,
           timeout: 120_000,
           stdout: 'pipe',
           stderr: 'pipe',
@@ -183,7 +201,7 @@ export default defineConfig({
           // longer timeout covers the one-time build before the server is up.
           command: `pnpm --filter @tradr/web build && pnpm --filter @tradr/web exec vite preview --port ${webPort} --strictPort`,
           url: baseURL,
-          reuseExistingServer: !isCI,
+          reuseExistingServer,
           timeout: 180_000,
         },
       ]

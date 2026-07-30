@@ -211,20 +211,45 @@
   background-color: var(--color-primary);
   border-radius: var(--radius-md, 0.375rem);
 }
-/* The arrow is baked into a `data:` URI, which cannot read a CSS variable, so
-   use it as an alpha mask and paint through it with the token colour instead. */
+/* Corner grips, not direction arrows.
+   gridstack ships a double-headed arrow per corner, which reads as an
+   instruction about which way the widget may move — six of them at once is
+   loud, and the direction is not the useful part anyway. Two short diagonal
+   strokes say "there is a grip here" and stop talking. The strokes run
+   PARALLEL to the corner they sit in, so the texture points into the corner
+   rather than across it.
+   The mask is a `data:` URI, which cannot read a CSS variable, so it is used
+   as an alpha mask and painted through with the token colour. */
 .grid-stack > .grid-stack-item > .ui-resizable-nw,
 .grid-stack > .grid-stack-item > .ui-resizable-ne,
 .grid-stack > .grid-stack-item > .ui-resizable-sw,
 .grid-stack > .grid-stack-item > .ui-resizable-se {
   background-image: none;
   background-color: var(--color-muted-foreground);
-  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="black" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 20 20"><path d="m10 3 2 2H8l2-2v14l-2-2h4l-2 2"/></svg>');
-  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="black" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 20 20"><path d="m10 3 2 2H8l2-2v14l-2-2h4l-2 2"/></svg>');
+  opacity: 0.55;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
   -webkit-mask-position: center;
   mask-position: center;
+}
+/* `╲` corners — top-left and bottom-right. */
+.grid-stack > .grid-stack-item > .ui-resizable-nw,
+.grid-stack > .grid-stack-item > .ui-resizable-se {
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 14 14 6M11 15l4-4"/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 14 14 6M11 15l4-4"/></svg>');
+}
+/* `╱` corners — top-right and bottom-left. */
+.grid-stack > .grid-stack-item > .ui-resizable-ne,
+.grid-stack > .grid-stack-item > .ui-resizable-sw {
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 6l8 8M5 11l4 4"/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 6l8 8M5 11l4 4"/></svg>');
+}
+/* Edge handles carry no glyph at all — the cursor already says what they do. */
+.grid-stack > .grid-stack-item > .ui-resizable-n,
+.grid-stack > .grid-stack-item > .ui-resizable-e,
+.grid-stack > .grid-stack-item > .ui-resizable-s,
+.grid-stack > .grid-stack-item > .ui-resizable-w {
+  background-image: none;
 }
 /* WidgetCard owns its own scrolling (its body is `overflow-auto`); gridstack's
    wrapper adding a second scroll axis only produces a stray scrollbar at
