@@ -128,12 +128,19 @@ BYOK). Key material is loaded once at bootstrap.
 
 Set `ENCRYPTION_KEY_FINGERPRINT` to the `sha256` of the raw key bytes. When set,
 `api` aborts at startup (before migrations) if the loaded key doesn't match —
-turning a silent wrong-key deploy into a fast, clearly logged failure. Generate
-it from your key:
+turning a silent wrong-key deploy into a fast, clearly logged failure.
+
+Derive it from the key you are actually running. `docker/quickstart.sh` does this
+for you; by hand, read `ENCRYPTION_KEY` out of `.env` and hash **that**:
 
 ```bash
-openssl rand -hex 32 | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 32
+ENCRYPTION_KEY="$(grep -E '^ENCRYPTION_KEY=' .env | cut -d= -f2)"
+printf '%s' "$ENCRYPTION_KEY" | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 32
 ```
+
+Do **not** pipe `openssl rand -hex 32` into that hash: it fingerprints a brand-new
+random key rather than yours, so the value can never match and the api exits on
+every boot.
 
 With the fingerprint **unset** and at least one stored provider key, a wrong key
 instead fails later via the decrypt canary (same crash-loop). With the
