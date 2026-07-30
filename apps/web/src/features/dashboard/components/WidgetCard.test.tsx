@@ -28,7 +28,7 @@ function mount(): { container: HTMLElement; root: ReturnType<typeof createRoot> 
 }
 
 describe('WidgetCard — drag zone', () => {
-  it('puts the drag-handle class on the header so react-grid-layout can target it', () => {
+  it('puts the drag-handle class on the header so gridstack can target it', () => {
     const { container, root } = mount();
     act(() => {
       root.render(<WidgetCard widget={makeWidget()} onRemove={() => undefined} draggable />);

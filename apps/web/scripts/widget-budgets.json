@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-widget gzipped chunk caps in bytes. Task 47 / design §W-r3. Keys for widgets are the source filename (relative to apps/web/) of the lazy-imported widget module — check-bundle-size.mjs resolves these via Vite's build manifest. 'dashboard-entry' is the dashboard route's initial chunk (entry components + registry shells + react-grid-layout + event-bus store + theme hook, EXCLUSIVE of lazy widget chunks).",
+  "_comment": "Per-widget gzipped chunk caps in bytes. Task 47 / design §W-r3. Keys for widgets are the source filename (relative to apps/web/) of the lazy-imported widget module — check-bundle-size.mjs resolves these via Vite's build manifest. 'dashboard-entry' is the dashboard route's initial chunk (entry components + registry shells + gridstack + event-bus store + theme hook, EXCLUSIVE of lazy widget chunks).",
   "totalBundle": 512000,
   "dashboardEntry": {
     "source": "src/routes/_auth.dashboard.tsx",

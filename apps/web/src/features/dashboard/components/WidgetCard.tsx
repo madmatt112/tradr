@@ -13,7 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { widgetRegistry } from '../widgets/registry';
 
 /**
- * The class react-grid-layout's `dragConfig.handle` selector targets.
+ * The class gridstack's `handle` selector targets.
  *
  * The whole header wears it, so the header — and only the header — starts a
  * drag. `<WidgetCard>` stays presentational and mounts no gesture hooks of its
@@ -22,7 +22,7 @@ import { widgetRegistry } from '../widgets/registry';
 export const WIDGET_DRAG_HANDLE_CLASS = 'widget-drag-handle';
 
 /**
- * The class react-grid-layout's `dragConfig.cancel` selector targets.
+ * The class gridstack's `draggable.cancel` selector targets.
  *
  * Anything inside the header that has to stay clickable wears it, so pressing
  * it never arms a drag.

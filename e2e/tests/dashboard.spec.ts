@@ -305,9 +305,9 @@ test.describe('Dashboard — desktop', () => {
     await loginViaUi(page, user.email);
     await ensureDefaultLayoutPopulated(page);
 
-    // react-grid-layout does not reorder the widgets array — free placement
-    // moves a widget's (x, y) and leaves DOM order alone — so assert on the
-    // PERSISTED coordinates rather than on the rendered order.
+    // Free placement moves a widget's (x, y) and leaves DOM order alone, and
+    // gridstack reports its nodes position-sorted — so assert on the PERSISTED
+    // coordinates rather than on the rendered or stored order.
     const placementOf = async (type: string): Promise<{ x: number; y: number }> => {
       const res = await request.get('/api/dashboard/layout');
       expect(res.status(), 'GET layout').toBe(200);
@@ -324,7 +324,7 @@ test.describe('Dashboard — desktop', () => {
     // Stats Summary is the full-width band at the top of the default layout, so
     // it is on screen without scrolling and can only move vertically. Drag it
     // down two rows; the widgets below get pushed out of the way rather than
-    // overlapped (`compactor` = noCompactor, allowOverlap false).
+    // overlapped (gridstack `float: true`, no `maxRow`).
     const card = page.locator('section[data-widget-type="stats-summary"]');
     const zone = card.locator('[data-drag-zone="true"]');
     await zone.scrollIntoViewIfNeeded();
@@ -335,13 +335,14 @@ test.describe('Dashboard — desktop', () => {
     // wears the drag-cancel class and would refuse the gesture.
     const startX = zoneBox!.x + 24;
     const startY = zoneBox!.y + zoneBox!.height / 2;
-    // Two rows: GRID_ROW_HEIGHT_PX (40) + GRID_GAP_PX (16) per row.
-    const twoRowsPx = 2 * (40 + 16);
+    // gridstack's row pitch is `cellHeight` flat (GRID_ROW_HEIGHT_PX, 40): the
+    // gap is an inset INSIDE each cell, not extra space between rows.
+    const twoRowsPx = 2 * 40;
 
-    // Drive the drag with explicit mouse steps rather than `dragTo`.
-    // react-draggable (which RGL uses) needs a real mousedown, at least one
-    // mousemove past its 3px threshold, and then movement before the mouseup —
-    // a single jump lands as a click.
+    // Drive the drag with explicit mouse steps rather than `dragTo`. gridstack's
+    // drag&drop needs a real mousedown, at least one mousemove past its 3px
+    // threshold, and then movement before the mouseup — a single jump lands as
+    // a click.
     await page.mouse.move(startX, startY);
     await page.mouse.down();
     await page.mouse.move(startX, startY + 8, { steps: 3 });
@@ -354,7 +355,7 @@ test.describe('Dashboard — desktop', () => {
     await ensureDefaultLayoutPopulated(page);
 
     // Still six widgets, one grid item each.
-    await expect(page.locator('.react-grid-item')).toHaveCount(6);
+    await expect(page.locator('.grid-stack-item')).toHaveCount(6);
 
     const after = await placementOf('stats-summary');
     // The widget really moved and the move survived the reload — asserting the
@@ -370,7 +371,7 @@ test.describe('Dashboard — desktop', () => {
   // This is the property the whole revision exists for and the one no unit test
   // can reach: under vertical compaction RGL would pull the widget straight back
   // to the first row that fits, so the drop would look like it did nothing.
-  // `compactor` = noCompactor is what makes it stick.
+  // `compactType` = null is what makes it stick.
   // -------------------------------------------------------------------------
   test('drop below the layout stays put and neighbours do not float up', async ({
     page,
@@ -404,11 +405,11 @@ test.describe('Dashboard — desktop', () => {
 
     const startX = zoneBox!.x + 24; // left of the drag-cancel overflow menu
     const startY = zoneBox!.y + zoneBox!.height / 2;
-    const ROW_PX = 40 + 16; // GRID_ROW_HEIGHT_PX + GRID_GAP_PX
+    const ROW_PX = 40; // GRID_ROW_HEIGHT_PX — gridstack's gap is inset, not pitch
     const rowsDown = 2;
 
-    // Explicit steps: react-draggable needs a real mousedown, a move past its
-    // 3px threshold, then travel before mouseup, or the gesture reads as a click.
+    // Explicit steps: gridstack needs a real mousedown, a move past its 3px
+    // threshold, then travel before mouseup, or the gesture reads as a click.
     await page.mouse.move(startX, startY);
     await page.mouse.down();
     await page.mouse.move(startX, startY + 8, { steps: 3 });
@@ -416,13 +417,22 @@ test.describe('Dashboard — desktop', () => {
     await page.mouse.up();
 
     await page.waitForTimeout(500); // debounced PUT is ~300ms
+
+    // Read the persisted row BEFORE reloading. The exact landing row is not
+    // predictable from the pointer delta — the canvas grows as the widget
+    // descends and the page can auto-scroll, so the effective travel exceeds
+    // the mouse delta. What matters is the property, not the arithmetic: it
+    // moved down, and it is still there after a reload.
+    const dropped = (await readLayout()).get('open-positions')!;
+    expect(dropped.y, 'widget moved down').toBeGreaterThan(target!.y);
+
     await page.reload();
     await ensureDefaultLayoutPopulated(page);
 
     const after = await readLayout();
 
-    // It landed where it was dropped and STAYED there across the reload.
-    expect(after.get('open-positions')!.y).toBe(target!.y + rowsDown);
+    // It stayed exactly where it was dropped — no float-up on reload.
+    expect(after.get('open-positions')!.y).toBe(dropped.y);
 
     // Nothing else moved. Under vertical compaction the widgets above would
     // have been pulled up to close the gap; free placement leaves them alone.
@@ -555,10 +565,10 @@ test.describe('Dashboard — mobile', () => {
     );
     await expect(widgetContainers).toHaveCount(6);
 
-    // Mobile does not mount react-grid-layout at all, so there is no grid item
-    // and no resize handle anywhere on the page, and no header drag zone.
-    await expect(page.locator('.react-grid-item')).toHaveCount(0);
-    await expect(page.locator('.react-resizable-handle')).toHaveCount(0);
+    // Mobile does not mount gridstack at all, so there is no grid item and no
+    // resize handle anywhere on the page, and no header drag zone.
+    await expect(page.locator('.grid-stack-item')).toHaveCount(0);
+    await expect(page.locator('.ui-resizable-handle')).toHaveCount(0);
     await expect(page.locator('[data-drag-zone="true"]')).toHaveCount(0);
     // The `::` grip survives as an inert visual affordance inside a container
     // marked aria-disabled="true".

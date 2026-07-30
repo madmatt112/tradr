@@ -202,15 +202,33 @@
   }
 }
 
-/* react-grid-layout ships an unthemed stylesheet: its drop placeholder is
-   `background: red` and its resize handles are hard-coded black chevrons, both
-   of which read as broken against either theme. Re-point them at the design
-   tokens; everything else in that stylesheet is geometry and stays as-is. */
-.react-grid-item.react-grid-placeholder {
-  background: var(--color-primary);
+/* gridstack ships an unthemed stylesheet: its drop placeholder is a flat
+   translucent black and its corner resize arrows are a hard-coded #666 SVG,
+   both of which read as broken against one theme or the other. Re-point them at
+   the design tokens; everything else in that stylesheet is geometry and stays
+   as-is. */
+.grid-stack > .grid-stack-placeholder > .placeholder-content {
+  background-color: var(--color-primary);
   border-radius: var(--radius-md, 0.375rem);
 }
-.react-grid-item > .react-resizable-handle::after {
-  border-right-color: var(--color-muted-foreground);
-  border-bottom-color: var(--color-muted-foreground);
+/* The arrow is baked into a `data:` URI, which cannot read a CSS variable, so
+   use it as an alpha mask and paint through it with the token colour instead. */
+.grid-stack > .grid-stack-item > .ui-resizable-nw,
+.grid-stack > .grid-stack-item > .ui-resizable-ne,
+.grid-stack > .grid-stack-item > .ui-resizable-sw,
+.grid-stack > .grid-stack-item > .ui-resizable-se {
+  background-image: none;
+  background-color: var(--color-muted-foreground);
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="black" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 20 20"><path d="m10 3 2 2H8l2-2v14l-2-2h4l-2 2"/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="black" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 20 20"><path d="m10 3 2 2H8l2-2v14l-2-2h4l-2 2"/></svg>');
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+/* WidgetCard owns its own scrolling (its body is `overflow-auto`); gridstack's
+   wrapper adding a second scroll axis only produces a stray scrollbar at
+   fractional heights. */
+.grid-stack > .grid-stack-item > .grid-stack-item-content {
+  overflow: hidden;
 }

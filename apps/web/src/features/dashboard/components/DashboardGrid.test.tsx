@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import type { GridHTMLElement, GridItemHTMLElement, GridStack, GridStackWidget } from 'gridstack';
+import { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { Layout } from 'react-grid-layout';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PerWidgetMinSize, type WidgetPlacement } from '@tradr/shared/schemas/dashboard';
 
-import { GRID_MAX_ROWS } from '../grid.constants';
+import { GRID_COLUMNS, GRID_GAP_PX, GRID_MAX_ROWS, GRID_ROW_HEIGHT_PX } from '../grid.constants';
 
-import { DashboardGrid, GRID_CONFIG, fromGridLayout, toGridLayout } from './DashboardGrid';
+import { createGridOptions, DashboardGrid, fromGridWidgets, toGridWidgets } from './DashboardGrid';
+import { WIDGET_DRAG_CANCEL_CLASS, WIDGET_DRAG_HANDLE_CLASS } from './WidgetCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -55,20 +56,20 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// The two pure conversions. jsdom has no layout, so an RGL drag resolves every
-// pixel delta to zero and cannot be driven through the DOM — these functions
-// are where the real coverage of the grid's data model lives.
+// The two pure conversions. jsdom has no layout, so a gridstack drag resolves
+// every pixel delta to zero and cannot be driven through the DOM — these
+// functions are where the real coverage of the grid's data model lives.
 // ---------------------------------------------------------------------------
 
-describe('toGridLayout', () => {
-  it('maps id → i and carries the per-type minimums from PerWidgetMinSize', () => {
+describe('toGridWidgets', () => {
+  it('carries the id and the per-type minimums from PerWidgetMinSize', () => {
     const widgets: WidgetPlacement[] = [
       W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 }),
       W({ id: 'b', type: 'position-sizing', x: 0, y: 2, w: 4, h: 6 }),
     ];
-    expect(toGridLayout(widgets)).toEqual([
+    expect(toGridWidgets(widgets)).toEqual([
       {
-        i: 'a',
+        id: 'a',
         x: 0,
         y: 0,
         w: 12,
@@ -78,7 +79,7 @@ describe('toGridLayout', () => {
         maxH: GRID_MAX_ROWS,
       },
       {
-        i: 'b',
+        id: 'b',
         x: 0,
         y: 2,
         w: 4,
@@ -92,24 +93,24 @@ describe('toGridLayout', () => {
 
   it('caps height per widget rather than capping the canvas', () => {
     // The schema bounds `h` at GRID_MAX_ROWS and leaves `y` unbounded, so the
-    // cap belongs on the item as `maxH`. Were it the grid's `maxRows`, RGL
-    // would clamp `y <= maxRows - h` and box free placement into 24 rows —
-    // with the default layout already reaching row 20.
+    // cap belongs on the item as `maxH`. Were it the grid's `maxRow`, gridstack
+    // would box free placement into 24 rows total — with the default layout
+    // already reaching row 20. That the grid does not set `maxRow` is asserted
+    // against the options it is built with, below.
     const widgets = Object.keys(PerWidgetMinSize).map((type, i) =>
       W({ id: `w${i}`, type: type as WidgetPlacement['type'] }),
     );
-    for (const item of toGridLayout(widgets)) {
+    for (const item of toGridWidgets(widgets)) {
       expect(item.maxH).toBe(GRID_MAX_ROWS);
     }
-    expect(GRID_CONFIG?.maxRows).toBeUndefined();
   });
 
   it('derives every minimum from PerWidgetMinSize rather than hard-coding one', () => {
     const widgets = Object.keys(PerWidgetMinSize).map((type, i) =>
       W({ id: `w${i}`, type: type as WidgetPlacement['type'], w: 12, h: 8 }),
     );
-    for (const item of toGridLayout(widgets)) {
-      const widget = widgets.find((candidate) => candidate.id === item.i)!;
+    for (const item of toGridWidgets(widgets)) {
+      const widget = widgets.find((candidate) => candidate.id === item.id)!;
       expect({ minW: item.minW, minH: item.minH }).toEqual({
         minW: PerWidgetMinSize[widget.type].w,
         minH: PerWidgetMinSize[widget.type].h,
@@ -118,8 +119,8 @@ describe('toGridLayout', () => {
   });
 });
 
-describe('fromGridLayout', () => {
-  it('round-trips through toGridLayout preserving type and config', () => {
+describe('fromGridWidgets', () => {
+  it('round-trips through toGridWidgets preserving type and config', () => {
     const widgets: WidgetPlacement[] = [
       W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 }),
       W({
@@ -132,10 +133,10 @@ describe('fromGridLayout', () => {
         config: { timeframe: 'weekly' },
       }),
     ];
-    expect(fromGridLayout(toGridLayout(widgets), widgets)).toEqual(widgets);
+    expect(fromGridWidgets(toGridWidgets(widgets), widgets)).toEqual(widgets);
   });
 
-  it('applies the geometry from the layout and keeps type and config from the widget', () => {
+  it('applies the geometry from the node and keeps type and config from the widget', () => {
     const widgets: WidgetPlacement[] = [
       W({
         id: 'b',
@@ -147,8 +148,8 @@ describe('fromGridLayout', () => {
         config: { timeframe: 'weekly' },
       }),
     ];
-    const moved: Layout = [{ i: 'b', x: 4, y: 9, w: 6, h: 5 }];
-    expect(fromGridLayout(moved, widgets)).toEqual([
+    const moved: GridStackWidget[] = [{ id: 'b', x: 4, y: 9, w: 6, h: 5 }];
+    expect(fromGridWidgets(moved, widgets)).toEqual([
       {
         id: 'b',
         type: 'performance-chart',
@@ -161,27 +162,93 @@ describe('fromGridLayout', () => {
     ]);
   });
 
-  it('drops layout items with no matching widget', () => {
-    // RGL's internal layout can still hold an entry for a widget that has just
-    // been removed. A placement with no `type` fails WidgetPlacementSchema, so
-    // the write would 400.
+  it("defaults the geometry gridstack omits (it drops `w`/`h` once they're 1)", () => {
     const widgets: WidgetPlacement[] = [W({ id: 'a', type: 'stats-summary' })];
-    const layout: Layout = [
-      { i: 'a', x: 1, y: 1, w: 4, h: 2 },
-      { i: 'gone', x: 0, y: 5, w: 4, h: 2 },
+    expect(fromGridWidgets([{ id: 'a', x: 3 }], widgets)).toEqual([
+      { id: 'a', type: 'stats-summary', x: 3, y: 0, w: 1, h: 1 },
+    ]);
+  });
+
+  it('drops nodes with no matching widget', () => {
+    // The grid can still hold a node for a widget that has just been removed.
+    // A placement with no `type` fails WidgetPlacementSchema, so the write
+    // would 400.
+    const widgets: WidgetPlacement[] = [W({ id: 'a', type: 'stats-summary' })];
+    const nodes: GridStackWidget[] = [
+      { id: 'a', x: 1, y: 1, w: 4, h: 2 },
+      { id: 'gone', x: 0, y: 5, w: 4, h: 2 },
     ];
-    const next = fromGridLayout(layout, widgets);
+    const next = fromGridWidgets(nodes, widgets);
     expect(next.map((widget) => widget.id)).toEqual(['a']);
     expect(next[0]).toMatchObject({ x: 1, y: 1 });
   });
 });
 
 // ---------------------------------------------------------------------------
-// Mount
+// Grid configuration
 // ---------------------------------------------------------------------------
 
+describe('createGridOptions', () => {
+  it('configures free placement and leaves maxRow unset', () => {
+    const opts = createGridOptions();
+    expect(opts).toMatchObject({
+      column: GRID_COLUMNS,
+      cellHeight: GRID_ROW_HEIGHT_PX,
+      // gridstack insets EACH SIDE of an item by `margin`, so the gutter a user
+      // sees between two neighbours is twice this.
+      margin: GRID_GAP_PX / 2,
+      float: true,
+      handle: `.${WIDGET_DRAG_HANDLE_CLASS}`,
+      resizable: { handles: 'e,se,s,sw,w,ne,nw' },
+    });
+    // Supplying `cancel` replaces gridstack's built-in skip list, so the
+    // defaults must still be there alongside the widget's own cancel class.
+    expect(opts.draggable?.cancel).toContain(`.${WIDGET_DRAG_CANCEL_CLASS}`);
+    expect(opts.draggable?.cancel).toContain('button');
+    // A whole-canvas ceiling would clamp free placement to 24 rows; the
+    // per-widget height cap lives on each item as `maxH` instead.
+    expect(opts.maxRow).toBeUndefined();
+  });
+
+  it('hands out a fresh object each call — GridStack.init mutates what it is given', () => {
+    expect(createGridOptions()).not.toBe(createGridOptions());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mount + write path
+// ---------------------------------------------------------------------------
+
+/**
+ * gridstack does NOT dispatch its drag/resize callbacks as DOM events (only
+ * `added`/`removed`/`change` are real CustomEvents); `on('dragstop', …)` stores
+ * the callback in an internal registry that `triggerEvent` invokes directly.
+ * jsdom has no layout, so a real pointer drag resolves to a zero-pixel delta —
+ * reaching into that registry is the only way to exercise the completion path.
+ */
+function fireGesture(grid: GridStack, name: 'dragstop' | 'resizestop', el: HTMLElement): void {
+  const handlers = (
+    grid as unknown as {
+      _gsEventHandler: Record<string, ((event: Event, el: HTMLElement) => void) | undefined>;
+    }
+  )._gsEventHandler;
+  handlers[name]?.(new Event(name), el);
+}
+
+function gridOf(container: HTMLElement): GridStack {
+  const root = container.querySelector('.grid-stack') as GridHTMLElement | null;
+  expect(root?.gridstack).toBeDefined();
+  return root!.gridstack!;
+}
+
+function itemOf(grid: GridStack, id: string): GridItemHTMLElement {
+  const el = grid.getGridItems().find((candidate) => candidate.gridstackNode?.id === id);
+  expect(el, `grid item ${id}`).toBeDefined();
+  return el!;
+}
+
 describe('DashboardGrid — grid mount', () => {
-  it('renders one react-grid-layout item per widget and writes nothing on mount', () => {
+  it('renders one gridstack item per widget and writes nothing on mount', () => {
     installMatchMediaSpy({});
     const scheduleLayoutWrite = vi.fn();
     const widgets: WidgetPlacement[] = [
@@ -201,9 +268,84 @@ describe('DashboardGrid — grid mount', () => {
     });
 
     expect(container.querySelector('[data-grid-mode="grid"]')).not.toBeNull();
-    expect(container.querySelectorAll('.react-grid-item')).toHaveLength(3);
-    // RGL calls onLayoutChange on mount; a write from there would PUT on every
-    // dashboard visit.
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(3);
+    // Each card is portalled into the item gridstack made for it.
+    expect(
+      container.querySelectorAll('.grid-stack-item-content > section[data-widget-id]'),
+    ).toHaveLength(3);
+    // gridstack fires `added` and `change` while the grid is populated; a write
+    // from there would PUT on every dashboard visit.
+    expect(scheduleLayoutWrite).not.toHaveBeenCalled();
+
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('survives a StrictMode double-mount with no duplicate items', () => {
+    // main.tsx renders under StrictMode, which mounts → tears down → re-mounts.
+    // gridstack owns the item elements, so a cleanup that left them behind
+    // would leave the second init adopting six ghosts.
+    installMatchMediaSpy({});
+    const scheduleLayoutWrite = vi.fn();
+    const widgets: WidgetPlacement[] = [
+      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 }),
+      W({ id: 'b', type: 'performance-chart', x: 0, y: 2, w: 8, h: 4 }),
+    ];
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <StrictMode>
+          <DashboardGrid
+            widgets={widgets}
+            onRemove={() => undefined}
+            scheduleLayoutWrite={scheduleLayoutWrite}
+          />
+        </StrictMode>,
+      );
+    });
+
+    expect(container.querySelectorAll('.grid-stack')).toHaveLength(1);
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(2);
+    expect(
+      container.querySelectorAll('.grid-stack-item-content > section[data-widget-id]'),
+    ).toHaveLength(2);
+    expect(scheduleLayoutWrite).not.toHaveBeenCalled();
+
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  it('adds and removes items as the persisted widget set changes, still without writing', () => {
+    installMatchMediaSpy({});
+    const scheduleLayoutWrite = vi.fn();
+    const a = W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 });
+    const b = W({ id: 'b', type: 'performance-chart', x: 0, y: 2, w: 8, h: 4 });
+    const { container, root } = mountIntoBody();
+    const render = (widgets: WidgetPlacement[]): void => {
+      act(() => {
+        root.render(
+          <DashboardGrid
+            widgets={widgets}
+            onRemove={() => undefined}
+            scheduleLayoutWrite={scheduleLayoutWrite}
+          />,
+        );
+      });
+    };
+
+    render([a]);
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(1);
+
+    render([a, b]);
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(2);
+
+    render([b]);
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(1);
+    expect(container.querySelectorAll('.grid-stack-item-content > section')).toHaveLength(1);
     expect(scheduleLayoutWrite).not.toHaveBeenCalled();
 
     act(() => {
@@ -213,37 +355,9 @@ describe('DashboardGrid — grid mount', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Write path
-// ---------------------------------------------------------------------------
-
 describe('DashboardGrid — gesture completion is the only write path', () => {
-  interface Captured {
-    onDragStop?: (layout: Layout) => void;
-    onResizeStop?: (layout: Layout) => void;
-    onLayoutChange?: (layout: Layout) => void;
-  }
-
-  it('writes once per completed gesture and never from onLayoutChange', async () => {
+  it('writes once per completed gesture, never from a programmatic move', () => {
     installMatchMediaSpy({});
-    const captured: Captured = {};
-    vi.resetModules();
-    vi.doMock('react-grid-layout', async () => {
-      const actual = await vi.importActual<typeof import('react-grid-layout')>('react-grid-layout');
-      return {
-        ...actual,
-        // jsdom cannot drive an RGL drag (no layout → every delta is zero), so
-        // capture the completion callbacks and invoke them directly.
-        GridLayout: (props: Captured & { children?: React.ReactNode }) => {
-          captured.onDragStop = props.onDragStop;
-          captured.onResizeStop = props.onResizeStop;
-          captured.onLayoutChange = props.onLayoutChange;
-          return <div data-testid="grid-layout-mock">{props.children}</div>;
-        },
-      };
-    });
-    const mod = await import('./DashboardGrid');
-
     const scheduleLayoutWrite = vi.fn();
     const widgets: WidgetPlacement[] = [
       W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 }),
@@ -260,7 +374,7 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
     const { container, root } = mountIntoBody();
     act(() => {
       root.render(
-        <mod.DashboardGrid
+        <DashboardGrid
           widgets={widgets}
           onRemove={() => undefined}
           scheduleLayoutWrite={scheduleLayoutWrite}
@@ -269,63 +383,56 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
     });
     expect(scheduleLayoutWrite).not.toHaveBeenCalled();
 
-    const mountLayout: Layout = mod.toGridLayout(widgets);
-    // The mount call, and any later prop-driven resync, must not write.
-    act(() => {
-      captured.onLayoutChange!(mountLayout);
-    });
+    const grid = gridOf(container);
+    const itemA = itemOf(grid, 'a');
+
+    // Move into empty canvas below everything — nothing to push, so the result
+    // is unambiguous. The move alone must not write. (Geometry is passed whole:
+    // `update` defaults any side it is not given rather than keeping it, so a
+    // partial `{x, y}` would silently reset `w`/`h` to 1.)
+    grid.update(itemA, { x: 0, y: 10, w: 12, h: 2 });
     expect(scheduleLayoutWrite).not.toHaveBeenCalled();
 
-    const dragged: Layout = [
-      { i: 'a', x: 0, y: 4, w: 12, h: 2 },
-      { i: 'b', x: 0, y: 6, w: 8, h: 4 },
-    ];
-    act(() => {
-      captured.onDragStop!(dragged);
-    });
+    fireGesture(grid, 'dragstop', itemA);
     expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
-    expect(scheduleLayoutWrite.mock.calls[0][0]).toEqual([
-      { id: 'a', type: 'stats-summary', x: 0, y: 4, w: 12, h: 2 },
-      {
-        id: 'b',
-        type: 'performance-chart',
-        x: 0,
-        y: 6,
-        w: 8,
-        h: 4,
-        config: { timeframe: 'weekly' },
-      },
-    ]);
+    const dragged = scheduleLayoutWrite.mock.calls[0][0] as WidgetPlacement[];
+    expect(dragged).toHaveLength(2);
+    // `type` and `config` are not gridstack's to hold — they come back off the
+    // widget the node matches.
+    //
+    // `h: 2` also pins a gridstack gotcha: `save()` DELETES `h` from a node
+    // when it equals 1 or the item's own `minH`, and stats-summary's minH IS 2.
+    // Taken at face value the placement would persist as 1 row tall.
+    expect(dragged.find((widget) => widget.id === 'a')).toEqual({
+      id: 'a',
+      type: 'stats-summary',
+      x: 0,
+      y: 10,
+      w: 12,
+      h: 2,
+    });
+    expect(dragged.find((widget) => widget.id === 'b')).toEqual({
+      id: 'b',
+      type: 'performance-chart',
+      x: 0,
+      y: 2,
+      w: 8,
+      h: 4,
+      config: { timeframe: 'weekly' },
+    });
 
-    // RGL follows every gesture with onLayoutChange (twice, in fact). It must
-    // not turn one gesture into a second write.
-    act(() => {
-      captured.onLayoutChange!(dragged);
-    });
-    act(() => {
-      captured.onLayoutChange!(dragged);
-    });
-    expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
-
-    const resized: Layout = [
-      { i: 'a', x: 0, y: 4, w: 12, h: 3 },
-      { i: 'b', x: 0, y: 7, w: 8, h: 4 },
-    ];
-    act(() => {
-      captured.onResizeStop!(resized);
-    });
+    // Shrink to exactly PerWidgetMinSize['performance-chart'] — the other half
+    // of the same gotcha, where `save()` would drop BOTH `w` and `h`.
+    grid.update(itemOf(grid, 'b'), { x: 0, y: 2, w: 4, h: 4 });
+    fireGesture(grid, 'resizestop', itemOf(grid, 'b'));
     expect(scheduleLayoutWrite).toHaveBeenCalledTimes(2);
-    expect(scheduleLayoutWrite.mock.calls[1][0]).toMatchObject([
-      { id: 'a', h: 3 },
-      { id: 'b', y: 7 },
-    ]);
+    const resized = scheduleLayoutWrite.mock.calls[1][0] as WidgetPlacement[];
+    expect(resized.find((widget) => widget.id === 'b')).toMatchObject({ w: 4, h: 4 });
 
     act(() => {
       root.unmount();
     });
     container.remove();
-    vi.doUnmock('react-grid-layout');
-    vi.resetModules();
   });
 });
 
@@ -362,9 +469,10 @@ describe('DashboardGrid — mobile fallback', () => {
       .filter((id): id is string => id !== null);
     expect(order).toEqual(['a', 'b', 'c', 'd']);
 
-    // No RGL, so no drag zone and no resize handles.
-    expect(container.querySelectorAll('.react-grid-item')).toHaveLength(0);
-    expect(container.querySelector('.react-resizable-handle')).toBeNull();
+    // No gridstack instance, so no drag zone and no resize handles.
+    expect(container.querySelectorAll('.grid-stack')).toHaveLength(0);
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(0);
+    expect(container.querySelector('.ui-resizable-handle')).toBeNull();
     expect(container.querySelector('[data-drag-zone="true"]')).toBeNull();
     expect(scheduleLayoutWrite).not.toHaveBeenCalled();
 
