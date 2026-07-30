@@ -30,26 +30,6 @@ export function findFirstSlot(
   return { x: 0, y: 0 };
 }
 
-/**
- * Re-packs `widgets` into the grid in array order, preserving each widget's
- * `w`/`h` and assigning the first `(x, y)` slot that fits.
- *
- * The server validates every PUT with `checkNoOverlap` (see
- * `packages/shared/src/schemas/dashboard.ts`), so any layout the client
- * produces must be overlap-free or the write 400s and rolls back. Packing in
- * array order makes that guarantee structural rather than incidental: the
- * caller decides the ORDER widgets should appear in, and this decides where
- * they land.
- */
-export function repackLayout(widgets: WidgetPlacement[]): WidgetPlacement[] {
-  const placed: WidgetPlacement[] = [];
-  for (const widget of widgets) {
-    const { x, y } = findFirstSlot(placed, { w: widget.w, h: widget.h });
-    placed.push({ ...widget, x, y });
-  }
-  return placed;
-}
-
 /** Reading order for the grid: top-to-bottom, then left-to-right. */
 export function sortByYThenX(widgets: WidgetPlacement[]): WidgetPlacement[] {
   return [...widgets].sort((a, b) => a.y - b.y || a.x - b.x);
