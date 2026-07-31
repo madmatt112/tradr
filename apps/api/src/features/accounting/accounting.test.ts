@@ -1067,3 +1067,261 @@ describe('POST /api/ledger/:accountId/reconcile', () => {
     // contract for the wrong feature.
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-fill realized P&L posting (Req 9, design §C15–C18)
+// ---------------------------------------------------------------------------
+
+describe('per-fill realized P&L posting', () => {
+  async function createAccountWithBalance(cookie: string, name: string, startingBalance = '1000') {
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name,
+      currency: 'USD',
+      startingBalance,
+    });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  async function getBalance(cookie: string, accountId: string): Promise<string> {
+    const res = await authedRequest('GET', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(200);
+    return (await res.json()).balance;
+  }
+
+  async function pnlRows(accountId: string) {
+    return db
+      .select()
+      .from(ledgerEntries)
+      .where(
+        drizzleSql`${ledgerEntries.accountId} = ${accountId} AND ${ledgerEntries.entryType} = 'position_pnl'`,
+      );
+  }
+
+  /** Open a position with a single entry fill; leave it open. */
+  async function openWithEntry(
+    cookie: string,
+    accountId: string,
+    opts: { price: string; quantity: string; fees?: string; symbol?: string },
+  ) {
+    const pos = await createPosition(cookie, accountId, { symbol: opts.symbol ?? 'AAPL' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: opts.price,
+      quantity: opts.quantity,
+      fees: opts.fees ?? '0',
+      filledAt: '2026-01-01T00:00:00Z',
+    });
+    await openPosition(cookie, pos.id, '2026-01-01T00:00:00Z');
+    return pos;
+  }
+
+  // The §C18 regression pin. If this ever fails, the change broke the common
+  // case — that is an implementation bug, never an expected update.
+  it('a whole trade still posts exactly ONE row, unchanged from close-time posting', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'C18 Pin');
+
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '100',
+      exitPrice: '110',
+      quantity: '1',
+    });
+
+    const rows = await pnlRows(account.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].direction).toBe('credit');
+    expect(rows[0].amount).toBe('10.0000');
+    expect(await getBalance(cookie, account.id)).toBe('1010.0000');
+  });
+
+  it('an entry-only position posts nothing (Req 9.4)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Entry Only');
+
+    await openWithEntry(cookie, account.id, { price: '100', quantity: '10' });
+
+    expect(await pnlRows(account.id)).toHaveLength(0);
+    expect(await getBalance(cookie, account.id)).toBe('1000.0000');
+  });
+
+  // The design §C15 worked example. This is the test that catches an
+  // accumulate-instead-of-recompute implementation: the second partial must
+  // post 45, not 90.
+  it('two partial exits post 45 then 45 — fee proration stays exact', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Two Partials');
+
+    // Entry 10 @ $100 with $10 fees.
+    const pos = await openWithEntry(cookie, account.id, {
+      price: '100',
+      quantity: '10',
+      fees: '10',
+    });
+
+    // First partial: 5 @ $110 → (110-100)*5 - (10 * 5/10) = 45.
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-01-02T00:00:00Z',
+    });
+
+    let rows = await pnlRows(account.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].direction).toBe('credit');
+    expect(rows[0].amount).toBe('45.0000');
+    // The balance moves immediately — the whole point of Req 9.
+    expect(await getBalance(cookie, account.id)).toBe('1045.0000');
+
+    // Second partial: cumulative becomes (110-100)*10 - 10 = 90, so the delta
+    // is 45 again — NOT 90.
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-01-03T00:00:00Z',
+    });
+
+    rows = await pnlRows(account.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.amount).sort()).toEqual(['45.0000', '45.0000']);
+    // Cumulative counted exactly once.
+    expect(await getBalance(cookie, account.id)).toBe('1090.0000');
+
+    // The balancing exit auto-closed the position; the close hook's delta was
+    // zero, so it added no third row.
+    const detail = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect((await detail.json()).status).toBe('closed');
+    expect(await pnlRows(account.id)).toHaveLength(2);
+  });
+
+  it('deleting an exit fill posts a correcting debit (Req 9.1)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Delete Exit');
+
+    const pos = await openWithEntry(cookie, account.id, { price: '100', quantity: '10' });
+    const exitRes = await authedRequest('POST', `/api/positions/${pos.id}/fills`, cookie, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-01-02T00:00:00Z',
+    });
+    expect(exitRes.status).toBe(201);
+    const exitFill = await exitRes.json();
+    expect(await getBalance(cookie, account.id)).toBe('1050.0000');
+
+    const del = await authedRequest(
+      'DELETE',
+      `/api/positions/${pos.id}/fills/${exitFill.id}`,
+      cookie,
+    );
+    expect(del.status).toBe(204);
+
+    // Append-only: the original credit stays, a debit neutralizes it.
+    const rows = await pnlRows(account.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((r) => r.direction === 'debit')).toHaveLength(1);
+    expect(await getBalance(cookie, account.id)).toBe('1000.0000');
+  });
+
+  it('editing an exit fill re-derives the posted amount (Req 9.1)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Edit Exit');
+
+    const pos = await openWithEntry(cookie, account.id, { price: '100', quantity: '10' });
+    const exitRes = await authedRequest('POST', `/api/positions/${pos.id}/fills`, cookie, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-01-02T00:00:00Z',
+    });
+    const exitFill = await exitRes.json();
+    expect(await getBalance(cookie, account.id)).toBe('1050.0000');
+
+    // Correct the price down: cumulative becomes (105-100)*5 = 25.
+    const edit = await authedRequest(
+      'PUT',
+      `/api/positions/${pos.id}/fills/${exitFill.id}`,
+      cookie,
+      { price: '105' },
+    );
+    expect(edit.status).toBe(200);
+
+    expect(await getBalance(cookie, account.id)).toBe('1025.0000');
+    const rows = await pnlRows(account.id);
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((r) => r.direction === 'debit')[0].amount).toBe('25.0000');
+  });
+
+  // Req 9.2 — the un-reversed filter is what makes this work. If
+  // sumPostedRealizedForPosition counted reversed rows, the re-close would post
+  // a delta against postings that have already been neutralized.
+  it('reopen reverses every row and resets the posted baseline to zero', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Reopen Baseline');
+
+    // Reopen is guarded to the position's OPEN DAY in the account's timezone
+    // (R13-AC1/AC2), so this fixture must be same-day. `now` for every fill
+    // keeps it same-day under any timezone without a clock-boundary race.
+    const now = new Date().toISOString();
+
+    const pos = await createPosition(cookie, account.id, { symbol: 'RBASE' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0',
+      filledAt: now,
+    });
+    await openPosition(cookie, pos.id, now);
+
+    // Two partials → two rows, the second auto-closing the position.
+    for (let i = 0; i < 2; i++) {
+      await addFill(cookie, pos.id, {
+        type: 'exit',
+        price: '110',
+        quantity: '5',
+        fees: '0',
+        filledAt: now,
+      });
+    }
+    expect(await pnlRows(account.id)).toHaveLength(2);
+    expect(await getBalance(cookie, account.id)).toBe('1100.0000');
+
+    const reopen = await authedRequest('POST', `/api/positions/${pos.id}/reopen`, cookie, {});
+    expect(reopen.status).toBe(200);
+
+    // Both originals reversed → balance back to the pre-trade value.
+    expect(await getBalance(cookie, account.id)).toBe('1000.0000');
+    const afterReopen = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(afterReopen.filter((r) => r.entryType === 'position_pnl_reversal')).toHaveLength(2);
+
+    // The baseline is now zero because sumPostedRealizedForPosition ignores
+    // reversed rows (Req 9.2). Scaling into the position with another entry
+    // re-realizes the cumulative P&L against the new average cost and posts it
+    // ONCE. Note the exit fills survive the reopen, so entry and exit quantities
+    // are still balanced — adding another exit would exceed entry; adding an
+    // entry is the real "reopen to scale in" case.
+    //
+    // This is the discriminating assertion: if reversed rows still counted
+    // toward the baseline, the delta would come out at 0 and the balance would
+    // stay at 1000.
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '5',
+      fees: '0',
+      filledAt: now,
+    });
+    // entry 15 @ 100, exit 10 @ 110 → realized (110−100) × 10 = 100.
+    expect(await getBalance(cookie, account.id)).toBe('1100.0000');
+  });
+});

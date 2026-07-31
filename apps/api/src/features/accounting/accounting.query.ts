@@ -129,6 +129,72 @@ export async function reverseCloseForPosition(
 }
 
 /**
+ * Signed sum of what has ALREADY been posted as realized P&L for a position —
+ * the `alreadyPosted` term of the per-fill delta rule (design §C15; Req 9.2).
+ *
+ *   delta = cumulativeRealizedNow − alreadyPostedForThisPosition
+ *
+ * Counts only **un-reversed** `position_pnl` rows, using the same "un-reversed"
+ * definition as `reverseCloseForPosition`: a row whose `groupId` is not
+ * referenced by any `position_pnl_reversal.reversesGroupId` for the position.
+ *
+ * That filter is what makes reopen work. A reopen reverses every posted row, so
+ * the un-reversed set becomes empty and the baseline resets to zero — the
+ * re-close then posts the full cumulative amount once, rather than a delta
+ * against postings that have already been neutralized.
+ *
+ * `position_pnl_reversal` rows are deliberately NOT summed. They exist to cancel
+ * originals in the *balance* derivation; here they are the thing that removes an
+ * original from the baseline, not a contributor to it.
+ *
+ * Returns the signed `total` AND the `rowCount` behind it. The count is not
+ * redundant with `total.isZero()`: a position whose postings net to zero (say
+ * +45 then −45 after an edit) has rows, while a never-posted position has none.
+ * The close hook needs that distinction to honour Req 2's exact-zero-P&L row —
+ * see `postRealizedDelta`.
+ *
+ * Read-only, but transaction-scoped because every caller runs inside the
+ * fill/close transaction that is about to write.
+ */
+export async function sumPostedRealizedForPosition(
+  tx: Transaction,
+  { userId, positionId }: { userId: string; positionId: string },
+): Promise<{ total: Decimal; rowCount: number }> {
+  const rev = alias(ledgerEntries, 'rev');
+  const rows = await tx
+    .select({ direction: ledgerEntries.direction, amount: ledgerEntries.amount })
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.userId, userId),
+        eq(ledgerEntries.positionId, positionId),
+        eq(ledgerEntries.entryType, 'position_pnl'),
+        notExists(
+          tx
+            .select({ id: rev.id })
+            .from(rev)
+            .where(
+              and(
+                eq(rev.entryType, 'position_pnl_reversal'),
+                eq(rev.positionId, positionId),
+                eq(rev.reversesGroupId, ledgerEntries.groupId),
+              ),
+            ),
+        ),
+      ),
+    );
+
+  // Summed in JS rather than SQL: the row count per position is tiny (one per
+  // realization event) and decimal.js keeps the arithmetic identical to the
+  // rest of the posting path. `amount` is a numeric string — never parseFloat.
+  const total = rows.reduce(
+    (acc, row) => (row.direction === 'credit' ? acc.plus(row.amount) : acc.minus(row.amount)),
+    new Decimal(0),
+  );
+  return { total, rowCount: rows.length };
+}
+
+/**
  * Row-lock an account and return the fields reconciliation needs (Req 8.3).
  * Returns `null` when the account does not exist or belongs to another user —
  * the caller turns that into a `NotFoundError`, so a probe cannot distinguish
