@@ -35,17 +35,15 @@ const passwordReset = new Hono();
  *   post:
  *     summary: Request a password-reset email (no-enumeration surface).
  *     description: >
- *       Public. Rate limited by client IP (5 / 15 min, the register posture)
- *       AND by the normalized target email (3 / 1 h — REQ-3.8's per-target
- *       bound; case variants share one bucket). Responds the identical generic
- *       `200 { success: true }` whether or not the email matches an account
- *       and regardless of delivery outcome (REQ-3.2/3.3 — no account-existence
- *       or delivery-health oracle). When an account exists, a single-use reset
- *       token (60 min TTL, newest-wins over prior tokens) is issued and the
- *       reset email dispatched WITHOUT awaiting delivery (REQ-2.7). When the
- *       instance has no email configured the endpoint returns a stable
- *       `409 EMAIL_NOT_CONFIGURED` for every caller — instance-level,
- *       account-independent (REQ-1.2, D12).
+ *       Public. Rate limited by client IP (5 / 15 min, the register posture) AND by the
+ *       normalized target email (3 / 1 h — per-target bound; case variants share one
+ *       bucket). Responds the identical generic `200 { success: true }` whether or not
+ *       the email matches an account and regardless of delivery outcome (no
+ *       account-existence or delivery-health oracle). When an account exists, a
+ *       single-use reset token (60 min TTL, newest-wins over prior tokens) is issued
+ *       and the reset email dispatched WITHOUT awaiting delivery. When the instance has
+ *       no email configured the endpoint returns a stable `409 EMAIL_NOT_CONFIGURED`
+ *       for every caller — instance-level, account-independent.
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -105,17 +103,15 @@ passwordReset.post(
  *   post:
  *     summary: Complete a password reset with an emailed token (consume → revoke → rewrite).
  *     description: >
- *       Public. Rate limited by client IP (10 / 15 min, the login posture —
- *       REQ-4.7; token guessing is primarily throttled by the token's 256-bit
- *       entropy + 60 min TTL). Atomically consumes the single-use token
- *       (REQ-4.3), revokes ALL of the account's sessions (REQ-4.5), sets the
- *       new bcrypt password hash, and marks the account email-verified — a
- *       completed email-delivered reset proves mailbox control (D8). Expired,
- *       already-consumed, and unrecognized tokens are indistinguishable: one
- *       generic 400 INVALID_OR_EXPIRED_TOKEN (REQ-4.2). No auto-login — no
- *       session cookie is set; the page routes to login (D8). Fully functional
- *       when the instance has no email configured (D12 — consuming an existing
- *       token sends nothing).
+ *       Public. Rate limited by client IP (10 / 15 min, the login posture — token
+ *       guessing is primarily throttled by the token's 256-bit entropy + 60 min TTL).
+ *       Atomically consumes the single-use token, revokes ALL of the account's
+ *       sessions, sets the new bcrypt password hash, and marks the account
+ *       email-verified — a completed email-delivered reset proves mailbox control.
+ *       Expired, already-consumed, and unrecognized tokens are indistinguishable: one
+ *       generic 400 INVALID_OR_EXPIRED_TOKEN. No auto-login — no session cookie is set;
+ *       the page routes to login. Fully functional when the instance has no email
+ *       configured (consuming an existing token sends nothing).
  *     tags: [Auth]
  *     requestBody:
  *       required: true

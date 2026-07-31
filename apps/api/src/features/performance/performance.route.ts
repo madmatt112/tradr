@@ -27,15 +27,14 @@ const performance = new Hono<PerformanceEnv>();
  *   get:
  *     summary: Aggregated P&L performance series, equity curve and statistics.
  *     description: >
- *       Authed. Computes bucketed P&L series, equity curve and statistics per
- *       currency over the requested `[start, end)` window. Query validation
- *       (minimum start date, date order, bucket-count cap) always runs on the
- *       REQUESTED window on every tier. When feature gating is enabled and the
- *       user is a non-admin Free user, the window is clamped to the last
- *       6 calendar months (plan-tiers L3, REQ-7.1) — never an error: the
- *       response is computed over the clamped window and marked with the
- *       additive `tierWindow` field. History metadata (per-currency
- *       earliest/most-recent closed timestamps and totals) is never clamped.
+ *       Authed. Computes bucketed P&L series, equity curve and statistics per currency
+ *       over the requested `[start, end)` window. Query validation (minimum start date,
+ *       date order, bucket-count cap) always runs on the REQUESTED window on every
+ *       tier. When feature gating is enabled and the user is a non-admin Free user, the
+ *       window is clamped to the last 6 calendar months — never an error: the response
+ *       is computed over the clamped window and marked with the additive `tierWindow`
+ *       field. History metadata (per-currency earliest/most-recent closed timestamps
+ *       and totals) is never clamped.
  *     tags: [Performance]
  *     parameters:
  *       - in: query

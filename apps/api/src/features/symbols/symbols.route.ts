@@ -50,13 +50,13 @@ const perUserQuoteRateLimit = createRateLimiter({
  *   get:
  *     summary: Ranked ticker-prefix symbol autocomplete.
  *     description: >
- *       Returns up to 10 NYSE/NASDAQ symbols whose ticker starts with the query
- *       prefix `q`, ranked exact-match-first, then by ascending ticker length,
- *       then alphabetically. `q` is sanitized to `[A-Z.-]{0,16}` (trimmed,
- *       uppercased); a normalized-empty `q` returns `{ results: [] }` without a
- *       database prefix scan, and likewise before the reference table is first
- *       populated. Read-only and side-effect-free (CSRF-safe GET); never calls
- *       the quote provider (REQ-3.6). Requires an authenticated session.
+ *       Returns up to 10 NYSE/NASDAQ symbols whose ticker starts with the query prefix
+ *       `q`, ranked exact-match-first, then by ascending ticker length, then
+ *       alphabetically. `q` is sanitized to `[A-Z.-]{0,16}` (trimmed, uppercased); a
+ *       normalized-empty `q` returns `{ results: [] }` without a database prefix scan,
+ *       and likewise before the reference table is first populated. Read-only and
+ *       side-effect-free (CSRF-safe GET); never calls the quote provider. Requires an
+ *       authenticated session.
  *     tags: [Symbols]
  *     parameters:
  *       - in: query
@@ -77,14 +77,13 @@ symbolsRouter.get('/search', searchSymbolsHandler);
  *     summary: Delayed spot last-price for a symbol.
  *     description: >
  *       Returns the platform-global provider's ~15-minute-delayed last price for
- *       `symbol`. With no provider key configured the response is
- *       `{ configured: false }` (200) — defense-in-depth mirroring the frontend
- *       gate (REQ-4.2). With a key configured the response is
- *       `{ configured: true, symbol, lastPrice, change, delayed }`. Independent
- *       of the symbols table (REQ-4.6). Per-user rate limited to 30 lookups per
- *       60 s. Provider failures surface as coded statuses — 404 unknown symbol,
- *       503 temporarily unavailable / rate-limited, 502 misconfigured — never a
- *       generic 500 (REQ-4.3). Requires an authenticated session.
+ *       `symbol`. With no provider key configured the response is `{ configured: false
+ *       }` — defense-in-depth mirroring the frontend gate. With a key configured the
+ *       response is `{ configured: true, symbol, lastPrice, change, delayed }`.
+ *       Independent of the symbols table. Per-user rate limited to 30 lookups per 60 s.
+ *       Provider failures surface as coded statuses — 404 unknown symbol, 503
+ *       temporarily unavailable / rate-limited, 502 misconfigured — never a generic
+ *       500. Requires an authenticated session.
  *     tags: [Symbols]
  *     parameters:
  *       - in: path
@@ -126,11 +125,10 @@ symbolsRouter.get('/quote-config', quoteConfigHandler);
  *   post:
  *     summary: Force a symbols reference-data sync from the SEC source (admin).
  *     description: >
- *       Admin-only manual refresh path (REQ-2.4(d)). Runs the guarded,
- *       multi-container-safe population with `force: true` and returns the
- *       SyncOutcome verbatim. Under NODE_ENV=test population is a no-op
- *       (`skipped-test-env`). A side-effecting POST (CSRF-protected); requires an
- *       admin session (authMiddleware → adminMiddleware).
+ *       Admin-only manual refresh path. Runs the guarded, multi-container-safe
+ *       population with `force: true` and returns the SyncOutcome verbatim. Under
+ *       NODE_ENV=test population is a no-op (`skipped-test-env`). A side-effecting POST
+ *       (CSRF-protected); requires an admin session (authMiddleware → adminMiddleware).
  *     tags: [Symbols]
  *     responses:
  *       200:

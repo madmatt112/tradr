@@ -124,7 +124,7 @@ blocks and fails on any difference, so a skipped block is caught before merge. O
 references live in [`docs/`](docs/) — changes to how the app is built, configured, or self-hosted should
 land alongside the code that changes them.
 
-The documentation site at [www.tradr.cloud/docs](https://www.tradr.cloud/docs/) is built from
+The documentation site at [docs.tradr.cloud](https://docs.tradr.cloud/) is built from
 [`apps/docs`](apps/docs) in this repository. Preview it with `pnpm --filter @tradr/docs dev`, and note
 that the build fails on a broken internal link.
 

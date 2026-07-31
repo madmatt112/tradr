@@ -105,24 +105,22 @@ csvImport.post('/preview', async (c) => {
  *   post:
  *     summary: Commit a previewed CSV import (consumes the preview token).
  *     description: >
- *       Second call of the preview→commit handshake. Consumes the single-use
- *       `token` minted by `/api/csv-import/preview` and atomically replays the
- *       staged positions/fills (firing the close-hook ledger entries inside one
- *       bulk transaction). Idempotent: re-committing an already-committed token
- *       returns the original summary, never a second import. A stale token
- *       (replaced by a newer preview), an expired token, a blocked preview, an
- *       in-flight commit, or unconfirmed near-total duplicates each return a
- *       specific 409 with a stable code; an unknown token returns 404. Set
- *       `confirmDuplicates: true` to import past a near-total-overlap (≥90%)
- *       duplicate block. Tier enforcement (plan-tiers, gated non-admin free
- *       users): the commit refuses 403 when the lifetime CSV-import allowance
- *       is exhausted, when the target account is not the writable designation
- *       while over the account cap, or when the batch would exceed the
- *       position cap (atomic whole-batch refusal — the message names the cap
- *       and the batch size). A tier refusal leaves the staged preview INTACT:
- *       the same token is re-committable after re-designation/upgrade, no
- *       re-upload. Only successful commits consume the lifetime allowance —
- *       previews, refusals, and failed commits never do.
+ *       Second call of the preview→commit handshake. Consumes the single-use `token`
+ *       minted by `/api/csv-import/preview` and atomically replays the staged
+ *       positions/fills (firing the close-hook ledger entries inside one bulk
+ *       transaction). Idempotent: re-committing an already-committed token returns the
+ *       original summary, never a second import. A stale token (replaced by a newer
+ *       preview), an expired token, a blocked preview, an in-flight commit, or
+ *       unconfirmed near-total duplicates each return a specific 409 with a stable
+ *       code; an unknown token returns 404. Set `confirmDuplicates: true` to import
+ *       past a near-total-overlap (≥90%) duplicate block. Tier enforcement (gated
+ *       non-admin free users): the commit refuses 403 when the lifetime CSV-import
+ *       allowance is exhausted, when the target account is not the writable designation
+ *       while over the account cap, or when the batch would exceed the position cap
+ *       (atomic whole-batch refusal — the message names the cap and the batch size). A
+ *       tier refusal leaves the staged preview INTACT: the same token is re-committable
+ *       after re-designation/upgrade, no re-upload. Only successful commits consume the
+ *       lifetime allowance — previews, refusals, and failed commits never do.
  *     tags: [CSV Import]
  *     requestBody:
  *       required: true
@@ -136,7 +134,7 @@ csvImport.post('/preview', async (c) => {
  *               confirmDuplicates: { type: boolean, default: false }
  *     responses:
  *       200:
- *         description: '`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary (REQ-8.7).'
+ *         description: '`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary.'
  *       400: { description: Malformed body (invalid token / confirmDuplicates). }
  *       403: { description: 'Tier refusal (never 429, no Retry-After) with a stable code: TIER_LIMIT_CSV_IMPORTS (lifetime import allowance exhausted), TIER_ACCOUNT_NOT_WRITABLE (target account not writable while over the account cap), or TIER_LIMIT_POSITIONS (batch would exceed the position cap; message names cap and batch size). The staged preview stays intact and re-committable.' }
  *       404: { description: No staged preview matches this token (or not owned). }

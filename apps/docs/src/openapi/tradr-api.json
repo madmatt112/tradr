@@ -118,7 +118,7 @@
   "paths": {
     "/api/accounts": {
       "post": {
-        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the L1 account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` (plan-tiers REQ-6.1) — admins and gating-off deployments pass through unchanged.\n",
+        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass through unchanged.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -179,7 +179,7 @@
     },
     "/api/accounts/writable": {
       "put": {
-        "description": "Authed, always-on. Stores which of the user's accounts stays writable for new trading data while over the Free-tier account cap. A plain stored preference — independent of gating/tier/over-cap state; it only takes effect when L1-writability enforcement consults the resolver. The account must belong to the current user (404 otherwise).\n",
+        "description": "Authed, always-on. Stores which of the user's accounts stays writable for new trading data while over the Free-tier account cap. A plain stored preference — independent of gating/tier/over-cap state; it only takes effect when the writable-account rule is enforced. The account must belong to the current user (404 otherwise).\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -287,7 +287,7 @@
     },
     "/api/admin/stats": {
       "get": {
-        "description": "Admin-gated (403 `ADMIN_REQUIRED` for non-admins) and per-user rate limited (60 / 60 s). Returns total users, \"Active now\" users (still-valid sessions in the last 30 min — `activeUsersWindowMinutes` is serialized for honest labeling), positions by status, and revenue as micro-USD integer strings: `allTime` and the reversal-attributed UTC `currentMonth`, with the pinned `basis: 'purchased-credit-volume'`. An empty instance returns well-formed zeros, never errors (REQ-2.7).\n",
+        "description": "Admin-gated (403 `ADMIN_REQUIRED` for non-admins) and per-user rate limited (60 / 60 s). Returns total users, \"Active now\" users (still-valid sessions in the last 30 min — `activeUsersWindowMinutes` is serialized for honest labeling), positions by status, and revenue as micro-USD integer strings: `allTime` and the reversal-attributed UTC `currentMonth`, with the pinned `basis: 'purchased-credit-volume'`. An empty instance returns well-formed zeros, never errors.\n",
         "responses": {
           "200": {
             "activeUsers": null,
@@ -313,7 +313,7 @@
     },
     "/api/admin/usage": {
       "get": {
-        "description": "Admin-gated (403 `ADMIN_REQUIRED`). `from`/`to` are optional ISO 8601 datetimes; the default window is the trailing 30 days ending now. `from > to` and ranges over 366 days are a 400 `VALIDATION_ERROR`. Returns `period`, `totals` (token/credit integer strings; `providerCost` is null when zero covered rows — pre-0013 rows have no recorded raw cost, see `providerCostCoverage`), the UTC-day `series`, `topUsers` (max 50 by billed credits), and the reversal-attributed `revenue { credited, reversed, net }`. Empty/future ranges return well-formed zeros (REQ-4.6).\n",
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). `from`/`to` are optional ISO 8601 datetimes; the default window is the trailing 30 days ending now. `from > to` and ranges over 366 days are a 400 `VALIDATION_ERROR`. Returns `period`, `totals` (token/credit integer strings; `providerCost` is null when zero covered rows — pre-0013 rows have no recorded raw cost, see `providerCostCoverage`), the UTC-day `series`, `topUsers` (max 50 by billed credits), and the reversal-attributed `revenue { credited, reversed, net }`. Empty/future ranges return well-formed zeros.\n",
         "parameters": [
           {
             "in": "query",
@@ -363,7 +363,7 @@
     },
     "/api/admin/users": {
       "get": {
-        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over `(created_at, id)` descending — new signups on page one. `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. `limit` defaults to 25, clamped to [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items, nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable, may be arbitrarily old); `emailVerified` is the stored verified flag — a read-only signal, nothing is gated on it in v1. No secret fields are returned (REQ-3.6).\n",
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over `(created_at, id)` descending — new signups on page one. `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. `limit` defaults to 25, clamped to [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items, nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable, may be arbitrarily old); `emailVerified` is the stored verified flag — a read-only signal, nothing is gated on it in v1. No secret fields are returned.\n",
         "parameters": [
           {
             "in": "query",
@@ -448,7 +448,7 @@
     },
     "/api/admin/users/{id}/admin": {
       "patch": {
-        "description": "Admin-gated (403 `ADMIN_REQUIRED`). The admin surface's single write — PATCH (never GET) per the SameSite=Lax CSRF posture (REQ-3.3). Body `{ isAdmin }`. Race-safe inside one transaction with a same-tx audit row: demoting the last remaining admin is refused with a 409 `LAST_ADMIN` (\"Cannot remove the last admin\"), so the instance can never reach zero admins through the API. Self-demotion is permitted when not the last admin. Toggling to the current value is a 200 no-op (no update, no audit row). Returns the target's `{ id, email, isAdmin, createdAt }`.\n",
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). The admin surface's single write — PATCH (never GET) per the SameSite=Lax CSRF posture. Body `{ isAdmin }`. Race-safe inside one transaction with a same-tx audit row: demoting the last remaining admin is refused with a 409 `LAST_ADMIN` (\"Cannot remove the last admin\"), so the instance can never reach zero admins through the API. Self-demotion is permitted when not the last admin. Toggling to the current value is a 200 no-op (no update, no audit row). Returns the target's `{ id, email, isAdmin, createdAt }`.\n",
         "parameters": [
           {
             "in": "path",
@@ -639,7 +639,7 @@
     },
     "/api/advisor/conversations/{conversationId}/messages/{messageId}/images/{index}": {
       "get": {
-        "description": "Streams the bytes of the image content-part at `index` on a message the authenticated user owns. Object access is proxy-through-API (D1) — there are NO presigned URLs and the object-storage key is resolved server-side, never appearing in the URL or any response (no IDOR leak — REQ-2.4). Side-effect-free. A missing/not-owned conversation or message, an out-of-range or non-image index, an `unrecoverable` marker, and a genuinely-absent object all return the identical 404 (no existence oracle). A pointer image is fetched from object storage and returned with its stored `Content-Type`; an inline image is decoded from base64. Both carry `Cache-Control: private, max-age=300`. A transient object-store outage returns 503 (OBJECT_UNREACHABLE).\n",
+        "description": "Streams the bytes of the image content-part at `index` on a message the authenticated user owns. Object access is proxy-through-API — there are NO presigned URLs and the object-storage key is resolved server-side, never appearing in the URL or any response (no IDOR leak —). Side-effect-free. A missing/not-owned conversation or message, an out-of-range or non-image index, an `unrecoverable` marker, and a genuinely-absent object all return the identical 404 (no existence oracle). A pointer image is fetched from object storage and returned with its stored `Content-Type`; an inline image is decoded from base64. Both carry `Cache-Control: private, max-age=300`. A transient object-store outage returns 503 (OBJECT_UNREACHABLE).\n",
         "parameters": [
           {
             "in": "path",
@@ -985,7 +985,7 @@
         ]
       },
       "get": {
-        "description": "Returns the market-data (Unusual Whales) BYOK key status. The plaintext is NEVER returned (REQ-6.2/6.6) — only `configured`, a last-4-char masking hint (`keyHintTail`), and the `verified` flag. When no key is stored the response is `{ configured: false }`.\n",
+        "description": "Returns the market-data (Unusual Whales) BYOK key status. The plaintext is NEVER returned — only `configured`, a last-4-char masking hint (`keyHintTail`), and the `verified` flag. When no key is stored the response is `{ configured: false }`.\n",
         "responses": {
           "200": {
             "description": "{ configured: false } or { configured: true, keyHintTail, verified } — no key material."
@@ -997,7 +997,7 @@
         ]
       },
       "put": {
-        "description": "Encrypts the supplied key at rest (AES-256-GCM, REQ-6.6) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned. Runs a lightweight verification probe (REQ-6.3): a 401/403 rejects the save with `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a transient failure (timeout / upstream unavailable) stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour.\n",
+        "description": "Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned. Runs a lightweight verification probe: a 401/403 rejects the save with `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a transient failure (timeout / upstream unavailable) stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1053,7 +1053,7 @@
     },
     "/api/advisor/options-chain": {
       "get": {
-        "description": "Backs the options-tools page chain viewer. Shares the Unusual Whales client and the `market_data_options_chain` tool's parsing (REQ-12.4 — no duplicate fetch logic). When the authenticated user has no Unusual Whales key the response is `{ configured: false }` (200) so the viewer shows an empty-state CTA to Settings, not an error (REQ-12.2). With a key the response is `{ configured: true, chain }` where `chain` is the compact projection `{ symbol, expiration?, count, contracts[] }`. Upstream failures are mapped to their REQ-6.5 reason codes on the matching HTTP status (REQ-12.3): 400 MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 404 SYMBOL_NOT_FOUND, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never returned or logged.\n",
+        "description": "Backs the options-tools page chain viewer. Shares the Unusual Whales client and the `market_data_options_chain` tool's parsing (no duplicate fetch logic). When the authenticated user has no Unusual Whales key the response is `{ configured: false }` so the viewer shows an empty-state CTA to Settings, not an error. With a key the response is `{ configured: true, chain }` where `chain` is the compact projection `{ symbol, expiration?, count, contracts[] }`. Upstream failures are mapped to their reason codes on the matching HTTP status: 400 MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 404 SYMBOL_NOT_FOUND, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never returned or logged.\n",
         "parameters": [
           {
             "in": "query",
@@ -1242,7 +1242,7 @@
     },
     "/api/advisor/personas/{id}/default": {
       "post": {
-        "description": "Atomic flip (REQ-7.9): for a user-owned persona, clears the prior default and sets this one; in all cases records the chosen persona on the user row. 404 if the persona is neither built-in nor owned.\n",
+        "description": "Atomic flip: for a user-owned persona, clears the prior default and sets this one; in all cases records the chosen persona on the user row. 404 if the persona is neither built-in nor owned.\n",
         "parameters": [
           {
             "in": "path",
@@ -1269,7 +1269,7 @@
     },
     "/api/advisor/provider-keys": {
       "get": {
-        "description": "Returns one item per provider the user has stored a BYOK key for. The plaintext key is NEVER returned (REQ-5.7) — only a masking hint (`keyHintTail`, the last four characters), the chosen `defaultModel`, and `lastUsedAt`. Response: `{ items: ProviderKeyListItem[] }`.\n",
+        "description": "Returns one item per provider the user has stored a BYOK key for. The plaintext key is NEVER returned — only a masking hint (`keyHintTail`, the last four characters), the chosen `defaultModel`, and `lastUsedAt`. Response: `{ items: ProviderKeyListItem[] }`.\n",
         "responses": {
           "200": {
             "description": "{ items: ProviderKeyListItem[] } — no key material."
@@ -1365,7 +1365,7 @@
         ]
       },
       "put": {
-        "description": "Encrypts the supplied key at rest (AES-256-GCM, REQ-5.1) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned (REQ-5.7). Runs a lightweight validation roundtrip against the provider's listModels endpoint (REQ-5.8, 5s timeout): a 401/403 rejects the save with `PROVIDER_KEY_INVALID`; a successful probe returns `verified: true`; a timeout or transient failure stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour (REQ-5.9). `defaultModel` is optional — when omitted (a first-time save has no model list to pick from), the server selects the provider's deterministic default from the probe's listModels response (REQ-6.4); the user can change it later.\n",
+        "description": "Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned. Runs a lightweight validation roundtrip against the provider's listModels endpoint (5s timeout): a 401/403 rejects the save with `PROVIDER_KEY_INVALID`; a successful probe returns `verified: true`; a timeout or transient failure stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour. `defaultModel` is optional — when omitted (a first-time save has no model list to pick from), the server selects the provider's deterministic default from the probe's listModels response; the user can change it later.\n",
         "parameters": [
           {
             "in": "path",
@@ -1423,7 +1423,7 @@
     },
     "/api/advisor/trade-data-consent": {
       "get": {
-        "description": "Returns whether the user has consented to the advisor reading their stored trade data (REQ-9.1). Defaults to `false` for a user who has never set it. Response: `{ consent: boolean }`.\n",
+        "description": "Returns whether the user has consented to the advisor reading their stored trade data. Defaults to `false` for a user who has never set it. Response: `{ consent: boolean }`.\n",
         "responses": {
           "200": {
             "description": "{ consent: boolean }."
@@ -1435,7 +1435,7 @@
         ]
       },
       "put": {
-        "description": "Grants or revokes the advisor's access to the user's stored trade data (REQ-9.1). Revoking consent stops new trade-data reads and removes stored structured trade-data from what is replayed to the provider; it cannot remove figures already disclosed in prior replies (REQ-10.2). Consent is re-read on every provider round-trip, so a change takes effect on the next iteration of an in-flight turn (REQ-1.7).\n",
+        "description": "Grants or revokes the advisor's access to the user's stored trade data. Revoking consent stops new trade-data reads and removes stored structured trade-data from what is replayed to the provider; it cannot remove figures already disclosed in prior replies. Consent is re-read on every provider round-trip, so a change takes effect on the next iteration of an in-flight turn.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1612,7 +1612,7 @@
     },
     "/api/auth/password-reset/complete": {
       "post": {
-        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture — REQ-4.7; token guessing is primarily throttled by the token's 256-bit entropy + 60 min TTL). Atomically consumes the single-use token (REQ-4.3), revokes ALL of the account's sessions (REQ-4.5), sets the new bcrypt password hash, and marks the account email-verified — a completed email-delivered reset proves mailbox control (D8). Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (REQ-4.2). No auto-login — no session cookie is set; the page routes to login (D8). Fully functional when the instance has no email configured (D12 — consuming an existing token sends nothing).\n",
+        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture — token guessing is primarily throttled by the token's 256-bit entropy + 60 min TTL). Atomically consumes the single-use token, revokes ALL of the account's sessions, sets the new bcrypt password hash, and marks the account email-verified — a completed email-delivered reset proves mailbox control. Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN. No auto-login — no session cookie is set; the page routes to login. Fully functional when the instance has no email configured (consuming an existing token sends nothing).\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1660,7 +1660,7 @@
     },
     "/api/auth/password-reset/request": {
       "post": {
-        "description": "Public. Rate limited by client IP (5 / 15 min, the register posture) AND by the normalized target email (3 / 1 h — REQ-3.8's per-target bound; case variants share one bucket). Responds the identical generic `200 { success: true }` whether or not the email matches an account and regardless of delivery outcome (REQ-3.2/3.3 — no account-existence or delivery-health oracle). When an account exists, a single-use reset token (60 min TTL, newest-wins over prior tokens) is issued and the reset email dispatched WITHOUT awaiting delivery (REQ-2.7). When the instance has no email configured the endpoint returns a stable `409 EMAIL_NOT_CONFIGURED` for every caller — instance-level, account-independent (REQ-1.2, D12).\n",
+        "description": "Public. Rate limited by client IP (5 / 15 min, the register posture) AND by the normalized target email (3 / 1 h — per-target bound; case variants share one bucket). Responds the identical generic `200 { success: true }` whether or not the email matches an account and regardless of delivery outcome (no account-existence or delivery-health oracle). When an account exists, a single-use reset token (60 min TTL, newest-wins over prior tokens) is issued and the reset email dispatched WITHOUT awaiting delivery. When the instance has no email configured the endpoint returns a stable `409 EMAIL_NOT_CONFIGURED` for every caller — instance-level, account-independent.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1778,7 +1778,7 @@
     },
     "/api/auth/verify-email": {
       "post": {
-        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture; token guessing is primarily throttled by the token's 256-bit entropy + 24 h TTL). Atomically consumes the single-use verification token and marks the account email-verified in one transaction. Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (REQ-5.3 — the frontend then offers the resend path). Consumption is THIS POST — fetching the emailed GET link never mutates, so prefetchers and link scanners burn nothing (D6, REQ-4.8). Fully functional when the instance has no email configured (D12 — consuming an existing token sends nothing).\n",
+        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture; token guessing is primarily throttled by the token's 256-bit entropy + 24 h TTL). Atomically consumes the single-use verification token and marks the account email-verified in one transaction. Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (the frontend then offers the resend path). Consumption is THIS POST — fetching the emailed GET link never mutates, so prefetchers and link scanners burn nothing. Fully functional when the instance has no email configured (consuming an existing token sends nothing).\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1819,7 +1819,7 @@
     },
     "/api/auth/verify-email/resend": {
       "post": {
-        "description": "Authenticated (session cookie) — only the account owner can trigger a resend, so account enumeration is impossible by construction (D11). Rate limited per authenticated userId (3 / 1 h — per-account equals per-target, REQ-3.8's bound). No request body. Issues a fresh single-use verification token (24 h TTL, newest-wins over prior tokens) and dispatches the verification email WITHOUT awaiting delivery (REQ-2.7). Already-verified accounts get 409 ALREADY_VERIFIED (an authed self-fact); an instance with no email configured gets 409 EMAIL_NOT_CONFIGURED — the two codes are distinct because the UI keys on code (SF-2, D12).\n",
+        "description": "Authenticated (session cookie) — only the account owner can trigger a resend, so account enumeration is impossible by construction. Rate limited per authenticated userId (3 / 1 h — per-account equals per-target, bound). No request body. Issues a fresh single-use verification token (24 h TTL, newest-wins over prior tokens) and dispatches the verification email WITHOUT awaiting delivery. Already-verified accounts get 409 ALREADY_VERIFIED (an authed self-fact); an instance with no email configured gets 409 EMAIL_NOT_CONFIGURED — the two codes are distinct because the UI keys on code.\n",
         "responses": {
           "200": {
             "description": "{ success: true } — verification email dispatched (delivery not awaited)."
@@ -1842,7 +1842,7 @@
     },
     "/api/billing/balance": {
       "get": {
-        "description": "User-scoped. Returns `{ balance, available }` as decimal credit strings (bigint micro-USD; `available = balance − reserved`). A user with no wallet row reads as zero (REQ-1.1).\n",
+        "description": "User-scoped. Returns `{ balance, available }` as decimal credit strings (bigint micro-USD; `available = balance − reserved`). A user with no wallet row reads as zero.\n",
         "responses": {
           "200": {
             "description": "{ balance, available } credit strings."
@@ -1856,7 +1856,7 @@
     },
     "/api/billing/checkout": {
       "post": {
-        "description": "Authed and per-user rate limited (10 / 60 s). Body `{ packId }` selects a server-authoritative `CREDIT_PACKS` pack — the price and credit grant come solely from config, never client input (REQ-2.2). Returns `{ url }`, the Stripe-hosted checkout page to redirect to. NO wallet write happens here — crediting is the webhook's job (REQ-2.6). When Stripe is unconfigured the endpoint returns a stable `402 BILLING_NOT_AVAILABLE` (REQ-2.5/10.2).\n",
+        "description": "Authed and per-user rate limited (10 / 60 s). Body `{ packId }` selects a server-authoritative `CREDIT_PACKS` pack — the price and credit grant come solely from config, never client input. Returns `{ url }`, the Stripe-hosted checkout page to redirect to. NO wallet write happens here — crediting is the webhook's job. When Stripe is unconfigured the endpoint returns a stable `402 BILLING_NOT_AVAILABLE`.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1898,7 +1898,7 @@
     },
     "/api/billing/config": {
       "get": {
-        "description": "Drives the billing settings tab and the no-BYOK model picker. Authed, unthrottled read (plan-tiers Component 6 — never behind the spend budget). `enabled` is `isStripeConfigured()`; `packs` is `CREDIT_PACKS`; `models` is the platform-priced provider/model set restricted to providers with a configured platform key (REQ-7.4) — the authoritative picker source, so the UI never offers an unpriced or unspendable model. Each provider's allowance model carries `allowance: true` ONLY when feature gating is enabled (REQ-8.9a/8.8 — self-host pickers must never advertise free monthly turns); `subscription.purchasable` is `isProSubscriptionConfigured()` (REQ-2.7). When `enabled` is false the frontend hides the purchase UI (graceful absence, REQ-10.2).\n",
+        "description": "Drives the billing settings tab and the no-BYOK model picker. Authed, unthrottled read, never behind the spend budget. `enabled` is `isStripeConfigured`; `packs` is `CREDIT_PACKS`; `models` is the platform-priced provider/model set restricted to providers with a configured platform key — the authoritative picker source, so the UI never offers an unpriced or unspendable model. Each provider's allowance model carries `allowance: true` ONLY when feature gating is enabled (self-host pickers must never advertise free monthly turns); `subscription.purchasable` is `isProSubscriptionConfigured`. When `enabled` is false the frontend hides the purchase UI (graceful absence).\n",
         "responses": {
           "200": {
             "description": "{ enabled, packs, models, subscription: { purchasable } }."
@@ -1912,7 +1912,7 @@
     },
     "/api/billing/subscription/checkout": {
       "post": {
-        "description": "Authed; shares the per-user 10 / 60 s spend budget with the credit-pack checkout and the portal endpoint (plan-tiers D8). No request body — the Price sold is server-configured (`STRIPE_PRO_PRICE_ID`, REQ-2.2). Refuses `402 BILLING_NOT_AVAILABLE` unless the Pro subscription is fully configured (REQ-2.7), and `409 SUBSCRIPTION_EXISTS` when the user already has a qualifying subscription — including `past_due` and canceled-pending-period-end (REQ-2.4). Returns `{ url }`, the Stripe-hosted checkout page. NO mirror write happens here — the mirror is the webhook's job (REQ-3.2); the success URL returns to the billing tab in its `?subscription=confirming` state (REQ-2.6).\n",
+        "description": "Authed; shares the per-user 10 / 60 s spend budget with the credit-pack checkout and the portal endpoint. No request body — the Price sold is server-configured (`STRIPE_PRO_PRICE_ID`). Refuses `402 BILLING_NOT_AVAILABLE` unless the Pro subscription is fully configured, and `409 SUBSCRIPTION_EXISTS` when the user already has a qualifying subscription — including `past_due` and canceled-pending-period-end. Returns `{ url }`, the Stripe-hosted checkout page. NO mirror write happens here — the mirror is the webhook's job; the success URL returns to the billing tab in its `?subscription=confirming` state.\n",
         "responses": {
           "200": {
             "description": "{ url } — the Stripe-hosted checkout URL."
@@ -1938,7 +1938,7 @@
     },
     "/api/billing/subscription/portal": {
       "post": {
-        "description": "Authed; shares the per-user 10 / 60 s spend budget (plan-tiers D15). Looks up the persisted billing-customer linkage FIRST — none ⇒ `404 NO_BILLING_CUSTOMER`; Stripe unconfigured ⇒ `402 BILLING_NOT_AVAILABLE`. Returns `{ url }`, the Stripe-hosted Billing Portal (cancel / payment method / invoices per the account's operator-set default portal configuration — REQ-4.1/4.2).\n",
+        "description": "Authed; shares the per-user 10 / 60 s spend budget. Looks up the persisted billing-customer linkage FIRST — none ⇒ `404 NO_BILLING_CUSTOMER`; Stripe unconfigured ⇒ `402 BILLING_NOT_AVAILABLE`. Returns `{ url }`, the Stripe-hosted Billing Portal (cancel / payment method / invoices per the account's operator-set default portal configuration —).\n",
         "responses": {
           "200": {
             "description": "{ url } — the Stripe-hosted Billing Portal URL."
@@ -1961,7 +1961,7 @@
     },
     "/api/billing/tier": {
       "get": {
-        "description": "Authed, DELIBERATELY UNTHROTTLED read (plan-tiers Component 6's pinned posture — the 2 s confirming poll alone is 30/min and the tier cache key is invalidated after every committed turn; sharing the spend budget would 429 the confirming banner and lock out legitimate checkout clicks). Returns the TierState shape: `gatingEnabled`, `exempt`, `tier`, `purchasable`, `subscription` (derived from the LOCAL mirror only via the qualifying-first display-row rule — renders with Stripe unconfigured, REQ-11.1; carried even when gating is off, the REQ-11.7 carve-out), `limits` (the free/pro lever catalog), and `usage` (populated only when gating is on and the user is non-exempt). Booleans and state only — no server credentials, no price ids.\n",
+        "description": "Authed, and DELIBERATELY UNTHROTTLED — the 2 s confirming poll alone is 30/min and the tier cache key is invalidated after every committed turn; sharing the spend budget would 429 the confirming banner and lock out legitimate checkout clicks). Returns the TierState shape: `gatingEnabled`, `exempt`, `tier`, `purchasable`, `subscription` (derived from the LOCAL mirror only via the qualifying-first display-row rule — renders with Stripe unconfigured, and carried even when gating is off), `limits` (the free/pro lever catalog), and `usage` (populated only when gating is on and the user is non-exempt). Booleans and state only — no server credentials, no price ids.\n",
         "responses": {
           "200": {
             "description": "TierState — see packages/shared/src/schemas/tier.ts."
@@ -1975,7 +1975,7 @@
     },
     "/api/billing/usage": {
       "get": {
-        "description": "User-scoped unified history (credits, debits, reversals) joined to per-turn token detail (REQ-7.3). `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. Response `{ items, nextCursor }`.\n",
+        "description": "User-scoped unified history (credits, debits, reversals) joined to per-turn token detail. `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. Response `{ items, nextCursor }`.\n",
         "parameters": [
           {
             "in": "query",
@@ -1998,7 +1998,7 @@
     },
     "/api/billing/webhook": {
       "post": {
-        "description": "PUBLIC endpoint (NO session auth — Stripe is the caller) and IP-rate limited. Reads the UNMODIFIED RAW request body and verifies the `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET` over the exact raw bytes (REQ-3.1) — an invalid or missing signature returns 400 and no wallet is touched. The verified event is dispatched to the idempotent settled-only handler; its outcome maps to 200 (credited / acked / duplicate / refused / reversed — terminal, Stripe stops retrying) or a retryable 5xx (transient verify-failure, no row written — Stripe redelivers). NOTE: this route MUST receive the raw body before any JSON parse; a global JSON body parser would silently break signatures.\n",
+        "description": "PUBLIC endpoint (NO session auth — Stripe is the caller) and IP-rate limited. Reads the UNMODIFIED RAW request body and verifies the `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET` over the exact raw bytes — an invalid or missing signature returns 400 and no wallet is touched. The verified event is dispatched to the idempotent settled-only handler; its outcome maps to 200 (credited / acked / duplicate / refused / reversed — terminal, Stripe stops retrying) or a retryable 5xx (transient verify-failure, no row written — Stripe redelivers). NOTE: this route MUST receive the raw body before any JSON parse; a global JSON body parser would silently break signatures.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2412,7 +2412,7 @@
     },
     "/api/changelog/viewed": {
       "post": {
-        "description": "Sets the viewer's `changelog_viewed_at` to now (single-statement write, no body). Returns `{ lastViewedAt }`, the new floor. This is the ONLY mutation in the feature — the badge's GET never clears the indicator (REQ-5(a)(3)).\n",
+        "description": "Sets the viewer's `changelog_viewed_at` to now (single-statement write, no body). Returns `{ lastViewedAt }`, the new floor. This is the ONLY mutation in the feature — the badge's GET never clears the indicator.\n",
         "responses": {
           "200": {
             "description": "{ lastViewedAt } — the new floor."
@@ -2429,7 +2429,7 @@
     },
     "/api/csv-import/commit": {
       "post": {
-        "description": "Second call of the preview→commit handshake. Consumes the single-use `token` minted by `/api/csv-import/preview` and atomically replays the staged positions/fills (firing the close-hook ledger entries inside one bulk transaction). Idempotent: re-committing an already-committed token returns the original summary, never a second import. A stale token (replaced by a newer preview), an expired token, a blocked preview, an in-flight commit, or unconfirmed near-total duplicates each return a specific 409 with a stable code; an unknown token returns 404. Set `confirmDuplicates: true` to import past a near-total-overlap (≥90%) duplicate block. Tier enforcement (plan-tiers, gated non-admin free users): the commit refuses 403 when the lifetime CSV-import allowance is exhausted, when the target account is not the writable designation while over the account cap, or when the batch would exceed the position cap (atomic whole-batch refusal — the message names the cap and the batch size). A tier refusal leaves the staged preview INTACT: the same token is re-committable after re-designation/upgrade, no re-upload. Only successful commits consume the lifetime allowance — previews, refusals, and failed commits never do.\n",
+        "description": "Second call of the preview→commit handshake. Consumes the single-use `token` minted by `/api/csv-import/preview` and atomically replays the staged positions/fills (firing the close-hook ledger entries inside one bulk transaction). Idempotent: re-committing an already-committed token returns the original summary, never a second import. A stale token (replaced by a newer preview), an expired token, a blocked preview, an in-flight commit, or unconfirmed near-total duplicates each return a specific 409 with a stable code; an unknown token returns 404. Set `confirmDuplicates: true` to import past a near-total-overlap (≥90%) duplicate block. Tier enforcement (gated non-admin free users): the commit refuses 403 when the lifetime CSV-import allowance is exhausted, when the target account is not the writable designation while over the account cap, or when the batch would exceed the position cap (atomic whole-batch refusal — the message names the cap and the batch size). A tier refusal leaves the staged preview INTACT: the same token is re-committable after re-designation/upgrade, no re-upload. Only successful commits consume the lifetime allowance — previews, refusals, and failed commits never do.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2455,7 +2455,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary (REQ-8.7)."
+            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary."
           },
           "400": {
             "description": "Malformed body (invalid token / confirmDuplicates)."
@@ -3400,7 +3400,7 @@
     },
     "/api/performance": {
       "get": {
-        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. When feature gating is enabled and the user is a non-admin Free user, the window is clamped to the last 6 calendar months (plan-tiers L3, REQ-7.1) — never an error: the response is computed over the clamped window and marked with the additive `tierWindow` field. History metadata (per-currency earliest/most-recent closed timestamps and totals) is never clamped.\n",
+        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. When feature gating is enabled and the user is a non-admin Free user, the window is clamped to the last 6 calendar months — never an error: the response is computed over the clamped window and marked with the additive `tierWindow` field. History metadata (per-currency earliest/most-recent closed timestamps and totals) is never clamped.\n",
         "parameters": [
           {
             "in": "query",
@@ -3480,7 +3480,7 @@
     },
     "/api/positions": {
       "post": {
-        "description": "Authed. Creates a draft position in one of the user's accounts. When feature gating is enabled and the user is a non-admin Free user, the create is refused with `403 TIER_LIMIT_POSITIONS` at the L2 position cap, or `403 TIER_ACCOUNT_NOT_WRITABLE` when over the L1 account cap and targeting an account other than the writable designation (plan-tiers REQ-6.1/6.6). Admins and gating-off deployments pass through unchanged. Existing-data management (close/fills/edit/delete) is never blocked (REQ-6.5).\n",
+        "description": "Authed. Creates a draft position in one of the user's accounts. When feature gating is enabled and the user is a non-admin Free user, the create is refused with `403 TIER_LIMIT_POSITIONS` at the position cap, or `403 TIER_ACCOUNT_NOT_WRITABLE` when over the account cap and targeting an account other than the writable designation. Admins and gating-off deployments pass through unchanged. Existing-data management (close/fills/edit/delete) is never blocked.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3940,7 +3940,7 @@
     },
     "/api/symbols/refresh": {
       "post": {
-        "description": "Admin-only manual refresh path (REQ-2.4(d)). Runs the guarded, multi-container-safe population with `force: true` and returns the SyncOutcome verbatim. Under NODE_ENV=test population is a no-op (`skipped-test-env`). A side-effecting POST (CSRF-protected); requires an admin session (authMiddleware → adminMiddleware).\n",
+        "description": "Admin-only manual refresh path. Runs the guarded, multi-container-safe population with `force: true` and returns the SyncOutcome verbatim. Under NODE_ENV=test population is a no-op (`skipped-test-env`). A side-effecting POST (CSRF-protected); requires an admin session (authMiddleware → adminMiddleware).\n",
         "responses": {
           "200": {
             "content": {
@@ -3990,7 +3990,7 @@
     },
     "/api/symbols/search": {
       "get": {
-        "description": "Returns up to 10 NYSE/NASDAQ symbols whose ticker starts with the query prefix `q`, ranked exact-match-first, then by ascending ticker length, then alphabetically. `q` is sanitized to `[A-Z.-]{0,16}` (trimmed, uppercased); a normalized-empty `q` returns `{ results: [] }` without a database prefix scan, and likewise before the reference table is first populated. Read-only and side-effect-free (CSRF-safe GET); never calls the quote provider (REQ-3.6). Requires an authenticated session.\n",
+        "description": "Returns up to 10 NYSE/NASDAQ symbols whose ticker starts with the query prefix `q`, ranked exact-match-first, then by ascending ticker length, then alphabetically. `q` is sanitized to `[A-Z.-]{0,16}` (trimmed, uppercased); a normalized-empty `q` returns `{ results: [] }` without a database prefix scan, and likewise before the reference table is first populated. Read-only and side-effect-free (CSRF-safe GET); never calls the quote provider. Requires an authenticated session.\n",
         "parameters": [
           {
             "in": "query",
@@ -4020,7 +4020,7 @@
     },
     "/api/symbols/{symbol}/quote": {
       "get": {
-        "description": "Returns the platform-global provider's ~15-minute-delayed last price for `symbol`. With no provider key configured the response is `{ configured: false }` (200) — defense-in-depth mirroring the frontend gate (REQ-4.2). With a key configured the response is `{ configured: true, symbol, lastPrice, change, delayed }`. Independent of the symbols table (REQ-4.6). Per-user rate limited to 30 lookups per 60 s. Provider failures surface as coded statuses — 404 unknown symbol, 503 temporarily unavailable / rate-limited, 502 misconfigured — never a generic 500 (REQ-4.3). Requires an authenticated session.\n",
+        "description": "Returns the platform-global provider's ~15-minute-delayed last price for `symbol`. With no provider key configured the response is `{ configured: false }` — defense-in-depth mirroring the frontend gate. With a key configured the response is `{ configured: true, symbol, lastPrice, change, delayed }`. Independent of the symbols table. Per-user rate limited to 30 lookups per 60 s. Provider failures surface as coded statuses — 404 unknown symbol, 503 temporarily unavailable / rate-limited, 502 misconfigured — never a generic 500. Requires an authenticated session.\n",
         "parameters": [
           {
             "in": "path",

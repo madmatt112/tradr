@@ -48,7 +48,7 @@ finishes, Tradr is on <http://localhost:8080> (override with `WEB_PORT`).
 This is the same script CI runs in its `docker-smoke` job, so these instructions are
 executed on every push rather than proofread. To do it by hand instead, or to run behind
 TLS, against your own Postgres, or on a different port, see the
-[self-hosting guide](https://www.tradr.cloud/docs/self-hosting/docker-compose/).
+[self-hosting guide](https://docs.tradr.cloud/self-hosting/docker-compose/).
 
 ## Status
 
@@ -108,11 +108,11 @@ rate limiting stays accurate.
 
 ## Documentation
 
-|                                                                           |                                                            |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [User guide](https://www.tradr.cloud/docs/user-guide/getting-started/)    | Using Tradr — first trade to performance review            |
-| [Self-hosting](https://www.tradr.cloud/docs/self-hosting/docker-compose/) | Install, upgrade, back up, run behind TLS                  |
-| [`docs/`](docs/)                                                          | Operator and maintainer references that live with the code |
+|                                                                       |                                                            |
+| --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [User guide](https://docs.tradr.cloud/user-guide/getting-started/)    | Using Tradr — first trade to performance review            |
+| [Self-hosting](https://docs.tradr.cloud/self-hosting/docker-compose/) | Install, upgrade, back up, run behind TLS                  |
+| [`docs/`](docs/)                                                      | Operator and maintainer references that live with the code |
 
 ## Contributing
 

@@ -59,11 +59,10 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *   post:
  *     summary: Create an account.
  *     description: >
- *       Authed. Creates a trading account for the current user. When feature
- *       gating is enabled and the user is a non-admin Free user at the L1
- *       account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS`
- *       (plan-tiers REQ-6.1) — admins and gating-off deployments pass through
- *       unchanged.
+ *       Authed. Creates a trading account for the current user. When feature gating is
+ *       enabled and the user is a non-admin Free user at the account cap, the create is
+ *       refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass
+ *       through unchanged.
  *     tags: [Accounts]
  *     requestBody:
  *       required: true
@@ -105,11 +104,11 @@ accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
  *   put:
  *     summary: Set the writable-account designation.
  *     description: >
- *       Authed, always-on. Stores which of the user's accounts stays writable
- *       for new trading data while over the Free-tier account cap. A plain
- *       stored preference — independent of gating/tier/over-cap state; it only
- *       takes effect when L1-writability enforcement consults the resolver.
- *       The account must belong to the current user (404 otherwise).
+ *       Authed, always-on. Stores which of the user's accounts stays writable for new
+ *       trading data while over the Free-tier account cap. A plain stored preference —
+ *       independent of gating/tier/over-cap state; it only takes effect when
+ *       the writable-account rule is enforced. The account must belong to the
+ *       current user (404 otherwise).
  *     tags: [Accounts]
  *     requestBody:
  *       required: true

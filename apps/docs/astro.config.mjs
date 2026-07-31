@@ -15,14 +15,21 @@ import sitemap from '@astrojs/sitemap';
 // it documents, so a doc change ships in the same PR as the change it describes
 // and one CI run gates both.
 //
-// Served at www.tradr.cloud/docs. `base` prefixes every route and every emitted
-// asset with /docs, so the site is self-contained under that one prefix and the
-// marketing site can front it.
+// Served at docs.tradr.cloud, on its own host.
 //
-// Note that `base` does NOT nest the build output — dist/ is flat, and the HTML
-// inside refers to /docs/…. Whatever fronts this project must therefore strip
-// the /docs prefix before serving from dist/. Serving dist/ at a path other than
-// /docs will 404 every asset.
+// It was going to live at www.tradr.cloud/docs behind an edge rewrite, to keep
+// the subpath. That does not work: a Cloudflare Pages custom domain takes
+// precedence over a Workers route on the same hostname, so a Worker on
+// www.tradr.cloud/docs* never sees the request. Measured, not assumed — a probe
+// Worker on the staging host was ignored while Pages kept serving. A Pages
+// Function on the marketing project could have done it, but that puts docs
+// routing back into the marketing deploy, which is most of what moving the docs
+// out was meant to undo.
+//
+// So: a separate host, and a 301 from the old /docs paths. The link equity given
+// up is near zero — the domain has no ranking history. Nothing here needs a
+// `base` now, which also removes a sharp edge: `base` prefixes emitted URLs but
+// leaves dist/ flat, so anything serving it at a different path 404s.
 const openAPISidebarGroup = createOpenAPISidebarGroup();
 
 const CONTENT_DIR = fileURLToPath(new URL('./src/content/docs', import.meta.url));
@@ -70,8 +77,7 @@ function collectUnwrittenSlugs(dir = CONTENT_DIR) {
 const UNWRITTEN = collectUnwrittenSlugs();
 
 export default defineConfig({
-  site: 'https://www.tradr.cloud',
-  base: '/docs',
+  site: 'https://docs.tradr.cloud',
   output: 'static',
   integrations: [
     starlight({
@@ -79,14 +85,17 @@ export default defineConfig({
       description:
         'Documentation for Tradr — the open-source trading journal with an AI advisor. User guide for the hosted app plus self-hosting and development guides.',
       pagefind: true,
+      // Excludes the generated API operation pages from the search index — see
+      // the file for why. The API overview page stays indexed.
+      routeMiddleware: './src/routeData.ts',
       // Every page gets an "Edit this page" link straight to its source. This is
       // only possible now that the docs live in the public product repo.
       editLink: {
         baseUrl: 'https://github.com/madmatt112/tradr/edit/main/apps/docs/',
       },
       head: [
-        { tag: 'link', attrs: { rel: 'icon', href: '/docs/favicon.ico', sizes: 'any' } },
-        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/docs/apple-touch-icon.png' } },
+        { tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: 'any' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
       ],
       plugins: [
         starlightLlmsTxt({ exclude: UNWRITTEN }),
@@ -192,8 +201,7 @@ export default defineConfig({
       // Keep unwritten pages out of the sitemap. Submitting ~20 near-identical
       // placeholder pages for indexing is a thin-content liability, and it is
       // what made 97 of the old site's 98 sitemap URLs placeholder docs pages.
-      filter: (page) =>
-        !UNWRITTEN.some((slug) => page === `https://www.tradr.cloud/docs/${slug}/`),
+      filter: (page) => !UNWRITTEN.some((slug) => page === `https://docs.tradr.cloud/${slug}/`),
     }),
   ],
 });
