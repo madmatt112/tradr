@@ -32,6 +32,9 @@ export interface SnapshotPosition {
    */
   closedAt: string | null;
   status: string;
+  /** Latched flat snapshot — see positions.schema.ts. Null if never flat. */
+  lastFlatAt: string | null;
+  lastFlatNetPnl: string | null;
   fills: SnapshotFill[];
 }
 
@@ -83,6 +86,7 @@ export async function fetchTimeframeSnapshot(
       -- come from fills.fees and are never re-applied at read time.
       SELECT DISTINCT
         p.id, p.side, p.asset_type, p.closed_at, p.status,
+        p.last_flat_at, p.last_flat_net_pnl,
         a.currency
       FROM positions p
       JOIN accounts a ON a.id = p.account_id AND a.user_id = p.user_id
@@ -90,10 +94,9 @@ export async function fetchTimeframeSnapshot(
         AND a.currency = ANY(${supported}::text[])
         AND (
           (
-            p.status = 'closed'
-            AND p.closed_at IS NOT NULL
-            AND p.closed_at >= ${startInstant.toISOString()}
-            AND p.closed_at <  ${endInstant.toISOString()}
+            COALESCE(p.last_flat_at, p.closed_at) IS NOT NULL
+            AND COALESCE(p.last_flat_at, p.closed_at) >= ${startInstant.toISOString()}
+            AND COALESCE(p.last_flat_at, p.closed_at) <  ${endInstant.toISOString()}
           )
           OR EXISTS (
             SELECT 1 FROM fills f
@@ -142,6 +145,7 @@ export async function fetchTimeframeSnapshot(
         SELECT jsonb_agg(jsonb_build_object(
           'id', c.id, 'side', c.side, 'assetType', c.asset_type,
           'currency', c.currency, 'closedAt', c.closed_at, 'status', c.status,
+          'lastFlatAt', c.last_flat_at, 'lastFlatNetPnl', c.last_flat_net_pnl::text,
           'fills', COALESCE(pf.fills, '[]'::jsonb)
         ))
         FROM closed c LEFT JOIN position_fills pf ON pf.position_id = c.id

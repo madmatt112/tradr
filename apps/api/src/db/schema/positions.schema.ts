@@ -32,6 +32,22 @@ export const positions = pgTable(
     stopLoss: numeric('stop_loss', { precision: 18, scale: 8 }),
     openedAt: timestamp('opened_at', { withTimezone: true }),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    // --- Latched flat-only snapshot (performance bucket A) ---
+    // Set every time the position goes flat, and NEVER cleared — not on reopen,
+    // not on re-close (it is overwritten with the newer flat value).
+    //
+    // `closedAt` is nulled on reopen, so without these a reopened position
+    // vanishes from the completed-trade statistics until it goes flat again.
+    // The rule is that such a metric keeps its LAST FLAT value in the meantime;
+    // recomputing from the current fills would give a different number, because
+    // the fills have changed since. Hence a frozen snapshot rather than a
+    // derivation.
+    //
+    // This is deliberately NOT a cached aggregate — the no-stored-balance
+    // invariant is about values that must track their inputs. This one must
+    // NOT track its inputs; being stale is the point.
+    lastFlatAt: timestamp('last_flat_at', { withTimezone: true }),
+    lastFlatNetPnl: numeric('last_flat_net_pnl', { precision: 18, scale: 4 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

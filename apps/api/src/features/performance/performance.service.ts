@@ -256,12 +256,27 @@ interface CurrencyRealization {
  * pre-fee figure, and `fees` is the sum actually recorded on the fills.
  */
 function classifyOne(position: SnapshotPosition): ClassifiedPosition | null {
-  // Bucket A (design: "requires flat"). A position that is not currently flat
-  // has no completed-trade outcome, so it contributes to NONE of the per-trade
-  // statistics — win rate, profit factor, avg/largest win/loss, breakeven rate,
-  // or the position counts. Its realized P&L still reaches bucket B via
-  // `computeRealizationEvents`.
-  if (position.status !== 'closed' || position.closedAt === null) return null;
+  // Bucket A (design: "requires flat"). Keyed on the LATCHED flat snapshot, not
+  // on live `closedAt`:
+  //
+  //  - Never flat  ⇒ no completed-trade outcome, contributes to none of the
+  //    per-trade statistics. Its realized P&L still reaches bucket B via
+  //    `computeRealizationEvents`.
+  //  - Flat now    ⇒ the latch was written at its close; same value as
+  //    recomputing, so the two agree.
+  //  - Reopened    ⇒ the latch survives, so the position keeps reporting the
+  //    result it had when it was last flat, until it goes flat again. Live
+  //    `closedAt` is null here, and recomputing from the current fills would
+  //    give a DIFFERENT number, which is exactly what must not happen.
+  // The latch is an ENHANCEMENT, not a hard dependency: fall back to live
+  // `closedAt` for any currently-flat position whose latch was never written
+  // (rows predating the migration, seeds, or any future path that bypasses
+  // closePositionTx). Only a position that is neither latched nor currently
+  // flat is excluded.
+  const flatAt =
+    position.lastFlatAt ??
+    (position.status === 'closed' && position.closedAt !== null ? position.closedAt : null);
+  if (flatAt === null) return null;
 
   const minorUnits = getCurrencyMinorUnits(position.currency);
   const side = position.side as 'long' | 'short';
@@ -270,13 +285,14 @@ function classifyOne(position: SnapshotPosition): ClassifiedPosition | null {
   const totals = aggregateFills(position.fills);
   const grossPnl = computeGrossPnl(totals, side, assetType, minorUnits);
 
-  const pnl = computePnlFromTotals(totals, side, assetType, minorUnits);
+  // The frozen value when present. Null only for positions closed before the
+  // latch migration, which backfilled `last_flat_at` but not the P&L — for a
+  // position that is still flat those two agree, so recomputing is exact.
   const netPnl =
-    pnl.realizedPnl === null
-      ? new Decimal(0)
-      : new Decimal(pnl.realizedPnl).toDecimalPlaces(minorUnits, Decimal.ROUND_HALF_UP);
+    position.lastFlatNetPnl !== null
+      ? new Decimal(position.lastFlatNetPnl).toDecimalPlaces(minorUnits, Decimal.ROUND_HALF_UP)
+      : new Decimal(computePnlFromTotals(totals, side, assetType, minorUnits).realizedPnl ?? 0);
 
-  // Recorded fees, derived so the breakdown still reconciles: gross − net.
   const fees = grossPnl.minus(netPnl);
 
   const classification = classifyPosition(netPnl, position.currency);
@@ -287,7 +303,7 @@ function classifyOne(position: SnapshotPosition): ClassifiedPosition | null {
     netPnl,
     grossPnl,
     fees,
-    closedAt: new Date(position.closedAt),
+    closedAt: new Date(flatAt),
     classification,
   };
 }

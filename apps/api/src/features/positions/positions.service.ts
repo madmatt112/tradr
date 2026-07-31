@@ -828,6 +828,32 @@ export async function closePositionTx(
   // requirements.md §Cross-spec Contracts). Any future change to that
   // type must be coordinated with this call site's boundary conversion
   // inside `buildCloseHookContext`.
+  // Latch the flat snapshot BEFORE the hooks run, so it is set whether or not
+  // the accounting module is registered. `netPnl` here is the same
+  // `computePnlFromTotals` figure every other surface uses.
+  const closedAtInstant = closedAt ? new Date(closedAt) : new Date();
+  const flatTotals = aggregateFills(
+    (await findFillsByPosition(tx, id)).map((f) => ({
+      type: f.type,
+      price: f.price,
+      quantity: f.quantity,
+      fees: f.fees,
+    })),
+  );
+  const flatAccountRows = await findAccountById(tx, result[0].accountId, userId);
+  if (flatAccountRows.length > 0) {
+    const flatPnl = computePnlFromTotals(
+      flatTotals,
+      result[0].side as 'long' | 'short',
+      result[0].assetType as 'stock' | 'option',
+      getCurrencyMinorUnits(flatAccountRows[0].currency),
+    );
+    await updatePosition(tx, id, userId, {
+      lastFlatAt: closedAtInstant,
+      lastFlatNetPnl: new Decimal(flatPnl.realizedPnl ?? 0).toFixed(4),
+    });
+  }
+
   if (closeHooks.size > 0) {
     const ctx = await buildCloseHookContext(tx, result[0], userId);
     // Snapshot the hook list before iterating: freezes the invocation
@@ -906,6 +932,10 @@ export async function reopenPositionTx(
   // Flip Closed→Open. openedAt is left untouched (AC4); the
   // `positions_closed_at_when_closed_chk` CHECK is satisfied since status=open
   // and closed_at=null move together.
+  //
+  // `lastFlatAt` / `lastFlatNetPnl` are deliberately NOT cleared: the
+  // completed-trade statistics keep reporting this position's last flat value
+  // until it goes flat again, at which point the close overwrites the snapshot.
   const result = await updatePosition(tx, id, userId, {
     status: 'open',
     closedAt: null,

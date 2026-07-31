@@ -126,12 +126,21 @@ describe('close-hook registry — lifecycle', () => {
 
 // ---------------------------------------------------------------------------
 // closePosition with NO hooks registered — the default state.
-// Per design.md §Testing Strategy: assert findAccountById /
-// findFillsByPosition are NOT called when no hooks are present.
+//
+// REVISED by the flat-latch change. The original contract was "no hooks ⇒ ZERO
+// extra reads", which existed so an instance without the accounting module paid
+// nothing for it. Closing now always writes the latched flat snapshot
+// (`last_flat_at` / `last_flat_net_pnl`), which the completed-trade statistics
+// depend on and which has nothing to do with accounting — so the fills and
+// account reads it needs are core close-flow cost, not hook cost.
+//
+// The guarantee that still holds, and is what this asserts: those reads happen
+// exactly ONCE whether or not hooks are registered. Registering the ledger hook
+// must not multiply them.
 // ---------------------------------------------------------------------------
 
 describe('closePosition — no hooks registered (default state)', () => {
-  it('does not call findAccountById or findFillsByPosition when registry is empty', async () => {
+  it('reads fills and account exactly once for the flat latch, with an empty registry', async () => {
     // Sanity: the registry must be empty at this point (bootstrap() not called).
     expect(listCloseHooks()).toEqual([]);
 
@@ -147,8 +156,10 @@ describe('closePosition — no hooks registered (default state)', () => {
     const closed = await closePosition(db, positionId, userId);
     expect(closed.status).toBe('closed');
 
-    expect(accountSpy).toHaveBeenCalledTimes(0);
-    expect(fillsSpy).toHaveBeenCalledTimes(0);
+    // Once each, for the latch — not zero (pre-latch), and not twice (which
+    // would mean the hook path re-read what the latch already fetched).
+    expect(accountSpy).toHaveBeenCalledTimes(1);
+    expect(fillsSpy).toHaveBeenCalledTimes(1);
 
     accountSpy.mockRestore();
     fillsSpy.mockRestore();

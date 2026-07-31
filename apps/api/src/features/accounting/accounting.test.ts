@@ -1624,3 +1624,128 @@ describe('performance bucket A/B split', () => {
     expect(d4.wins).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Flat-only values are LATCHED across a reopen (bucket A)
+// ---------------------------------------------------------------------------
+
+describe('reopen latches the last flat value', () => {
+  it('a reopened position keeps reporting its last flat result until flat again', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acctRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Latch Acct',
+      currency: 'USD',
+      startingBalance: '1000',
+    });
+    const account = await acctRes.json();
+
+    // Same-day fixture — reopen is guarded to the position's open day.
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dayStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    ).toISOString();
+    const dayEnd = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+    ).toISOString();
+    const query =
+      '/api/performance?' +
+      new URLSearchParams({
+        granularity: 'day',
+        start: dayStart,
+        end: dayEnd,
+        tz: 'UTC',
+        currency: 'USD',
+      }).toString();
+
+    const pos = await createPosition(cookie, account.id, { symbol: 'LATCH' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0',
+      filledAt: nowIso,
+    });
+    await openPosition(cookie, pos.id, nowIso);
+    // Close flat at +100 — a win.
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '10',
+      fees: '0',
+      filledAt: nowIso,
+    });
+
+    const whenFlat = await (await authedRequest('GET', query, cookie)).json();
+    const flatUsd = whenFlat.currencies.find((c: { code: string }) => c.code === 'USD');
+    expect(flatUsd.stats.totalPositions).toBe(1);
+    expect(flatUsd.stats.winRate).toBe(100);
+    expect(flatUsd.stats.largestWin).toBe('100');
+
+    // Reopen. `closedAt` is nulled, so without the latch this position would
+    // drop straight out of the completed-trade statistics.
+    const reopen = await authedRequest('POST', `/api/positions/${pos.id}/reopen`, cookie, {});
+    expect(reopen.status).toBe(200);
+    expect(
+      (await (await authedRequest('GET', `/api/positions/${pos.id}`, cookie)).json()).status,
+    ).toBe('open');
+
+    const whenReopened = await (await authedRequest('GET', query, cookie)).json();
+    const reopenedUsd = whenReopened.currencies.find((c: { code: string }) => c.code === 'USD');
+    // The latched value survives, unchanged.
+    expect(reopenedUsd.stats.totalPositions).toBe(1);
+    expect(reopenedUsd.stats.winRate).toBe(100);
+    expect(reopenedUsd.stats.largestWin).toBe('100');
+
+    // Bucket B still reports 100, and this is a KNOWN, deliberate divergence
+    // from the account balance during a reopened window.
+    //
+    // Performance derives realizations from FILLS, and reopening does not remove
+    // fills — the round trip genuinely happened, so 100 was genuinely realized.
+    // The ledger meanwhile reverses on reopen (Req 7), a bookkeeping device that
+    // stops the re-close from double-counting, so the BALANCE reads 0 until the
+    // position goes flat again.
+    //
+    // The two reconcile the moment it is flat again. The window is bounded: the
+    // reopen guard is same-trading-day, so this can only diverge while the user
+    // is mid-edit on the day of the trade. Documented rather than papered over —
+    // closing it means either sourcing bucket B from the ledger (which cannot
+    // decompose gross/fees, since the ledger stores net only) or making reopen
+    // not reverse.
+    expect(reopenedUsd.stats.totalNetPnl).toBe('100');
+
+    // Scale in, then go flat again at a different result. The latch is
+    // overwritten with the NEW flat value, not the old one.
+    //
+    // These fills must be stamped AFTER the reopen: the re-close guard
+    // (`reopenedWithoutNewFills`) compares the reversal's occurredAt against the
+    // newest filled_at, so fills sharing the pre-reopen instant read as "nothing
+    // has changed since the reopen" and the auto-close 409s.
+    const afterReopenIso = new Date().toISOString();
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '120',
+      quantity: '10',
+      fees: '0',
+      filledAt: afterReopenIso,
+    });
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '10',
+      fees: '0',
+      filledAt: afterReopenIso,
+    });
+
+    const detail = await (await authedRequest('GET', `/api/positions/${pos.id}`, cookie)).json();
+    expect(detail.status).toBe('closed');
+
+    const whenReclosed = await (await authedRequest('GET', query, cookie)).json();
+    const reclosedUsd = whenReclosed.currencies.find((c: { code: string }) => c.code === 'USD');
+    // Entry 20 @ avg 110, exit 20 @ 110 → flat, zero P&L. Now a breakeven, not
+    // the win it was latched at before.
+    expect(reclosedUsd.stats.totalPositions).toBe(1);
+    expect(reclosedUsd.stats.winRate).toBeNull();
+    expect(reclosedUsd.stats.breakevenRate).toBe(100);
+  });
+});
