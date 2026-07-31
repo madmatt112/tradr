@@ -1,0 +1,90 @@
+/* ============================================================================
+   Tradr — Starlight docs theme (Component 3)
+   Maps Starlight's `--sl-color-*` and font custom properties onto the SHARED
+   design tokens (tokens.css) so /docs matches the app and marketing site:
+   TERMINAL AMBER accent, dark-first surfaces, JetBrains Mono code — NOT
+   Starlight's stock purple. Starlight uses the same `data-theme='light'`
+   mechanism as tokens.css, so dark is `:root` (canonical) and light is the
+   `[data-theme='light']` override.
+
+   Load order (astro.config customCss): fonts.css → tokens.css → docs.css, so
+   the var(--*) references below resolve, and — because customCss is injected
+   AFTER Starlight's own styles — these overrides win at equal specificity.
+
+   Brand rule (design-system.md): amber is the sole accent; green/red are
+   RESERVED for gain/loss data. So the accent maps to amber and the "tip" aside
+   (our Self-hosted callout) is re-themed cool-blue rather than the stock green.
+   Focus rings use the dedicated cool-blue --focus token, never amber.
+   ============================================================================ */
+
+/* --- Fonts: body = Inter, code/mono = JetBrains Mono (self-hosted, fonts.css) --- */
+:root {
+  --sl-font: var(--font-sans);
+  --sl-font-mono: var(--font-mono);
+}
+
+/* --- Palette: DARK (canonical). Starlight derives bg/text/hairline from the
+       gray scale + accent trio + black/white below. --- */
+:root {
+  --sl-color-accent-low: oklch(0.32 0.06 78);
+  --sl-color-accent: var(--primary); /* terminal amber — links, active nav */
+  --sl-color-accent-high: oklch(0.88 0.11 82);
+
+  --sl-color-white: var(--fg); /* highest-contrast text (headings) */
+  --sl-color-gray-1: oklch(0.9 0 0);
+  --sl-color-gray-2: oklch(0.8 0 0); /* body text */
+  --sl-color-gray-3: var(--muted-fg);
+  --sl-color-gray-4: var(--border);
+  --sl-color-gray-5: var(--hairline);
+  --sl-color-gray-6: var(--card); /* nav + sidebar surface */
+  --sl-color-black: var(--bg); /* page background */
+
+  /* Inline code chips read better on the raised surface than on the hairline
+     gray Starlight would otherwise use. */
+  --sl-color-bg-inline-code: var(--secondary);
+}
+
+/* --- Palette: LIGHT parity (mirrors tokens.css [data-theme='light']). In light
+       mode Starlight treats --sl-color-white as the DARKEST text and
+       --sl-color-black as the page background. --- */
+:root[data-theme='light'] {
+  --sl-color-accent-low: oklch(0.92 0.05 82);
+  --sl-color-accent: oklch(0.52 0.13 66); /* darker amber → AA link contrast on white */
+  --sl-color-accent-high: oklch(0.34 0.09 60);
+
+  --sl-color-white: var(--fg);
+  --sl-color-gray-1: oklch(0.26 0 0);
+  --sl-color-gray-2: oklch(0.34 0 0);
+  --sl-color-gray-3: var(--muted-fg);
+  --sl-color-gray-4: var(--border);
+  --sl-color-gray-5: var(--hairline);
+  --sl-color-gray-6: var(--secondary);
+  --sl-color-black: var(--bg);
+
+  --sl-color-bg-inline-code: var(--secondary);
+}
+
+/* --- Focus indicator: cool-blue --focus, never amber (matches global.css) --- */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* --- CLAUDE.md convention: button-like elements get a pointer cursor. Starlight's
+       docs chrome (search, theme select, sidebar/mobile-menu toggles) is native
+       <button>s, which default to the arrow cursor. --- */
+button,
+[role='button'],
+summary {
+  cursor: pointer;
+}
+
+/* --- Aside convention re-theme (see components/*.astro):
+       - `note`  = "Hosted only"  → keeps the amber accent (default note color).
+       - `tip`   = "Self-hosted"  → re-themed cool-blue so the reserved green is
+         not used for chrome. Green/red stay for P&L data only. --- */
+.starlight-aside--tip {
+  --sl-color-asides-text-accent: var(--info);
+  --sl-color-asides-border: var(--info);
+  background-color: color-mix(in oklch, var(--info) 12%, var(--bg));
+}

@@ -273,7 +273,7 @@ advisorRouter.get('/conversations', listConversationsHandler);
  *       200: { description: Conversation with its newest message page. }
  *       404: { description: Conversation not found (or not owned). }
  *   patch:
- *     summary: Rename a conversation (REQ-2.5).
+ *     summary: Rename a conversation.
  *     description: >
  *       Updates the conversation `title` (1–200 chars; whitespace-only
  *       rejected) and bumps `updatedAt`. 404 if the conversation does not
@@ -597,7 +597,7 @@ advisorRouter.get('/provider-keys', listProviderKeysHandler);
  *       400: { description: Validation error. }
  *       404: { description: No key configured for this provider. }
  *   delete:
- *     summary: Remove the BYOK key for a provider (REQ-5.6).
+ *     summary: Remove the BYOK key for a provider.
  *     description: >
  *       Hard-deletes the stored key for the authenticated user. The ciphertext
  *       is gone from the database; the plaintext was never persisted.
@@ -666,7 +666,7 @@ const perUserMarketDataKeySaveRateLimit = createRateLimiter({
  *       400: { description: 'Validation error or MARKET_DATA_KEY_INVALID (key rejected by Unusual Whales).' }
  *       429: { description: Save rate limit reached (10 / hour). }
  *   delete:
- *     summary: Remove the Unusual Whales market-data key (REQ-6.2).
+ *     summary: Remove the Unusual Whales market-data key.
  *     description: >
  *       Hard-deletes the stored key for the authenticated user. The ciphertext is
  *       gone from the database; the plaintext was never persisted.
@@ -725,7 +725,7 @@ advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
  * @swagger
  * /api/advisor/options-chain:
  *   get:
- *     summary: Get the live options chain for a symbol from Unusual Whales (REQ-12.4).
+ *     summary: Get the live options chain for a symbol from Unusual Whales.
  *     description: >
  *       Backs the options-tools page chain viewer. Shares the Unusual Whales
  *       client and the `market_data_options_chain` tool's parsing (REQ-12.4 —

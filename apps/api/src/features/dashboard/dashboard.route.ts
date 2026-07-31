@@ -20,6 +20,36 @@ type AuthEnv = {
   };
 };
 
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     WidgetPlacement:
+ *       type: object
+ *       description: >
+ *         One widget on the dashboard grid. The grid is 12 columns wide and
+ *         rows are a fixed height, so `x`/`w` are columns and `y`/`h` are rows.
+ *       required: [id, type, x, y, w, h]
+ *       properties:
+ *         id: { type: string, format: uuid }
+ *         type:
+ *           type: string
+ *           enum:
+ *             [
+ *               stats-summary,
+ *               open-positions,
+ *               performance-chart,
+ *               account-balances,
+ *               position-sizing,
+ *               equity-curve,
+ *             ]
+ *         x: { type: integer, minimum: 0, maximum: 11 }
+ *         y: { type: integer, minimum: 0 }
+ *         w: { type: integer, minimum: 1, maximum: 12, description: 'x + w must not exceed 12.' }
+ *         h: { type: integer, minimum: 1, maximum: 24 }
+ *         config:
+ *           description: Optional per-widget settings. Serialises to at most 2048 bytes.
+ */
 const app = new Hono<AuthEnv>();
 
 app.use(authMiddleware);
@@ -28,6 +58,31 @@ export function buildThemeCookie(value: Theme): string {
   return `tradr_theme=${value}; ${themeCookieAttributes()}`;
 }
 
+/**
+ * @swagger
+ * /api/dashboard/layout:
+ *   get:
+ *     summary: Get the dashboard layout.
+ *     description: >
+ *       Authed. Returns the user's widget placements on a 12-column grid, their
+ *       theme, and when the layout was last saved. A user who has never
+ *       customised the dashboard gets the default layout, not an empty one.
+ *     tags: [Dashboard]
+ *     responses:
+ *       200:
+ *         description: The layout.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 widgets:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/WidgetPlacement' }
+ *                 theme: { type: string, enum: [light, dark, system] }
+ *                 updatedAt: { type: string, nullable: true }
+ *       401: { description: No valid session. }
+ */
 app.get('/layout', async (c) => {
   const userId = c.get('userId');
   const response = await getLayoutForUser(userId);
@@ -67,6 +122,36 @@ const consumeBodyOrEmit413 = createMiddleware(async (c, next) => {
   await next();
 });
 
+/**
+ * @swagger
+ * /api/dashboard/layout:
+ *   put:
+ *     summary: Save the dashboard layout, the theme, or both.
+ *     description: >
+ *       Authed. Send `widgets`, `theme`, or both — a body with neither is a
+ *       400. `widgets` replaces the whole layout; it is not a patch. Placements
+ *       are validated as a set: at most one widget of each type, no two
+ *       overlapping, none extending past the 12-column grid, and none below its
+ *       type's minimum size. When `theme` is sent the response also sets the
+ *       `tradr_theme` cookie so the next page load paints without a flash.
+ *     tags: [Dashboard]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               widgets:
+ *                 type: array
+ *                 maxItems: 6
+ *                 items: { $ref: '#/components/schemas/WidgetPlacement' }
+ *               theme: { type: string, enum: [light, dark, system] }
+ *     responses:
+ *       200: { description: The saved layout. }
+ *       400: { description: Validation error, or a body containing neither widgets nor theme. }
+ *       413: { description: PAYLOAD_TOO_LARGE — the request body exceeds the limit. }
+ */
 app.put(
   '/layout',
   bodyLimit({
@@ -86,6 +171,23 @@ app.put(
   },
 );
 
+/**
+ * @swagger
+ * /api/dashboard/theme:
+ *   get:
+ *     summary: Get the stored theme preference.
+ *     description: 'Authed. Answered with `Cache-Control: no-store`.'
+ *     tags: [Dashboard]
+ *     responses:
+ *       200:
+ *         description: The theme.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 theme: { type: string, enum: [light, dark, system] }
+ */
 app.get('/theme', async (c) => {
   const userId = c.get('userId');
   const theme = await getThemeForUser(userId);
@@ -93,6 +195,21 @@ app.get('/theme', async (c) => {
   return c.json({ theme }, 200);
 });
 
+/**
+ * @swagger
+ * /api/dashboard/theme-cookie:
+ *   post:
+ *     summary: Re-issue the theme cookie.
+ *     description: >
+ *       Authed. Sets `tradr_theme` from the stored preference without changing
+ *       it. Used to restore the cookie on a new device or after it is cleared,
+ *       so the first paint matches the saved theme. The request body must be
+ *       empty.
+ *     tags: [Dashboard]
+ *     responses:
+ *       204: { description: The cookie is set. }
+ *       400: { description: The request body was not empty. }
+ */
 app.post('/theme-cookie', async (c) => {
   const userId = c.get('userId');
   const raw = await c.req.text();

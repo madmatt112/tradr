@@ -9,6 +9,9 @@ The polished, task-oriented documentation is on the docs site:
 Start there if you want to _use_ or _install_ Tradr. Start here if you want to know
 how something works, or what it promises.
 
+That site is built from [`apps/docs`](../apps/docs) in this repository, so a doc fix
+is an ordinary pull request. Run it locally with `pnpm --filter @tradr/docs dev`.
+
 ## For operators
 
 | Document                                           | Answers                                                                                                                                                          |

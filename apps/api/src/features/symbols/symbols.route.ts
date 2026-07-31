@@ -48,7 +48,7 @@ const perUserQuoteRateLimit = createRateLimiter({
  * @swagger
  * /api/symbols/search:
  *   get:
- *     summary: Ranked ticker-prefix symbol autocomplete (REQ-3.2).
+ *     summary: Ranked ticker-prefix symbol autocomplete.
  *     description: >
  *       Returns up to 10 NYSE/NASDAQ symbols whose ticker starts with the query
  *       prefix `q`, ranked exact-match-first, then by ascending ticker length,
@@ -74,7 +74,7 @@ symbolsRouter.get('/search', searchSymbolsHandler);
  * @swagger
  * /api/symbols/{symbol}/quote:
  *   get:
- *     summary: Delayed spot last-price for a symbol (REQ-4.2/4.6).
+ *     summary: Delayed spot last-price for a symbol.
  *     description: >
  *       Returns the platform-global provider's ~15-minute-delayed last price for
  *       `symbol`. With no provider key configured the response is
@@ -107,7 +107,7 @@ symbolsRouter.get('/:symbol/quote', perUserQuoteRateLimit, getQuoteHandler);
  * @swagger
  * /api/symbols/quote-config:
  *   get:
- *     summary: Whether the delayed-quote provider is configured (REQ-9.5).
+ *     summary: Whether the delayed-quote provider is configured.
  *     description: >
  *       Returns `{ stockQuoteConfigured: boolean }` so the frontend can gate the
  *       pull-last-price affordance without probing the quote endpoint. Gates

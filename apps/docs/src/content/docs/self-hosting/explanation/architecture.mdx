@@ -1,0 +1,71 @@
+---
+title: Architecture overview
+description: React SPA + Hono API + PostgreSQL — static frontend, stateless API, all state in Postgres, forward-only auto-migrations, and a single published port.
+---
+
+Tradr is deliberately small: a static React SPA, a stateless Hono API, and one
+PostgreSQL database. There is no Redis, queue, or background worker in the default
+self-hosted stack — the three containers in [Self-host with Docker
+Compose](/docs/self-hosting/docker-compose/) are the whole system.
+
+## The three containers
+
+- **`web`** — Nginx serving the built static SPA and reverse-proxying `/api` to
+  the api service. It is the only container that publishes a host port
+  (`${WEB_PORT:-8080}` → container `:80`).
+- **`api`** — a Node.js Hono server. It is **stateless**: all persistent state
+  lives in Postgres, so the api can be restarted or scaled without data loss.
+- **`postgres`** — PostgreSQL 16 with a persistent named volume (`pgdata`).
+
+`api` and `postgres` are not published — they are reachable only inside the
+compose bridge network, keeping the database and API off the public internet by
+default.
+
+## Startup and migrations
+
+On boot the api runs its migrations **automatically** inside `bootstrap()` before
+it serves traffic, serialised by a PostgreSQL session-level advisory lock
+(`apps/api/src/db/migrate.ts`). Migrations are **forward-only** — there is no
+down/rollback — which is why the upgrade policy is *back up before every upgrade*.
+
+## The HTTP surface
+
+Every endpoint is mounted under `/api` and documented in the generated **API
+reference** (in the sidebar under *Run it yourself*), which is produced from the
+API source so it always matches what the app serves.
+
+## Repository layout
+
+The source is one pnpm workspace. `pnpm-workspace.yaml` declares the members:
+
+| Path | What it is |
+| --- | --- |
+| `apps/api` | The Hono API and the `tradr` CLI |
+| `apps/web` | The React SPA |
+| `apps/docs` | This documentation site (Astro + Starlight) |
+| `packages/shared` | Zod schemas, constants, and pure calculation code used by both apps |
+| `e2e` | The Playwright suite that drives a real web + api stack |
+| `bench` | Performance benchmarks |
+| `docker` | The container build context and entrypoints |
+
+Both apps are organised as **vertical feature slices** — everything for one
+feature lives in one directory (`apps/api/src/features/positions/`,
+`apps/web/src/features/positions/`) rather than being split across
+layer-per-directory trees.
+
+Inside an API slice, the file suffix states the layer:
+
+- `*.route.ts` — HTTP handlers, request/response validation, and the `@swagger`
+  block that generates that endpoint's entry in the API reference.
+- `*.service.ts` — business logic. This is where rules live.
+- `*.query.ts` — thin Drizzle query functions. Data access only, no rules.
+- `*.test.ts` — tests, next to the code they test.
+
+Anything both apps must agree on — a validation schema, a fee table, an options
+maths helper — lives in `packages/shared` so there is one definition rather than
+two that drift.
+
+:::note
+This page is not finished. The data flow, the auth model, and the advisor
+pipeline are still to be written.
+:::

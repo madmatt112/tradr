@@ -1,0 +1,4212 @@
+{
+  "components": {
+    "schemas": {
+      "Expense": {
+        "description": "A cost of trading that is not a per-fill commission.",
+        "properties": {
+          "amount": {
+            "at most 4 fractional digits.": null,
+            "description": "Positive decimal",
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "data_subscription",
+              "platform_fee",
+              "software",
+              "education",
+              "hardware",
+              "other"
+            ],
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "notes": {
+            "nullable": true,
+            "type": "string"
+          },
+          "occurredAt": {
+            "format": "date",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "userId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "WidgetPlacement": {
+        "description": "One widget on the dashboard grid. The grid is 12 columns wide and rows are a fixed height, so `x`/`w` are columns and `y`/`h` are rows.\n",
+        "properties": {
+          "config": {
+            "description": "Optional per-widget settings. Serialises to at most 2048 bytes."
+          },
+          "h": {
+            "maximum": 24,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "stats-summary",
+              "open-positions",
+              "performance-chart",
+              "account-balances",
+              "position-sizing",
+              "equity-curve"
+            ],
+            "type": "string"
+          },
+          "w": {
+            "description": "x + w must not exceed 12.",
+            "maximum": 12,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "x": {
+            "maximum": 11,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "y": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "HTTP API for Tradr — the open-source trading journal with an AI advisor.\n\nThis reference is generated from the `@swagger` JSDoc blocks that live next to each route in the API source, so it always matches the endpoints the app actually serves. All routes are mounted under `/api`. The same API backs both the hosted app (`api.tradr.cloud`) and a self-hosted instance (reached through the web container at `/api`). Most endpoints require an authenticated session cookie.",
+    "title": "Tradr API",
+    "version": "0.5.3"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/accounts": {
+      "post": {
+        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the L1 account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` (plan-tiers REQ-6.1) — admins and gating-off deployments pass through unchanged.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "brokerageId": {
+                    "format": "uuid",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "currency": {
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "startingBalance": {
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "description": "IANA zone name (canonical spelling, e.g. `America/New_York`, `Etc/UTC`). Defines the account's trading day. Omitted defaults to `America/New_York`; an unknown zone is a 400.\n",
+                    "example": "America/New_York",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "currency"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created account."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "403": {
+            "description": "TIER_LIMIT_ACCOUNTS (account cap reached on the current plan) or FORBIDDEN (cross-user brokerage)."
+          },
+          "409": {
+            "description": "Duplicate account name."
+          }
+        },
+        "summary": "Create an account.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
+    "/api/accounts/writable": {
+      "put": {
+        "description": "Authed, always-on. Stores which of the user's accounts stays writable for new trading data while over the Free-tier account cap. A plain stored preference — independent of gating/tier/over-cap state; it only takes effect when L1-writability enforcement consults the resolver. The account must belong to the current user (404 otherwise).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "accountId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ writableAccountId } — the stored designation."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "404": {
+            "description": "Account not found (or not owned by the user)."
+          }
+        },
+        "summary": "Set the writable-account designation.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
+    "/api/accounts/{id}": {
+      "put": {
+        "description": "Authed. All fields optional. `startingBalance` is deliberately absent — it is creation-only. `timezone` IS editable: it changes only subsequent trading-day evaluations and rewrites no history.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "brokerageId": {
+                    "format": "uuid",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "currency": {
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "name": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "description": "IANA zone name (canonical spelling). Unknown zone is a 400.",
+                    "example": "America/New_York",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated account."
+          },
+          "400": {
+            "description": "Validation error (includes an unknown IANA timezone)."
+          },
+          "403": {
+            "description": "FORBIDDEN (cross-user brokerage)."
+          },
+          "404": {
+            "description": "Account not found."
+          },
+          "409": {
+            "description": "Duplicate account name",
+            "or currency change while positions exist.": null
+          }
+        },
+        "summary": "Update an account.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
+    "/api/admin/stats": {
+      "get": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED` for non-admins) and per-user rate limited (60 / 60 s). Returns total users, \"Active now\" users (still-valid sessions in the last 30 min — `activeUsersWindowMinutes` is serialized for honest labeling), positions by status, and revenue as micro-USD integer strings: `allTime` and the reversal-attributed UTC `currentMonth`, with the pinned `basis: 'purchased-credit-volume'`. An empty instance returns well-formed zeros, never errors (REQ-2.7).\n",
+        "responses": {
+          "200": {
+            "activeUsers": null,
+            "description": "AdminStats — totals",
+            "positions": null,
+            "revenue.": null
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "Platform statistics (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/usage": {
+      "get": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). `from`/`to` are optional ISO 8601 datetimes; the default window is the trailing 30 days ending now. `from > to` and ranges over 366 days are a 400 `VALIDATION_ERROR`. Returns `period`, `totals` (token/credit integer strings; `providerCost` is null when zero covered rows — pre-0013 rows have no recorded raw cost, see `providerCostCoverage`), the UTC-day `series`, `topUsers` (max 50 by billed credits), and the reversal-attributed `revenue { credited, reversed, net }`. Empty/future ranges return well-formed zeros (REQ-4.6).\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AdminUsage — period",
+            "revenue.": null,
+            "series": null,
+            "topUsers": null,
+            "totals": null
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — malformed datetimes",
+            "from > to": null,
+            "or range > 366 days.": null
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "Platform usage and revenue over a period (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/users": {
+      "get": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over `(created_at, id)` descending — new signups on page one. `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. `limit` defaults to 25, clamped to [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items, nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable, may be arbitrarily old); `emailVerified` is the stored verified flag — a read-only signal, nothing is gated on it in v1. No secret fields are returned (REQ-3.6).\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ items: AdminUserListItem[], nextCursor: string | null }."
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — malformed limit."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "List users, cursor-paginated newest-first (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/users/{id}": {
+      "get": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Returns the list fields plus `positionCount`, `advisorTurns` (platform-key advisor turns, current UTC month), all-time `usage` token/credit sums, and `walletBalance` ('0' when no wallet row) — all bigint sums as integer strings. A non-UUID id is a 400 `VALIDATION_ERROR`; an unknown id is a 404 `NOT_FOUND`.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AdminUserDetail."
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — id is not a UUID."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "404": {
+            "description": "NOT_FOUND — no such user."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "Per-user admin detail (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/users/{id}/admin": {
+      "patch": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). The admin surface's single write — PATCH (never GET) per the SameSite=Lax CSRF posture (REQ-3.3). Body `{ isAdmin }`. Race-safe inside one transaction with a same-tx audit row: demoting the last remaining admin is refused with a 409 `LAST_ADMIN` (\"Cannot remove the last admin\"), so the instance can never reach zero admins through the API. Self-demotion is permitted when not the last admin. Toggling to the current value is a 200 no-op (no update, no audit row). Returns the target's `{ id, email, isAdmin, createdAt }`.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "isAdmin": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "isAdmin"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ id, email, isAdmin, createdAt } — the post-toggle target."
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — id is not a UUID or body is malformed."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "404": {
+            "description": "NOT_FOUND — no such user."
+          },
+          "409": {
+            "description": "LAST_ADMIN — cannot remove the last admin."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "Toggle a user's admin flag (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/advisor/conversations": {
+      "get": {
+        "description": "Returns conversations sorted by `updatedAt` descending with cursor-based pagination. Default limit 25, max 100. Response: `{ items: ConversationListItem[], nextCursor: string | null }`.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated conversation list."
+          },
+          "400": {
+            "description": "Malformed cursor or limit."
+          }
+        },
+        "summary": "List the authenticated user's conversations (cursor-paginated).",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/conversations/new/messages/stream": {
+      "post": {
+        "description": "New-conversation variant of the streaming endpoint. The provider and model are seeded from the caller's stored provider key. Same SSE frame shapes and rate limit (30 / 60 s) as the existing-conversation endpoint.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "attachments": {
+                    "items": {
+                      "properties": {
+                        "dataBase64": {
+                          "maxLength": 4500000,
+                          "type": "string"
+                        },
+                        "format": {
+                          "enum": [
+                            "png",
+                            "jpeg",
+                            "webp"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "image"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  },
+                  "clientMessageId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "personaId": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "maxLength": 50000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "clientMessageId",
+                  "text"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-Sent Event stream."
+          },
+          "400": {
+            "description": "Validation / image / cap error envelope (IMAGE_TOO_LARGE above the per-image byte cap)."
+          },
+          "402": {
+            "description": "Platform billing refusal — INSUFFICIENT_CREDITS / ALLOWANCE_EXHAUSTED (allowance model + allowance and credits exhausted) / INSUFFICIENT_CREDITS_ALLOWANCE_AVAILABLE (non-allowance model + free allowance turns remain) / MODEL_NOT_AVAILABLE / BILLING_NOT_AVAILABLE."
+          },
+          "403": {
+            "description": "Monthly advisor image quota exceeded for the user's tier (TIER_LIMIT_IMAGES) — text-only turns unaffected."
+          },
+          "413": {
+            "description": "Request body exceeds the byte-cap floor (PAYLOAD_TOO_LARGE)."
+          },
+          "429": {
+            "description": "Stream in progress or rate limit."
+          },
+          "500": {
+            "description": "Provider-key decryption failure."
+          }
+        },
+        "summary": "Start a new conversation and stream the assistant reply (SSE).",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/conversations/{conversationId}/messages/{messageId}/images/{index}": {
+      "get": {
+        "description": "Streams the bytes of the image content-part at `index` on a message the authenticated user owns. Object access is proxy-through-API (D1) — there are NO presigned URLs and the object-storage key is resolved server-side, never appearing in the URL or any response (no IDOR leak — REQ-2.4). Side-effect-free. A missing/not-owned conversation or message, an out-of-range or non-image index, an `unrecoverable` marker, and a genuinely-absent object all return the identical 404 (no existence oracle). A pointer image is fetched from object storage and returned with its stored `Content-Type`; an inline image is decoded from base64. Both carry `Cache-Control: private, max-age=300`. A transient object-store outage returns 503 (OBJECT_UNREACHABLE).\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "messageId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "index",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The image bytes."
+          },
+          "404": {
+            "description": "Not found",
+            "non-image": null,
+            "not owned": null,
+            "or object gone.": null,
+            "out of range": null,
+            "unrecoverable": null
+          },
+          "503": {
+            "description": "Object storage temporarily unreachable (OBJECT_UNREACHABLE)."
+          }
+        },
+        "summary": "Proxy an advisor message image by index (ownership-scoped).",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/conversations/{id}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "Conversation not found (or not owned)."
+          }
+        },
+        "summary": "Delete a conversation (cascades to its messages).",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "get": {
+        "description": "Returns `{ conversation, messages, nextCursor }`. 404 if the conversation does not exist OR is owned by another user (identical envelope — no information leak).\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation with its newest message page."
+          },
+          "404": {
+            "description": "Conversation not found (or not owned)."
+          }
+        },
+        "summary": "Get a conversation plus its latest 50 messages.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "patch": {
+        "description": "Updates the conversation `title` (1–200 chars; whitespace-only rejected) and bumps `updatedAt`. 404 if the conversation does not exist OR is owned by another user (identical envelope — no leak).\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "title": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated conversation."
+          },
+          "400": {
+            "description": "Invalid title."
+          },
+          "404": {
+            "description": "Conversation not found (or not owned)."
+          }
+        },
+        "summary": "Rename a conversation.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/conversations/{id}/messages": {
+      "get": {
+        "description": "Cursor encodes the `(created_at, id)` tuple of the last-seen message. Default limit 50, max 100. 404 if the conversation is not owned.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated message page."
+          },
+          "404": {
+            "description": "Conversation not found (or not owned)."
+          }
+        },
+        "summary": "List a conversation's messages (newest-first, cursor-paginated).",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/conversations/{id}/messages/stream": {
+      "post": {
+        "description": "Sends a user message to an existing conversation and streams the assistant reply as Server-Sent Events. Frames: `event: token` (`{delta}`), `event: usage` (`{promptTokens, completionTokens}`), `event: done` (`{messageId, deduped?, source?}`), `event: error` (`{code, upstreamStatus, message}`). Pre-stream failures return a JSON error envelope (no SSE) with the appropriate HTTP status. Rate limited to 30 requests per 60 s.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "attachments": {
+                    "items": {
+                      "properties": {
+                        "dataBase64": {
+                          "maxLength": 4500000,
+                          "type": "string"
+                        },
+                        "format": {
+                          "enum": [
+                            "png",
+                            "jpeg",
+                            "webp"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": [
+                            "image"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "maxItems": 4,
+                    "type": "array"
+                  },
+                  "clientMessageId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "personaId": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "maxLength": 50000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "clientMessageId",
+                  "text"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-Sent Event stream."
+          },
+          "400": {
+            "description": "Validation / image / cap error envelope (IMAGE_TOO_LARGE above the per-image byte cap)."
+          },
+          "402": {
+            "description": "Platform billing refusal — INSUFFICIENT_CREDITS / ALLOWANCE_EXHAUSTED (allowance model + allowance and credits exhausted) / INSUFFICIENT_CREDITS_ALLOWANCE_AVAILABLE (non-allowance model + free allowance turns remain) / MODEL_NOT_AVAILABLE / BILLING_NOT_AVAILABLE."
+          },
+          "403": {
+            "description": "Monthly advisor image quota exceeded for the user's tier (TIER_LIMIT_IMAGES) — text-only turns unaffected."
+          },
+          "404": {
+            "description": "Conversation not found (or not owned)."
+          },
+          "413": {
+            "description": "Request body exceeds the byte-cap floor (PAYLOAD_TOO_LARGE)."
+          },
+          "429": {
+            "description": "Stream in progress",
+            "or rate limit.": null,
+            "retry-while-in-flight": null
+          },
+          "500": {
+            "description": "Provider-key decryption failure."
+          }
+        },
+        "summary": "Stream an assistant reply for an existing conversation (SSE).",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/market-data-key": {
+      "delete": {
+        "description": "Hard-deletes the stored key for the authenticated user. The ciphertext is gone from the database; the plaintext was never persisted.\n",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No market-data key configured."
+          }
+        },
+        "summary": "Remove the Unusual Whales market-data key.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "get": {
+        "description": "Returns the market-data (Unusual Whales) BYOK key status. The plaintext is NEVER returned (REQ-6.2/6.6) — only `configured`, a last-4-char masking hint (`keyHintTail`), and the `verified` flag. When no key is stored the response is `{ configured: false }`.\n",
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, keyHintTail, verified } — no key material."
+          }
+        },
+        "summary": "Get the masked status of the authenticated user's Unusual Whales key.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "put": {
+        "description": "Encrypts the supplied key at rest (AES-256-GCM, REQ-6.6) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned. Runs a lightweight verification probe (REQ-6.3): a 401/403 rejects the save with `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a transient failure (timeout / upstream unavailable) stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "apiKey": {
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiKey"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ configured: true, keyHintTail, verified: boolean }."
+          },
+          "400": {
+            "description": "Validation error or MARKET_DATA_KEY_INVALID (key rejected by Unusual Whales)."
+          },
+          "429": {
+            "description": "Save rate limit reached (10 / hour)."
+          }
+        },
+        "summary": "Save (or replace) the Unusual Whales market-data key.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/models": {
+      "get": {
+        "description": "Returns the cached `ProviderModel[]` for every provider the user has a key for, each item tagged with its `providerId` (claude | openai) so clients can scope per-provider selectors. Served from the shared ListModelsCache (10-minute TTL). Response: `{ items: (ProviderModel & { providerId })[] }`.\n",
+        "responses": {
+          "200": {
+            "description": "{ items: (ProviderModel & { providerId })[] }."
+          },
+          "500": {
+            "description": "A provider key could not be decrypted."
+          }
+        },
+        "summary": "List available models across the user's configured providers.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/options-chain": {
+      "get": {
+        "description": "Backs the options-tools page chain viewer. Shares the Unusual Whales client and the `market_data_options_chain` tool's parsing (REQ-12.4 — no duplicate fetch logic). When the authenticated user has no Unusual Whales key the response is `{ configured: false }` (200) so the viewer shows an empty-state CTA to Settings, not an error (REQ-12.2). With a key the response is `{ configured: true, chain }` where `chain` is the compact projection `{ symbol, expiration?, count, contracts[] }`. Upstream failures are mapped to their REQ-6.5 reason codes on the matching HTTP status (REQ-12.3): 400 MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 404 SYMBOL_NOT_FOUND, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never returned or logged.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Z.]{1,6}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expiration",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, chain }."
+          },
+          "400": {
+            "description": "Validation error or MARKET_DATA_KEY_INVALID."
+          },
+          "404": {
+            "description": "SYMBOL_NOT_FOUND."
+          },
+          "429": {
+            "description": "MARKET_DATA_RATE_LIMITED or PLATFORM_RATE_LIMITED."
+          },
+          "503": {
+            "description": "MARKET_DATA_UNAVAILABLE."
+          }
+        },
+        "summary": "Get the live options chain for a symbol from Unusual Whales.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/personas": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "{ items: Persona[] } — built-ins have isBuiltin: true."
+          }
+        },
+        "summary": "List built-in personas plus the user's own personas.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "description": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "systemPrompt": {
+                    "maxLength": 5000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "systemPrompt"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created persona."
+          },
+          "400": {
+            "description": "Validation error."
+          }
+        },
+        "summary": "Create a user-owned persona.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/personas/{id}": {
+      "delete": {
+        "description": "Rejected with 403 for built-in personas; 409 if the persona is the user's current default (change default first). Referencing conversations are left with persona_id = NULL.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "403": {
+            "description": "Built-in personas cannot be deleted."
+          },
+          "404": {
+            "description": "Persona not found (or not owned)."
+          },
+          "409": {
+            "description": "Persona is the current default."
+          }
+        },
+        "summary": "Delete a user-owned persona.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "patch": {
+        "description": "Any subset of `{ name, description, systemPrompt }`. Rejected with 403 for built-in personas. 404 if not owned.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "description": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "systemPrompt": {
+                    "maxLength": 5000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated persona."
+          },
+          "403": {
+            "description": "Built-in personas cannot be edited."
+          },
+          "404": {
+            "description": "Persona not found (or not owned)."
+          }
+        },
+        "summary": "Update a user-owned persona.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/personas/{id}/default": {
+      "post": {
+        "description": "Atomic flip (REQ-7.9): for a user-owned persona, clears the prior default and sets this one; in all cases records the chosen persona on the user row. 404 if the persona is neither built-in nor owned.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Default updated."
+          },
+          "404": {
+            "description": "Persona not found (or not owned)."
+          }
+        },
+        "summary": "Set a persona as the user's default for new conversations.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/provider-keys": {
+      "get": {
+        "description": "Returns one item per provider the user has stored a BYOK key for. The plaintext key is NEVER returned (REQ-5.7) — only a masking hint (`keyHintTail`, the last four characters), the chosen `defaultModel`, and `lastUsedAt`. Response: `{ items: ProviderKeyListItem[] }`.\n",
+        "responses": {
+          "200": {
+            "description": "{ items: ProviderKeyListItem[] } — no key material."
+          }
+        },
+        "summary": "List the authenticated user's configured provider keys.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/provider-keys/{providerId}": {
+      "delete": {
+        "description": "Hard-deletes the stored key for the authenticated user. The ciphertext is gone from the database; the plaintext was never persisted.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "providerId",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "openai"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No key configured for this provider."
+          }
+        },
+        "summary": "Remove the BYOK key for a provider.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "patch": {
+        "description": "Updates ONLY the default model — the stored key material is untouched and never re-supplied, so no validation probe runs and the save rate limit does not apply. An unknown model id still fails at stream time (MODEL_NOT_LISTED), mirroring PUT.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "providerId",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "openai"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "defaultModel": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "defaultModel"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated key (ProviderKeyListItem",
+            "no key material).": null
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "404": {
+            "description": "No key configured for this provider."
+          }
+        },
+        "summary": "Change the default model for an existing provider key.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "put": {
+        "description": "Encrypts the supplied key at rest (AES-256-GCM, REQ-5.1) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned (REQ-5.7). Runs a lightweight validation roundtrip against the provider's listModels endpoint (REQ-5.8, 5s timeout): a 401/403 rejects the save with `PROVIDER_KEY_INVALID`; a successful probe returns `verified: true`; a timeout or transient failure stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour (REQ-5.9). `defaultModel` is optional — when omitted (a first-time save has no model list to pick from), the server selects the provider's deterministic default from the probe's listModels response (REQ-6.4); the user can change it later.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "providerId",
+            "required": true,
+            "schema": {
+              "enum": [
+                "claude",
+                "openai"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "apiKey": {
+                    "minLength": 8,
+                    "type": "string"
+                  },
+                  "defaultModel": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiKey"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored key (ProviderKeyListItem) plus `verified: boolean`."
+          },
+          "400": {
+            "description": "Validation error or PROVIDER_KEY_INVALID (key rejected by provider)."
+          },
+          "429": {
+            "description": "Save rate limit reached (10 / hour)."
+          }
+        },
+        "summary": "Save (or replace) the BYOK key for a provider.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/advisor/trade-data-consent": {
+      "get": {
+        "description": "Returns whether the user has consented to the advisor reading their stored trade data (REQ-9.1). Defaults to `false` for a user who has never set it. Response: `{ consent: boolean }`.\n",
+        "responses": {
+          "200": {
+            "description": "{ consent: boolean }."
+          }
+        },
+        "summary": "Get the authenticated user's trade-data consent flag.",
+        "tags": [
+          "Advisor"
+        ]
+      },
+      "put": {
+        "description": "Grants or revokes the advisor's access to the user's stored trade data (REQ-9.1). Revoking consent stops new trade-data reads and removes stored structured trade-data from what is replayed to the provider; it cannot remove figures already disclosed in prior replies (REQ-10.2). Consent is re-read on every provider round-trip, so a change takes effect on the next iteration of an in-flight turn (REQ-1.7).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "consent": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "consent"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ consent: boolean } — the stored flag."
+          },
+          "400": {
+            "description": "Validation error."
+          }
+        },
+        "summary": "Set the authenticated user's trade-data consent flag.",
+        "tags": [
+          "Advisor"
+        ]
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "description": "Public. On success sets the `session` cookie; every authenticated endpoint reads it. Rate limited to 10 requests per 15 minutes per client, tightening to 5 while the shared rate-limit store is unavailable. A wrong email and a wrong password are answered identically, so the response does not reveal whether an address is registered. A user may hold 5 concurrent sessions; signing in a sixth time ends the oldest one.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "password": {
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "user": {
+                      "properties": {
+                        "email": {
+                          "format": "email",
+                          "type": "string"
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "isAdmin": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The signed-in user. The `session` cookie is set."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "401": {
+            "description": "Invalid email or password."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Sign in and start a session.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "description": "Revokes the session server-side and clears the `session` cookie. Idempotent: calling it without a session still returns 200, so a client can always reach a signed-out state.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The session is ended."
+          }
+        },
+        "summary": "End the current session.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "Authed. The canonical \"who am I\" call — clients use it on boot to decide whether a session is still valid.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "email": {
+                      "format": "email",
+                      "type": "string"
+                    },
+                    "emailVerified": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "isAdmin": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The current user."
+          },
+          "401": {
+            "description": "No valid session."
+          }
+        },
+        "summary": "Get the signed-in user.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/password-reset/complete": {
+      "post": {
+        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture — REQ-4.7; token guessing is primarily throttled by the token's 256-bit entropy + 60 min TTL). Atomically consumes the single-use token (REQ-4.3), revokes ALL of the account's sessions (REQ-4.5), sets the new bcrypt password hash, and marks the account email-verified — a completed email-delivered reset proves mailbox control (D8). Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (REQ-4.2). No auto-login — no session cookie is set; the page routes to login (D8). Fully functional when the instance has no email configured (D12 — consuming an existing token sends nothing).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "password": {
+                    "description": "The new password (the shared registration policy).",
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "type": "string"
+                  },
+                  "token": {
+                    "description": "The raw token from the emailed link's URL fragment.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token",
+                  "password"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ success: true } — password rewritten, all sessions revoked, no session cookie set."
+          },
+          "400": {
+            "description": "Validation error",
+            "or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body).": null
+          },
+          "429": {
+            "description": "Rate limit reached (IP-keyed)."
+          }
+        },
+        "summary": "Complete a password reset with an emailed token (consume → revoke → rewrite).",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/password-reset/request": {
+      "post": {
+        "description": "Public. Rate limited by client IP (5 / 15 min, the register posture) AND by the normalized target email (3 / 1 h — REQ-3.8's per-target bound; case variants share one bucket). Responds the identical generic `200 { success: true }` whether or not the email matches an account and regardless of delivery outcome (REQ-3.2/3.3 — no account-existence or delivery-health oracle). When an account exists, a single-use reset token (60 min TTL, newest-wins over prior tokens) is issued and the reset email dispatched WITHOUT awaiting delivery (REQ-2.7). When the instance has no email configured the endpoint returns a stable `409 EMAIL_NOT_CONFIGURED` for every caller — instance-level, account-independent (REQ-1.2, D12).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ success: true } — identical for existing and nonexistent accounts."
+          },
+          "400": {
+            "description": "Validation error (malformed email)."
+          },
+          "409": {
+            "description": "EMAIL_NOT_CONFIGURED — this instance has no email configured."
+          },
+          "429": {
+            "description": "Rate limit reached (IP-keyed or per-target)."
+          }
+        },
+        "summary": "Request a password-reset email (no-enumeration surface).",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "description": "Public. Creates a user and sets the `session` cookie, so a successful register leaves the caller signed in. Rate limited to 5 requests per 15 minutes per client, tightening to 3 while the shared rate-limit store is unavailable. `emailVerified` is `false` until the address is confirmed; when transactional email is not configured there is nothing to confirm and the flag stays false without blocking use.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "password": {
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "user": {
+                      "properties": {
+                        "email": {
+                          "format": "email",
+                          "type": "string"
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "isAdmin": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The new user. The `session` cookie is set."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "409": {
+            "description": "That email is already registered."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Create an account and start a session.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/verify-email": {
+      "post": {
+        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture; token guessing is primarily throttled by the token's 256-bit entropy + 24 h TTL). Atomically consumes the single-use verification token and marks the account email-verified in one transaction. Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (REQ-5.3 — the frontend then offers the resend path). Consumption is THIS POST — fetching the emailed GET link never mutates, so prefetchers and link scanners burn nothing (D6, REQ-4.8). Fully functional when the instance has no email configured (D12 — consuming an existing token sends nothing).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "description": "The raw token from the emailed link's URL fragment.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ success: true } — account marked email-verified, token consumed."
+          },
+          "400": {
+            "description": "Validation error",
+            "or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body).": null
+          },
+          "429": {
+            "description": "Rate limit reached (IP-keyed)."
+          }
+        },
+        "summary": "Verify an email address with an emailed token (gesture-consumed).",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/verify-email/resend": {
+      "post": {
+        "description": "Authenticated (session cookie) — only the account owner can trigger a resend, so account enumeration is impossible by construction (D11). Rate limited per authenticated userId (3 / 1 h — per-account equals per-target, REQ-3.8's bound). No request body. Issues a fresh single-use verification token (24 h TTL, newest-wins over prior tokens) and dispatches the verification email WITHOUT awaiting delivery (REQ-2.7). Already-verified accounts get 409 ALREADY_VERIFIED (an authed self-fact); an instance with no email configured gets 409 EMAIL_NOT_CONFIGURED — the two codes are distinct because the UI keys on code (SF-2, D12).\n",
+        "responses": {
+          "200": {
+            "description": "{ success: true } — verification email dispatched (delivery not awaited)."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "409": {
+            "description": "ALREADY_VERIFIED (account already verified) or EMAIL_NOT_CONFIGURED (instance has no email configured) — distinct codes."
+          },
+          "429": {
+            "description": "Rate limit reached (userId-keyed)."
+          }
+        },
+        "summary": "Resend the verification email for the authenticated account.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/billing/balance": {
+      "get": {
+        "description": "User-scoped. Returns `{ balance, available }` as decimal credit strings (bigint micro-USD; `available = balance − reserved`). A user with no wallet row reads as zero (REQ-1.1).\n",
+        "responses": {
+          "200": {
+            "description": "{ balance, available } credit strings."
+          }
+        },
+        "summary": "Get the authenticated user's wallet balance.",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/checkout": {
+      "post": {
+        "description": "Authed and per-user rate limited (10 / 60 s). Body `{ packId }` selects a server-authoritative `CREDIT_PACKS` pack — the price and credit grant come solely from config, never client input (REQ-2.2). Returns `{ url }`, the Stripe-hosted checkout page to redirect to. NO wallet write happens here — crediting is the webhook's job (REQ-2.6). When Stripe is unconfigured the endpoint returns a stable `402 BILLING_NOT_AVAILABLE` (REQ-2.5/10.2).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "packId": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "packId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ url } — the Stripe-hosted checkout URL."
+          },
+          "400": {
+            "description": "Validation error or UNKNOWN_PACK."
+          },
+          "402": {
+            "description": "BILLING_NOT_AVAILABLE (Stripe unconfigured)."
+          },
+          "429": {
+            "description": "Checkout rate limit reached (10 / 60 s)."
+          }
+        },
+        "summary": "Create a Stripe Checkout Session for a credit pack.",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/config": {
+      "get": {
+        "description": "Drives the billing settings tab and the no-BYOK model picker. Authed, unthrottled read (plan-tiers Component 6 — never behind the spend budget). `enabled` is `isStripeConfigured()`; `packs` is `CREDIT_PACKS`; `models` is the platform-priced provider/model set restricted to providers with a configured platform key (REQ-7.4) — the authoritative picker source, so the UI never offers an unpriced or unspendable model. Each provider's allowance model carries `allowance: true` ONLY when feature gating is enabled (REQ-8.9a/8.8 — self-host pickers must never advertise free monthly turns); `subscription.purchasable` is `isProSubscriptionConfigured()` (REQ-2.7). When `enabled` is false the frontend hides the purchase UI (graceful absence, REQ-10.2).\n",
+        "responses": {
+          "200": {
+            "description": "{ enabled, packs, models, subscription: { purchasable } }."
+          }
+        },
+        "summary": "Get billing availability, offered packs, the priced model list, and subscription purchasability.",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/subscription/checkout": {
+      "post": {
+        "description": "Authed; shares the per-user 10 / 60 s spend budget with the credit-pack checkout and the portal endpoint (plan-tiers D8). No request body — the Price sold is server-configured (`STRIPE_PRO_PRICE_ID`, REQ-2.2). Refuses `402 BILLING_NOT_AVAILABLE` unless the Pro subscription is fully configured (REQ-2.7), and `409 SUBSCRIPTION_EXISTS` when the user already has a qualifying subscription — including `past_due` and canceled-pending-period-end (REQ-2.4). Returns `{ url }`, the Stripe-hosted checkout page. NO mirror write happens here — the mirror is the webhook's job (REQ-3.2); the success URL returns to the billing tab in its `?subscription=confirming` state (REQ-2.6).\n",
+        "responses": {
+          "200": {
+            "description": "{ url } — the Stripe-hosted checkout URL."
+          },
+          "402": {
+            "description": "BILLING_NOT_AVAILABLE (Stripe or the Pro price unconfigured)."
+          },
+          "409": {
+            "description": "SUBSCRIPTION_EXISTS (a qualifying subscription already exists)."
+          },
+          "429": {
+            "description": "Shared checkout rate limit reached (10 / 60 s)."
+          },
+          "502": {
+            "description": "CHECKOUT_FAILED (Stripe returned no checkout URL)."
+          }
+        },
+        "summary": "Create a Stripe Checkout Session for the Pro subscription.",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/subscription/portal": {
+      "post": {
+        "description": "Authed; shares the per-user 10 / 60 s spend budget (plan-tiers D15). Looks up the persisted billing-customer linkage FIRST — none ⇒ `404 NO_BILLING_CUSTOMER`; Stripe unconfigured ⇒ `402 BILLING_NOT_AVAILABLE`. Returns `{ url }`, the Stripe-hosted Billing Portal (cancel / payment method / invoices per the account's operator-set default portal configuration — REQ-4.1/4.2).\n",
+        "responses": {
+          "200": {
+            "description": "{ url } — the Stripe-hosted Billing Portal URL."
+          },
+          "402": {
+            "description": "BILLING_NOT_AVAILABLE (Stripe unconfigured)."
+          },
+          "404": {
+            "description": "NO_BILLING_CUSTOMER (no billing customer exists for this account)."
+          },
+          "429": {
+            "description": "Shared checkout rate limit reached (10 / 60 s)."
+          }
+        },
+        "summary": "Create a Stripe Billing Portal session.",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/tier": {
+      "get": {
+        "description": "Authed, DELIBERATELY UNTHROTTLED read (plan-tiers Component 6's pinned posture — the 2 s confirming poll alone is 30/min and the tier cache key is invalidated after every committed turn; sharing the spend budget would 429 the confirming banner and lock out legitimate checkout clicks). Returns the TierState shape: `gatingEnabled`, `exempt`, `tier`, `purchasable`, `subscription` (derived from the LOCAL mirror only via the qualifying-first display-row rule — renders with Stripe unconfigured, REQ-11.1; carried even when gating is off, the REQ-11.7 carve-out), `limits` (the free/pro lever catalog), and `usage` (populated only when gating is on and the user is non-exempt). Booleans and state only — no server credentials, no price ids.\n",
+        "responses": {
+          "200": {
+            "description": "TierState — see packages/shared/src/schemas/tier.ts."
+          }
+        },
+        "summary": "Get the authenticated user's tier state (plan card / CTA / usage surface).",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/usage": {
+      "get": {
+        "description": "User-scoped unified history (credits, debits, reversals) joined to per-turn token detail (REQ-7.3). `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. Response `{ items, nextCursor }`.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ items: WalletHistoryItem[], nextCursor: string | null }."
+          }
+        },
+        "summary": "List the authenticated user's wallet/usage history (cursor-paginated).",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/billing/webhook": {
+      "post": {
+        "description": "PUBLIC endpoint (NO session auth — Stripe is the caller) and IP-rate limited. Reads the UNMODIFIED RAW request body and verifies the `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET` over the exact raw bytes (REQ-3.1) — an invalid or missing signature returns 400 and no wallet is touched. The verified event is dispatched to the idempotent settled-only handler; its outcome maps to 200 (credited / acked / duplicate / refused / reversed — terminal, Stripe stops retrying) or a retryable 5xx (transient verify-failure, no row written — Stripe redelivers). NOTE: this route MUST receive the raw body before any JSON parse; a global JSON body parser would silently break signatures.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "Raw Stripe event JSON (verified by signature, not parsed by the framework).",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Event acknowledged (credited / acked / duplicate / refused / reversed)."
+          },
+          "400": {
+            "description": "Missing/invalid signature or Stripe unconfigured — no wallet touched."
+          },
+          "500": {
+            "description": "Transient verify-failure — Stripe should redeliver."
+          }
+        },
+        "security": [],
+        "summary": "Stripe webhook — idempotent, settled-only crediting (PUBLIC).",
+        "tags": [
+          "Billing"
+        ]
+      }
+    },
+    "/api/brokerages": {
+      "get": {
+        "description": "Authed. Returns the user's own brokerages plus the built-in system ones, each with its fee schedule. A brokerage is a name and a fee schedule that accounts and positions reference so commissions are computed consistently. Tradr does not connect to any broker; nothing here holds credentials.\n",
+        "responses": {
+          "200": {
+            "description": "The brokerages visible to this user."
+          },
+          "401": {
+            "description": "No valid session."
+          }
+        },
+        "summary": "List brokerages.",
+        "tags": [
+          "Brokerages"
+        ]
+      },
+      "post": {
+        "description": "Authed. Names are unique per user. The new brokerage starts with a zeroed fee schedule; set the rates with a follow-up PUT.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "notes": {
+                    "maxLength": 10000,
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created brokerage."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "409": {
+            "description": "A brokerage with this name already exists."
+          }
+        },
+        "summary": "Create a brokerage.",
+        "tags": [
+          "Brokerages"
+        ]
+      }
+    },
+    "/api/brokerages/{id}": {
+      "delete": {
+        "description": "Authed. Refused while any account still references the brokerage — the 409 names them, so you can reassign those accounts first. System brokerages cannot be deleted.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "403": {
+            "description": "System brokerages cannot be deleted."
+          },
+          "404": {
+            "description": "No such brokerage for this user."
+          },
+          "409": {
+            "description": "Still assigned to one or more accounts",
+            "which are named in the message.": null
+          }
+        },
+        "summary": "Delete a brokerage.",
+        "tags": [
+          "Brokerages"
+        ]
+      },
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The brokerage",
+            "including its fee schedule.": null
+          },
+          "404": {
+            "description": "No such brokerage for this user."
+          }
+        },
+        "summary": "Get one brokerage.",
+        "tags": [
+          "Brokerages"
+        ]
+      },
+      "put": {
+        "description": "Authed. Every field is optional; `feeSchedule` is merged, so you can send a single rate. Fee values are non-negative decimal strings. System brokerages are read-only.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "feeSchedule": {
+                    "description": "Any subset of the fee fields. Each is a non-negative decimal string.",
+                    "properties": {
+                      "optionsMaxPerFill": {
+                        "type": "string"
+                      },
+                      "optionsMinPerFill": {
+                        "type": "string"
+                      },
+                      "optionsPerContractCommission": {
+                        "type": "string"
+                      },
+                      "optionsPerContractExchangeFee": {
+                        "type": "string"
+                      },
+                      "stockMaxPerFill": {
+                        "type": "string"
+                      },
+                      "stockMinPerFill": {
+                        "type": "string"
+                      },
+                      "stockPerShareCommission": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "notes": {
+                    "maxLength": 10000,
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated brokerage."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "403": {
+            "description": "System brokerages cannot be modified."
+          },
+          "404": {
+            "description": "No such brokerage for this user."
+          },
+          "409": {
+            "description": "A brokerage with this name already exists."
+          }
+        },
+        "summary": "Edit a brokerage or its fee schedule.",
+        "tags": [
+          "Brokerages"
+        ]
+      }
+    },
+    "/api/brokerages/{id}/duplicate": {
+      "post": {
+        "description": "Authed. Copies a brokerage and its whole fee schedule under a new name, which is how you take a system brokerage as the starting point for your own rates. The copy belongs to the user and is fully editable.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new copy."
+          },
+          "404": {
+            "description": "No such brokerage for this user."
+          },
+          "409": {
+            "description": "The generated name collides with an existing brokerage."
+          }
+        },
+        "summary": "Duplicate a brokerage.",
+        "tags": [
+          "Brokerages"
+        ]
+      }
+    },
+    "/api/brokerages/{id}/position-count": {
+      "get": {
+        "description": "Authed. Used to warn before a destructive edit.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The count."
+          },
+          "404": {
+            "description": "No such brokerage for this user."
+          }
+        },
+        "summary": "Count the positions booked against a brokerage.",
+        "tags": [
+          "Brokerages"
+        ]
+      }
+    },
+    "/api/calculator": {
+      "post": {
+        "description": "Authed and stateless — the whole calculation is a pure function of the request body (no DB read, no account id). Supply the trade shape (`entryPrice`, `stopLoss`, `direction`, `mode`) plus **exactly one** risk basis: a direct `dollarRisk`, OR a `balance` + `riskPercent` (the dollar risk is then derived as `balance × riskPercent ÷ 100` at full precision). Supplying both bases, or neither, is a 400. In the percent basis the position size is also capped to what the balance can fund at entry (`floor(balance ÷ (entry × multiplier))`); the three percent-only response fields (`derivedDollarRisk`, `sizingStatus`, `buyingPowerLimited`) are absent from dollar-basis results. Non-sizing outcomes (non-positive balance, derived risk over the ceiling, insufficient risk, balance funds zero units) are valid **200**s with `positionSize: 0` and a `sizingStatus` discriminator — not 400s.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "description": "Provide exactly one risk basis — `dollarRisk`, or `balance` + `riskPercent`.",
+                "properties": {
+                  "balance": {
+                    "description": "Percent-basis balance to size against and cap against. Sign-agnostic finite decimal within the account-balance domain (a losing account's balance can be ≤ 0). Percent basis requires both `balance` and `riskPercent`.\n",
+                    "type": "string"
+                  },
+                  "direction": {
+                    "enum": [
+                      "long",
+                      "short"
+                    ],
+                    "type": "string"
+                  },
+                  "dollarRisk": {
+                    "description": "Dollar-basis risk (positive decimal up to 99,999,999.99). Required in dollar mode; omit (or send empty ⇒ treated as absent) in percent mode.\n",
+                    "type": "string"
+                  },
+                  "entryPrice": {
+                    "description": "Positive decimal up to 9,999,999.99.",
+                    "type": "string"
+                  },
+                  "feeSchedule": {
+                    "description": "Optional brokerage fee schedule (mutually exclusive with manualFees).",
+                    "type": "object"
+                  },
+                  "manualFees": {
+                    "description": "Optional flat fee estimate (mutually exclusive with feeSchedule).",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "enum": [
+                      "stock",
+                      "options"
+                    ],
+                    "type": "string"
+                  },
+                  "riskPercent": {
+                    "description": "Percent of balance to risk (0 < p ≤ 100).",
+                    "type": "string"
+                  },
+                  "stopLoss": {
+                    "description": "Positive decimal up to 9,999,999.99.",
+                    "type": "string"
+                  },
+                  "targetPrice": {
+                    "description": "Optional positive decimal for R:R.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "entryPrice",
+                  "stopLoss",
+                  "direction",
+                  "mode"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A CalculatorOutput. Always carries `positionSize`, `perUnitRisk`, `actualDollarRisk`, `totalPositionValue`; `perUnitReward` / `riskRewardRatio` when a target is set, and the fee fields when fees are supplied. Percent basis additionally echoes `derivedDollarRisk` (2dp, when balance > 0), `sizingStatus` (`nothing-to-size-against` | `exceeds-maximum` | `buying-power-zero`) on the zero-position outcomes, and `buyingPowerLimited: true` when the buying-power cap set the size.\n"
+          },
+          "400": {
+            "description": "Validation error — both/neither risk basis, riskPercent ∉ (0,100], bad balance/price format, or a structural price error."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Size a trade from a risk basis, with fee and buying-power modelling.",
+        "tags": [
+          "Calculator"
+        ]
+      }
+    },
+    "/api/changelog/releases": {
+      "get": {
+        "description": "User-scoped, side-effect-free. Returns the cached GitHub releases (newest first) plus `fetchedAt`, a `stale` flag (cache older than its TTL but still served), and the per-viewer `lastViewedAt` floor (`changelog_viewed_at ?? created_at`). Never mutates viewer state — marking viewed is the dedicated POST. When the cache is empty and the upstream fetch fails, returns a coded `503 CHANGELOG_UNAVAILABLE`.\n",
+        "responses": {
+          "200": {
+            "description": "{ releases, fetchedAt, stale, lastViewedAt }."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "503": {
+            "description": "CHANGELOG_UNAVAILABLE (empty cache",
+            "upstream down).": null
+          }
+        },
+        "summary": "List published release notes with the viewer's last-viewed floor.",
+        "tags": [
+          "Changelog"
+        ]
+      }
+    },
+    "/api/changelog/viewed": {
+      "post": {
+        "description": "Sets the viewer's `changelog_viewed_at` to now (single-statement write, no body). Returns `{ lastViewedAt }`, the new floor. This is the ONLY mutation in the feature — the badge's GET never clears the indicator (REQ-5(a)(3)).\n",
+        "responses": {
+          "200": {
+            "description": "{ lastViewedAt } — the new floor."
+          },
+          "401": {
+            "description": "Not authenticated."
+          }
+        },
+        "summary": "Mark the changelog as viewed for the authenticated user.",
+        "tags": [
+          "Changelog"
+        ]
+      }
+    },
+    "/api/csv-import/commit": {
+      "post": {
+        "description": "Second call of the preview→commit handshake. Consumes the single-use `token` minted by `/api/csv-import/preview` and atomically replays the staged positions/fills (firing the close-hook ledger entries inside one bulk transaction). Idempotent: re-committing an already-committed token returns the original summary, never a second import. A stale token (replaced by a newer preview), an expired token, a blocked preview, an in-flight commit, or unconfirmed near-total duplicates each return a specific 409 with a stable code; an unknown token returns 404. Set `confirmDuplicates: true` to import past a near-total-overlap (≥90%) duplicate block. Tier enforcement (plan-tiers, gated non-admin free users): the commit refuses 403 when the lifetime CSV-import allowance is exhausted, when the target account is not the writable designation while over the account cap, or when the batch would exceed the position cap (atomic whole-batch refusal — the message names the cap and the batch size). A tier refusal leaves the staged preview INTACT: the same token is re-committable after re-designation/upgrade, no re-upload. Only successful commits consume the lifetime allowance — previews, refusals, and failed commits never do.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "confirmDuplicates": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "token": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary (REQ-8.7)."
+          },
+          "400": {
+            "description": "Malformed body (invalid token / confirmDuplicates)."
+          },
+          "403": {
+            "description": "Tier refusal (never 429, no Retry-After) with a stable code: TIER_LIMIT_CSV_IMPORTS (lifetime import allowance exhausted), TIER_ACCOUNT_NOT_WRITABLE (target account not writable while over the account cap), or TIER_LIMIT_POSITIONS (batch would exceed the position cap; message names cap and batch size). The staged preview stays intact and re-committable."
+          },
+          "404": {
+            "description": "No staged preview matches this token (or not owned)."
+          },
+          "409": {
+            "description": "Refusal with a stable code: CSV_IMPORT_SUPERSEDED, CSV_IMPORT_EXPIRED, CSV_IMPORT_BLOCKED, CSV_IMPORT_IN_PROGRESS, or CSV_IMPORT_DUPLICATES_UNCONFIRMED."
+          }
+        },
+        "summary": "Commit a previewed CSV import (consumes the preview token).",
+        "tags": [
+          "CSV Import"
+        ]
+      }
+    },
+    "/api/csv-import/preview": {
+      "post": {
+        "description": "First call of the preview→commit handshake. Parses, maps, normalizes, segments, and dry-runs the uploaded CSV against the target account, returning the proposed positions/fills plus per-row/per-cell errors and warnings — and a single-use `token` the client passes to `/api/csv-import/commit`. No trade data is written; the only side effect is staging one preview row per user (a newer preview supersedes the prior one). The body is read with an actual-bytes byte cap (`CSV_IMPORT_MAX_FILE_BYTES`, default 10 MiB) — a deceptive `Content-Length` below the cap does not bypass it — so an oversized upload is rejected with 413. The multipart `request` part is itself capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).\n",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "description": "The raw CSV file (UTF-8).",
+                    "format": "binary",
+                    "type": "string"
+                  },
+                  "request": {
+                    "description": "A JSON string (CsvPreviewRequest): `{ accountId, rowShape, mapping, presetId?, timezone, dateFormat, numberFormat }`.\n",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file",
+                  "request"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation }`. `token` is consumed by the commit endpoint.\n"
+          },
+          "400": {
+            "description": "Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS)."
+          },
+          "409": {
+            "description": "An import is already in progress for this user (CSV_IMPORT_IN_PROGRESS)."
+          },
+          "413": {
+            "description": "File over CSV_IMPORT_MAX_FILE_BYTES (PAYLOAD_TOO_LARGE), too many rows (CSV_IMPORT_TOO_MANY_ROWS), or staged result too large (CSV_IMPORT_RESULT_TOO_LARGE)."
+          }
+        },
+        "summary": "Preview a CSV trade import (mints a single-use commit token).",
+        "tags": [
+          "CSV Import"
+        ]
+      }
+    },
+    "/api/dashboard/layout": {
+      "get": {
+        "description": "Authed. Returns the user's widget placements on a 12-column grid, their theme, and when the layout was last saved. A user who has never customised the dashboard gets the default layout, not an empty one.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "theme": {
+                      "enum": [
+                        "light",
+                        "dark",
+                        "system"
+                      ],
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "widgets": {
+                      "items": {
+                        "$ref": "#/components/schemas/WidgetPlacement"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The layout."
+          },
+          "401": {
+            "description": "No valid session."
+          }
+        },
+        "summary": "Get the dashboard layout.",
+        "tags": [
+          "Dashboard"
+        ]
+      },
+      "put": {
+        "description": "Authed. Send `widgets`, `theme`, or both — a body with neither is a 400. `widgets` replaces the whole layout; it is not a patch. Placements are validated as a set: at most one widget of each type, no two overlapping, none extending past the 12-column grid, and none below its type's minimum size. When `theme` is sent the response also sets the `tradr_theme` cookie so the next page load paints without a flash.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "theme": {
+                    "enum": [
+                      "light",
+                      "dark",
+                      "system"
+                    ],
+                    "type": "string"
+                  },
+                  "widgets": {
+                    "items": {
+                      "$ref": "#/components/schemas/WidgetPlacement"
+                    },
+                    "maxItems": 6,
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved layout."
+          },
+          "400": {
+            "description": "Validation error",
+            "or a body containing neither widgets nor theme.": null
+          },
+          "413": {
+            "description": "PAYLOAD_TOO_LARGE — the request body exceeds the limit."
+          }
+        },
+        "summary": "Save the dashboard layout, the theme, or both.",
+        "tags": [
+          "Dashboard"
+        ]
+      }
+    },
+    "/api/dashboard/theme": {
+      "get": {
+        "description": "Authed. Answered with `Cache-Control: no-store`.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "theme": {
+                      "enum": [
+                        "light",
+                        "dark",
+                        "system"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The theme."
+          }
+        },
+        "summary": "Get the stored theme preference.",
+        "tags": [
+          "Dashboard"
+        ]
+      }
+    },
+    "/api/dashboard/theme-cookie": {
+      "post": {
+        "description": "Authed. Sets `tradr_theme` from the stored preference without changing it. Used to restore the cookie on a new device or after it is cleared, so the first paint matches the saved theme. The request body must be empty.\n",
+        "responses": {
+          "204": {
+            "description": "The cookie is set."
+          },
+          "400": {
+            "description": "The request body was not empty."
+          }
+        },
+        "summary": "Re-issue the theme cookie.",
+        "tags": [
+          "Dashboard"
+        ]
+      }
+    },
+    "/api/dashboard/totals": {
+      "get": {
+        "description": "Authed. Sums every account balance into the user's display currency. `missingPairs` is present only when at least one account could not be converted for want of a rate — its absence is the \"total is complete\" signal, so check for the key rather than an empty array. When it is present the total covers only the accounts that could be converted.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "displayCurrency": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "missingPairs": {
+                      "description": "Omitted entirely when every account converted.",
+                      "items": {
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "total": {
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The combined total."
+          }
+        },
+        "summary": "Get the combined balance across all accounts.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
+    "/api/exchange-rates": {
+      "get": {
+        "description": "Authed. Tradr does not fetch rates from any market feed — you supply them. Each rate is a base/quote pair with a value and an effective date, and conversions use the latest rate on or before the date being converted.\n",
+        "responses": {
+          "200": {
+            "description": "The user's exchange rates."
+          }
+        },
+        "summary": "List the user's exchange rates.",
+        "tags": [
+          "Accounting"
+        ]
+      },
+      "post": {
+        "description": "Authed. A rate is keyed by base, quote, and effective date, so posting the same three again replaces the value rather than adding a duplicate. Because a rate change moves historical converted totals, call the preview endpoint first if you want to show the impact before saving.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "baseCurrency": {
+                    "example": "USD",
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "effectiveDate": {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  "quoteCurrency": {
+                    "example": "EUR",
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "rate": {
+                    "description": "Positive decimal.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "baseCurrency",
+                  "quoteCurrency",
+                  "rate",
+                  "effectiveDate"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The stored rate."
+          },
+          "400": {
+            "description": "Validation error",
+            "or baseCurrency equal to quoteCurrency.": null
+          }
+        },
+        "summary": "Add or update an exchange rate.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
+    "/api/exchange-rates/preview": {
+      "post": {
+        "description": "Authed. Read-only — it stores nothing. Computes the converted total before and after a proposed rate upsert or deletion so the change can be confirmed before it is applied. `exceedsThreshold` marks a move large enough to be worth an explicit confirmation.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "intent": {
+                        "enum": [
+                          "upsert"
+                        ],
+                        "type": "string"
+                      },
+                      "rate": {
+                        "properties": {
+                          "baseCurrency": {
+                            "maxLength": 3,
+                            "minLength": 3,
+                            "type": "string"
+                          },
+                          "effectiveDate": {
+                            "format": "date",
+                            "type": "string"
+                          },
+                          "quoteCurrency": {
+                            "maxLength": 3,
+                            "minLength": 3,
+                            "type": "string"
+                          },
+                          "rate": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "baseCurrency",
+                          "quoteCurrency",
+                          "rate",
+                          "effectiveDate"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "intent",
+                      "rate"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "intent": {
+                        "enum": [
+                          "delete"
+                        ],
+                        "type": "string"
+                      },
+                      "rateId": {
+                        "format": "uuid",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "intent",
+                      "rateId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "afterTotal": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "beforeTotal": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "displayCurrency": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "exceedsThreshold": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The before/after comparison."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "404": {
+            "description": "The rate named for deletion does not exist."
+          }
+        },
+        "summary": "Preview what a rate change would do to the dashboard total.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
+    "/api/exchange-rates/{id}": {
+      "delete": {
+        "description": "Authed. Removing a rate can leave a currency pair unconvertible for some dates, which surfaces as `missingPairs` on the dashboard totals.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No such exchange rate for this user."
+          }
+        },
+        "summary": "Delete an exchange rate.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
+    "/api/expenses": {
+      "get": {
+        "description": "Authed. Expenses are the costs of trading that are not per-fill commissions — data subscriptions, platform fees, software, hardware, education. Commissions belong to fills and appear in the fee rollup instead. `filterTotals` covers the whole active filter, not just the page. Note `page` is zero-based here.\n",
+        "parameters": [
+          {
+            "description": "Omit for all years.",
+            "in": "query",
+            "name": "year",
+            "schema": {
+              "maximum": 9999,
+              "minimum": 1900,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "expenses": {
+                      "items": {
+                        "$ref": "#/components/schemas/Expense"
+                      },
+                      "type": "array"
+                    },
+                    "filterTotals": {
+                      "type": "object"
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "One page of expenses plus the totals for the active filter."
+          }
+        },
+        "summary": "List trading expenses.",
+        "tags": [
+          "Expenses"
+        ]
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "amount": {
+                    "description": "Positive decimal, at most 4 fractional digits. Zero is rejected.",
+                    "type": "string"
+                  },
+                  "category": {
+                    "enum": [
+                      "data_subscription",
+                      "platform_fee",
+                      "software",
+                      "education",
+                      "hardware",
+                      "other"
+                    ],
+                    "type": "string"
+                  },
+                  "currency": {
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "notes": {
+                    "maxLength": 5000,
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "category",
+                  "description",
+                  "amount",
+                  "currency",
+                  "occurredAt"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created expense."
+          },
+          "400": {
+            "description": "Validation error."
+          }
+        },
+        "summary": "Record an expense.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    },
+    "/api/expenses/fee-rollup": {
+      "get": {
+        "description": "Authed. Sums the fees recorded on fills for the year, split by account and by stock versus options, then again per currency. These are per-fill commissions, not the tracked expenses above, and they are already netted into realised P&L — do not add the two together.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 9999,
+              "minimum": 1900,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "perCurrencyTotals": {
+                      "items": {
+                        "properties": {
+                          "currency": {
+                            "maxLength": 3,
+                            "minLength": 3,
+                            "type": "string"
+                          },
+                          "totalFees": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "totalsByAccount": {
+                      "items": {
+                        "properties": {
+                          "accountId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "accountName": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "maxLength": 3,
+                            "minLength": 3,
+                            "type": "string"
+                          },
+                          "optionsFees": {
+                            "type": "string"
+                          },
+                          "stockFees": {
+                            "type": "string"
+                          },
+                          "totalFees": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "year": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Fee totals for the year."
+          },
+          "400": {
+            "description": "Missing or invalid year."
+          }
+        },
+        "summary": "Total the commissions paid in a year.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    },
+    "/api/expenses/tax-summary": {
+      "get": {
+        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "year",
+            "required": true,
+            "schema": {
+              "maximum": 9999,
+              "minimum": 1900,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "displayCurrency": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "flags": {
+                      "description": "Wash sales (US) or superficial losses (CA), with the counterparty positions.",
+                      "type": "object"
+                    },
+                    "jurisdiction": {
+                      "enum": [
+                        "US",
+                        "CA",
+                        "other"
+                      ],
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "realisedPnl": {
+                      "type": "object"
+                    },
+                    "trackedExpenses": {
+                      "type": "object"
+                    },
+                    "year": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The summary for the year."
+          },
+          "400": {
+            "description": "Missing or invalid year."
+          }
+        },
+        "summary": "Summarise a tax year.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    },
+    "/api/expenses/{expenseId}": {
+      "delete": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "expenseId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No such expense for this user."
+          }
+        },
+        "summary": "Delete an expense.",
+        "tags": [
+          "Expenses"
+        ]
+      },
+      "patch": {
+        "description": "Authed. A partial update — only the fields you send change.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "expenseId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "amount": {
+                    "at most 4 fractional digits.": null,
+                    "description": "Positive decimal",
+                    "type": "string"
+                  },
+                  "category": {
+                    "enum": [
+                      "data_subscription",
+                      "platform_fee",
+                      "software",
+                      "education",
+                      "hardware",
+                      "other"
+                    ],
+                    "type": "string"
+                  },
+                  "currency": {
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  "description": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "notes": {
+                    "maxLength": 5000,
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated expense."
+          },
+          "400": {
+            "description": "Validation error",
+            "or an unknown field.": null
+          },
+          "404": {
+            "description": "No such expense for this user."
+          }
+        },
+        "summary": "Edit an expense.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "description": "Runs `SELECT 1` against the database. `version` is the deployed version string (e.g. `v0.2.0-f51f9f5`) baked into the image at build time via the APP_VERSION env; the field is omitted where unset (local dev).\n",
+        "responses": {
+          "200": {
+            "description": "{ status: \"ok\", version? }"
+          },
+          "503": {
+            "description": "{ status: \"error\", version? } — DB unreachable."
+          }
+        },
+        "summary": "Liveness probe (DB connectivity) plus the deployed version.",
+        "tags": [
+          "Platform"
+        ]
+      }
+    },
+    "/api/ledger/{accountId}": {
+      "get": {
+        "description": "Authed. The ledger is the cash record for one account: deposits, withdrawals, and the cash effect of each fill, newest first. `runningBalanceAtFirstRow` is the balance as at the first row on this page, so a client can reconstruct the running balance down the page without fetching the whole history.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "entries": {
+                      "items": {
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer"
+                    },
+                    "runningBalanceAtFirstRow": {
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "One page of ledger entries."
+          },
+          "404": {
+            "description": "No such account for this user."
+          }
+        },
+        "summary": "List an account's ledger entries.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
+    "/api/performance": {
+      "get": {
+        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. When feature gating is enabled and the user is a non-admin Free user, the window is clamped to the last 6 calendar months (plan-tiers L3, REQ-7.1) — never an error: the response is computed over the clamped window and marked with the additive `tierWindow` field. History metadata (per-currency earliest/most-recent closed timestamps and totals) is never clamped.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "granularity",
+            "required": true,
+            "schema": {
+              "enum": [
+                "day",
+                "week",
+                "month",
+                "year"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The performance response. When the free-tier lookback floor clamped the requested window it carries the additive optional `tierWindow: { clamped: true, effectiveStart: ISO date-time, lookbackMonths: integer }` field; a window entirely before the floor yields empty series, still marked.\n"
+          },
+          "400": {
+            "bucket count over cap": null,
+            "description": "Validation error (invalid timezone",
+            "end beyond today + 1 day": null,
+            "invalid dates": null,
+            "start before 2000-01-01": null,
+            "start not before end": null,
+            "unsupported currency) — identical on every tier.": null
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "503": {
+            "description": "TIMEOUT or CLIENT_ABORT."
+          }
+        },
+        "summary": "Aggregated P&L performance series, equity curve and statistics.",
+        "tags": [
+          "Performance"
+        ]
+      }
+    },
+    "/api/positions": {
+      "post": {
+        "description": "Authed. Creates a draft position in one of the user's accounts. When feature gating is enabled and the user is a non-admin Free user, the create is refused with `403 TIER_LIMIT_POSITIONS` at the L2 position cap, or `403 TIER_ACCOUNT_NOT_WRITABLE` when over the L1 account cap and targeting an account other than the writable designation (plan-tiers REQ-6.1/6.6). Admins and gating-off deployments pass through unchanged. Existing-data management (close/fills/edit/delete) is never blocked (REQ-6.5).\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "assetType": {
+                    "enum": [
+                      "stock",
+                      "option"
+                    ],
+                    "type": "string"
+                  },
+                  "notes": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "side": {
+                    "enum": [
+                      "long",
+                      "short"
+                    ],
+                    "type": "string"
+                  },
+                  "stopLoss": {
+                    "description": "Trade-plan stop-loss price. Positive decimal string with up to 8 decimal places, or null. Used to compute risk/reward.\n",
+                    "example": "140.00",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "symbol": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "targetPrice": {
+                    "description": "Trade-plan target price. Positive decimal string with up to 8 decimal places, or null. Used to compute the target R/R.\n",
+                    "example": "150.00",
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "accountId",
+                  "symbol",
+                  "side",
+                  "assetType"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created position."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "403": {
+            "description": "TIER_LIMIT_POSITIONS (position cap reached) or TIER_ACCOUNT_NOT_WRITABLE (non-writable account while over the account cap)."
+          },
+          "404": {
+            "description": "Account not found (or not owned by the user)."
+          }
+        },
+        "summary": "Create a position (draft).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}": {
+      "delete": {
+        "description": "Authed. Hard-deletes a position in any status (`draft`, `open`, or `closed`) and cascades to its fills. When the position had written a ledger entry via its close, a compensating `position_pnl_reversal` row is posted in the same transaction so the account balance is not left inflated; the ledger stays append-only (`positionId` is set NULL on the affected rows, which net to zero in the balance).\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Position deleted; its fills cascade and any prior close is reversed in the ledger."
+          },
+          "404": {
+            "description": "Position not found (or not owned by the user)."
+          }
+        },
+        "summary": "Delete a position (any status).",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "put": {
+        "description": "Authed. All fields optional. On a `draft` position every field is editable. On `open` and `closed` positions only `notes`, `targetPrice`, and `stopLoss` may change — the trade-plan fields are plan annotations that do not affect fill quantities; any other field on a non-draft position is rejected with 409.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "assetType": {
+                    "enum": [
+                      "stock",
+                      "option"
+                    ],
+                    "type": "string"
+                  },
+                  "notes": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "side": {
+                    "enum": [
+                      "long",
+                      "short"
+                    ],
+                    "type": "string"
+                  },
+                  "stopLoss": {
+                    "description": "Trade-plan stop-loss price. Positive decimal string with up to 8 decimal places, or null. Editable on any status.\n",
+                    "example": "140.00",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "symbol": {
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "targetPrice": {
+                    "description": "Trade-plan target price. Positive decimal string with up to 8 decimal places, or null. Editable on any status.\n",
+                    "example": "150.00",
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated position."
+          },
+          "400": {
+            "description": "Validation error (e.g. an invalid option symbol or plan price)."
+          },
+          "404": {
+            "description": "Position not found (or not owned)",
+            "or the target account not found.": null
+          },
+          "409": {
+            "description": "A restricted field (symbol/side/assetType/accountId) was changed on a non-draft position",
+            "or an asset-type change was attempted.": null
+          }
+        },
+        "summary": "Update a position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/fills": {
+      "post": {
+        "description": "Authed. A position is a sequence of fills, not a single trade: add an `entry` fill to open or scale in, an `exit` fill to scale out or close. The position's average price, open quantity, status, and realised P&L are all derived from its fills, so adding one recomputes them. Monetary and quantity fields are strings to preserve decimal precision.\n",
+        "parameters": [
+          {
+            "description": "The position the fill belongs to.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "fees": {
+                    "default": "0",
+                    "description": "Non-negative decimal.",
+                    "type": "string"
+                  },
+                  "filledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "notes": {
+                    "maxLength": 10000,
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "price": {
+                    "description": "Non-negative decimal.",
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "description": "Positive decimal.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "entry",
+                      "exit"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "price",
+                  "quantity",
+                  "filledAt"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created fill."
+          },
+          "400": {
+            "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."
+          },
+          "404": {
+            "description": "No such position for this user."
+          },
+          "409": {
+            "description": "The position is closed",
+            "or an exit fill was sent to a position that is still a draft.": null
+          }
+        },
+        "summary": "Add a fill to a position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/fills/{fillId}": {
+      "delete": {
+        "description": "Authed. Removes the fill and recomputes the position from what is left. An open position must keep at least one entry fill, and its entry quantity must stay at or above its exit quantity, so a deletion that would break either rule is refused rather than applied.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fillId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No such position or fill for this user."
+          },
+          "409": {
+            "description": "The position is closed",
+            "or removing it would leave exit fills unbacked.": null,
+            "the fill is the last remaining entry": null
+          }
+        },
+        "summary": "Delete a fill.",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "put": {
+        "description": "Authed. Corrects a recorded fill and recomputes the position's derived figures. `type` is immutable — an entry cannot become an exit; delete the fill and add the right one instead. Every field is optional; only what you send changes.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fillId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "fees": {
+                    "description": "Non-negative decimal.",
+                    "type": "string"
+                  },
+                  "filledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "notes": {
+                    "maxLength": 10000,
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "price": {
+                    "description": "Non-negative decimal.",
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "description": "Positive decimal.",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated fill."
+          },
+          "400": {
+            "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."
+          },
+          "404": {
+            "description": "No such position or fill for this user."
+          },
+          "409": {
+            "description": "The change would leave the position inconsistent with its other fills."
+          }
+        },
+        "summary": "Edit a fill.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/reopen": {
+      "post": {
+        "description": "Authed. Transitions a `closed` position back to `open` for intraday re-entries, clearing `closedAt` while preserving `openedAt` (the position's identity day). Allowed only when `openedAt` and the reopen timestamp fall on the same calendar day **in the account's timezone** — a position opened on a previous day must be re-entered as a new position. A supplied `reopenedAt` may not precede `closedAt` nor lie in the future. Reopening posts a compensating reversing ledger row for the prior close so a subsequent re-close does not double-count realized P&L.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "reopenedAt": {
+                    "description": "Optional ISO-8601 reopen timestamp; defaults to now. Must be on or after the position's close time and not in the future.\n",
+                    "format": "date-time",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "The reopened (now open) position."
+          },
+          "400": {
+            "description": "reopenedAt precedes closedAt or is in the future."
+          },
+          "404": {
+            "description": "Position not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "The position is not closed",
+            "or its open day (in the account timezone) differs from the reopen day.": null
+          }
+        },
+        "summary": "Reopen a same-day closed position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/symbols/quote-config": {
+      "get": {
+        "description": "Returns `{ stockQuoteConfigured: boolean }` so the frontend can gate the pull-last-price affordance without probing the quote endpoint. Gates solely on the presence of the provider key. Requires an authenticated session.\n",
+        "responses": {
+          "200": {
+            "description": "{ stockQuoteConfigured: boolean }."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          }
+        },
+        "summary": "Whether the delayed-quote provider is configured.",
+        "tags": [
+          "Symbols"
+        ]
+      }
+    },
+    "/api/symbols/refresh": {
+      "post": {
+        "description": "Admin-only manual refresh path (REQ-2.4(d)). Runs the guarded, multi-container-safe population with `force: true` and returns the SyncOutcome verbatim. Under NODE_ENV=test population is a no-op (`skipped-test-env`). A side-effecting POST (CSRF-protected); requires an admin session (authMiddleware → adminMiddleware).\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "reason": {
+                      "description": "Present when status is 'error'.",
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "completed",
+                        "skipped-fresh",
+                        "skipped-claimed",
+                        "skipped-test-env",
+                        "error"
+                      ],
+                      "type": "string"
+                    },
+                    "symbolCount": {
+                      "description": "Present when status is 'completed'.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The SyncOutcome for this run."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "403": {
+            "description": "Authenticated but not an admin (ADMIN_REQUIRED)."
+          }
+        },
+        "summary": "Force a symbols reference-data sync from the SEC source (admin).",
+        "tags": [
+          "Symbols"
+        ]
+      }
+    },
+    "/api/symbols/search": {
+      "get": {
+        "description": "Returns up to 10 NYSE/NASDAQ symbols whose ticker starts with the query prefix `q`, ranked exact-match-first, then by ascending ticker length, then alphabetically. `q` is sanitized to `[A-Z.-]{0,16}` (trimmed, uppercased); a normalized-empty `q` returns `{ results: [] }` without a database prefix scan, and likewise before the reference table is first populated. Read-only and side-effect-free (CSRF-safe GET); never calls the quote provider (REQ-3.6). Requires an authenticated session.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "pattern": "^[A-Z.-]{0,16}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ results: SymbolSearchItem[] } — [] for an empty query or before first population."
+          },
+          "400": {
+            "description": "Query out of charset or longer than 16 chars (VALIDATION_ERROR)."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          }
+        },
+        "summary": "Ranked ticker-prefix symbol autocomplete.",
+        "tags": [
+          "Symbols"
+        ]
+      }
+    },
+    "/api/symbols/{symbol}/quote": {
+      "get": {
+        "description": "Returns the platform-global provider's ~15-minute-delayed last price for `symbol`. With no provider key configured the response is `{ configured: false }` (200) — defense-in-depth mirroring the frontend gate (REQ-4.2). With a key configured the response is `{ configured: true, symbol, lastPrice, change, delayed }`. Independent of the symbols table (REQ-4.6). Per-user rate limited to 30 lookups per 60 s. Provider failures surface as coded statuses — 404 unknown symbol, 503 temporarily unavailable / rate-limited, 502 misconfigured — never a generic 500 (REQ-4.3). Requires an authenticated session.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Z.-]{1,16}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, symbol, lastPrice, change, delayed }."
+          },
+          "400": {
+            "description": "Symbol out of charset or longer than 16 chars (VALIDATION_ERROR)."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "Unknown symbol (NOT_FOUND)."
+          },
+          "429": {
+            "description": "Per-user quote rate limit reached (30 / 60 s)."
+          },
+          "502": {
+            "description": "Quote provider rejected the key (QUOTE_PROVIDER_MISCONFIGURED)."
+          },
+          "503": {
+            "description": "Quote provider unavailable or rate-limited (QUOTE_PROVIDER_UNAVAILABLE)."
+          }
+        },
+        "summary": "Delayed spot last-price for a symbol.",
+        "tags": [
+          "Symbols"
+        ]
+      }
+    },
+    "/api/users/me/display-currency": {
+      "get": {
+        "description": "Authed. The single currency cross-account totals are reported in. `null` means the user has not chosen one.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "currency": {
+                      "example": "USD",
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The display currency."
+          }
+        },
+        "summary": "Get the display currency.",
+        "tags": [
+          "Accounting"
+        ]
+      },
+      "put": {
+        "description": "Authed. Changing it re-expresses cross-account totals; it does not convert or alter any stored amount. Accounts keep their own currencies.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "currency": {
+                    "description": "Three-letter uppercase ISO 4217 code.",
+                    "example": "USD",
+                    "maxLength": 3,
+                    "minLength": 3,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "currency"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored display currency."
+          },
+          "400": {
+            "description": "Not a 3-letter uppercase currency code."
+          }
+        },
+        "summary": "Set the display currency.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
+    "/api/users/me/tax-jurisdiction": {
+      "get": {
+        "description": "Authed. Selects which loss rules the tax summary applies. `null` means the user has not chosen one.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "taxJurisdiction": {
+                      "enum": [
+                        "US",
+                        "CA",
+                        "other"
+                      ],
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The stored jurisdiction."
+          }
+        },
+        "summary": "Get the tax jurisdiction.",
+        "tags": [
+          "Expenses"
+        ]
+      },
+      "patch": {
+        "description": "Authed. `US` applies wash-sale rules, `CA` superficial-loss rules; `other` and `null` apply neither. Changing it re-derives the tax summary and alters nothing that is stored.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "taxJurisdiction": {
+                    "enum": [
+                      "US",
+                      "CA",
+                      "other"
+                    ],
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "taxJurisdiction"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored jurisdiction."
+          },
+          "400": {
+            "description": "Validation error."
+          }
+        },
+        "summary": "Set the tax jurisdiction.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "Hosted (tradr.cloud)",
+      "url": "https://api.tradr.cloud"
+    },
+    {
+      "description": "Local development (API PORT default)",
+      "url": "http://localhost:3100"
+    }
+  ],
+  "tags": []
+}

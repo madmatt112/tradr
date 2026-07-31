@@ -229,7 +229,7 @@ positions.post(
  * @swagger
  * /api/positions/{id}/reopen:
  *   post:
- *     summary: Reopen a same-day closed position (R13).
+ *     summary: Reopen a same-day closed position.
  *     description: >
  *       Authed. Transitions a `closed` position back to `open` for intraday
  *       re-entries, clearing `closedAt` while preserving `openedAt` (the

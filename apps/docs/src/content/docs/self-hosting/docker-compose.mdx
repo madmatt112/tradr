@@ -1,0 +1,440 @@
+---
+title: Self-host with Docker Compose
+description: Stand up the full Tradr stack — web, api, and Postgres — on your own server with Docker Compose.
+---
+
+import HostedOnly from '@/components/HostedOnly.astro';
+
+This guide takes you from a fresh server to a running Tradr instance with Docker
+Compose, then covers verifying health, updating, and backing up. Self-hosting is
+a first-class path: the self-hosted build is the real product, and it runs as a
+complete manual trading journal with **no optional keys configured** — the AI
+advisor and external integrations are opt-in.
+
+## The three-container model
+
+Tradr ships as three services on one private bridge network:
+
+| Service | Image | Role | Published port |
+| --- | --- | --- | --- |
+| `web` | built from `docker/Dockerfile.web` | Nginx serving the static SPA + reverse-proxying `/api` to the api service | `${WEB_PORT:-8080}` → container `:80` |
+| `api` | built from `docker/Dockerfile.api` | Node.js Hono server; stateless, all state in Postgres | none (internal only) |
+| `postgres` | `postgres:16` | PostgreSQL 16 with a persistent volume | none (internal only) |
+
+Only `web` exposes a host port. `postgres` and `api` are reachable only inside
+the compose network. This keeps the database and API off the public internet by
+default.
+
+## Prerequisites
+
+- **Docker with Compose v2** — the `docker compose` (space, not hyphen)
+  subcommand. Check with `docker compose version`.
+- **~2 GB RAM minimum** (2–4 GB recommended). Postgres + Node + Nginx use
+  ~500–700 MB under load; concurrent AI advisor requests add memory pressure. A
+  1 GB VPS risks the OOM killer under load.
+- **A small VPS or homelab box.** Any host that runs Docker Compose works —
+  Hetzner/DigitalOcean/Linode droplets, or Synology, Unraid, TrueNAS, Coolify,
+  and Portainer setups.
+- **`git`** and **`openssl`** (for generating secrets).
+
+<HostedOnly>
+  None of this applies to `app.tradr.cloud` — the managed platform runs the same
+  images on managed infrastructure. This page is for running your own instance.
+</HostedOnly>
+
+## Step 1 — Clone the repository
+
+```bash
+git clone https://github.com/madmatt112/tradr.git
+cd tradr
+```
+
+## Step 2 — Create your `.env`
+
+Copy the annotated template. Every setting has a sensible default except the
+secrets, which ship **blank on purpose**.
+
+```bash
+cp .env.example .env
+```
+
+The compose stack reads secrets and optional settings from this file. One thing
+that is **not** read from `.env`: the api's `DATABASE_URL`. Compose builds it from
+your `POSTGRES_*` values in `api.environment` at render time — do **not** rely on
+`DATABASE_URL` in `.env` for the compose stack (compose overrides it).
+
+## Step 3 — Set the required secrets
+
+These are the only values Tradr cannot run without. Generate each and paste it
+into `.env`.
+
+### Database credentials
+
+```
+POSTGRES_USER=tradr
+POSTGRES_PASSWORD=      # generate below
+POSTGRES_DB=tradr
+```
+
+Generate a URL-safe password (hex avoids URL-reserved characters like `@ : / ?`):
+
+```bash
+openssl rand -hex 24    # -> POSTGRES_PASSWORD
+```
+
+Compose derives the api's connection string from these three values as
+`postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}`.
+
+### Session secret
+
+Signs auth session cookies. Generate at least 32 characters:
+
+```bash
+openssl rand -base64 24    # -> SESSION_SECRET
+```
+
+### Encryption key
+
+A 32-byte hex key used to encrypt provider API keys at rest (AES-256-GCM):
+
+```bash
+openssl rand -hex 32       # -> ENCRYPTION_KEY
+```
+
+**Recommended: pin the key with `ENCRYPTION_KEY_FINGERPRINT`.** If set, the app
+**fails fast on startup** when it is deployed with the wrong `ENCRYPTION_KEY`,
+instead of silently failing to decrypt stored keys. Generate it from your actual
+key (not a fresh random value):
+
+```bash
+openssl rand -hex 32 | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 32
+```
+
+`ENCRYPTION_KEY_PREVIOUS` exists only for key rotation — leave it blank
+otherwise.
+
+### Feature gating — leave it off
+
+```
+FEATURE_GATING=false
+```
+
+`FEATURE_GATING=false` is the default and the right choice for self-hosters: it
+disables all usage limits so your instance is unrestricted. Only the hosted
+platform sets this to `true`.
+
+That is everything required. You can start the stack now (Step 5) and add any of
+the optional integrations below later.
+
+## Step 4 — Optional integrations
+
+All of these are optional. When an integration's config is absent the feature is
+simply **absent, not broken** — a fresh clone with none set runs identically,
+makes no outbound calls, and logs no errors. Configure only what you want.
+
+### LLM keys for the AI advisor
+
+Platform-provided keys let any user on your instance use the advisor without
+their own key. Absent, the advisor stays **BYOK-only** (each user pastes their
+own key in-app).
+
+```
+ANTHROPIC_API_KEY=      # Claude
+OPENAI_API_KEY=         # OpenAI
+```
+
+### Wallet billing and Pro subscriptions (Stripe)
+
+Only needed if you want users to buy advisor credits or subscribe to Pro. **Both**
+the secret key and the webhook signing secret are required to enable the purchase
++ webhook path; with them unset there is no purchase UI and the advisor stays
+BYOK-only.
+
+```
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PUBLISHABLE_KEY=   # reserved; unused by the redirect checkout flow
+STRIPE_PRO_PRICE_ID=      # the Stripe Price id sold by the Pro subscription checkout
+```
+
+Pro is purchasable only when `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, **and**
+`STRIPE_PRO_PRICE_ID` are all set. Full webhook-endpoint and Customer-Portal setup
+is documented inline in `.env.example`.
+
+### Market data and delayed quotes
+
+The advisor fetches market data when a tool-use-capable provider is selected;
+`UNUSUAL_WHALES_BASE_URL` only exists to point the server at a test stub — leave
+it unset in production to use the real host. Symbol autocomplete needs **no key**
+(it is backed by the public SEC ticker file); only the delayed last-price lookup
+needs one:
+
+```
+STOCK_QUOTE_API_KEY=      # API Ninjas — enables the delayed last-price affordance
+```
+
+### Analytics (PostHog)
+
+Off by default. Set a key to send **product analytics** only (no PII, no trade
+data — users are identified by an opaque id, payloads are redaction-scrubbed).
+
+```
+POSTHOG_API_KEY=          # backend business events (api container)
+POSTHOG_HOST=             # optional; default https://us.i.posthog.com
+POSTHOG_PUBLIC_KEY=       # frontend UI events (read by the web container)
+POSTHOG_PUBLIC_HOST=      # optional; default https://us.i.posthog.com
+```
+
+### Transactional email
+
+Self-service password reset and email verification turn on **only when all three
+of** `SMTP_HOST`, `EMAIL_FROM`, and `WEB_BASE_URL` are set (all-or-nothing). A
+partial set fails loudly at startup naming the missing var. Without email, users
+who forget a password rely on the operator CLI (`tradr reset-password <email>`),
+and verification is not required.
+
+```
+# SMTP_HOST=
+# SMTP_PORT=587
+# SMTP_TLS_MODE=starttls        # implicit | starttls | none
+# SMTP_USER=                    # optional pair — set both or neither
+# SMTP_PASS=
+# EMAIL_FROM=
+# WEB_BASE_URL=https://tradr.example.com   # your instance's public origin
+```
+
+### Interactive Brokers (IBKR) — roadmap, not yet shipped
+
+IBKR is a planned read-only integration (view positions, live prices, import
+positions). It is **not yet a shipped runtime integration** — there are currently
+**no `IBKR_*` settings** in `.env.example`, and CSV import is today's path for
+getting broker data in. See [Import trades from
+CSV](/docs/user-guide/import-history/).
+
+### Cross-container settings to keep in sync
+
+A few limits live in different containers and are **hand-synced** — the compose
+stack does not couple them for you:
+
+- `MAX_UPLOAD_SIZE` (web/nginx) must be **≥** `CSV_IMPORT_MAX_FILE_BYTES` (api),
+  or oversized CSVs are rejected by nginx before the api can size them.
+- `CSV_IMPORT_CLAIM_TIMEOUT_SECONDS` (api) must be **≥ 2 ×**
+  `CSV_IMPORT_NGINX_PROXY_TIMEOUT` (web).
+- `ADVISOR_NGINX_PROXY_TIMEOUT` (web) must **exceed** `ADVISOR_STREAM_TIMEOUT_MS`
+  (api), or nginx cuts advisor streams early.
+
+The defaults already satisfy these; only revisit them if you change one side.
+
+## Step 5 — Start the stack
+
+```bash
+docker compose up -d
+```
+
+Compose builds the images, starts `postgres`, waits for it to pass its
+healthcheck, then starts `api`, then `web`.
+
+**Using pre-built images instead of building locally:** the release workflow
+publishes multi-arch images to GHCR. In `docker-compose.yml`, replace each
+service's `build:` block with a pinned image — this is documented inline in the
+compose file:
+
+```
+image: ghcr.io/<owner>/tradr-api:1.2.3
+image: ghcr.io/<owner>/tradr-web:1.2.3
+```
+
+### First run: migrations apply automatically
+
+On the api container's first start, database migrations run **automatically** —
+there are no manual migration steps. The api acquires a **PostgreSQL
+session-level advisory lock** (key `7064001`) before invoking the migrator, so in
+multi-container or restart scenarios only one process migrates at a time and the
+others wait. Migrations are **forward-only** (no down/rollback). This is
+implemented in `apps/api/src/db/migrate.ts` and runs inside the api's
+`bootstrap()` before it starts serving.
+
+The api healthcheck has a **`start_period` of 180s**. A first-run
+`CREATE INDEX CONCURRENTLY` post-migration on a large table can take a while; the
+grace window keeps the container from being killed mid-migration. During this
+window `api` shows `health: starting` and the SPA's API calls may briefly 502 —
+this is expected on first boot. `restart: unless-stopped` will not interrupt an
+in-flight migration.
+
+## Step 6 — Verify it's healthy
+
+Check liveness through the published web port:
+
+```bash
+curl -fsS http://localhost:8080/api/health
+# {"status":"ok"}       (HTTP 200; 503 {"status":"error"} if the DB is unreachable)
+```
+
+Then open the app in a browser at **`http://localhost:8080`** (or your
+`WEB_PORT`) and sign up — see [Getting
+started](/docs/user-guide/getting-started/).
+
+Check migration state at any time (read-only, uses its own connection):
+
+```bash
+docker compose exec api tradr migrate --status
+# exit 0 = schema current, 1 = pending migrations, 2 = cannot connect
+```
+
+**TLS is your responsibility.** The shipped compose file does **not** terminate
+HTTPS. Put your own reverse proxy / edge (Caddy, Traefik, nginx, Cloudflare) in
+front of the `web` container. If you do, add that edge's address to
+`TRUSTED_PROXIES` in `.env` so per-IP rate limiting stays accurate.
+
+## Bootstrap the first admin (optional)
+
+To get an admin account: register normally in the app, then set
+`SEED_ADMIN_EMAIL` in `.env` to that account's email and restart
+(`docker compose up -d` re-creates the container). At startup, **if the instance
+has zero admins**, that email is promoted. It is a one-time bootstrap, not a
+standing override.
+
+## Updating
+
+The shipped compose file **builds locally**, so the default update path is to pull
+the newer source and rebuild:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+If instead you switched the compose services to pinned GHCR images (Step 5), pull
+the newer images and recreate:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Migrations for the new version apply automatically on api startup (same advisory
+lock as first run). Because migrations are forward-only, the policy is **back up
+before every upgrade** (next section).
+
+## Backups and where your data lives
+
+All persistent data lives in the **`pgdata` named volume** mounted at
+`/var/lib/postgresql/data` in the `postgres` container. Docker prefixes the
+volume with the compose project name, so it resolves to e.g. `tradr_pgdata`
+(confirm with `docker volume ls`). There is no proprietary format — a plain
+`pg_dump` is a complete, portable backup.
+
+### Logical dump (recommended, hot)
+
+```bash
+docker compose exec -T postgres \
+  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup-$(date +%F).sql
+```
+
+### Volume snapshot (cold, stack stopped)
+
+```bash
+docker compose down
+docker run --rm -v tradr_pgdata:/data -v "$PWD":/backup alpine \
+  tar czf /backup/pgdata-$(date +%F).tar.gz -C /data .
+docker compose up -d
+```
+
+### Restore
+
+Restore a logical dump into a **fresh** stack (empty database):
+
+```bash
+docker compose up -d postgres
+cat backup-2026-01-01.sql | docker compose exec -T postgres \
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+docker compose up -d
+```
+
+<HostedOnly>
+  On `app.tradr.cloud` backups are managed for you (daily platform backups) — you
+  never run `pg_dump`. This section is for self-hosters, who own their own backup
+  schedule.
+</HostedOnly>
+
+## Troubleshooting
+
+- **`api` stuck `health: starting` on first boot** — likely a long first-run
+  migration. Give it the full 180s `start_period`; watch progress with
+  `docker compose logs -f api`.
+- **`api` crash-loops complaining about the encryption key** — you changed
+  `ENCRYPTION_KEY` (or set a mismatched `ENCRYPTION_KEY_FINGERPRINT`). Restore the
+  original key and check `docker compose logs api`.
+- **Uploads or CSV imports rejected with 413** — the cross-container size/timeout
+  constraints in Step 4 are out of sync.
+- **Can't reach the app** — confirm the `web` port mapping (`WEB_PORT`, default
+  `8080`) and that `postgres` passed its healthcheck (`docker compose ps`).
+
+## Appendix: what the compose file declares
+
+A summary of `docker-compose.yml`. The file itself is heavily annotated and is
+the authoritative version.
+
+### Services
+
+| Service | Image | Published port | Notes |
+| --- | --- | --- | --- |
+| `postgres` | `postgres:16` | none | Data in the `pgdata` named volume at `/var/lib/postgresql/data` |
+| `api` | built from `docker/Dockerfile.api` | none | Reads `.env` via `env_file`; runs migrations on boot |
+| `web` | built from `docker/Dockerfile.web` | `${WEB_PORT:-8080}` → `:80` | Nginx: serves the SPA, proxies `/api` to `api` |
+
+`postgres` and `api` are deliberately **not** published. Only `web` exposes a
+host port, so the database and the API stay off the public interface by default.
+All three restart `unless-stopped`.
+
+### Network and volume
+
+One bridge network, `tradr`, on a fixed subnet — `${TRADR_SUBNET:-172.28.0.0/24}`.
+Keep it in sync with `TRUSTED_PROXIES` in `.env`; the API uses that range to
+decide which forwarded client IPs to trust.
+
+One named volume, `pgdata`. It is what you back up, and `docker compose down -v`
+destroys it.
+
+### Health checks and start order
+
+- `postgres` — `pg_isready`, every 10s, 5 retries.
+- `api` — fetches `http://127.0.0.1:3100/api/health`, every 15s, with a **180s
+  `start_period`** so a long first-run migration does not mark it unhealthy.
+- `api` waits for `postgres` to pass its health check (`condition: service_healthy`);
+  `web` waits for `api` to start.
+
+### Where `DATABASE_URL` comes from
+
+The API's `DATABASE_URL` is composed in `api.environment` from your `POSTGRES_*`
+values — **not** read from `.env`. Compose does not recursively expand a `${VAR}`
+written inside an `.env` value, so a `DATABASE_URL` set in `.env` would be taken
+literally. Setting it in `.env` has no effect on the compose stack; set the
+`POSTGRES_*` values instead.
+
+### Running published images instead of building
+
+Each release publishes multi-arch images to GHCR. To run those rather than
+building locally, replace the `build:` block on a service with a pinned tag:
+
+```yaml
+  api:
+    image: ghcr.io/madmatt112/tradr-api:0.5.3
+  web:
+    image: ghcr.io/madmatt112/tradr-web:0.5.3
+```
+
+Pin an explicit version rather than a floating tag, so an upgrade is a decision
+you make and can reverse.
+
+## Next steps
+
+- [Environment variable reference](/docs/self-hosting/reference/env-vars/) — every
+  key, its default, and generation recipe.
+- [Back up and restore](/docs/self-hosting/backup-restore/) — schedules and full
+  restore procedures.
+- [Upgrade an instance](/docs/self-hosting/upgrades/) — the upgrade policy in
+  detail.
+- [Put TLS in front of the stack](/docs/self-hosting/tls-reverse-proxy/).
+- [Architecture overview](/docs/self-hosting/explanation/architecture/) — how the
+  three containers fit together.

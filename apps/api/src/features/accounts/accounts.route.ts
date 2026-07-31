@@ -103,7 +103,7 @@ accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
  * @swagger
  * /api/accounts/writable:
  *   put:
- *     summary: Set the writable-account designation (plan-tiers D18, REQ-6.6).
+ *     summary: Set the writable-account designation.
  *     description: >
  *       Authed, always-on. Stores which of the user's accounts stays writable
  *       for new trading data while over the Free-tier account cap. A plain
