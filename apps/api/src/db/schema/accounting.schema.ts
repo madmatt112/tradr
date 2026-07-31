@@ -44,16 +44,23 @@ export const ledgerEntries = pgTable(
     // Partial index for per-account ledger LIST (Req 5). The WHERE predicate
     // includes both 'position_pnl' and 'position_pnl_reversal' so the reversal
     // spec (d-536e8750) does not need to rebuild this index when it ships.
+    // Widened with 'balance_adjustment' by the reconciliation amendment
+    // (Req 8.1, 2026-07-31) — a partial predicate cannot be ALTERed, so
+    // migration 0022 rebuilds this index rather than patching it.
     index('ledger_user_account_occurred_pnl_idx')
       .on(table.userId, table.accountId, sql`${table.occurredAt} DESC`)
-      .where(sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal')`),
+      .where(
+        sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')`,
+      ),
     // Partial covering index for accounts-list balance aggregation (Req 3.3).
     // INCLUDE (amount) is hand-added to the migration SQL — see Task 5 +
     // design.md §Data Models. drizzle-orm@0.38.4's pg index() builder has no
     // .include() method.
     index('ledger_user_account_direction_amount_pnl_idx')
       .on(table.userId, table.accountId, table.direction)
-      .where(sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal')`),
+      .where(
+        sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')`,
+      ),
     // Partial index on reverses_group_id (forward-compat for d-536e8750).
     index('ledger_reverses_group_id_idx')
       .on(table.reversesGroupId)
@@ -67,9 +74,12 @@ export const ledgerEntries = pgTable(
     // reverse-hook co-registration invariant, not this index.
     check('ledger_amount_nonneg_chk', sql`${table.amount} >= 0`),
     check('ledger_direction_chk', sql`${table.direction} IN ('credit', 'debit')`),
+    // 'balance_adjustment' (ledger-balances Req 8, 2026-07-31) is the ledger's
+    // second writer: a user-initiated cash-balance reconciliation. It carries a
+    // NULL positionId and symbol, and is INSERT-only like every other row here.
     check(
       'ledger_entry_type_chk',
-      sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal')`,
+      sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')`,
     ),
   ],
 );

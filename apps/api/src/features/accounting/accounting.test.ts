@@ -833,3 +833,237 @@ describe('mid-hook failure leaves the position open with zero ledger rows', () =
     expect(typeof me.id).toBe('string');
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/ledger/:accountId/reconcile — cash balance reconciliation (Req 8)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/ledger/:accountId/reconcile', () => {
+  async function createAccountWithBalance(
+    cookie: string,
+    name: string,
+    startingBalance: string,
+    currency = 'USD',
+  ) {
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name,
+      currency,
+      startingBalance,
+    });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  async function reconcile(cookie: string, accountId: string, targetBalance: string) {
+    return authedRequest('POST', `/api/ledger/${accountId}/reconcile`, cookie, { targetBalance });
+  }
+
+  async function getBalance(cookie: string, accountId: string): Promise<string> {
+    const res = await authedRequest('GET', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(200);
+    return (await res.json()).balance;
+  }
+
+  it('reconciling UP posts one credit balance_adjustment and lands the balance on the target', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Up', '1000');
+
+    const res = await reconcile(cookie, account.id, '1250.50');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    expect(body.previousBalance).toBe('1000.0000');
+    expect(body.newBalance).toBe('1250.5000');
+    expect(body.entry.entryType).toBe('balance_adjustment');
+    expect(body.entry.direction).toBe('credit');
+    expect(body.entry.amount).toBe('250.5000');
+    expect(body.entry.currency).toBe('USD');
+    // Not tied to a trade — this is what keeps it out of the tax summary.
+    expect(body.entry.positionId).toBeNull();
+    expect(body.entry.symbol).toBeNull();
+
+    expect(await getBalance(cookie, account.id)).toBe('1250.5000');
+  });
+
+  it('reconciling DOWN posts a debit', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Down', '1000');
+
+    const res = await reconcile(cookie, account.id, '900');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    expect(body.entry.direction).toBe('debit');
+    // `amount` is a non-negative magnitude — the sign lives in `direction`.
+    expect(body.entry.amount).toBe('100.0000');
+    expect(await getBalance(cookie, account.id)).toBe('900.0000');
+  });
+
+  // This is the test that catches a missed entry-type filter. The
+  // ('position_pnl','position_pnl_reversal') list is hand-written in five
+  // places, three of them raw SQL; each derivation site below reads a
+  // DIFFERENT one of those copies.
+  it('the adjusted balance agrees across all three derivation sites', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Sites', '1000');
+    expect((await reconcile(cookie, account.id, '1400')).status).toBe(201);
+
+    // Site 1 — `balanceLateral` in accounts.query.ts (account detail + list).
+    expect(await getBalance(cookie, account.id)).toBe('1400.0000');
+    const listRes = await authedRequest('GET', '/api/accounts', cookie);
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()).find((a: { id: string }) => a.id === account.id);
+    expect(listed.balance).toBe('1400.0000');
+
+    // Site 2 — `aggregateBalancesForAccounts` (dashboard totals). Single USD
+    // account, so the display-currency aggregate is the balance itself.
+    const totalsRes = await authedRequest('GET', '/api/dashboard/totals', cookie);
+    expect(totalsRes.status).toBe(200);
+    const totals = await totalsRes.json();
+    expect(totals.displayCurrency).toBe('USD');
+    expect(totals.total).toBe('1400.0000');
+
+    // Site 3 — `listLedgerEntriesForAccount`'s running-balance anchor. A second
+    // reconcile gives an OLDER adjustment row for the anchor to sum over: with
+    // pageSize=1 the anchor is the balance before the newest row, which must
+    // already include the first adjustment.
+    expect((await reconcile(cookie, account.id, '1750')).status).toBe(201);
+    const ledgerRes = await authedRequest(
+      'GET',
+      `/api/ledger/${account.id}?page=1&pageSize=1`,
+      cookie,
+    );
+    expect(ledgerRes.status).toBe(200);
+    const ledger = await ledgerRes.json();
+    expect(ledger.entries).toHaveLength(1);
+    expect(ledger.entries[0].amount).toBe('350.0000');
+    // 1000 starting + the first 400 adjustment. Would be '1000.00' if the
+    // anchor's raw-SQL filter had not been widened.
+    expect(ledger.runningBalanceAtFirstRow).toBe('1400.00');
+  });
+
+  it('rejects a zero delta with 409 and writes nothing', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Noop', '1000');
+
+    const res = await reconcile(cookie, account.id, '1000');
+    expect(res.status).toBe(409);
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(rows).toHaveLength(0);
+    expect(await getBalance(cookie, account.id)).toBe('1000.0000');
+  });
+
+  it('404s for an unknown account and for another user’s account, writing nothing', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const { cookie: otherCookie } = await registerAndGetCookie();
+    const victim = await createAccountWithBalance(otherCookie, 'Victim Acct', '1000');
+
+    const unknown = await reconcile(cookie, '00000000-0000-4000-8000-000000000000', '50');
+    expect(unknown.status).toBe(404);
+
+    const crossUser = await reconcile(cookie, victim.id, '50');
+    expect(crossUser.status).toBe(404);
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, victim.id));
+    expect(rows).toHaveLength(0);
+    expect(await getBalance(otherCookie, victim.id)).toBe('1000.0000');
+  });
+
+  it('rejects a target too precise for the account currency', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Precision', '1000');
+
+    // USD has 2 minor units; 3+ decimals is not a figure any statement shows.
+    const res = await reconcile(cookie, account.id, '1000.123');
+    expect(res.status).toBe(400);
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('accepts a negative target (margin/debit balance)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Margin', '1000');
+
+    const res = await reconcile(cookie, account.id, '-250.00');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.entry.direction).toBe('debit');
+    expect(body.entry.amount).toBe('1250.0000');
+    expect(await getBalance(cookie, account.id)).toBe('-250.0000');
+  });
+
+  // Proves the delta is computed server-side from the live balance rather than
+  // taken from the client: the second reconcile has to account for the P&L that
+  // landed in between.
+  it('reconcile → close → reconcile composes on the live balance', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Sequence', '1000');
+
+    expect((await reconcile(cookie, account.id, '1200')).status).toBe(201);
+    expect(await getBalance(cookie, account.id)).toBe('1200.0000');
+
+    // +$10 realized P&L.
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '100',
+      exitPrice: '110',
+      quantity: '1',
+    });
+    expect(await getBalance(cookie, account.id)).toBe('1210.0000');
+
+    const res = await reconcile(cookie, account.id, '1500');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.previousBalance).toBe('1210.0000');
+    expect(body.entry.amount).toBe('290.0000');
+    expect(await getBalance(cookie, account.id)).toBe('1500.0000');
+  });
+
+  // Req 8.9 — there is no undo. A wrong figure is corrected by reconciling
+  // again, and BOTH rows survive as the audit trail.
+  it('a mistyped figure is corrected by re-reconciling, retaining both rows', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Fix', '1000');
+
+    expect((await reconcile(cookie, account.id, '100000')).status).toBe(201);
+    expect((await reconcile(cookie, account.id, '10000')).status).toBe(201);
+
+    expect(await getBalance(cookie, account.id)).toBe('10000.0000');
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.entryType === 'balance_adjustment')).toBe(true);
+  });
+
+  it('surfaces the adjustment in the ledger list with a null position', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Recon Ledger', '500');
+    expect((await reconcile(cookie, account.id, '750')).status).toBe(201);
+
+    const res = await authedRequest('GET', `/api/ledger/${account.id}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0].entryType).toBe('balance_adjustment');
+    expect(body.entries[0].positionId).toBeNull();
+    expect(body.entries[0].symbol).toBeNull();
+    // NOTE: `userId` / `reversesGroupId` are NOT asserted absent here. The
+    // ledger LIST route returns raw rows, so those internal columns are on the
+    // wire today for every entry type — a pre-existing gap against Req 1, not
+    // something reconciliation introduces. Pinning it here would pin the wrong
+    // contract for the wrong feature.
+  });
+});

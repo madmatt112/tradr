@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   CreateExchangeRateInputSchema,
   PreviewRateChangeInputSchema,
+  ReconcileBalanceInputSchema,
 } from '@tradr/shared/schemas/accounting';
 
 import { db } from '@/db';
@@ -18,6 +19,7 @@ import {
   getUserDisplayCurrency,
   listExchangeRates,
   previewRateChangeImpact,
+  reconcileAccountBalance,
   setUserDisplayCurrency,
 } from './accounting.service';
 
@@ -82,6 +84,80 @@ accountingRouter.get(
       },
       200,
     );
+  },
+);
+
+/**
+ * @swagger
+ * /api/ledger/{accountId}/reconcile:
+ *   post:
+ *     summary: Reconcile an account's cash balance to a stated figure.
+ *     description: >
+ *       Posts a single `balance_adjustment` ledger entry for the difference
+ *       between the account's current derived balance and `targetBalance`, so
+ *       the balance afterwards equals `targetBalance` exactly.
+ *
+ *       The client sends the TARGET balance, never a delta — the server computes
+ *       the difference inside the transaction that writes the row, behind a row
+ *       lock on the account, so a concurrent position close cannot race it.
+ *
+ *       The balance being reconciled is Tradr's cash balance for the account:
+ *       starting balance plus realized P&L from closed trades. Tradr holds no
+ *       mark-to-market, so it excludes the market value of open positions. Open
+ *       positions do not block or alter this operation.
+ *
+ *       Append-only: this adds a row and never edits or deletes one. A wrong
+ *       figure is corrected by reconciling again; both entries persist.
+ *     tags: [Accounting]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: accountId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [targetBalance]
+ *             properties:
+ *               targetBalance:
+ *                 type: string
+ *                 description: >
+ *                   Decimal string with at most 4 fractional digits, and no more
+ *                   than the account currency's minor units. May be negative (a
+ *                   margin/debit balance).
+ *                 example: '10250.00'
+ *     responses:
+ *       201:
+ *         description: The adjustment entry, plus the balance either side of it.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 entry: { type: object }
+ *                 previousBalance: { type: string, example: '10000.0000' }
+ *                 newBalance: { type: string, example: '10250.0000' }
+ *       400: { description: targetBalance is malformed or too precise for the currency. }
+ *       401: { description: Not authenticated. }
+ *       404: { description: No such account for this user. }
+ *       409: { description: The balance already equals targetBalance — nothing to adjust. }
+ */
+accountingRouter.post(
+  '/ledger/:accountId/reconcile',
+  validate('param', AccountIdParamSchema),
+  validate('json', ReconcileBalanceInputSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { accountId } = c.req.valid('param');
+    const { targetBalance } = c.req.valid('json');
+
+    const result = await reconcileAccountBalance(db, userId, accountId, targetBalance);
+    return c.json(result, 201);
   },
 );
 

@@ -5,10 +5,15 @@ import { accounts, brokerages, users, ledgerEntries } from '@/db/schema';
 import { positions } from '@/db/schema';
 
 // LATERAL aggregate over ledger_entries computing the ledger part of the
-// derived account balance as (SUM credits − SUM debits) restricted to P&L
-// entry types. Backed by the partial covering index
+// derived account balance as (SUM credits − SUM debits) restricted to the
+// balance-affecting entry types. Backed by the partial covering index
 // `ledger_user_account_direction_amount_pnl_idx` (see accounting.schema.ts).
 // Inlined as a raw SQL fragment per the positions.query.ts LATERAL pattern.
+//
+// This entry-type list is one of five hand-written copies (see the
+// `BALANCE_ENTRY_TYPES` comment in accounting.query.ts) and it is the one that
+// drives EVERY account balance the app renders — accounts list, account detail,
+// and the advisor summary. It must stay in lockstep with the others.
 const balanceLateral = sql`LATERAL (
   SELECT (
     COALESCE(SUM(amount) FILTER (WHERE direction = 'credit'), 0)
@@ -16,7 +21,7 @@ const balanceLateral = sql`LATERAL (
   )::numeric(18,4) AS balance
   FROM ledger_entries le
   WHERE le.account_id = ${accounts.id}
-    AND le.entry_type IN ('position_pnl', 'position_pnl_reversal')
+    AND le.entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')
 ) bal`;
 
 // Derived balance = user-entered starting_balance + ledger aggregate, emitted
