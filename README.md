@@ -1,108 +1,131 @@
-# Tradr
+<h1 align="center">▴ Tradr</h1>
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
+<p align="center">
+  <strong>The open-source trading journal that shows its work.</strong><br>
+  Log every fill, size the trade before you take it, and ask an AI advisor about your own P&amp;L.
+</p>
 
-A self-hostable trading journal and analysis platform. Log trades, review
-performance, and (optionally) get AI advisor feedback. It runs as a plain manual
-journal with **no optional keys** configured — the AI advisor and external
-integrations are opt-in. See
-[docs/external-services.md](docs/external-services.md) for the full inventory
-of external services and what enables each.
+<p align="center">
+  <a href="./LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg"></a>
+  <a href="https://github.com/madmatt112/tradr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/madmatt112/tradr/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/madmatt112/tradr/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/madmatt112/tradr?sort=semver"></a>
+</p>
 
-## Self-hosting quickstart
+<!-- Screenshot slot: a real capture of a seeded instance goes here. Do not use
+     the marketing hero mock — its figures are illustrative sample data, and an
+     invented equity curve in the README of a finance tool is a credibility risk. -->
 
-Requires Docker with Compose v2 (`docker compose`).
+Tradr is a self-hostable journal for options and equities traders. It records the whole
+arc of a position — draft, scale-in, partial close — with every fill, fee, and note
+attached, then shows you what your record actually says.
+
+It runs as a complete manual journal with **no keys configured at all**. The AI advisor
+and every external integration are opt-in, and nothing phones home until you switch it
+on. It never places an order.
+
+## Try it, or run it
+
+- **Hosted** — [app.tradr.cloud](https://app.tradr.cloud). Managed, free tier, nothing to run.
+- **Self-hosted** — free and completely unlimited, forever. No feature is fenced off;
+  plan gating is a single deployment setting that ships **off**.
+
+## Quickstart
+
+Requires Docker with Compose v2 and `openssl`. About two minutes.
 
 ```bash
-# 1. Clone
-git clone <repo-url> tradr
+git clone https://github.com/madmatt112/tradr.git
 cd tradr
-
-# 2. Create your env file from the template
-cp .env.example .env
-
-# 3. Generate the required secrets and paste them into .env:
-openssl rand -base64 24   # -> SESSION_SECRET (>=32 chars)
-openssl rand -hex 24      # -> POSTGRES_PASSWORD (URL-safe; hex avoids @ : / ?)
-openssl rand -hex 32      # -> ENCRYPTION_KEY
-
-# 4. Set POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB in .env.
-#    Compose derives DATABASE_URL for the api from these — do NOT set it yourself.
-
-# 5. Start the stack
-docker compose up -d
+./docker/quickstart.sh
 ```
 
-The web UI is published on `http://localhost:8080` by default (override with
-`WEB_PORT` in `.env`). Check liveness:
+The script generates the three required secrets, writes your `.env`, starts the stack,
+and waits for the API to report healthy. It never overwrites an existing `.env`. When it
+finishes, Tradr is on <http://localhost:8080> (override with `WEB_PORT`).
 
-```bash
-curl -fsS http://localhost:8080/api/health    # {"status":"ok","version":"vX.Y.Z"}
-```
+This is the same script CI runs in its `docker-smoke` job, so these instructions are
+executed on every push rather than proofread. To do it by hand instead, or to run behind
+TLS, against your own Postgres, or on a different port, see the
+[self-hosting guide](https://www.tradr.cloud/docs/self-hosting/docker-compose/).
 
-### Required vs. optional
+## Status
 
-**Required** (the stack will not work without these):
+**v0.5.x — pre-1.0, and moving quickly.** What that promises:
 
-- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — database credentials.
-  Compose builds the api's `DATABASE_URL` from them.
-- `SESSION_SECRET` — auth session signing key (≥32 chars).
-- `ENCRYPTION_KEY` — 32-byte hex key used to encrypt stored provider keys.
+- **The HTTP API is not stable yet.** Breaking endpoint changes can land in any release
+  until v1.0.0. Pin a tag rather than tracking `:latest` if that matters to you.
+- **Migrations are forward-only and run automatically on API startup.** There are no
+  down-migrations. Schema changes are split expand-then-contract across releases, so
+  redeploying the previous image stays a viable recovery.
+- **Releases are CI-gated.** A tag publishes images only after CI passes on that exact
+  commit.
+- **Back up before every upgrade.** See the [deployment runbook](docs/runbooks/deployment.md).
 
-**Optional** — Tradr runs as a manual journal without any of these:
+Full policy — what counts as a breaking change, which surfaces are covered — in
+[`docs/versioning.md`](docs/versioning.md). Release notes are the changelog: see
+[Releases](https://github.com/madmatt112/tradr/releases), which the app also renders
+in-product.
 
-- AI advisor provider keys (added in-app, encrypted with `ENCRYPTION_KEY`).
-- `ENCRYPTION_KEY_FINGERPRINT` — recommended; pins the key so a wrong-key boot
-  fails fast (see the runbook).
-- `ENCRYPTION_KEY_PREVIOUS` — only used during key rotation.
-- `ADVISOR_*` tuning, `UNUSUAL_WHALES_BASE_URL`, persona prompt overrides.
+## What it does
 
-See `.env.example` for the full annotated list with generation recipes.
+- **Positions** — draft, open, scale in, close in parts. Multiple fills roll up into one
+  position with a correct average and realized P&L, net of per-fill fees.
+- **Trade calculator** — position size, R:R, dollar risk, and estimated fees from your
+  entry, target, and stop, before anything is at risk.
+- **Accounts & ledger** — multiple brokerages and currencies on a double-entry ledger,
+  with reconciliation.
+- **Performance** — equity curve built from net P&L, broken down daily through all-time.
+- **Options tools** — chain lookup, OCC symbol parsing, Black-Scholes pricing with full Greeks.
+- **AI advisor** — conversation grounded in your own trade history, opt-in and off by
+  default. Bring your own Anthropic or OpenAI key; self-hosted, it is never metered.
+- **CSV import** — bring years of history from any broker with a column-mapping step.
+  Direct read-only broker connections are on the roadmap, not shipped.
 
-### Analytics (optional, off by default)
+## Configuration
 
-Tradr can optionally send **product analytics** to
-[PostHog](https://posthog.com) — set `POSTHOG_API_KEY` (backend business events)
-and/or `POSTHOG_PUBLIC_KEY` (frontend UI events) to turn it on. With no keys set
-it constructs no client and makes no telemetry calls; there is nothing to opt
-out of. Events carry no PII and no trading data — users are identified only by an
-opaque id, and payloads (including captured error stacks) are redaction-scrubbed
-before they leave the container. See [docs/analytics.md](docs/analytics.md) for
-the event catalogue and privacy design.
+Three values must be set; everything else has a working default. `./docker/quickstart.sh`
+generates all three:
 
-### TLS
+| Variable            | What it is                                                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD` | Database password. Compose builds the API's `DATABASE_URL` from the `POSTGRES_*` values — do not set `DATABASE_URL` yourself. |
+| `SESSION_SECRET`    | Signs auth session cookies (≥32 chars).                                                                                       |
+| `ENCRYPTION_KEY`    | 32-byte hex key encrypting stored provider keys at rest (AES-256-GCM).                                                        |
 
-The shipped compose file does **not** terminate TLS. Running HTTPS is the
-operator's responsibility: put your own reverse proxy / edge in front of the
-`web` container. If you do, add that edge to `TRUSTED_PROXIES` so per-IP rate
-limiting stays accurate (see the runbook).
+`ENCRYPTION_KEY_FINGERPRINT` is optional but recommended — it makes a wrong-key boot fail
+fast and loudly instead of failing later when a stored key won't decrypt.
 
-### Operations
+Every key is documented inline in [`.env.example`](.env.example). What a running instance
+talks to over the network, and which setting enables each connection, is in
+[`docs/external-services.md`](docs/external-services.md). Analytics are **off unless you
+set a key** — see [`docs/analytics.md`](docs/analytics.md).
 
-For upgrades, backups, migration status, the coupled timeout/upload settings,
-and diagnosing an `ENCRYPTION_KEY` mismatch crash-loop, see
-[`docs/runbooks/deployment.md`](docs/runbooks/deployment.md).
+**TLS is yours.** The shipped compose file does not terminate it. Put your own reverse
+proxy in front of the `web` container, and add that edge to `TRUSTED_PROXIES` so per-IP
+rate limiting stays accurate.
 
-## Releasing (maintainers)
+## Documentation
 
-Versions are driven by git tags: `make release VERSION=X.Y.Z` bumps and tags,
-and pushing the tag publishes GHCR images plus a GitHub Release — but only
-after CI passes on the tagged commit (a gate in the Release workflow blocks
-publishing otherwise). The full process, assumptions, and failure modes are in
-[`docs/runbooks/release.md`](docs/runbooks/release.md).
+|                                                                           |                                                            |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [User guide](https://www.tradr.cloud/docs/user-guide/getting-started/)    | Using Tradr — first trade to performance review            |
+| [Self-hosting](https://www.tradr.cloud/docs/self-hosting/docker-compose/) | Install, upgrade, back up, run behind TLS                  |
+| [`docs/`](docs/)                                                          | Operator and maintainer references that live with the code |
 
-What that version number promises — which surfaces are covered, what counts as
-a breaking change, and when to pin `:X.Y.Z` rather than track `:latest` — is in
-[`docs/versioning.md`](docs/versioning.md).
+## Contributing
+
+Issues and pull requests are welcome. Development setup, code style, the migration policy,
+and the DCO sign-off requirement are in [`CONTRIBUTING.md`](CONTRIBUTING.md) — commits need
+`git commit -s`, and there is no CLA.
+
+To report a vulnerability, follow [`SECURITY.md`](SECURITY.md). Please don't open a public
+issue for security problems.
 
 ## License & Trademark
 
-Tradr is open source under the **[Apache License 2.0](./LICENSE)** — free to use, self-host, modify, and
-redistribute. See [`NOTICE`](./NOTICE) for attribution terms.
+Apache-2.0 — free to use, self-host, modify, and redistribute. See [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE).
 
-The Apache-2.0 license covers the **code**, not the **name**. **"Tradr"** and the Tradr logo are trademarks;
-see the [Trademark Policy](./TRADEMARK.md) before using the name or logo in a fork, product, service, or
-domain. Fork the code freely, but a modified or independently hosted version must use a different name.
-
-Contributions are welcome under Apache-2.0 via a [Developer Certificate of Origin](./CONTRIBUTING.md) sign-off
-(no CLA) — see [`CONTRIBUTING.md`](./CONTRIBUTING.md). To report a vulnerability, see [`SECURITY.md`](./SECURITY.md).
+The license covers the **code**, not the **name**. "Tradr" and the Tradr logo are
+trademarks: fork the code freely, but a modified or independently hosted version needs a
+different name. See [`TRADEMARK.md`](TRADEMARK.md).

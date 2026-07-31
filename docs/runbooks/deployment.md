@@ -1,22 +1,21 @@
 # Deployment runbook
 
-Operational reference for self-hosting Tradr with the shipped
-`docker-compose.yml`. For first-time setup see the
-[Self-hosting quickstart](../../README.md#self-hosting-quickstart) in the README.
-For what the containers connect out to (and which keys enable each connection)
-see [External services](../external-services.md).
+**Day-two** operations for a self-hosted instance: health, upgrades, backups, and
+the failure modes worth recognising early.
 
-The stack has three services on one bridge network:
+This is not the install guide. First-time setup is
+[`docker/quickstart.sh`](../../docker/quickstart.sh) — the script CI executes — and
+the [self-hosting guide](https://www.tradr.cloud/docs/self-hosting/docker-compose/)
+covers the three-service layout, prerequisites, and configuration in full. Setup
+instructions used to be restated here as well, and the two copies drifted; this
+page now links rather than repeats.
 
-| Service    | Image                              | Published?             |
-| ---------- | ---------------------------------- | ---------------------- |
-| `postgres` | `postgres:16`                      | no (internal only)     |
-| `api`      | built from `docker/Dockerfile.api` | no (internal only)     |
-| `web`      | built from `docker/Dockerfile.web` | `${WEB_PORT:-8080}:80` |
+For what the containers connect out to, and which keys enable each connection, see
+[External services](../external-services.md).
 
-Only `web` exposes a host port. `DATABASE_URL` for `api` is built from the
-`POSTGRES_*` vars inside `docker-compose.yml`; any `DATABASE_URL` in `.env` is
-ignored by the compose stack.
+Two facts to keep in mind while reading the rest of this page: only `web` exposes a
+host port, and `DATABASE_URL` for `api` is built from the `POSTGRES_*` vars inside
+`docker-compose.yml` — any `DATABASE_URL` in `.env` is ignored by the compose stack.
 
 ## Health and migration status
 
@@ -34,7 +33,15 @@ docker compose exec api tradr migrate --status
 ```
 
 Exit codes: `0` schema current, `1` pending migrations, `2` cannot connect.
-This is the only subcommand the CLI accepts (`tradr migrate --status`).
+The `tradr` CLI ships four subcommands, all runnable with
+`docker compose exec api tradr <subcommand>`:
+
+| Subcommand                                    | Does                                                                                                 |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `migrate --status`                            | Reports schema state via the exit codes above.                                                       |
+| `reset-password <email> [--password <value>]` | Resets a user's password from the server — the recovery path on an instance with no SMTP configured. |
+| `storage migrate-to-inline`                   | Moves object-storage-backed uploads back into the database.                                          |
+| `storage gc`                                  | Deletes orphaned upload blobs.                                                                       |
 
 ## Upgrades, migrations, and backups
 
@@ -121,12 +128,19 @@ BYOK). Key material is loaded once at bootstrap.
 
 Set `ENCRYPTION_KEY_FINGERPRINT` to the `sha256` of the raw key bytes. When set,
 `api` aborts at startup (before migrations) if the loaded key doesn't match —
-turning a silent wrong-key deploy into a fast, clearly logged failure. Generate
-it from your key:
+turning a silent wrong-key deploy into a fast, clearly logged failure.
+
+Derive it from the key you are actually running. `docker/quickstart.sh` does this
+for you; by hand, read `ENCRYPTION_KEY` out of `.env` and hash **that**:
 
 ```bash
-openssl rand -hex 32 | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 32
+ENCRYPTION_KEY="$(grep -E '^ENCRYPTION_KEY=' .env | cut -d= -f2)"
+printf '%s' "$ENCRYPTION_KEY" | xxd -r -p | openssl dgst -sha256 -binary | xxd -p -c 32
 ```
+
+Do **not** pipe `openssl rand -hex 32` into that hash: it fingerprints a brand-new
+random key rather than yours, so the value can never match and the api exits on
+every boot.
 
 With the fingerprint **unset** and at least one stored provider key, a wrong key
 instead fails later via the decrypt canary (same crash-loop). With the

@@ -1,18 +1,19 @@
 # Required-States Audit (both themes)
 
-**Supersedes** `docs/dark-mode-audit.md` (retired by visual-design Task 19).
+How every interactive state — hover, focus, active, disabled, selected — is
+expected to render in **both** the light and dark themes, and where each
+expectation is enforced.
 
 Scope: the global chrome plus every interactive component and data surface in
-`apps/web/src`. Spec: visual-design Component 4 + Component 8 (Req 10.1, 10.6,
-8.4, 11.2, 2.1). The audit is anchored to the two machine gates so it stays
-self-checking, not a snapshot:
+`apps/web/src`. The audit is anchored to two machine gates, so it stays
+self-checking rather than a snapshot that rots:
 
 - `apps/web/scripts/check-contrast.mjs` — per-theme WCAG-AA contrast + ΔEOK
   distinctness, **light AND dark**. Reports **0 findings**.
 - `apps/web/scripts/check-design-lint.mjs` — no raw palette classes, on-ladder
   spacing, primitive-bypass guard. Reports **0 findings**.
 
-## 1. Global chrome re-themes via `.dark` (R10.1)
+## 1. Global chrome re-themes via `.dark`
 
 All global chrome is token-clean — it carries no hardcoded color and re-themes
 automatically once `.dark` re-values the tokens (`index.css`).
@@ -26,7 +27,7 @@ automatically once `.dark` re-values the tokens (`index.css`).
 
 No stray classes were found; no chrome fix was required.
 
-## 2. Active/selected navigation = amber primary (R2.1)
+## 2. Active/selected navigation = amber primary
 
 The brand amber (`--color-primary`) is reserved for the primary action **and**
 active/selected nav. All **13** Sidebar nav links (`components/layout/Sidebar.tsx`)
@@ -68,7 +69,7 @@ modified — re-skin is via tokens only.
 
 All states use semantic tokens, so each renders correctly in both themes.
 
-## 4. Disabled / muted legibility — covered by the contrast gate (R10.6)
+## 4. Disabled / muted legibility — covered by the contrast gate
 
 The codebase has **no grey palette classes**. The de-emphasised path is
 `disabled:opacity-50` (~8 `components/ui` sites, all on inactive controls) and
@@ -107,7 +108,7 @@ distinctness — preserved; type-scale/font tokens unchanged):
 | `--color-success`                  | light | `0.52 0.09 190`  | `0.50 0.10 190`  | `text-success` ≥4.5 on its `/10` tint          |
 | `--color-destructive`              | dark  | `0.62 0.21 12`   | `0.58 0.21 12`   | white `destructive-foreground` ≥4.5 (was 3.94) |
 
-## 5. Density registers (R8.4)
+## 5. Density registers
 
 The two registers are a **surface convention**, not a new component variant:
 
@@ -122,7 +123,7 @@ widget's existing `density` prop). Numbers stay tabular-aligned at **both**
 registers because alignment is owned by the `Numeric` primitive, independent of
 the surrounding register.
 
-## 6. Target size ≥24×24px (R8.4 / WCAG 2.5.8)
+## 6. Target size ≥24×24px (WCAG 2.5.8)
 
 Satisfied by the shadcn defaults — verified in `components/ui/button.tsx`; no
 control smaller than 24px exists, and the design adds none:
@@ -137,7 +138,7 @@ control smaller than 24px exists, and the design adds none:
 The Sidebar's collapse toggle and log-out use `icon-sm` (32px) / `sm` (32px).
 No new harness check is added (the shadcn floor + this audit cover it).
 
-## 7. Keyboard / tab-order / ARIA + focus indicator (R11.2)
+## 7. Keyboard / tab-order / ARIA + focus indicator
 
 This spec adds **no** new interactive component — it re-skins via tokens. So the
 keyboard-operability, logical tab order, and ARIA correctness ride on the
