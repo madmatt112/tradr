@@ -1,7 +1,6 @@
 import Decimal from 'decimal.js';
 
-import { calculateFees, getCurrencyMinorUnits, parseOccSymbol } from '@tradr/shared';
-import type { FeeScheduleInput, FillInput } from '@tradr/shared';
+import { getCurrencyMinorUnits, parseOccSymbol } from '@tradr/shared';
 
 import type { Database, Transaction } from '@/db';
 import {
@@ -477,55 +476,23 @@ export async function listPositions(
       currencyMinorUnits,
     );
 
-    // Fee calculation
     const brokerageName: string | null = row.brokerage_name ?? null;
-    let brokerageFees = 0;
 
-    if (brokerageName !== null) {
-      const feeSchedule: FeeScheduleInput = {
-        stockPerShareCommission: String(row.stock_per_share_commission),
-        stockMinPerFill: String(row.stock_min_per_fill),
-        stockMaxPerFill: String(row.stock_max_per_fill),
-        optionsPerContractCommission: String(row.options_per_contract_commission),
-        optionsPerContractExchangeFee: String(row.options_per_contract_exchange_fee),
-        optionsMinPerFill: String(row.options_min_per_fill),
-        optionsMaxPerFill: String(row.options_max_per_fill),
-      };
-
-      const assetType = row.asset_type as 'stock' | 'option';
-      const side = row.side as 'long' | 'short';
-      const fillInputs: FillInput[] = [];
-
-      const entryQty = new Decimal(String(row.entry_qty));
-      if (!entryQty.isZero()) {
-        const entryCost = new Decimal(String(row.entry_cost));
-        fillInputs.push({
-          quantity: entryQty.toString(),
-          price: entryCost.div(entryQty).toString(),
-          type: assetType,
-          side: side === 'long' ? 'buy' : 'sell',
-        });
-      }
-
-      const exitQty = new Decimal(String(row.exit_qty));
-      if (!exitQty.isZero()) {
-        const exitCost = new Decimal(String(row.exit_cost));
-        fillInputs.push({
-          quantity: exitQty.toString(),
-          price: exitCost.div(exitQty).toString(),
-          type: assetType,
-          side: side === 'long' ? 'sell' : 'buy',
-        });
-      }
-
-      if (fillInputs.length > 0) {
-        const feeResult = calculateFees(fillInputs, feeSchedule);
-        brokerageFees = parseFloat(feeResult.totalFees);
-      }
-    }
-
-    const grossPnl = pnl.realizedPnl;
-    const netPnl = grossPnl !== null ? grossPnl - brokerageFees : null;
+    // Net realized P&L is `computePnlFromTotals`, full stop — it has ALREADY
+    // subtracted `exitFees` and the pro-rated `allocatedEntryFees` recorded on
+    // the fills.
+    //
+    // This previously did `pnl.realizedPnl − calculateFees(feeSchedule)`, under
+    // the local name `grossPnl`. That name was the bug: the value is not gross,
+    // so the schedule was being subtracted a SECOND time on top of fees already
+    // stored on the fills. A brokerage fee schedule is an entry-time convenience
+    // (FillDialog computes the fee from it as the user types, overridable, and
+    // stores the result on `fills.fees`); it is not a reporting input, and
+    // re-applying it at read time double-counts.
+    const netPnl = pnl.realizedPnl;
+    const grossPnl = pnl.grossPnl;
+    // Fees actually recorded on the fills, not a schedule estimate.
+    const brokerageFees = pnl.fees ?? 0;
 
     // Trade-plan fields & R/R (R14). `target_price`/`stop_loss` arrive via
     // `p.*` as raw Drizzle numeric strings — pass them straight into
@@ -599,38 +566,14 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     currencyMinorUnits,
   );
 
-  // Fee calculation
   const brokerageName: string | null = row.brokerageName ?? null;
-  let brokerageFees = 0;
 
-  if (brokerageName !== null && fillRows.length > 0) {
-    const feeSchedule: FeeScheduleInput = {
-      stockPerShareCommission: String(row.stockPerShareCommission),
-      stockMinPerFill: String(row.stockMinPerFill),
-      stockMaxPerFill: String(row.stockMaxPerFill),
-      optionsPerContractCommission: String(row.optionsPerContractCommission),
-      optionsPerContractExchangeFee: String(row.optionsPerContractExchangeFee),
-      optionsMinPerFill: String(row.optionsMinPerFill),
-      optionsMaxPerFill: String(row.optionsMaxPerFill),
-    };
-
-    const assetType = position.assetType as 'stock' | 'option';
-    const side = position.side as 'long' | 'short';
-
-    const fillInputs: FillInput[] = fillRows.map((f) => ({
-      quantity: f.quantity,
-      price: f.price,
-      type: assetType,
-      side:
-        f.type === 'entry' ? (side === 'long' ? 'buy' : 'sell') : side === 'long' ? 'sell' : 'buy',
-    }));
-
-    const feeResult = calculateFees(fillInputs, feeSchedule);
-    brokerageFees = parseFloat(feeResult.totalFees);
-  }
-
-  const grossPnl = pnl.realizedPnl;
-  const netPnl = grossPnl !== null ? grossPnl - brokerageFees : null;
+  // Same unification as the list path above: `computePnlFromTotals` has already
+  // netted the fees recorded on the fills. Re-applying the brokerage schedule
+  // here double-counted them — see the comment at the list site.
+  const netPnl = pnl.realizedPnl;
+  const grossPnl = pnl.grossPnl;
+  const brokerageFees = pnl.fees ?? 0;
 
   // Trade-plan fields & R/R (R14). `position.targetPrice`/`position.stopLoss`
   // are raw Drizzle numeric strings — pass straight into computeRiskReward

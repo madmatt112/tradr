@@ -16,6 +16,22 @@ export interface PnlResult {
   totalExitQuantity: number;
   realizedPnl: number | null;
   returnPercentage: number | null;
+  /**
+   * Pre-fee realized P&L. `realizedPnl` minus nothing — the price move alone.
+   * Surfaced so callers can show a fee breakdown without recomputing it (three
+   * sites previously did, inconsistently).
+   */
+  grossPnl: number | null;
+  /**
+   * Fees actually recorded on the fills and subtracted from `grossPnl` to reach
+   * `realizedPnl`: all exit fees plus entry fees pro-rated by
+   * `exitQty / entryQty`. NOT a brokerage-schedule estimate — a fee schedule is
+   * an entry-time convenience that populates `fills.fees`, and must never be
+   * re-applied at read time.
+   *
+   * Invariant: `grossPnl − fees === realizedPnl`.
+   */
+  fees: number | null;
 }
 
 export function aggregateFills(
@@ -71,6 +87,8 @@ export function computePnlFromTotals(
       totalExitQuantity: 0,
       realizedPnl: null,
       returnPercentage: null,
+      grossPnl: null,
+      fees: null,
     };
   }
 
@@ -90,6 +108,8 @@ export function computePnlFromTotals(
       totalExitQuantity: 0,
       realizedPnl: null,
       returnPercentage: null,
+      grossPnl: null,
+      fees: null,
     };
   }
 
@@ -100,14 +120,21 @@ export function computePnlFromTotals(
     .times(exitQty.div(entryQty))
     .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
 
-  const realizedPnl = avgExitPrice!
+  const grossPnl = avgExitPrice!
     .minus(avgEntryPrice)
     .times(exitQty)
     .times(sideMultiplier)
     .times(contractMultiplier)
-    .minus(exitFees)
-    .minus(allocatedEntryFees)
     .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
+
+  // Total fees recorded on the fills that this realization bears.
+  const totalFees = exitFees
+    .plus(allocatedEntryFees)
+    .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
+
+  // Derived from the rounded components so `grossPnl − fees === realizedPnl`
+  // holds exactly, rather than rounding the unrounded expression separately.
+  const realizedPnl = grossPnl.minus(totalFees);
 
   // Return percentage denominator: avgEntryPrice × exitQty × contractMultiplier + allocatedEntryFees.
   // For short positions, this represents gross sale proceeds (notional sold), not margin requirement.
@@ -128,5 +155,7 @@ export function computePnlFromTotals(
     totalExitQuantity: exitQty.toNumber(),
     realizedPnl: realizedPnl.toNumber(),
     returnPercentage: returnPercentage?.toNumber() ?? null,
+    grossPnl: grossPnl.toNumber(),
+    fees: totalFees.toNumber(),
   };
 }

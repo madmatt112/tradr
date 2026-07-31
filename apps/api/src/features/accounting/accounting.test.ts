@@ -1325,3 +1325,165 @@ describe('per-fill realized P&L posting', () => {
     expect(await getBalance(cookie, account.id)).toBe('1100.0000');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fee-model unification: ledger, position detail and performance must agree
+// ---------------------------------------------------------------------------
+//
+// These three surfaces used to compute net realized P&L three different ways:
+//   ledger           computePnlFromTotals                  (fills.fees only)
+//   position detail  computePnlFromTotals − scheduleFees   (fills.fees TWICE)
+//   performance      computeGrossPnl     − scheduleFees    (schedule only)
+//
+// A brokerage fee schedule is an ENTRY-TIME convenience — `FillDialog` computes
+// the fee from it as the user types and stores the result on `fills.fees`,
+// overridable. Re-applying it at read time double-counts. Nothing existed to
+// catch the divergence, which is how it drifted; these are that test.
+
+describe('net realized P&L is consistent across ledger, position detail and performance', () => {
+  async function createBrokerageWithFees(cookie: string, name: string) {
+    const res = await authedRequest('POST', '/api/brokerages', cookie, { name });
+    expect(res.status).toBe(201);
+    const brokerage = await res.json();
+    // A non-zero schedule is the whole point: if any surface re-applies it on
+    // top of fills.fees, the numbers below diverge.
+    const upd = await authedRequest('PUT', `/api/brokerages/${brokerage.id}`, cookie, {
+      name,
+      feeSchedule: {
+        stockPerShareCommission: '0.01',
+        stockMinPerFill: '1',
+        stockMaxPerFill: '10',
+        optionsPerContractCommission: '0.65',
+        optionsPerContractExchangeFee: '0.05',
+        optionsMinPerFill: '0',
+        optionsMaxPerFill: '10',
+      },
+    });
+    expect(upd.status).toBe(200);
+    return brokerage;
+  }
+
+  it('a position with recorded fill fees AND a fee schedule reports one number everywhere', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const brokerage = await createBrokerageWithFees(cookie, 'Fee Broker');
+
+    const acctRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Fee Model Acct',
+      currency: 'USD',
+      startingBalance: '1000',
+      brokerageId: brokerage.id,
+    });
+    expect(acctRes.status).toBe(201);
+    const account = await acctRes.json();
+
+    // Entry 10 @ $100 with $5 recorded fees; exit 10 @ $110 with $5 recorded.
+    // Gross = (110 − 100) × 10 = 100. Recorded fees = 10. Net = 90.
+    const pos = await createPosition(cookie, account.id, { symbol: 'FEEZ' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '5',
+      filledAt: '2026-03-02T00:00:00Z',
+    });
+    await openPosition(cookie, pos.id, '2026-03-02T00:00:00Z');
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '10',
+      fees: '5',
+      filledAt: '2026-03-03T00:00:00Z',
+    });
+
+    // 1. Ledger / account balance.
+    const balRes = await authedRequest('GET', `/api/accounts/${account.id}`, cookie);
+    expect(balRes.status).toBe(200);
+    expect((await balRes.json()).balance).toBe('1090.0000');
+
+    // 2. Position detail. grossPnl is the pre-fee figure, brokerageFees the
+    //    fees RECORDED on the fills — not a schedule estimate — and the
+    //    breakdown reconciles.
+    const detailRes = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect(detailRes.status).toBe(200);
+    const detail = await detailRes.json();
+    expect(detail.netPnl).toBe(90);
+    expect(detail.grossPnl).toBe(100);
+    expect(detail.brokerageFees).toBe(10);
+    expect(detail.grossPnl - detail.brokerageFees).toBe(detail.netPnl);
+
+    // 3. Performance. Same trade, same number — previously this reported 100
+    //    (gross) or a schedule-derived figure, never 90.
+    const perfRes = await authedRequest(
+      'GET',
+      '/api/performance?' +
+        new URLSearchParams({
+          granularity: 'day',
+          start: '2026-03-01T00:00:00.000Z',
+          end: '2026-03-31T00:00:00.000Z',
+          tz: 'UTC',
+          currency: 'USD',
+        }).toString(),
+      cookie,
+    );
+    expect(perfRes.status).toBe(200);
+    const perf = await perfRes.json();
+    const usd = perf.currencies.find((c: { code: string }) => c.code === 'USD');
+    expect(usd.stats.totalNetPnl).toBe('90');
+    // The per-bucket breakdown reconciles too: gross 100 − fees 10 = net 90.
+    const bucket = usd.series.find((b: { totalPositions: number }) => b.totalPositions > 0);
+    expect(bucket.grossPnl).toBe('100');
+    expect(bucket.fees).toBe('10');
+    expect(bucket.netPnl).toBe('90');
+  });
+
+  it('with NO fee schedule, performance still nets the recorded fill fees', async () => {
+    // The self-hosted default. Performance used to skip its fee block entirely
+    // when no schedule existed and report gross, so the equity curve and the
+    // account balance disagreed by exactly the fees the user had recorded.
+    const { cookie } = await registerAndGetCookie();
+    const acctRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'No Schedule Acct',
+      currency: 'USD',
+      startingBalance: '1000',
+    });
+    const account = await acctRes.json();
+
+    const pos = await createPosition(cookie, account.id, { symbol: 'NOSCH' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '5',
+      filledAt: '2026-03-02T00:00:00Z',
+    });
+    await openPosition(cookie, pos.id, '2026-03-02T00:00:00Z');
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '10',
+      fees: '5',
+      filledAt: '2026-03-03T00:00:00Z',
+    });
+
+    expect(
+      (await (await authedRequest('GET', `/api/accounts/${account.id}`, cookie)).json()).balance,
+    ).toBe('1090.0000');
+
+    const perfRes = await authedRequest(
+      'GET',
+      '/api/performance?' +
+        new URLSearchParams({
+          granularity: 'day',
+          start: '2026-03-01T00:00:00.000Z',
+          end: '2026-03-31T00:00:00.000Z',
+          tz: 'UTC',
+          currency: 'USD',
+        }).toString(),
+      cookie,
+    );
+    expect(perfRes.status).toBe(200);
+    const perf = await perfRes.json();
+    const usd = perf.currencies.find((c: { code: string }) => c.code === 'USD');
+    expect(usd.stats.totalNetPnl).toBe('90');
+  });
+});

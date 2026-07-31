@@ -1,10 +1,7 @@
 import Decimal from 'decimal.js';
 
 import {
-  calculateFees,
   getCurrencyMinorUnits,
-  type FeeScheduleInput,
-  type FillInput,
   type PerformanceCurrency,
   type PerformanceQueryInput,
   type PerformanceResponse,
@@ -21,7 +18,7 @@ import {
 import { resolveTimezone } from '@tradr/shared/schemas/performance';
 
 import type { Database } from '@/db';
-import { aggregateFills, type FillTotals } from '@/features/positions/pnl';
+import { aggregateFills, computePnlFromTotals, type FillTotals } from '@/features/positions/pnl';
 import { config } from '@/lib/config';
 import { ClientAbortError, InvalidTimezoneError, TimeoutError } from '@/lib/errors';
 import { captureServerEvent } from '@/lib/posthog';
@@ -190,6 +187,25 @@ async function classifyTimeframePositions(
   return out;
 }
 
+/**
+ * Net realized P&L for one closed position.
+ *
+ * Fees come from `fills.fees` and NOTHING is re-applied here. A brokerage fee
+ * schedule is an ENTRY-TIME convenience: `FillDialog` computes the fee from the
+ * account's schedule while the user types the fill, the user may override it,
+ * and the result is stored on `fills.fees`. The schedule's job ends there.
+ *
+ * This function previously did `computeGrossPnl(...) − calculateFees(schedule)`,
+ * which re-applied a modelled schedule on top of fees already recorded on the
+ * fills — and, when an account had NO schedule, skipped fees entirely and
+ * reported gross P&L. Either way performance disagreed with the account balance
+ * (which has always been net of `fills.fees`), so the equity curve and the
+ * balance did not tie out. `computePnlFromTotals` is now the single formula
+ * across the ledger, position detail, and performance.
+ *
+ * `grossPnl` is still surfaced for the fee-attribution breakdown; it is the
+ * pre-fee figure, and `fees` is the sum actually recorded on the fills.
+ */
 function classifyOne(position: SnapshotPosition): ClassifiedPosition {
   const minorUnits = getCurrencyMinorUnits(position.currency);
   const side = position.side as 'long' | 'short';
@@ -198,20 +214,15 @@ function classifyOne(position: SnapshotPosition): ClassifiedPosition {
   const totals = aggregateFills(position.fills);
   const grossPnl = computeGrossPnl(totals, side, assetType, minorUnits);
 
-  let fees = new Decimal(0);
-  if (position.feeSchedule && position.fills.length > 0) {
-    const feeSchedule: FeeScheduleInput = position.feeSchedule;
-    const fillInputs: FillInput[] = position.fills.map((f) => ({
-      quantity: f.quantity,
-      price: f.price,
-      type: assetType,
-      side: feeSide(f.type, side),
-    }));
-    const feeResult = calculateFees(fillInputs, feeSchedule);
-    fees = new Decimal(feeResult.totalFees).toDecimalPlaces(minorUnits, Decimal.ROUND_HALF_UP);
-  }
+  const pnl = computePnlFromTotals(totals, side, assetType, minorUnits);
+  const netPnl =
+    pnl.realizedPnl === null
+      ? new Decimal(0)
+      : new Decimal(pnl.realizedPnl).toDecimalPlaces(minorUnits, Decimal.ROUND_HALF_UP);
 
-  const netPnl = grossPnl.minus(fees);
+  // Recorded fees, derived so the breakdown still reconciles: gross − net.
+  const fees = grossPnl.minus(netPnl);
+
   const classification = classifyPosition(netPnl, position.currency);
 
   return {
@@ -244,11 +255,6 @@ function computeGrossPnl(
     .times(sideMultiplier)
     .times(contractMultiplier)
     .toDecimalPlaces(minorUnits, Decimal.ROUND_HALF_UP);
-}
-
-function feeSide(fillType: string, positionSide: 'long' | 'short'): 'buy' | 'sell' {
-  if (fillType === 'entry') return positionSide === 'long' ? 'buy' : 'sell';
-  return positionSide === 'long' ? 'sell' : 'buy';
 }
 
 function buildCurrencyEntry(
