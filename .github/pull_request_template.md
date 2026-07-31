@@ -14,3 +14,4 @@ Closes #
 - [ ] `pnpm test`, `pnpm check-types`, and `pnpm lint` pass locally.
 - [ ] Tests added or updated for the behavior this PR changes.
 - [ ] If an API endpoint changed: OpenAPI/Swagger definition and docs updated **in this PR**.
+- [ ] If this changes documentation: it follows [`docs/STYLE.md`](../docs/STYLE.md) and uses the terms in [`docs/TERMS.md`](../docs/TERMS.md).

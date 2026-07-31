@@ -118,9 +118,16 @@ Tradr favors **simple, boring, readable code over clever abstractions.** A few g
 
 ## API and documentation changes
 
-If you add, remove, or modify an API endpoint, update its OpenAPI/Swagger definition **in the same pull
-request**, and update the relevant documentation. Docs live in the repo — changes to how the app is built,
-configured, or self-hosted should land alongside the code that changes them.
+If you add, remove, or modify an API endpoint, update its `@swagger` JSDoc block **in the same pull
+request**, and update the relevant documentation. Operator and maintainer references live in
+[`docs/`](docs/) — changes to how the app is built, configured, or self-hosted should land alongside the
+code that changes them.
+
+Documentation has a house style: [`docs/STYLE.md`](docs/STYLE.md), with the declared vocabulary in
+[`docs/TERMS.md`](docs/TERMS.md). It is a simplified-English standard that applies to procedural and
+reference writing — how-to pages, runbooks, README setup steps, and `.env.example` comments — and
+deliberately **not** to narrative or marketing prose. The short version: one instruction per sentence,
+imperative mood, active voice, one term per meaning, and don't document a command you haven't run.
 
 ## Database migrations
 
