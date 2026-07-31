@@ -57,8 +57,26 @@ jobs:
             git diff --exit-code apps/api/src/db/migrations
           fi
 
+      # The published API reference is generated from the `@swagger` blocks next
+      # to each route, so it cannot drift from the endpoints the app serves —
+      # provided something checks. This is that check: regenerate, and fail if
+      # the committed artifact differs. A route change that skips its `@swagger`
+      # block fails here, in the same PR.
+      #
+      # The generator runs with failOnErrors, so a malformed block fails the job
+      # rather than silently dropping that endpoint from the reference.
+      - name: Check the OpenAPI artifact is up to date
+        run: |
+          pnpm --filter @tradr/docs openapi:generate
+          git diff --exit-code apps/docs/src/openapi/tradr-api.json
+
       - name: Build frontend
         run: pnpm --filter @tradr/web build
+
+      # Builds the docs site. starlightLinksValidator() fails the build on any
+      # broken internal doc link, so this is also the link check.
+      - name: Build docs
+        run: pnpm --filter @tradr/docs build
 
       - name: Check bundle size (total + dashboard entry + per-widget budgets)
         run: node apps/web/scripts/check-bundle-size.mjs

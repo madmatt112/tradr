@@ -1,0 +1,16 @@
+---
+// Docs convention — "Hosted only" callout. Thin wrapper over Starlight's built-in
+// <Aside> so hosted-vs-self-hosted deltas are marked inline with a single,
+// consistent admonition instead of duplicating pages. Applies to app.tradr.cloud:
+// managed backups, wallet credits, billing, feature gating.
+//
+// Uses the `note` aside type, which the docs theme (docs.css) renders in the
+// brand amber accent. Usage in .mdx:
+//   import HostedOnly from '@/components/HostedOnly.astro';
+//   <HostedOnly>Managed nightly backups run automatically.</HostedOnly>
+import { Aside } from '@astrojs/starlight/components';
+---
+
+<Aside type="note" title="Hosted only">
+  <slot />
+</Aside>

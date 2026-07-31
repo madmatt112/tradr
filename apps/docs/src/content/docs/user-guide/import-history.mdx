@@ -1,0 +1,35 @@
+---
+title: "Import your history"
+description: "Bring an existing trading history into Tradr with a broker CSV: upload, map columns, preview, and commit. Includes what Tradr does and does not connect to directly."
+---
+
+CSV import is how you bring an existing trading history into Tradr. Export the
+trades from your broker, upload the file, map its columns to Tradr fields,
+preview the result, and commit.
+
+## What Tradr connects to
+
+Tradr imports from a **file you export from your broker**. It does not hold your
+broker credentials and it does not place orders.
+
+There is **no direct broker connection today** — no Interactive Brokers link, no
+live price feed, no OAuth to any brokerage. Tradr ships broker-specific column
+presets so a familiar export maps in one click, but the transport is always a
+file you supply. A direct read-only IBKR connection is planned; until it ships,
+CSV is the only import path, and this page will say so.
+
+## Import a CSV
+
+:::note
+This section is not written yet. The importer is in the app under
+**Positions → Import**; it walks you through upload, column mapping, a preview,
+and a commit step. This page will document the broker presets, the column
+mapping rules, and the file and row limits.
+:::
+
+## Related
+
+- [Log and manage positions](/user-guide/positions/) — what an imported
+  position looks like once it lands.
+- [Accounts & the multi-currency ledger](/user-guide/accounts/) — pick the
+  account an import belongs to.

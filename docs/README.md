@@ -4,10 +4,13 @@ References that live with the code, so a change to how Tradr is built, configure
 or operated lands in the same pull request as the change itself.
 
 The polished, task-oriented documentation is on the docs site:
-**[User guide](https://www.tradr.cloud/docs/user-guide/getting-started/)** ·
-**[Self-hosting](https://www.tradr.cloud/docs/self-hosting/docker-compose/)**.
+**[User guide](https://docs.tradr.cloud/user-guide/getting-started/)** ·
+**[Self-hosting](https://docs.tradr.cloud/self-hosting/docker-compose/)**.
 Start there if you want to _use_ or _install_ Tradr. Start here if you want to know
 how something works, or what it promises.
+
+That site is built from [`apps/docs`](../apps/docs) in this repository, so a doc fix
+is an ordinary pull request. Run it locally with `pnpm --filter @tradr/docs dev`.
 
 ## For operators
 
@@ -19,7 +22,7 @@ how something works, or what it promises.
 | [`runbooks/deployment.md`](runbooks/deployment.md) | Day-two operations: health and migration status, upgrades, backups, the coupled timeout/upload settings, and diagnosing an `ENCRYPTION_KEY` mismatch crash-loop. |
 
 First-time install is not here — it is [`../docker/quickstart.sh`](../docker/quickstart.sh)
-and the [self-hosting guide](https://www.tradr.cloud/docs/self-hosting/docker-compose/).
+and the [self-hosting guide](https://docs.tradr.cloud/self-hosting/docker-compose/).
 
 ## For maintainers
 

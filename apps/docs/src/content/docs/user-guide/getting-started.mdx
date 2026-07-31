@@ -1,0 +1,215 @@
+---
+title: Getting started
+description: Create your account and log your first trade end to end in about ten minutes.
+---
+
+import HostedOnly from '@/components/HostedOnly.astro';
+import SelfHosted from '@/components/SelfHosted.astro';
+
+This is a hand-held first session. By the end you will have created an account,
+set up a brokerage account with a starting balance, logged a trade through its
+full lifecycle, seen it on your dashboard and equity curve, asked the AI advisor
+one question, and reviewed your performance. It takes about ten minutes and
+nothing here can go wrong — every step tells you what you should see.
+
+This guide describes the **hosted app at `app.tradr.cloud`**. If you run your own
+instance, the screens are identical; the few differences are called out in
+**Self-hosted** notes.
+
+<SelfHosted>
+  Open your instance at its own address instead (by default
+  `http://localhost:8080`). See [Self-host with Docker
+  Compose](/self-hosting/docker-compose/) to stand one up first.
+</SelfHosted>
+
+## Before you start
+
+You need:
+
+- An email address and a browser (latest Chrome, Firefox, Safari, or Edge).
+- Nothing else. Tradr works as a plain manual journal — no broker connection, no
+  API keys, no payment required to complete this tutorial.
+
+## Step 1 — Create your account
+
+1. Go to **https://app.tradr.cloud** and choose **Sign up**.
+2. Enter your email and a password, then submit.
+
+**Expected result:** you land on an empty dashboard. There are no trades yet, so
+most widgets show zeros or an empty state — that is correct.
+
+<HostedOnly>
+  You may be asked to verify your email. Click the link in the message to
+  confirm; you can still explore before verifying.
+</HostedOnly>
+
+<SelfHosted>
+  Email verification is only active if the operator configured SMTP. If it is
+  off, your account is usable immediately. If you ever forget your password on an
+  instance without email, the operator can reset it from the server with `tradr
+  reset-password <your-email>`.
+</SelfHosted>
+
+## Step 2 — Add a brokerage account with a starting balance
+
+Every trade is booked against an **account** — this is how Tradr tracks your
+balance and builds your equity curve. Create one before logging trades.
+
+1. Open **Accounts** from the main navigation.
+2. Choose **New account**.
+3. Fill in:
+   - **Name** — e.g. `Main` or your broker's name.
+   - **Currency** — e.g. `USD`. Pick the currency this account trades in.
+   - **Starting balance** — e.g. `10000`. This is your opening cash; the equity
+     curve begins here.
+4. Save.
+
+**Expected result:** the account appears in your accounts list showing a balance
+of your starting amount (e.g. `$10,000.00`). This opening balance is the
+baseline every future P&L figure is measured against.
+
+Tradr supports **multiple accounts in different currencies** and consolidates
+them into a single view. For this tutorial one account is enough — see
+[Accounts & the multi-currency ledger](/user-guide/accounts/) when you are
+ready to add more.
+
+## Step 3 — Log your first trade through its lifecycle
+
+A Tradr position moves through three states:
+
+| State | Meaning |
+| --- | --- |
+| **Draft** | An idea you are planning but have not entered. No effect on your balance. |
+| **Open** | You are in the trade. It shows in open positions and uses live/marked P&L. |
+| **Closed** | You have exited. Realised P&L is booked to the account. |
+
+You will walk a trade through all three.
+
+### 3a. Create a draft
+
+1. Open **Positions** and choose **New position**.
+2. Select the **account** you created in Step 2.
+3. Enter the trade idea:
+   - **Symbol** — e.g. `AAPL`.
+   - **Side** — `Long`.
+   - **Quantity** — e.g. `10` shares.
+   - **Planned entry price** — e.g. `200`.
+   - Optionally a **target**, a **stop**, and a **note** describing the setup.
+4. Save it as a **Draft**.
+
+**Expected result:** the position appears in your Positions list tagged
+**Draft**. Your account balance is unchanged — a draft is just a plan.
+
+> **Tip:** the [Trade calculator](/user-guide/trade-calculator/) turns an
+> entry, target, and stop into a suggested position size, risk/reward ratio, and
+> dollar risk. Use it to size the trade before you commit.
+
+### 3b. Open the position
+
+When you actually enter the trade:
+
+1. Open the draft and choose **Open** (or **Add fill**).
+2. Confirm the **entry price**, **quantity**, **fill date**, and any **fees**.
+3. Submit.
+
+**Expected result:** the position is now tagged **Open** and shows in your open
+positions. If you added fees, they are recorded against the trade.
+
+### 3c. Close the position
+
+When you exit:
+
+1. Open the position and choose **Close** (or **Add closing fill**).
+2. Enter the **exit price** (e.g. `210`), **quantity**, **date**, and any exit
+   **fees**.
+3. Submit.
+
+**Expected result:** the position is tagged **Closed** and shows a **realised
+P&L** (e.g. a $10 move on 10 shares ≈ `+$100.00`, less fees). Your **account
+balance updates** to reflect the gain or loss.
+
+Positions also support **partial closes**, **scale-ins**, and **multiple
+fills**. See [Log and manage positions](/user-guide/positions/) for the full
+lifecycle, including deleting a draft you decide not to take.
+
+## Step 4 — See it on the dashboard and equity curve
+
+1. Go back to the **Dashboard**.
+
+**Expected result:** the widgets are no longer empty. You should see:
+
+- **Stats** reflecting one closed trade (e.g. trade count, win rate, net P&L).
+- The **equity curve** now showing a line that starts at your $10,000 opening
+  balance and steps to your post-trade balance.
+- Your **account balance** widget showing the updated figure.
+
+The dashboard is a **drag-and-drop widget grid** — add, remove, and rearrange
+panels (stats, open positions, performance charts, account balances, position
+sizing). Your layout is saved to your account. See [Customise the
+dashboard](/user-guide/dashboard/).
+
+## Step 5 — Ask the AI advisor one question
+
+The AI advisor is a conversational assistant that can analyse trade ideas and,
+if you opt in, reason over your own trade history.
+
+<HostedOnly>
+  The advisor needs either **wallet credits** (buy a credit pack and pay per use
+  against your balance) **or** your **own API key** (BYOK — paste an
+  Anthropic/OpenAI key in settings and you are billed by the provider directly).
+  Pick whichever you prefer in **Settings → Advisor**. Without one of the two, the
+  advisor is simply unavailable — nothing breaks.
+</HostedOnly>
+
+<SelfHosted>
+  There are no wallet credits. You (or your operator) supply an LLM API key,
+  either as a platform key in the server's `.env` or as your own BYOK key in
+  settings. See [How the AI advisor
+  works](/user-guide/explanation/how-the-advisor-works/).
+</SelfHosted>
+
+Once a key or credits are in place:
+
+1. Open the **Advisor**.
+2. (Optional) turn on **trade-data access** so the advisor can see your positions
+   and accounts for personalised answers.
+3. Ask something concrete, e.g. _"Review my AAPL trade — was the risk/reward
+   reasonable?"_
+4. Send.
+
+**Expected result:** the advisor streams back a response token by token. If you
+granted data access, it can reference the trade you just logged. You can also
+**upload a chart screenshot** for the advisor to read (requires a vision-capable
+model).
+
+> Prefer a provider without tool-use? You still get a **conversation-only** mode
+> — you just lose live market-data fetching. This is surfaced when you pick the
+> model.
+
+## Step 6 — Review your performance
+
+1. Open **Performance**.
+2. Choose a timeframe — **daily, weekly, monthly, yearly, YTD,** or **all-time**.
+
+**Expected result:** a P&L breakdown for the chosen period and an equity curve
+covering it. With one closed trade you will see a single data point; the picture
+fills in as you log more.
+
+## You're done
+
+You have completed a full loop: **account → draft → open → closed → dashboard →
+advisor → performance.** From here, keep logging real trades — the value
+compounds as your history grows.
+
+### Next steps
+
+- [Log and manage positions](/user-guide/positions/) — partial closes,
+  scale-ins, tags, and editing.
+- [Use the trade calculator](/user-guide/trade-calculator/) — size and
+  risk-check before you enter.
+- [Import trades from CSV](/user-guide/import-history/) — bring your history in
+  from another journal or your broker.
+- [Accounts & the multi-currency ledger](/user-guide/accounts/) — add more
+  brokers and currencies.
+- [Metrics glossary](/user-guide/reference/metrics-glossary/) — exactly how
+  each number is calculated.

@@ -5,7 +5,7 @@ the failure modes worth recognising early.
 
 This is not the install guide. First-time setup is
 [`docker/quickstart.sh`](../../docker/quickstart.sh) — the script CI executes — and
-the [self-hosting guide](https://www.tradr.cloud/docs/self-hosting/docker-compose/)
+the [self-hosting guide](https://docs.tradr.cloud/self-hosting/docker-compose/)
 covers the three-service layout, prerequisites, and configuration in full. Setup
 instructions used to be restated here as well, and the two copies drifted; this
 page now links rather than repeats.

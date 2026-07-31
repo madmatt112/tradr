@@ -1,0 +1,42 @@
+---
+title: "Hosted vs self-hosted: what's different"
+description: The map between the hosted app at app.tradr.cloud and a self-run instance — managed backups, wallet credits vs BYOK, feature gating, who supplies LLM keys, and who runs migrations and backups.
+---
+
+import HostedOnly from '@/components/HostedOnly.astro';
+import SelfHosted from '@/components/SelfHosted.astro';
+
+Tradr is the same product whether you use the managed app or run your own
+instance. A small number of flows diverge, and this page is the map for them.
+
+## The admonition convention
+
+Rather than duplicating pages, the docs mark divergent flows **inline** with one
+of two callouts. Both are thin wrappers over Starlight's `<Aside>`:
+
+<HostedOnly>
+  Applies to `app.tradr.cloud` (the managed app): managed backups, wallet credits,
+  billing, and feature gating.
+</HostedOnly>
+
+<SelfHosted>
+  Applies to a self-run instance: you supply your own LLM key, and you run and
+  back up your own database.
+</SelfHosted>
+
+Use `<HostedOnly>` / `<SelfHosted>` from `src/components/` in any `.mdx`
+page where a step only applies to one deployment.
+
+## What differs
+
+| Area | Hosted (`app.tradr.cloud`) | Self-hosted |
+| --- | --- | --- |
+| Backups | Managed, automatic | You run and restore your own |
+| LLM access | Wallet credits (platform keys) | Bring your own key (BYOK) |
+| Billing | Stripe wallet | None |
+| Feature gating | On (plan limits apply) | Off by default |
+| Migrations | Run for you | Auto-run on API startup |
+
+:::note
+This page is a stub — the table above is the placeholder for the full map.
+:::

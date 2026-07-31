@@ -118,13 +118,12 @@ function pricedConfiguredModels(): BillingModel[] {
  *   post:
  *     summary: Create a Stripe Checkout Session for a credit pack.
  *     description: >
- *       Authed and per-user rate limited (10 / 60 s). Body `{ packId }` selects
- *       a server-authoritative `CREDIT_PACKS` pack — the price and credit grant
- *       come solely from config, never client input (REQ-2.2). Returns
- *       `{ url }`, the Stripe-hosted checkout page to redirect to. NO wallet
- *       write happens here — crediting is the webhook's job (REQ-2.6). When
- *       Stripe is unconfigured the endpoint returns a stable
- *       `402 BILLING_NOT_AVAILABLE` (REQ-2.5/10.2).
+ *       Authed and per-user rate limited (10 / 60 s). Body `{ packId }` selects a
+ *       server-authoritative `CREDIT_PACKS` pack — the price and credit grant come
+ *       solely from config, never client input. Returns `{ url }`, the Stripe-hosted
+ *       checkout page to redirect to. NO wallet write happens here — crediting is the
+ *       webhook's job. When Stripe is unconfigured the endpoint returns a stable `402
+ *       BILLING_NOT_AVAILABLE`.
  *     tags: [Billing]
  *     requestBody:
  *       required: true
@@ -160,15 +159,13 @@ billingRouter.post(
  *     summary: Create a Stripe Checkout Session for the Pro subscription.
  *     description: >
  *       Authed; shares the per-user 10 / 60 s spend budget with the credit-pack
- *       checkout and the portal endpoint (plan-tiers D8). No request body — the
- *       Price sold is server-configured (`STRIPE_PRO_PRICE_ID`, REQ-2.2). Refuses
- *       `402 BILLING_NOT_AVAILABLE` unless the Pro subscription is fully
- *       configured (REQ-2.7), and `409 SUBSCRIPTION_EXISTS` when the user
- *       already has a qualifying subscription — including `past_due` and
- *       canceled-pending-period-end (REQ-2.4). Returns `{ url }`, the
- *       Stripe-hosted checkout page. NO mirror write happens here — the mirror
- *       is the webhook's job (REQ-3.2); the success URL returns to the billing
- *       tab in its `?subscription=confirming` state (REQ-2.6).
+ *       checkout and the portal endpoint. No request body — the Price sold is
+ *       server-configured (`STRIPE_PRO_PRICE_ID`). Refuses `402 BILLING_NOT_AVAILABLE`
+ *       unless the Pro subscription is fully configured, and `409 SUBSCRIPTION_EXISTS`
+ *       when the user already has a qualifying subscription — including `past_due` and
+ *       canceled-pending-period-end. Returns `{ url }`, the Stripe-hosted checkout
+ *       page. NO mirror write happens here — the mirror is the webhook's job; the
+ *       success URL returns to the billing tab in its `?subscription=confirming` state.
  *     tags: [Billing]
  *     responses:
  *       200: { description: '{ url } — the Stripe-hosted checkout URL.' }
@@ -189,12 +186,11 @@ billingRouter.post('/subscription/checkout', perUserCheckoutRateLimit, async (c)
  *   post:
  *     summary: Create a Stripe Billing Portal session.
  *     description: >
- *       Authed; shares the per-user 10 / 60 s spend budget (plan-tiers D15).
- *       Looks up the persisted billing-customer linkage FIRST — none ⇒
- *       `404 NO_BILLING_CUSTOMER`; Stripe unconfigured ⇒
- *       `402 BILLING_NOT_AVAILABLE`. Returns `{ url }`, the Stripe-hosted
- *       Billing Portal (cancel / payment method / invoices per the account's
- *       operator-set default portal configuration — REQ-4.1/4.2).
+ *       Authed; shares the per-user 10 / 60 s spend budget. Looks up the persisted
+ *       billing-customer linkage FIRST — none ⇒ `404 NO_BILLING_CUSTOMER`; Stripe
+ *       unconfigured ⇒ `402 BILLING_NOT_AVAILABLE`. Returns `{ url }`, the
+ *       Stripe-hosted Billing Portal (cancel / payment method / invoices per the
+ *       account's operator-set default portal configuration —).
  *     tags: [Billing]
  *     responses:
  *       200: { description: '{ url } — the Stripe-hosted Billing Portal URL.' }
@@ -214,17 +210,16 @@ billingRouter.post('/subscription/portal', perUserCheckoutRateLimit, async (c) =
  *   get:
  *     summary: Get the authenticated user's tier state (plan card / CTA / usage surface).
  *     description: >
- *       Authed, DELIBERATELY UNTHROTTLED read (plan-tiers Component 6's pinned
- *       posture — the 2 s confirming poll alone is 30/min and the tier cache key
- *       is invalidated after every committed turn; sharing the spend budget
- *       would 429 the confirming banner and lock out legitimate checkout
- *       clicks). Returns the TierState shape: `gatingEnabled`, `exempt`,
- *       `tier`, `purchasable`, `subscription` (derived from the LOCAL mirror
- *       only via the qualifying-first display-row rule — renders with Stripe
- *       unconfigured, REQ-11.1; carried even when gating is off, the REQ-11.7
- *       carve-out), `limits` (the free/pro lever catalog), and `usage`
- *       (populated only when gating is on and the user is non-exempt).
- *       Booleans and state only — no server credentials, no price ids.
+ *       Authed, and DELIBERATELY UNTHROTTLED — the 2 s
+ *       confirming poll alone is 30/min and the tier cache key is invalidated after
+ *       every committed turn; sharing the spend budget would 429 the confirming banner
+ *       and lock out legitimate checkout clicks). Returns the TierState shape:
+ *       `gatingEnabled`, `exempt`, `tier`, `purchasable`, `subscription` (derived from
+ *       the LOCAL mirror only via the qualifying-first display-row rule — renders with
+ *       Stripe unconfigured, and carried even when gating is off), `limits`
+ *       (the free/pro lever catalog), and `usage` (populated only when gating is on and
+ *       the user is non-exempt). Booleans and state only — no server credentials, no
+ *       price ids.
  *     tags: [Billing]
  *     responses:
  *       200: { description: TierState — see packages/shared/src/schemas/tier.ts. }
@@ -241,9 +236,9 @@ billingRouter.get('/tier', async (c) => {
  *   get:
  *     summary: Get the authenticated user's wallet balance.
  *     description: >
- *       User-scoped. Returns `{ balance, available }` as decimal credit strings
- *       (bigint micro-USD; `available = balance − reserved`). A user with no
- *       wallet row reads as zero (REQ-1.1).
+ *       User-scoped. Returns `{ balance, available }` as decimal credit strings (bigint
+ *       micro-USD; `available = balance − reserved`). A user with no wallet row reads
+ *       as zero.
  *     tags: [Billing]
  *     responses:
  *       200: { description: '{ balance, available } credit strings.' }
@@ -259,10 +254,9 @@ billingRouter.get('/balance', async (c) => {
  *   get:
  *     summary: List the authenticated user's wallet/usage history (cursor-paginated).
  *     description: >
- *       User-scoped unified history (credits, debits, reversals) joined to
- *       per-turn token detail (REQ-7.3). `cursor` is the opaque base64 cursor
- *       from a prior page; absent/invalid ⇒ first page. Response
- *       `{ items, nextCursor }`.
+ *       User-scoped unified history (credits, debits, reversals) joined to per-turn
+ *       token detail. `cursor` is the opaque base64 cursor from a prior page;
+ *       absent/invalid ⇒ first page. Response `{ items, nextCursor }`.
  *     tags: [Billing]
  *     parameters:
  *       - in: query
@@ -284,17 +278,15 @@ billingRouter.get('/usage', async (c) => {
  *     summary: Get billing availability, offered packs, the priced model list, and subscription purchasability.
  *     description: >
  *       Drives the billing settings tab and the no-BYOK model picker. Authed,
- *       unthrottled read (plan-tiers Component 6 — never behind the spend
- *       budget). `enabled` is `isStripeConfigured()`; `packs` is
- *       `CREDIT_PACKS`; `models` is the platform-priced provider/model set
- *       restricted to providers with a configured platform key (REQ-7.4) — the
- *       authoritative picker source, so the UI never offers an unpriced or
- *       unspendable model. Each provider's allowance model carries
- *       `allowance: true` ONLY when feature gating is enabled (REQ-8.9a/8.8 —
- *       self-host pickers must never advertise free monthly turns);
- *       `subscription.purchasable` is `isProSubscriptionConfigured()`
- *       (REQ-2.7). When `enabled` is false the frontend hides the purchase UI
- *       (graceful absence, REQ-10.2).
+ *       unthrottled read, never behind the spend budget. `enabled` is
+ *       `isStripeConfigured`; `packs` is `CREDIT_PACKS`; `models` is the
+ *       platform-priced provider/model set restricted to providers with a configured
+ *       platform key — the authoritative picker source, so the UI never offers an
+ *       unpriced or unspendable model. Each provider's allowance model carries
+ *       `allowance: true` ONLY when feature gating is enabled (self-host pickers must
+ *       never advertise free monthly turns); `subscription.purchasable` is
+ *       `isProSubscriptionConfigured`. When `enabled` is false the frontend hides the
+ *       purchase UI (graceful absence).
  *     tags: [Billing]
  *     responses:
  *       200: { description: '{ enabled, packs, models, subscription: { purchasable } }.' }
@@ -341,16 +333,15 @@ function webhookStatus(result: WebhookResult): 200 | 500 {
  *   post:
  *     summary: Stripe webhook — idempotent, settled-only crediting (PUBLIC).
  *     description: >
- *       PUBLIC endpoint (NO session auth — Stripe is the caller) and IP-rate
- *       limited. Reads the UNMODIFIED RAW request body and verifies the
- *       `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET` over the exact
- *       raw bytes (REQ-3.1) — an invalid or missing signature returns 400 and no
- *       wallet is touched. The verified event is dispatched to the idempotent
- *       settled-only handler; its outcome maps to 200 (credited / acked /
- *       duplicate / refused / reversed — terminal, Stripe stops retrying) or a
- *       retryable 5xx (transient verify-failure, no row written — Stripe
- *       redelivers). NOTE: this route MUST receive the raw body before any JSON
- *       parse; a global JSON body parser would silently break signatures.
+ *       PUBLIC endpoint (NO session auth — Stripe is the caller) and IP-rate limited.
+ *       Reads the UNMODIFIED RAW request body and verifies the `Stripe-Signature`
+ *       header against `STRIPE_WEBHOOK_SECRET` over the exact raw bytes — an invalid or
+ *       missing signature returns 400 and no wallet is touched. The verified event is
+ *       dispatched to the idempotent settled-only handler; its outcome maps to 200
+ *       (credited / acked / duplicate / refused / reversed — terminal, Stripe stops
+ *       retrying) or a retryable 5xx (transient verify-failure, no row written — Stripe
+ *       redelivers). NOTE: this route MUST receive the raw body before any JSON parse;
+ *       a global JSON body parser would silently break signatures.
  *     tags: [Billing]
  *     security: []
  *     requestBody:

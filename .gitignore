@@ -29,6 +29,9 @@ e2e/playwright-report/
 .turbo
 .vite
 
+# Astro-generated content-collection types (apps/docs)
+.astro/
+
 # Binaries
 bin/
 *.exe
