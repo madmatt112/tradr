@@ -1487,3 +1487,140 @@ describe('net realized P&L is consistent across ledger, position detail and perf
     expect(usd.stats.totalNetPnl).toBe('90');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Bucket A/B split: which metrics may use a partially-closed position
+// ---------------------------------------------------------------------------
+//
+// Rule: a metric that REQUIRES a completed trade excludes positions that are not
+// flat (win rate, profit factor, avg/largest win/loss, breakeven rate, counts).
+// A metric that CAN use a partial realization does (total P&L, the equity
+// curve, per-bucket P&L).
+
+describe('performance bucket A/B split', () => {
+  function perfQuery(overrides: Record<string, string> = {}) {
+    return (
+      '/api/performance?' +
+      new URLSearchParams({
+        granularity: 'day',
+        start: '2026-04-01T00:00:00.000Z',
+        end: '2026-04-30T00:00:00.000Z',
+        tz: 'UTC',
+        currency: 'USD',
+        ...overrides,
+      }).toString()
+    );
+  }
+
+  async function usdAccount(cookie: string, name: string) {
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name,
+      currency: 'USD',
+      startingBalance: '1000',
+    });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  it('a partial exit contributes P&L but NOT to win rate or position counts', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await usdAccount(cookie, 'Bucket Split');
+
+    // Entry 10 @ $100, then exit only 5 @ $110 → +50 realized, position OPEN.
+    const pos = await createPosition(cookie, account.id, { symbol: 'SPLIT' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0',
+      filledAt: '2026-04-02T00:00:00Z',
+    });
+    await openPosition(cookie, pos.id, '2026-04-02T00:00:00Z');
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-04-03T00:00:00Z',
+    });
+
+    const detail = await (await authedRequest('GET', `/api/positions/${pos.id}`, cookie)).json();
+    expect(detail.status).toBe('open');
+
+    const perf = await (await authedRequest('GET', perfQuery(), cookie)).json();
+    const usd = perf.currencies.find((c: { code: string }) => c.code === 'USD');
+
+    // Bucket B — the realization counts immediately, in the bucket where the
+    // exit fill actually happened.
+    expect(usd.stats.totalNetPnl).toBe('50');
+    const bucket = usd.series.find((b: { bucketStart: string }) =>
+      b.bucketStart.startsWith('2026-04-03'),
+    );
+    expect(bucket.netPnl).toBe('50');
+    // And the equity curve ends at the same figure.
+    expect(usd.equityCurve[usd.equityCurve.length - 1].cumulativeNetPnl).toBe('50');
+
+    // Bucket A — nothing is a completed trade yet.
+    expect(usd.stats.winRate).toBeNull();
+    expect(usd.stats.profitFactor).toBeNull();
+    expect(usd.stats.avgWin).toBeNull();
+    expect(usd.stats.largestWin).toBeNull();
+    expect(usd.stats.totalPositions).toBe(0);
+    // The P&L bucket carries no position count — a partial exit on a position
+    // that has not gone flat. Intended, not an inconsistency.
+    expect(bucket.totalPositions).toBe(0);
+    expect(bucket.wins).toBe(0);
+  });
+
+  it('once flat, the same position joins the bucket-A statistics exactly once', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await usdAccount(cookie, 'Bucket Flat');
+
+    const pos = await createPosition(cookie, account.id, { symbol: 'FLATZ' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0',
+      filledAt: '2026-04-02T00:00:00Z',
+    });
+    await openPosition(cookie, pos.id, '2026-04-02T00:00:00Z');
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-04-03T00:00:00Z',
+    });
+    // Second half, a day later — auto-closes the position.
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-04-04T00:00:00Z',
+    });
+
+    const perf = await (await authedRequest('GET', perfQuery(), cookie)).json();
+    const usd = perf.currencies.find((c: { code: string }) => c.code === 'USD');
+
+    // Bucket B — total counted once, and SPLIT across the two days it was
+    // actually realized on, not lumped onto the close date.
+    expect(usd.stats.totalNetPnl).toBe('100');
+    const d3 = usd.series.find((b: { bucketStart: string }) =>
+      b.bucketStart.startsWith('2026-04-03'),
+    );
+    const d4 = usd.series.find((b: { bucketStart: string }) =>
+      b.bucketStart.startsWith('2026-04-04'),
+    );
+    expect(d3.netPnl).toBe('50');
+    expect(d4.netPnl).toBe('50');
+
+    // Bucket A — one completed trade, one win, counted on the close date only.
+    expect(usd.stats.totalPositions).toBe(1);
+    expect(usd.stats.winRate).toBe(100);
+    expect(d3.totalPositions).toBe(0);
+    expect(d4.totalPositions).toBe(1);
+    expect(d4.wins).toBe(1);
+  });
+});

@@ -18,7 +18,13 @@ import {
 import { resolveTimezone } from '@tradr/shared/schemas/performance';
 
 import type { Database } from '@/db';
-import { aggregateFills, computePnlFromTotals, type FillTotals } from '@/features/positions/pnl';
+import {
+  aggregateFills,
+  computePnlFromTotals,
+  computeRealizationEvents,
+  type FillTotals,
+  type RealizationEvent,
+} from '@/features/positions/pnl';
 import { config } from '@/lib/config';
 import { ClientAbortError, InvalidTimezoneError, TimeoutError } from '@/lib/errors';
 import { captureServerEvent } from '@/lib/posthog';
@@ -128,14 +134,26 @@ export async function getPerformance(
     : history.currencies;
 
   const positionsByCurrency = new Map<string, ClassifiedPosition[]>();
-  for (const p of classified) {
+  for (const p of classified.flat) {
     const list = positionsByCurrency.get(p.currency);
     if (list) list.push(p);
     else positionsByCurrency.set(p.currency, [p]);
   }
 
+  const realizationsByCurrency = new Map<string, RealizationEvent[]>();
+  for (const r of classified.realizations) {
+    const list = realizationsByCurrency.get(r.currency);
+    if (list) list.push(r.event);
+    else realizationsByCurrency.set(r.currency, [r.event]);
+  }
+
   const currencies: PerformanceCurrency[] = selectedCurrencies.map((cur) =>
-    buildCurrencyEntry(cur, positionsByCurrency.get(cur.code) ?? [], buckets),
+    buildCurrencyEntry(
+      cur,
+      positionsByCurrency.get(cur.code) ?? [],
+      realizationsByCurrency.get(cur.code) ?? [],
+      buckets,
+    ),
   );
 
   const defaultCurrency = pickDefaultCurrency(history.currencies);
@@ -167,24 +185,55 @@ export async function getPerformance(
   return PerformanceResponseSchema.parse(response);
 }
 
+/**
+ * Walk the snapshot once, producing BOTH populations the two metric buckets
+ * need (design: the bucket A/B split):
+ *
+ *  - `flat` — positions that are currently closed, for the per-trade statistics
+ *    that only mean anything for a completed trade (win rate, profit factor,
+ *    avg/largest win/loss, breakeven rate, counts). Unchanged behaviour.
+ *  - `realizations` — every realization event across ALL relevant positions,
+ *    open or closed, dated at the fill that produced it. This is what lets a
+ *    partial exit move total P&L and the equity curve immediately instead of
+ *    staying invisible until the position goes flat.
+ */
 async function classifyTimeframePositions(
   positions: readonly SnapshotPosition[],
   abortSignal: AbortSignal,
   startTime: number,
-): Promise<ClassifiedPosition[]> {
-  const out: ClassifiedPosition[] = [];
+): Promise<{ flat: ClassifiedPosition[]; realizations: CurrencyRealization[] }> {
+  const flat: ClassifiedPosition[] = [];
+  const realizations: CurrencyRealization[] = [];
+
   for (let i = 0; i < positions.length; i++) {
     if (abortSignal.reason instanceof ClientAbortError) throw abortSignal.reason;
     if (Date.now() - startTime > TIMEOUT_MS) throw new TimeoutError();
     if (abortSignal.reason instanceof TimeoutError) throw abortSignal.reason;
 
-    out.push(classifyOne(positions[i]!));
+    const position = positions[i]!;
+
+    const classified = classifyOne(position);
+    if (classified !== null) flat.push(classified);
+
+    for (const event of computeRealizationEvents(
+      position.fills.map((f) => ({ ...f, filledAt: new Date(f.filledAt) })),
+      position.side as 'long' | 'short',
+      position.assetType as 'stock' | 'option',
+      getCurrencyMinorUnits(position.currency),
+    )) {
+      realizations.push({ currency: position.currency, event });
+    }
 
     if ((i + 1) % CHUNK_SIZE === 0) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
-  return out;
+  return { flat, realizations };
+}
+
+interface CurrencyRealization {
+  currency: string;
+  event: RealizationEvent;
 }
 
 /**
@@ -206,7 +255,14 @@ async function classifyTimeframePositions(
  * `grossPnl` is still surfaced for the fee-attribution breakdown; it is the
  * pre-fee figure, and `fees` is the sum actually recorded on the fills.
  */
-function classifyOne(position: SnapshotPosition): ClassifiedPosition {
+function classifyOne(position: SnapshotPosition): ClassifiedPosition | null {
+  // Bucket A (design: "requires flat"). A position that is not currently flat
+  // has no completed-trade outcome, so it contributes to NONE of the per-trade
+  // statistics — win rate, profit factor, avg/largest win/loss, breakeven rate,
+  // or the position counts. Its realized P&L still reaches bucket B via
+  // `computeRealizationEvents`.
+  if (position.status !== 'closed' || position.closedAt === null) return null;
+
   const minorUnits = getCurrencyMinorUnits(position.currency);
   const side = position.side as 'long' | 'short';
   const assetType = position.assetType as 'stock' | 'option';
@@ -257,9 +313,27 @@ function computeGrossPnl(
     .toDecimalPlaces(minorUnits, Decimal.ROUND_HALF_UP);
 }
 
+/**
+ * Assemble one currency's series from the TWO populations (the bucket A/B
+ * split):
+ *
+ *  - **Bucket B — P&L** (`netPnl`/`grossPnl`/`fees` per bucket, and therefore
+ *    the equity curve and `stats.totalNetPnl`): driven by `realizations`, each
+ *    bucketed at the fill that produced it. A partial exit lands in the bucket
+ *    where it actually happened.
+ *  - **Bucket A — counts and per-trade stats** (`totalPositions`/`wins`/
+ *    `losses`/`breakevens`, win rate, profit factor, avg/largest win/loss):
+ *    driven by `positions`, which contains only currently-flat positions,
+ *    bucketed at `closedAt`. Unchanged.
+ *
+ * A bucket can therefore legitimately carry P&L with a zero position count —
+ * that is a partial exit on a position that has not gone flat yet, and it is the
+ * intended behaviour, not an inconsistency.
+ */
 function buildCurrencyEntry(
   history: HistoryCurrency,
   positions: readonly ClassifiedPosition[],
+  realizations: readonly RealizationEvent[],
   buckets: ReturnType<typeof generateBucketSeries>,
 ): PerformanceCurrency {
   const series: SeriesBucket[] = buckets.map((b) => ({
@@ -279,22 +353,30 @@ function buildCurrencyEntry(
     fees: new Decimal(0),
   }));
 
-  const sorted = [...positions].sort((a, b) => a.closedAt.getTime() - b.closedAt.getTime());
-  let bucketIdx = 0;
-  for (const p of sorted) {
-    const t = p.closedAt.getTime();
-    while (bucketIdx < buckets.length && buckets[bucketIdx]!.endInstant.getTime() <= t) {
-      bucketIdx++;
+  /** Index of the bucket containing `t`, or -1 when outside the window. */
+  const bucketIndexFor = (t: number): number => {
+    for (let i = 0; i < buckets.length; i++) {
+      const b = buckets[i]!;
+      if (t >= b.startInstant.getTime() && t < b.endInstant.getTime()) return i;
     }
-    if (bucketIdx >= buckets.length) break;
-    const bucket = buckets[bucketIdx]!;
-    if (t < bucket.startInstant.getTime()) continue;
+    return -1;
+  };
 
-    const a = acc[bucketIdx]!;
-    a.net = a.net.plus(p.netPnl);
-    a.gross = a.gross.plus(p.grossPnl);
-    a.fees = a.fees.plus(p.fees);
-    const s = series[bucketIdx]!;
+  // Bucket B — P&L, from realization events at their own timestamps.
+  for (const event of realizations) {
+    const idx = bucketIndexFor(event.occurredAt.getTime());
+    if (idx < 0) continue;
+    const a = acc[idx]!;
+    a.net = a.net.plus(event.netPnl);
+    a.gross = a.gross.plus(event.grossPnl);
+    a.fees = a.fees.plus(event.fees);
+  }
+
+  // Bucket A — counts and classification, from flat positions at closedAt.
+  for (const p of positions) {
+    const idx = bucketIndexFor(p.closedAt.getTime());
+    if (idx < 0) continue;
+    const s = series[idx]!;
     s.totalPositions++;
     if (p.classification === 'winning') s.wins++;
     else if (p.classification === 'losing') s.losses++;
@@ -318,7 +400,15 @@ function buildCurrencyEntry(
     },
     series,
     equityCurve: buildCumulativeSeries(series),
-    stats: computePositionSetStatistics(positions),
+    stats: {
+      // Bucket A — every per-trade statistic, over flat positions only.
+      ...computePositionSetStatistics(positions),
+      // Bucket B — total P&L follows the realizations, so a partial exit counts
+      // immediately. Summed from the series so it is identically the last point
+      // of the equity curve; taking it from `computePositionSetStatistics`
+      // would silently reinstate the flat-only population.
+      totalNetPnl: series.reduce((sum, b) => sum.plus(b.netPnl), new Decimal(0)).toString(),
+    },
   };
 }
 
