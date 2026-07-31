@@ -23,11 +23,13 @@ It runs as a complete manual journal with **no keys configured at all**. The AI 
 and every external integration are opt-in, and nothing phones home until you switch it
 on. It never places an order.
 
-## Try it, or run it
+## How to run it
 
-- **Hosted** — [app.tradr.cloud](https://app.tradr.cloud). Managed, free tier, nothing to run.
-- **Self-hosted** — free and completely unlimited, forever. No feature is fenced off;
-  plan gating is a single deployment setting that ships **off**.
+**Self-hosted, with the quickstart below** — free and completely unlimited, forever. No
+feature is fenced off; plan gating is a single deployment setting that ships **off**.
+
+A managed option at `app.tradr.cloud` is planned and **not open yet**, so self-hosting is
+the way to run Tradr today. Nothing about the self-hosted build depends on it.
 
 ## Quickstart
 
