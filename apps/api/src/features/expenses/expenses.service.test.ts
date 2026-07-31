@@ -187,7 +187,14 @@ function realisedRow(overrides: Partial<RealisedPositionRow>): RealisedPositionR
     positionId: overrides.positionId ?? 'pos-x',
     realisedPnl: overrides.realisedPnl ?? '-100',
     openedAt: overrides.openedAt ?? new Date('2026-01-01T00:00:00Z'),
-    closedAt: overrides.closedAt ?? new Date('2026-06-15T00:00:00Z'),
+    // `in` rather than `??`: a case that deliberately passes `closedAt: null`
+    // (a loss realized on a still-open position) must keep the null, and `??`
+    // would silently swap the default back in.
+    closedAt: 'closedAt' in overrides ? overrides.closedAt! : new Date('2026-06-15T00:00:00Z'),
+    // Defaults to closedAt: for a position exited in one go the realization IS
+    // the close, so every pre-existing case keeps its exact semantics. Cases
+    // that exercise staged exits set it explicitly.
+    realisedAt: overrides.realisedAt ?? overrides.closedAt ?? new Date('2026-06-15T00:00:00Z'),
     symbol: overrides.symbol ?? 'AAPL',
     assetType: overrides.assetType ?? 'stock',
     side: overrides.side ?? 'long',
@@ -458,6 +465,92 @@ describe('findWashSaleFlags', () => {
       symbol: 'AAPL 250417C200',
       assetType: 'option',
       openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    expect(flags).toHaveLength(0);
+  });
+
+  // --- Partial realization (ledger-balances Req 9) ---
+  //
+  // A position realizes P&L per fill, so it can hold a realized loss while
+  // STILL OPEN. Wash-sale detection used to bail on `closedAt === null`, which
+  // made those losses invisible, and otherwise anchored its window on the close
+  // date rather than on when the loss was actually realized.
+
+  it('flags a loss realized on a still-OPEN position (closedAt null)', () => {
+    log.warn.mockClear();
+    const loss = realisedRow({
+      positionId: 'loss-open',
+      symbol: 'AAPL',
+      assetType: 'stock',
+      side: 'long',
+      // Partial exit realized the loss; the position has not gone flat.
+      closedAt: null,
+      realisedAt: new Date('2026-06-15T00:00:00Z'),
+      realisedPnl: '-100',
+    });
+    const candidate = candidateRow({
+      positionId: 'cand-open',
+      symbol: 'AAPL',
+      assetType: 'stock',
+      side: 'long',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    // Previously zero — the loss was skipped entirely for having no closedAt.
+    expect(flags).toHaveLength(1);
+    expect(flags[0].reason).toBe('repurchase_within_30_days');
+    expect(flags[0].closedAt).toBeNull();
+    expect(flags[0].realisedAt).toEqual(new Date('2026-06-15T00:00:00Z'));
+  });
+
+  it('anchors the 30d window on the realization date, not the close date', () => {
+    log.warn.mockClear();
+    // Loss realized 1 March by a partial exit; the position did not go flat
+    // until 20 April. A repurchase on 10 March is 9 days after the REALIZATION
+    // (inside the window) but 41 days before the CLOSE (outside it).
+    const loss = realisedRow({
+      positionId: 'loss-staged',
+      symbol: 'AAPL',
+      assetType: 'stock',
+      side: 'long',
+      realisedAt: new Date('2026-03-01T00:00:00Z'),
+      closedAt: new Date('2026-04-20T00:00:00Z'),
+      realisedPnl: '-100',
+    });
+    const candidate = candidateRow({
+      positionId: 'cand-staged',
+      symbol: 'AAPL',
+      assetType: 'stock',
+      side: 'long',
+      openedAt: new Date('2026-03-10T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].reason).toBe('repurchase_within_30_days');
+  });
+
+  it('does NOT flag a repurchase that is only inside the stale close-date window', () => {
+    log.warn.mockClear();
+    // Mirror of the above: 15 May is inside +/-30d of the 20 April close but 75
+    // days after the 1 March realization. Anchoring on the close date would
+    // raise a false flag here.
+    const loss = realisedRow({
+      positionId: 'loss-stale',
+      symbol: 'AAPL',
+      assetType: 'stock',
+      side: 'long',
+      realisedAt: new Date('2026-03-01T00:00:00Z'),
+      closedAt: new Date('2026-04-20T00:00:00Z'),
+      realisedPnl: '-100',
+    });
+    const candidate = candidateRow({
+      positionId: 'cand-stale',
+      symbol: 'AAPL',
+      assetType: 'stock',
+      side: 'long',
+      openedAt: new Date('2026-05-15T00:00:00Z'),
+      closedAt: new Date('2026-05-20T00:00:00Z'),
     });
     const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
     expect(flags).toHaveLength(0);

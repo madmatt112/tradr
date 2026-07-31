@@ -25,7 +25,10 @@ export type WashSaleFlag = {
   underlying: string | null;
   side: 'long' | 'short';
   openedAt: Date | string;
-  closedAt: Date | string;
+  /** Null when the loss was realized on a position that is still open. */
+  closedAt: Date | string | null;
+  /** The instant the loss was realized — what the ±30d window is anchored on. */
+  realisedAt: Date | string;
   realisedLoss: string;
   reason: 'repurchase_within_30_days' | 'held_open_in_30d_window';
   counterpartyPositionIds: string[];
@@ -218,12 +221,14 @@ function findMatchingCandidates(
   candidates: KeyedCandidate[],
   opts: { requireStillOpenAt: Date | null },
 ): { matched: KeyedCandidate[]; anyOpenedInWindow: boolean } {
-  if (loss.closedAt === null) return { matched: [], anyOpenedInWindow: false };
-
-  const closedAtMs = new Date(loss.closedAt).getTime();
-  const windowStartMs = closedAtMs - THIRTY_DAYS_MS;
-  const windowEndMs = closedAtMs + THIRTY_DAYS_MS;
-  const lossDayBucket = utcDateBucket(loss.closedAt);
+  // Anchored on the REALIZATION date, not the close date. Under staged exits a
+  // position realizes on several dates while `closedAt` is a single, possibly
+  // much later, instant — and for a position still open it is null, which used
+  // to make the whole loss invisible here.
+  const realisedAtMs = new Date(loss.realisedAt).getTime();
+  const windowStartMs = realisedAtMs - THIRTY_DAYS_MS;
+  const windowEndMs = realisedAtMs + THIRTY_DAYS_MS;
+  const lossDayBucket = utcDateBucket(loss.realisedAt);
   const stillOpenAtMs = opts.requireStillOpenAt ? opts.requireStillOpenAt.getTime() : null;
 
   const matched: KeyedCandidate[] = [];
@@ -292,7 +297,8 @@ export function findWashSaleFlags(
   const flags: WashSaleFlag[] = [];
 
   for (const loss of losingPositions) {
-    if (loss.closedAt === null) continue;
+    // No `closedAt === null` skip: a position can hold a realized loss while
+    // still open (Req 9), and skipping those hid them from detection entirely.
     const matchKey = keyLoss(loss, parseUnderlying, log);
     if (matchKey === null) continue;
     const pool = loss.assetType === 'stock' ? stock : option;
@@ -309,6 +315,7 @@ export function findWashSaleFlags(
       side: loss.side,
       openedAt: loss.openedAt,
       closedAt: loss.closedAt,
+      realisedAt: loss.realisedAt,
       realisedLoss: loss.realisedPnl,
       reason: anyOpenedInWindow ? 'repurchase_within_30_days' : 'held_open_in_30d_window',
       counterpartyPositionIds: matched.map((c) => c.positionId),
@@ -339,11 +346,11 @@ export function findSuperficialLossFlags(
   const flags: SuperficialLossFlag[] = [];
 
   for (const loss of losingPositions) {
-    if (loss.closedAt === null) continue;
     const matchKey = keyLoss(loss, parseUnderlying, log);
     if (matchKey === null) continue;
     const pool = loss.assetType === 'stock' ? stock : option;
-    const stillOpenAt = new Date(new Date(loss.closedAt).getTime() + THIRTY_DAYS_MS);
+    // CRA's "still held 30 days after" runs from the realization, same as above.
+    const stillOpenAt = new Date(new Date(loss.realisedAt).getTime() + THIRTY_DAYS_MS);
 
     const { matched, anyOpenedInWindow } = findMatchingCandidates(loss, matchKey, pool, {
       requireStillOpenAt: stillOpenAt,
@@ -357,6 +364,7 @@ export function findSuperficialLossFlags(
       side: loss.side,
       openedAt: loss.openedAt,
       closedAt: loss.closedAt,
+      realisedAt: loss.realisedAt,
       realisedLoss: loss.realisedPnl,
       reason: anyOpenedInWindow ? 'repurchase_within_30_days' : 'held_open_in_30d_window',
       counterpartyPositionIds: matched.map((c) => c.positionId),
