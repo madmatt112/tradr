@@ -57,8 +57,26 @@ jobs:
             git diff --exit-code apps/api/src/db/migrations
           fi
 
+      # The published API reference is generated from the `@swagger` blocks next
+      # to each route, so it cannot drift from the endpoints the app serves —
+      # provided something checks. This is that check: regenerate, and fail if
+      # the committed artifact differs. A route change that skips its `@swagger`
+      # block fails here, in the same PR.
+      #
+      # The generator runs with failOnErrors, so a malformed block fails the job
+      # rather than silently dropping that endpoint from the reference.
+      - name: Check the OpenAPI artifact is up to date
+        run: |
+          pnpm --filter @tradr/docs openapi:generate
+          git diff --exit-code apps/docs/src/openapi/tradr-api.json
+
       - name: Build frontend
         run: pnpm --filter @tradr/web build
+
+      # Builds the docs site. starlightLinksValidator() fails the build on any
+      # broken internal doc link, so this is also the link check.
+      - name: Build docs
+        run: pnpm --filter @tradr/docs build
 
       - name: Check bundle size (total + dashboard entry + per-widget budgets)
         run: node apps/web/scripts/check-bundle-size.mjs
@@ -240,11 +258,15 @@ jobs:
     timeout-minutes: 15
 
     # Boot the full compose stack against a FRESH, EMPTY throwaway Postgres
-    # (named volume torn down with `down -v`). The api boots with ONLY
-    # DATABASE_URL, SESSION_SECRET and ENCRYPTION_KEY set — neither encryption
-    # gate is exercised here (no ENCRYPTION_KEY_FINGERPRINT, no
-    # ENCRYPTION_KEY_PREVIOUS), so the api degrades gracefully and runs its
-    # migrations on boot. POSTGRES_* feed both the throwaway postgres init and
+    # (named volume torn down with `down -v`). The .env is written by
+    # ./docker/quickstart.sh, the script the README documents, so this job also
+    # covers the setup instructions themselves.
+    #
+    # That means ENCRYPTION_KEY_FINGERPRINT IS now set and its startup gate is
+    # exercised: the script derives it from the ENCRYPTION_KEY below, and a bad
+    # derivation would exit(1) on boot and fail this job. Only
+    # ENCRYPTION_KEY_PREVIOUS (rotation) stays unexercised.
+    # POSTGRES_* feed both the throwaway postgres init and
     # the DATABASE_URL the base compose builds in api.environment; they are not
     # app secrets. WEB_PORT avoids the runner's other dev ports.
     env:
@@ -261,18 +283,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      # Write the .env the base compose reads (env_file: .env). DATABASE_URL is
-      # built from POSTGRES_* in api.environment, so it is NOT set here.
-      - name: Write CI .env
-        run: |
-          cat > .env <<EOF
-          POSTGRES_USER=${POSTGRES_USER}
-          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-          POSTGRES_DB=${POSTGRES_DB}
-          SESSION_SECRET=${SESSION_SECRET}
-          ENCRYPTION_KEY=${ENCRYPTION_KEY}
-          WEB_PORT=${WEB_PORT}
-          EOF
+      # Write the .env the base compose reads (env_file: .env) by running the
+      # SAME script the README tells a self-hoster to run. This is the point: the
+      # documented setup path is executed on every push instead of proofread, so
+      # the quickstart cannot rot into instructions that no longer work.
+      #
+      # --env-only stops before `docker compose up -d`, because the steps below
+      # need the CI overlay to boot local images rather than GHCR tags. The env
+      # vars above are pre-set, and the script honours them instead of generating
+      # random ones — DATABASE_URL stays unset, built from POSTGRES_* in
+      # api.environment.
+      - name: Write .env via the documented quickstart
+        run: ./docker/quickstart.sh --env-only
 
       # Build BOTH images locally and load them into the daemon under the exact
       # refs the base compose resolves (R5 — this is the real guarantee CI tests

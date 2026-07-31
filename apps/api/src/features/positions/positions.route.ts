@@ -45,14 +45,13 @@ const ListQuerySchema = z.object({
  *   post:
  *     summary: Create a position (draft).
  *     description: >
- *       Authed. Creates a draft position in one of the user's accounts. When
- *       feature gating is enabled and the user is a non-admin Free user, the
- *       create is refused with `403 TIER_LIMIT_POSITIONS` at the L2 position
- *       cap, or `403 TIER_ACCOUNT_NOT_WRITABLE` when over the L1 account cap
- *       and targeting an account other than the writable designation
- *       (plan-tiers REQ-6.1/6.6). Admins and gating-off deployments pass
- *       through unchanged. Existing-data management (close/fills/edit/delete)
- *       is never blocked (REQ-6.5).
+ *       Authed. Creates a draft position in one of the user's accounts. When feature
+ *       gating is enabled and the user is a non-admin Free user, the create is refused
+ *       with `403 TIER_LIMIT_POSITIONS` at the position cap, or `403
+ *       TIER_ACCOUNT_NOT_WRITABLE` when over the account cap and targeting an account
+ *       other than the writable designation. Admins and gating-off deployments pass
+ *       through unchanged. Existing-data management (close/fills/edit/delete) is never
+ *       blocked.
  *     tags: [Positions]
  *     requestBody:
  *       required: true
@@ -229,7 +228,7 @@ positions.post(
  * @swagger
  * /api/positions/{id}/reopen:
  *   post:
- *     summary: Reopen a same-day closed position (R13).
+ *     summary: Reopen a same-day closed position.
  *     description: >
  *       Authed. Transitions a `closed` position back to `open` for intraday
  *       re-entries, clearing `closedAt` while preserving `openedAt` (the

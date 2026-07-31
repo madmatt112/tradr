@@ -55,10 +55,9 @@ changelogRouter.get('/releases', async (c) => {
  *   post:
  *     summary: Mark the changelog as viewed for the authenticated user.
  *     description: >
- *       Sets the viewer's `changelog_viewed_at` to now (single-statement
- *       write, no body). Returns `{ lastViewedAt }`, the new floor. This is
- *       the ONLY mutation in the feature — the badge's GET never clears the
- *       indicator (REQ-5(a)(3)).
+ *       Sets the viewer's `changelog_viewed_at` to now (single-statement write, no
+ *       body). Returns `{ lastViewedAt }`, the new floor. This is the ONLY mutation in
+ *       the feature — the badge's GET never clears the indicator.
  *     tags: [Changelog]
  *     responses:
  *       200: { description: '{ lastViewedAt } — the new floor.' }

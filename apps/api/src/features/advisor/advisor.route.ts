@@ -273,7 +273,7 @@ advisorRouter.get('/conversations', listConversationsHandler);
  *       200: { description: Conversation with its newest message page. }
  *       404: { description: Conversation not found (or not owned). }
  *   patch:
- *     summary: Rename a conversation (REQ-2.5).
+ *     summary: Rename a conversation.
  *     description: >
  *       Updates the conversation `title` (1–200 chars; whitespace-only
  *       rejected) and bumps `updatedAt`. 404 if the conversation does not
@@ -346,15 +346,14 @@ advisorRouter.get('/conversations/:id/messages', listMessagesHandler);
  *     summary: Proxy an advisor message image by index (ownership-scoped).
  *     description: >
  *       Streams the bytes of the image content-part at `index` on a message the
- *       authenticated user owns. Object access is proxy-through-API (D1) — there
- *       are NO presigned URLs and the object-storage key is resolved
- *       server-side, never appearing in the URL or any response (no IDOR leak —
- *       REQ-2.4). Side-effect-free. A missing/not-owned conversation or message,
- *       an out-of-range or non-image index, an `unrecoverable` marker, and a
- *       genuinely-absent object all return the identical 404 (no existence
- *       oracle). A pointer image is fetched from object storage and returned
- *       with its stored `Content-Type`; an inline image is decoded from base64.
- *       Both carry `Cache-Control: private, max-age=300`. A transient
+ *       authenticated user owns. Object access is proxy-through-API — there are NO
+ *       presigned URLs and the object-storage key is resolved server-side, never
+ *       appearing in the URL or any response (no IDOR leak —). Side-effect-free. A
+ *       missing/not-owned conversation or message, an out-of-range or non-image index,
+ *       an `unrecoverable` marker, and a genuinely-absent object all return the
+ *       identical 404 (no existence oracle). A pointer image is fetched from object
+ *       storage and returned with its stored `Content-Type`; an inline image is decoded
+ *       from base64. Both carry `Cache-Control: private, max-age=300`. A transient
  *       object-store outage returns 503 (OBJECT_UNREACHABLE).
  *     tags: [Advisor]
  *     parameters:
@@ -469,9 +468,9 @@ advisorRouter.delete('/personas/:id', deletePersonaHandler);
  *   post:
  *     summary: Set a persona as the user's default for new conversations.
  *     description: >
- *       Atomic flip (REQ-7.9): for a user-owned persona, clears the prior
- *       default and sets this one; in all cases records the chosen persona on
- *       the user row. 404 if the persona is neither built-in nor owned.
+ *       Atomic flip: for a user-owned persona, clears the prior default and sets this
+ *       one; in all cases records the chosen persona on the user row. 404 if the
+ *       persona is neither built-in nor owned.
  *     tags: [Advisor]
  *     parameters:
  *       - in: path
@@ -523,10 +522,10 @@ const perUserKeySaveRateLimit = createRateLimiter({
  *   get:
  *     summary: List the authenticated user's configured provider keys.
  *     description: >
- *       Returns one item per provider the user has stored a BYOK key for. The
- *       plaintext key is NEVER returned (REQ-5.7) — only a masking hint
- *       (`keyHintTail`, the last four characters), the chosen `defaultModel`,
- *       and `lastUsedAt`. Response: `{ items: ProviderKeyListItem[] }`.
+ *       Returns one item per provider the user has stored a BYOK key for. The plaintext
+ *       key is NEVER returned — only a masking hint (`keyHintTail`, the last four
+ *       characters), the chosen `defaultModel`, and `lastUsedAt`. Response: `{ items:
+ *       ProviderKeyListItem[] }`.
  *     tags: [Advisor]
  *     responses:
  *       200: { description: '{ items: ProviderKeyListItem[] } — no key material.' }
@@ -539,17 +538,16 @@ advisorRouter.get('/provider-keys', listProviderKeysHandler);
  *   put:
  *     summary: Save (or replace) the BYOK key for a provider.
  *     description: >
- *       Encrypts the supplied key at rest (AES-256-GCM, REQ-5.1) and stores only
- *       the ciphertext plus a last-4-char masking hint — the plaintext is never
- *       persisted or returned (REQ-5.7). Runs a lightweight validation roundtrip
- *       against the provider's listModels endpoint (REQ-5.8, 5s timeout): a
- *       401/403 rejects the save with `PROVIDER_KEY_INVALID`; a successful probe
- *       returns `verified: true`; a timeout or transient failure stores the key
- *       anyway and returns `verified: false`. Rate limited to 10 saves per user
- *       per hour (REQ-5.9). `defaultModel` is optional — when omitted (a
- *       first-time save has no model list to pick from), the server selects the
- *       provider's deterministic default from the probe's listModels response
- *       (REQ-6.4); the user can change it later.
+ *       Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext
+ *       plus a last-4-char masking hint — the plaintext is never persisted or returned.
+ *       Runs a lightweight validation roundtrip against the provider's listModels
+ *       endpoint (5s timeout): a 401/403 rejects the save with `PROVIDER_KEY_INVALID`;
+ *       a successful probe returns `verified: true`; a timeout or transient failure
+ *       stores the key anyway and returns `verified: false`. Rate limited to 10 saves
+ *       per user per hour. `defaultModel` is optional — when omitted (a first-time save
+ *       has no model list to pick from), the server selects the provider's
+ *       deterministic default from the probe's listModels response; the user can change
+ *       it later.
  *     tags: [Advisor]
  *     parameters:
  *       - in: path
@@ -597,7 +595,7 @@ advisorRouter.get('/provider-keys', listProviderKeysHandler);
  *       400: { description: Validation error. }
  *       404: { description: No key configured for this provider. }
  *   delete:
- *     summary: Remove the BYOK key for a provider (REQ-5.6).
+ *     summary: Remove the BYOK key for a provider.
  *     description: >
  *       Hard-deletes the stored key for the authenticated user. The ciphertext
  *       is gone from the database; the plaintext was never persisted.
@@ -634,23 +632,22 @@ const perUserMarketDataKeySaveRateLimit = createRateLimiter({
  *   get:
  *     summary: Get the masked status of the authenticated user's Unusual Whales key.
  *     description: >
- *       Returns the market-data (Unusual Whales) BYOK key status. The plaintext
- *       is NEVER returned (REQ-6.2/6.6) — only `configured`, a last-4-char
- *       masking hint (`keyHintTail`), and the `verified` flag. When no key is
- *       stored the response is `{ configured: false }`.
+ *       Returns the market-data (Unusual Whales) BYOK key status. The plaintext is
+ *       NEVER returned — only `configured`, a last-4-char masking hint (`keyHintTail`),
+ *       and the `verified` flag. When no key is stored the response is `{ configured:
+ *       false }`.
  *     tags: [Advisor]
  *     responses:
  *       200: { description: '{ configured: false } or { configured: true, keyHintTail, verified } — no key material.' }
  *   put:
  *     summary: Save (or replace) the Unusual Whales market-data key.
  *     description: >
- *       Encrypts the supplied key at rest (AES-256-GCM, REQ-6.6) and stores only
- *       the ciphertext plus a last-4-char masking hint — the plaintext is never
- *       persisted or returned. Runs a lightweight verification probe (REQ-6.3): a
- *       401/403 rejects the save with `MARKET_DATA_KEY_INVALID`; a successful
- *       probe returns `verified: true`; a transient failure (timeout / upstream
- *       unavailable) stores the key anyway and returns `verified: false`. Rate
- *       limited to 10 saves per user per hour.
+ *       Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext
+ *       plus a last-4-char masking hint — the plaintext is never persisted or returned.
+ *       Runs a lightweight verification probe: a 401/403 rejects the save with
+ *       `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a
+ *       transient failure (timeout / upstream unavailable) stores the key anyway and
+ *       returns `verified: false`. Rate limited to 10 saves per user per hour.
  *     tags: [Advisor]
  *     requestBody:
  *       required: true
@@ -666,7 +663,7 @@ const perUserMarketDataKeySaveRateLimit = createRateLimiter({
  *       400: { description: 'Validation error or MARKET_DATA_KEY_INVALID (key rejected by Unusual Whales).' }
  *       429: { description: Save rate limit reached (10 / hour). }
  *   delete:
- *     summary: Remove the Unusual Whales market-data key (REQ-6.2).
+ *     summary: Remove the Unusual Whales market-data key.
  *     description: >
  *       Hard-deletes the stored key for the authenticated user. The ciphertext is
  *       gone from the database; the plaintext was never persisted.
@@ -687,21 +684,21 @@ advisorRouter.delete('/market-data-key', deleteMarketDataKeyHandler);
  *   get:
  *     summary: Get the authenticated user's trade-data consent flag.
  *     description: >
- *       Returns whether the user has consented to the advisor reading their
- *       stored trade data (REQ-9.1). Defaults to `false` for a user who has
- *       never set it. Response: `{ consent: boolean }`.
+ *       Returns whether the user has consented to the advisor reading their stored
+ *       trade data. Defaults to `false` for a user who has never set it. Response: `{
+ *       consent: boolean }`.
  *     tags: [Advisor]
  *     responses:
  *       200: { description: '{ consent: boolean }.' }
  *   put:
  *     summary: Set the authenticated user's trade-data consent flag.
  *     description: >
- *       Grants or revokes the advisor's access to the user's stored trade data
- *       (REQ-9.1). Revoking consent stops new trade-data reads and removes
- *       stored structured trade-data from what is replayed to the provider; it
- *       cannot remove figures already disclosed in prior replies (REQ-10.2).
- *       Consent is re-read on every provider round-trip, so a change takes
- *       effect on the next iteration of an in-flight turn (REQ-1.7).
+ *       Grants or revokes the advisor's access to the user's stored trade data.
+ *       Revoking consent stops new trade-data reads and removes stored structured
+ *       trade-data from what is replayed to the provider; it cannot remove figures
+ *       already disclosed in prior replies. Consent is re-read on every provider
+ *       round-trip, so a change takes effect on the next iteration of an in-flight
+ *       turn.
  *     tags: [Advisor]
  *     requestBody:
  *       required: true
@@ -725,19 +722,18 @@ advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
  * @swagger
  * /api/advisor/options-chain:
  *   get:
- *     summary: Get the live options chain for a symbol from Unusual Whales (REQ-12.4).
+ *     summary: Get the live options chain for a symbol from Unusual Whales.
  *     description: >
- *       Backs the options-tools page chain viewer. Shares the Unusual Whales
- *       client and the `market_data_options_chain` tool's parsing (REQ-12.4 —
- *       no duplicate fetch logic). When the authenticated user has no Unusual
- *       Whales key the response is `{ configured: false }` (200) so the viewer
- *       shows an empty-state CTA to Settings, not an error (REQ-12.2). With a
- *       key the response is `{ configured: true, chain }` where `chain` is the
+ *       Backs the options-tools page chain viewer. Shares the Unusual Whales client and
+ *       the `market_data_options_chain` tool's parsing (no duplicate fetch logic). When
+ *       the authenticated user has no Unusual Whales key the response is `{ configured:
+ *       false }` so the viewer shows an empty-state CTA to Settings, not an error. With
+ *       a key the response is `{ configured: true, chain }` where `chain` is the
  *       compact projection `{ symbol, expiration?, count, contracts[] }`. Upstream
- *       failures are mapped to their REQ-6.5 reason codes on the matching HTTP
- *       status (REQ-12.3): 400 MARKET_DATA_KEY_INVALID, 429
- *       MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 404 SYMBOL_NOT_FOUND,
- *       503 MARKET_DATA_UNAVAILABLE. The plaintext key is never returned or logged.
+ *       failures are mapped to their reason codes on the matching HTTP status: 400
+ *       MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED,
+ *       404 SYMBOL_NOT_FOUND, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never
+ *       returned or logged.
  *     tags: [Advisor]
  *     parameters:
  *       - in: query

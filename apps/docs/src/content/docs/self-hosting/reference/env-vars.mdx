@@ -1,0 +1,33 @@
+---
+title: Environment variable reference
+description: Every .env key — required vs optional, defaults, generation recipes, and the hand-synced cross-container constraints. Mirrors the annotated .env.example.
+---
+
+The authoritative, always-current source is the **annotated `.env.example`** at
+the repository root — every key is documented inline next to its default and
+generation recipe. This page will mirror it; until it is fully expanded, use
+`.env.example` and the walkthrough in [Self-host with Docker
+Compose](/self-hosting/docker-compose/).
+
+## The required trio
+
+Only three values must be set — everything else has a working default:
+
+- `POSTGRES_PASSWORD` — `openssl rand -hex 24`
+- `SESSION_SECRET` — `openssl rand -base64 24` (at least 32 characters)
+- `ENCRYPTION_KEY` — `openssl rand -hex 32` (32-byte hex, AES-256-GCM)
+
+`POSTGRES_USER` and `POSTGRES_DB` default to `tradr`. `FEATURE_GATING` defaults to
+`false` (self-hosters stay unrestricted). Every optional integration — LLM keys,
+Stripe, PostHog, SMTP — is **absent when unset, not broken**.
+
+## Where the api's `DATABASE_URL` comes from
+
+In the compose stack the api's `DATABASE_URL` is **not** read from `.env` — compose
+builds it from your `POSTGRES_*` values in `api.environment`. Set `DATABASE_URL`
+directly only for non-compose runs against an external Postgres.
+
+:::note
+This page is a stub — the full per-key table lands with the reference content
+(docs-as-code). See `.env.example` for the complete, annotated list today.
+:::

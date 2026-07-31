@@ -25,14 +25,27 @@ export const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/),
-  ENCRYPTION_KEY_PREVIOUS: z
-    .string()
-    .regex(/^[0-9a-fA-F]{64}$/)
-    .optional(),
-  ENCRYPTION_KEY_FINGERPRINT: z
-    .string()
-    .regex(/^[0-9a-f]{64}$/)
-    .optional(),
+  // Both OPTIONAL keys ship uncommented-and-empty in .env.example, so the
+  // documented `cp .env.example .env` path hands the schema '' — and `.optional()`
+  // only tolerates *undefined*, not ''. Without the empty-tolerant preprocess
+  // (the CHANGELOG_GITHUB_REPO / SEC_USER_AGENT idiom used throughout this file)
+  // a blank line here is a boot crash-loop on a stock install. ENCRYPTION_KEY and
+  // SESSION_SECRET deliberately do NOT get this treatment: they are required, and
+  // an empty value there SHOULD fail fast.
+  ENCRYPTION_KEY_PREVIOUS: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^[0-9a-fA-F]{64}$/)
+      .optional(),
+  ),
+  ENCRYPTION_KEY_FINGERPRINT: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+  ),
   ADVISOR_STREAM_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   ADVISOR_MAX_IMAGES_PER_MESSAGE: z.coerce.number().int().positive().default(4),
   ADVISOR_BUILTIN_PERSONA_PROMPT_DEFAULT_TRADING_ADVISOR: z.string().optional(),

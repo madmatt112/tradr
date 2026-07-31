@@ -25,7 +25,10 @@ const positionsInsertSelectors = [
 export default tseslint.config(
   {
     // `.astro/` is a generated type-output cache — not source.
-    ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**'],
+    // `.astro/` holds the types Astro generates from the content collections.
+    // It is build output, not source, and it does not satisfy this config's
+    // rules (it uses `any` and a triple-slash reference).
+    ignores: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '**/.astro/**'],
   },
   ...tseslint.configs.recommended,
   {

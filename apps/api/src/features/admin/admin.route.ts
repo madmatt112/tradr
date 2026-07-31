@@ -69,13 +69,13 @@ const UsersQuerySchema = z.object({
  *   get:
  *     summary: Platform statistics (admin only).
  *     description: >
- *       Admin-gated (403 `ADMIN_REQUIRED` for non-admins) and per-user rate
- *       limited (60 / 60 s). Returns total users, "Active now" users (still-valid
- *       sessions in the last 30 min — `activeUsersWindowMinutes` is serialized
- *       for honest labeling), positions by status, and revenue as micro-USD
- *       integer strings: `allTime` and the reversal-attributed UTC
- *       `currentMonth`, with the pinned `basis: 'purchased-credit-volume'`.
- *       An empty instance returns well-formed zeros, never errors (REQ-2.7).
+ *       Admin-gated (403 `ADMIN_REQUIRED` for non-admins) and per-user rate limited (60
+ *       / 60 s). Returns total users, "Active now" users (still-valid sessions in the
+ *       last 30 min — `activeUsersWindowMinutes` is serialized for honest labeling),
+ *       positions by status, and revenue as micro-USD integer strings: `allTime` and
+ *       the reversal-attributed UTC `currentMonth`, with the pinned `basis:
+ *       'purchased-credit-volume'`. An empty instance returns well-formed zeros, never
+ *       errors.
  *     tags: [Admin]
  *     responses:
  *       200: { description: AdminStats — totals, activeUsers, positions, revenue. }
@@ -93,15 +93,13 @@ adminRouter.get('/stats', async (c) => {
  *   get:
  *     summary: List users, cursor-paginated newest-first (admin only).
  *     description: >
- *       Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over
- *       `(created_at, id)` descending — new signups on page one. `cursor` is
- *       the opaque base64 cursor from a prior page; absent/invalid ⇒ first
- *       page. `limit` defaults to 25, clamped to [1, 100]; a non-numeric limit
- *       is a 400 `VALIDATION_ERROR`. Response `{ items, nextCursor }`;
- *       `lastActiveAt` is the last recorded session activity (nullable, may be
- *       arbitrarily old); `emailVerified` is the stored verified flag — a
- *       read-only signal, nothing is gated on it in v1. No secret fields are
- *       returned (REQ-3.6).
+ *       Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over `(created_at, id)`
+ *       descending — new signups on page one. `cursor` is the opaque base64 cursor from
+ *       a prior page; absent/invalid ⇒ first page. `limit` defaults to 25, clamped to
+ *       [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items,
+ *       nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable,
+ *       may be arbitrarily old); `emailVerified` is the stored verified flag — a
+ *       read-only signal, nothing is gated on it in v1. No secret fields are returned.
  *     tags: [Admin]
  *     parameters:
  *       - in: query
@@ -159,15 +157,14 @@ adminRouter.get('/users/:id', validate('param', IdParamSchema), async (c) => {
  *   patch:
  *     summary: Toggle a user's admin flag (admin only).
  *     description: >
- *       Admin-gated (403 `ADMIN_REQUIRED`). The admin surface's single write —
- *       PATCH (never GET) per the SameSite=Lax CSRF posture (REQ-3.3). Body
- *       `{ isAdmin }`. Race-safe inside one transaction with a same-tx audit
- *       row: demoting the last remaining admin is refused with a 409
- *       `LAST_ADMIN` ("Cannot remove the last admin"), so the instance can
- *       never reach zero admins through the API. Self-demotion is permitted
- *       when not the last admin. Toggling to the current value is a 200 no-op
- *       (no update, no audit row). Returns the target's
- *       `{ id, email, isAdmin, createdAt }`.
+ *       Admin-gated (403 `ADMIN_REQUIRED`). The admin surface's single write — PATCH
+ *       (never GET) per the SameSite=Lax CSRF posture. Body `{ isAdmin }`. Race-safe
+ *       inside one transaction with a same-tx audit row: demoting the last remaining
+ *       admin is refused with a 409 `LAST_ADMIN` ("Cannot remove the last admin"), so
+ *       the instance can never reach zero admins through the API. Self-demotion is
+ *       permitted when not the last admin. Toggling to the current value is a 200 no-op
+ *       (no update, no audit row). Returns the target's `{ id, email, isAdmin,
+ *       createdAt }`.
  *     tags: [Admin]
  *     parameters:
  *       - in: path
@@ -211,14 +208,13 @@ adminRouter.patch(
  *     summary: Platform usage and revenue over a period (admin only).
  *     description: >
  *       Admin-gated (403 `ADMIN_REQUIRED`). `from`/`to` are optional ISO 8601
- *       datetimes; the default window is the trailing 30 days ending now.
- *       `from > to` and ranges over 366 days are a 400 `VALIDATION_ERROR`.
- *       Returns `period`, `totals` (token/credit integer strings;
- *       `providerCost` is null when zero covered rows — pre-0013 rows have no
- *       recorded raw cost, see `providerCostCoverage`), the UTC-day `series`,
- *       `topUsers` (max 50 by billed credits), and the reversal-attributed
- *       `revenue { credited, reversed, net }`. Empty/future ranges return
- *       well-formed zeros (REQ-4.6).
+ *       datetimes; the default window is the trailing 30 days ending now. `from > to`
+ *       and ranges over 366 days are a 400 `VALIDATION_ERROR`. Returns `period`,
+ *       `totals` (token/credit integer strings; `providerCost` is null when zero
+ *       covered rows — pre-0013 rows have no recorded raw cost, see
+ *       `providerCostCoverage`), the UTC-day `series`, `topUsers` (max 50 by billed
+ *       credits), and the reversal-attributed `revenue { credited, reversed, net }`.
+ *       Empty/future ranges return well-formed zeros.
  *     tags: [Admin]
  *     parameters:
  *       - in: query
