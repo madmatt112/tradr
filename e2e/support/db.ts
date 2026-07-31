@@ -18,9 +18,15 @@ import postgres from 'postgres';
 // Playwright specs run outside the apps/api boot path — no `@/lib/config` in
 // scope, so the env is read directly (same exemption playwright.config.ts and
 // wallet-billing.spec.ts take).
+// 5433, not 5432 — matching playwright.config.ts. A native Postgres owns 5433
+// locally and shadows the compose container, so a local run with no
+// DATABASE_URL exported hit 5432, got ECONNREFUSED, and failed the only two
+// specs that open a direct connection (admin-platform, symbol-search-quotes).
+// The two files disagreeing on the default was the whole bug; CI is unaffected
+// either way because the workflow exports DATABASE_URL explicitly.
 const DATABASE_URL =
   // eslint-disable-next-line no-restricted-syntax
-  process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/tradr_test';
+  process.env.DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5433/tradr_test';
 
 /**
  * Promote a registered user to admin — the documented bootstrap statement:
