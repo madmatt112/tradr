@@ -150,6 +150,9 @@ describe('OpenPositionsTab', () => {
         totalEntryQuantity: 100,
         totalExitQuantity: 0,
         avgEntryPrice: 150,
+        // Cost basis now arrives from the API rather than being recomputed here
+        // (ledger-balances Req 10) — 100 × $150, no fees.
+        openCostBasis: 100 * 150,
         accountCurrency: 'USD',
         openedAt: '2026-05-25T10:00:00.000Z',
       }),
@@ -161,6 +164,10 @@ describe('OpenPositionsTab', () => {
         totalEntryQuantity: 10,
         totalExitQuantity: 0,
         avgEntryPrice: 4.5,
+        // NEGATIVE: a short's unexited size is proceeds received against
+        // contracts still owed, so it is a liability. The old local helper took
+        // an absolute value and reported +$4,500 here.
+        openCostBasis: -(10 * 4.5 * 100),
         accountCurrency: 'USD',
         openedAt: '2026-05-24T10:00:00.000Z',
       }),
@@ -184,6 +191,8 @@ describe('OpenPositionsTab', () => {
     expect(text).toContain('Short');
     expect(text).toContain('· 10');
     expect(text).toContain(formatCurrency(4.5, 'USD'));
+    // The API reports a short's cost basis as negative; this column shows the
+    // magnitude, because the row already reads "Short · 10".
     expect(text).toContain(formatCurrency(10 * 4.5 * 100, 'USD'));
 
     unmount(container, root);

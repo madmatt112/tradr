@@ -7,8 +7,14 @@
 //
 //   trade_data_open_positions  → 3000
 //   trade_data_recent_closed   → 1500
-//   trade_data_account_summary → 1500
+//   trade_data_account_summary → 2000
 //   trade_data_pnl_summary     →  800
+//
+// account_summary was raised 1500 → 2000 when the cash/position split
+// (ledger-balances Req 10) added `cash` and `positionValue` to every account
+// row — five fields became seven, so the worst-case payload grew with it. The
+// bound is a budget declaration, not a truncation limit, so leaving it at 1500
+// would have quietly under-charged the per-turn trade-data budget.
 //
 // Trade-data contexts carry NO Unusual Whales client (REQ-1.4): handlers read
 // the `db` singleton and run the task-14 summary queries scoped to `ctx.userId`
@@ -39,7 +45,7 @@ import type { ToolDefinition, ToolResult } from './types';
 
 const OPEN_POSITIONS_MAX_EST_TOKENS = 3000;
 const RECENT_CLOSED_MAX_EST_TOKENS = 1500;
-const ACCOUNT_SUMMARY_MAX_EST_TOKENS = 1500;
+const ACCOUNT_SUMMARY_MAX_EST_TOKENS = 2000;
 const PNL_SUMMARY_MAX_EST_TOKENS = 800;
 
 // --- Input schemas (flat objects; scalar fields only) ------------------------
@@ -97,7 +103,12 @@ export const recentClosedTool: ToolDefinition = {
 
 export const accountSummaryTool: ToolDefinition = {
   name: 'trade_data_account_summary',
-  description: "Get a summary of the user's own trading accounts and their current balances.",
+  description:
+    "Get a summary of the user's own trading accounts. Each account reports its balance " +
+    'split into cash (deployable funds) and positionValue (open positions at COST BASIS, ' +
+    'not market value — there is no quote feed). positionValue is negative for short ' +
+    'positions, where the unexited size is proceeds received against shares still owed. ' +
+    'cash + positionValue always equals balance.',
   category: 'trade-data',
   requires: 'trade-data-consent',
   maxEstTokens: ACCOUNT_SUMMARY_MAX_EST_TOKENS,

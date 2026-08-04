@@ -173,6 +173,64 @@ export function computePnlFromTotals(
   };
 }
 
+/**
+ * Capital currently tied up in a position's UNEXITED portion, at cost.
+ *
+ *     sideSign · openQty · avgEntryPrice · multiplier   (capital deployed)
+ *   + entryFees · openQty / entryQty                    (unallocated entry fee)
+ *
+ * This is the "position value" half of the account cash/position split
+ * (ledger-balances). Cost basis only — there is no quote source, so it never
+ * moves with the market.
+ *
+ * **Signed.** A short's entry fills are sells, so its remaining size is proceeds
+ * received against shares still owed — a liability, and therefore negative. That
+ * sign is what makes `cash = balance − Σ positionValue` land on the cash a broker
+ * would actually show: short 10 @ $100 then cover 5 @ $90 gives cash $5,550, not
+ * $4,550.
+ *
+ * **Entry fees are included**, allocated by `openQty / entryQty` — the exact
+ * complement of the `exitQty / entryQty` proration `computePnlFromTotals` applies
+ * to the realized side, so between them every entry fee is accounted for exactly
+ * once. Without this term the derived cash overstates by the unallocated entry
+ * fee for as long as any part of the position stays open: an entry commission
+ * leaves cash immediately, but the ledger only posts it slice by slice as the
+ * position exits. This also makes the figure the correct tax cost basis.
+ *
+ * Returns 0 for an entry-less position and for a fully-exited one; a
+ * fully-exited position has `openQty = 0`, which zeroes both terms.
+ *
+ * MIRRORED IN SQL by `positionValueLateral` in `accounts.query.ts`, which
+ * aggregates this same rule across an account's open positions. The two are
+ * pinned together by the parity test in `accounts.cash-split.test.ts` — change
+ * one and you must change the other.
+ */
+export function computeOpenCostBasis(
+  totals: FillTotals,
+  side: 'long' | 'short',
+  assetType: 'stock' | 'option',
+  currencyMinorUnits: number,
+): number {
+  const entryQty = new Decimal(totals.entryQty);
+  if (entryQty.isZero()) return 0;
+
+  const openQty = entryQty.minus(totals.exitQty);
+  const avgEntryPrice = new Decimal(totals.entryCost).div(entryQty);
+  const sideMultiplier = side === 'long' ? 1 : -1;
+  const contractMultiplier = assetType === 'option' ? 100 : 1;
+
+  // Rounds ONCE over the whole expression, matching `realizedPnl`'s convention
+  // in `computePnlFromTotals` — rounding the deployed-capital and fee terms
+  // separately and then adding shifts the result by a minor unit.
+  return avgEntryPrice
+    .times(openQty)
+    .times(sideMultiplier)
+    .times(contractMultiplier)
+    .plus(new Decimal(totals.entryFees).times(openQty).div(entryQty))
+    .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP)
+    .toNumber();
+}
+
 export interface RealizationEvent {
   occurredAt: Date;
   grossPnl: Decimal;

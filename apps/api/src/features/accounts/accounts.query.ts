@@ -24,6 +24,58 @@ const balanceLateral = sql`LATERAL (
     AND le.entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')
 ) bal`;
 
+// LATERAL aggregate over the account's OPEN positions computing the capital
+// currently tied up in them, at cost (ledger-balances Req 10). Same inlined raw
+// SQL LATERAL pattern as `balanceLateral` above.
+//
+//   sideSign · openQty · avgEntryPrice · multiplier   (capital deployed)
+// + entryFees · openQty / entryQty                    (unallocated entry fee)
+//
+// This reads `positions`/`fills`, NEVER `ledger_entries` — so it is deliberately
+// NOT another copy of the entry-type list, and `balance_adjustment` rows need no
+// handling here. Reconciliation adjustments are cash movements: they land in
+// `balance`, are not position value, and so flow into `cash` for free.
+//
+// SIGNED. A short's entry fills are sells, so its unexited size is proceeds
+// received against shares still owed — a liability, hence negative. Without the
+// sign, `cash` for a short lands on the wrong number entirely.
+//
+// Only `status = 'open'` contributes. Drafts are excluded: they never post to the
+// ledger (exits are blocked while draft, so they realize nothing), so counting
+// them here would move cash against a balance that never moved.
+//
+// MIRRORS `computeOpenCostBasis` in `positions/pnl.ts`, which applies the same
+// rule to one position for the per-row display. The two are pinned together by
+// the parity test in `accounts.cash-split.test.ts` — change one, change both.
+//
+// The inner `ON agg.entry_qty > 0` guards the two divisions: a position with no
+// entry fills drops out of the aggregate instead of contributing NULL and
+// poisoning the SUM. Unreachable for status='open' (opening requires at least
+// one entry fill), but the join condition is cheaper than trusting that
+// invariant from here.
+//
+// Backed by `positions_account_id_idx` and `fills_position_id_idx`.
+const positionValueLateral = sql`LATERAL (
+  SELECT COALESCE(SUM(
+    CASE WHEN p.side = 'long' THEN 1 ELSE -1 END
+      * (agg.entry_qty - agg.exit_qty)
+      * (agg.entry_cost / agg.entry_qty)
+      * CASE WHEN p.asset_type = 'option' THEN 100 ELSE 1 END
+    + agg.entry_fees * (agg.entry_qty - agg.exit_qty) / agg.entry_qty
+  ), 0)::numeric(18,4) AS position_value
+  FROM positions p
+  JOIN LATERAL (
+    SELECT
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0) AS entry_qty,
+      COALESCE(SUM(CASE WHEN f.type = 'exit'  THEN f.quantity END), 0) AS exit_qty,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.price * f.quantity END), 0) AS entry_cost,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.fees END), 0) AS entry_fees
+    FROM fills f WHERE f.position_id = p.id
+  ) agg ON agg.entry_qty > 0
+  WHERE p.account_id = ${accounts.id}
+    AND p.status = 'open'
+) pos`;
+
 // Derived balance = user-entered starting_balance + ledger aggregate, emitted
 // at scale-4 precision (e.g. '0.0000') to match ledger_entries.amount. The
 // COALESCE handles the LEFT JOIN producing no rows (impossible in practice
@@ -31,6 +83,21 @@ const balanceLateral = sql`LATERAL (
 const balanceProjection =
   sql<string>`(${accounts.startingBalance} + COALESCE(bal.balance, 0))::numeric(18,4)::text`.as(
     'balance',
+  );
+
+// The two halves of `balance`. `cash` is derived by SUBTRACTION rather than
+// summed independently, so `cash + positionValue = balance` holds exactly by
+// construction — the split is a partition of the existing number and can never
+// disagree with it.
+//
+// Cost basis only. Neither figure moves with the market; there is no quote
+// source. `positionValue` is what was paid (or, for shorts, received), full stop.
+const positionValueProjection =
+  sql<string>`COALESCE(pos.position_value, 0)::numeric(18,4)::text`.as('positionValue');
+
+const cashProjection =
+  sql<string>`(${accounts.startingBalance} + COALESCE(bal.balance, 0) - COALESCE(pos.position_value, 0))::numeric(18,4)::text`.as(
+    'cash',
   );
 
 export function findAccountsByUser(db: Database | Transaction, userId: string) {
@@ -46,10 +113,13 @@ export function findAccountsByUser(db: Database | Transaction, userId: string) {
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
+      cash: cashProjection,
+      positionValue: positionValueProjection,
     })
     .from(accounts)
     .leftJoin(brokerages, eq(accounts.brokerageId, brokerages.id))
     .leftJoin(balanceLateral, sql`true`)
+    .leftJoin(positionValueLateral, sql`true`)
     .where(eq(accounts.userId, userId));
 }
 
@@ -66,10 +136,13 @@ export function findAccountById(db: Database | Transaction, id: string, userId: 
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
+      cash: cashProjection,
+      positionValue: positionValueProjection,
     })
     .from(accounts)
     .leftJoin(brokerages, eq(accounts.brokerageId, brokerages.id))
     .leftJoin(balanceLateral, sql`true`)
+    .leftJoin(positionValueLateral, sql`true`)
     .where(and(eq(accounts.id, id), eq(accounts.userId, userId)))
     .limit(1);
 }
@@ -123,6 +196,10 @@ export interface AccountSummary {
   currency: string;
   brokerageName: string | null;
   balance: string;
+  /** Balance minus the cost basis of open positions — deployable funds. */
+  cash: string;
+  /** Cost basis of open positions; negative for shorts. Never mark-to-market. */
+  positionValue: string;
 }
 
 /** Accounts + derived balances for a user. Read-only, userId-scoped. */
@@ -137,10 +214,13 @@ export function selectAccountSummaries(
       currency: accounts.currency,
       brokerageName: brokerages.name,
       balance: balanceProjection,
+      cash: cashProjection,
+      positionValue: positionValueProjection,
     })
     .from(accounts)
     .leftJoin(brokerages, eq(accounts.brokerageId, brokerages.id))
     .leftJoin(balanceLateral, sql`true`)
+    .leftJoin(positionValueLateral, sql`true`)
     .where(eq(accounts.userId, userId));
 }
 

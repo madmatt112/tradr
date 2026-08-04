@@ -21,7 +21,7 @@ import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
 
 import { insertFill, findFillById, updateFill, deleteFill } from './fills.query';
-import { aggregateFills, computePnlFromTotals } from './pnl';
+import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import type { FillTotals } from './pnl';
 import {
   insertPosition,
@@ -535,6 +535,12 @@ export async function listPositions(
       actualRR,
       openUnits: pnl.totalEntryQuantity - pnl.totalExitQuantity,
       closedUnits: pnl.totalExitQuantity,
+      openCostBasis: computeOpenCostBasis(
+        totals,
+        row.side as 'long' | 'short',
+        row.asset_type as 'stock' | 'option',
+        currencyMinorUnits,
+      ),
     };
   });
 }
@@ -608,6 +614,12 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     actualRR,
     openUnits: pnl.totalEntryQuantity - pnl.totalExitQuantity,
     closedUnits: pnl.totalExitQuantity,
+    openCostBasis: computeOpenCostBasis(
+      totals,
+      position.side as 'long' | 'short',
+      position.assetType as 'stock' | 'option',
+      currencyMinorUnits,
+    ),
   };
 }
 

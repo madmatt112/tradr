@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { aggregateFills, computePnlFromTotals } from './pnl';
+import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import type { FillTotals } from './pnl';
 
 // ---------------------------------------------------------------------------
@@ -317,5 +317,115 @@ describe('computePnlFromTotals — rounding', () => {
     expect(pnl.grossPnl).toBe(100.01);
     expect(pnl.fees).toBe(0.01);
     expect(pnl.grossPnl! - pnl.fees!).toBeCloseTo(pnl.realizedPnl!, 10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeOpenCostBasis — the "position value" half of the cash/position split
+// ---------------------------------------------------------------------------
+
+describe('computeOpenCostBasis', () => {
+  function totals(o: Partial<FillTotals>): FillTotals {
+    return {
+      entryQty: '0',
+      exitQty: '0',
+      entryCost: '0',
+      exitCost: '0',
+      entryFees: '0',
+      exitFees: '0',
+      ...o,
+    };
+  }
+
+  it('is the full cost basis before any exit', () => {
+    const t = totals({ entryQty: '10', entryCost: '1000' });
+    expect(computeOpenCostBasis(t, 'long', 'stock', 2)).toBe(1000);
+  });
+
+  it('shrinks to the unexited portion after a partial exit', () => {
+    const t = totals({ entryQty: '10', exitQty: '5', entryCost: '1000', exitCost: '550' });
+    expect(computeOpenCostBasis(t, 'long', 'stock', 2)).toBe(500);
+  });
+
+  it('is zero once fully exited', () => {
+    const t = totals({ entryQty: '10', exitQty: '10', entryCost: '1000', exitCost: '1100' });
+    expect(computeOpenCostBasis(t, 'long', 'stock', 2)).toBe(0);
+  });
+
+  it('is zero for an entry-less position rather than dividing by zero', () => {
+    expect(computeOpenCostBasis(totals({}), 'long', 'stock', 2)).toBe(0);
+  });
+
+  it('allocates entry fees by openQty / entryQty', () => {
+    // $10 commission on 10 shares, half still open → $5 rides with the open half.
+    const t = totals({
+      entryQty: '10',
+      exitQty: '5',
+      entryCost: '1000',
+      exitCost: '550',
+      entryFees: '10',
+    });
+    expect(computeOpenCostBasis(t, 'long', 'stock', 2)).toBe(505);
+  });
+
+  it('complements the realized fee proration exactly — together they spend the fee once', () => {
+    const t = totals({
+      entryQty: '10',
+      exitQty: '5',
+      entryCost: '1000',
+      exitCost: '550',
+      entryFees: '10',
+    });
+    // computePnlFromTotals charged 10 × 5/10 = $5 against the realized half;
+    // computeOpenCostBasis carries the other $5 on the open half.
+    const realizedFeeShare = computeOpenCostBasis(t, 'long', 'stock', 2) - 500;
+    const pnl = computePnlFromTotals(t, 'long', 'stock', 2);
+    expect(realizedFeeShare).toBe(5);
+    expect(pnl.grossPnl! - pnl.realizedPnl!).toBe(5);
+    expect(realizedFeeShare + (pnl.grossPnl! - pnl.realizedPnl!)).toBe(10);
+  });
+
+  it('is NEGATIVE for a short — remaining proceeds are a liability', () => {
+    // Short 10 @ $100, covered 5 @ $90. Five shares still owed.
+    const t = totals({ entryQty: '10', exitQty: '5', entryCost: '1000', exitCost: '450' });
+    expect(computeOpenCostBasis(t, 'short', 'stock', 2)).toBe(-500);
+  });
+
+  it('moves a short toward zero with its entry fee, not away from it', () => {
+    // The fee is a cash outflow either way, so it always reduces the magnitude
+    // of a short's negative position value.
+    const t = totals({
+      entryQty: '10',
+      exitQty: '5',
+      entryCost: '1000',
+      exitCost: '450',
+      entryFees: '10',
+    });
+    expect(computeOpenCostBasis(t, 'short', 'stock', 2)).toBe(-495);
+  });
+
+  it('applies the 100x contract multiplier for options', () => {
+    // 2 contracts @ $3.00 = $600 of capital.
+    const t = totals({ entryQty: '2', entryCost: '6' });
+    expect(computeOpenCostBasis(t, 'long', 'option', 2)).toBe(600);
+  });
+
+  it('does NOT multiply fees by the contract multiplier', () => {
+    // Fees are already absolute currency; only the price leg is per-contract.
+    const t = totals({ entryQty: '2', entryCost: '6', entryFees: '1.30' });
+    expect(computeOpenCostBasis(t, 'long', 'option', 2)).toBe(601.3);
+  });
+
+  it('rounds once at the end, not per component', () => {
+    // Deployed capital 33.335 unrounded; fee share 0.005 unrounded.
+    //   round(33.335 + 0.005) = 33.34   ← this expression
+    //   round(33.335) + round(0.005) = 33.34 + 0.01 = 33.35   ← the bug
+    const t = totals({ entryQty: '3', exitQty: '0', entryCost: '33.335', entryFees: '0.005' });
+    expect(computeOpenCostBasis(t, 'long', 'stock', 2)).toBe(33.34);
+  });
+
+  it('honours zero-decimal currencies', () => {
+    const t = totals({ entryQty: '10', entryCost: '1000.4' });
+    expect(computeOpenCostBasis(t, 'long', 'stock', 0)).toBe(1000);
   });
 });

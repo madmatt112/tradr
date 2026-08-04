@@ -175,6 +175,11 @@ export const PositionListItemSchema = z.object({
   actualRR: z.number().nullable(),
   openUnits: z.number(),
   closedUnits: z.number(),
+  // Capital tied up in the unexited portion, at cost — the per-position term
+  // the account-level `positionValue` sums. Includes the open portion's share
+  // of entry fees, and is NEGATIVE for shorts (remaining proceeds are a
+  // liability). Cost basis only; it never moves with the market.
+  openCostBasis: z.number(),
 });
 
 export const PositionDetailSchema = z.object({
@@ -210,6 +215,11 @@ export const PositionDetailSchema = z.object({
   actualRR: z.number().nullable(),
   openUnits: z.number(),
   closedUnits: z.number(),
+  // Capital tied up in the unexited portion, at cost — the per-position term
+  // the account-level `positionValue` sums. Includes the open portion's share
+  // of entry fees, and is NEGATIVE for shorts (remaining proceeds are a
+  // liability). Cost basis only; it never moves with the market.
+  openCostBasis: z.number(),
 });
 
 export type CreatePositionInput = z.infer<typeof CreatePositionSchema>;
