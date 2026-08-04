@@ -125,6 +125,12 @@ export default defineConfig({
       // The modes remain an authoring discipline (docs/STYLE.md); they were never
       // useful as navigation. Page paths are unchanged.
       sidebar: [
+        // The way back to the marketing site. The docs are their own host now,
+        // so without this a reader who arrives from a search result has no route
+        // to the rest of the project — the site title only returns them here.
+        // Navigates in place rather than opening a tab: www links here with
+        // target="_blank", so the page they came from is usually still open.
+        { label: '← tradr.cloud', link: 'https://www.tradr.cloud/' },
         { label: 'Start here', slug: 'index' },
         {
           label: 'User guide',
