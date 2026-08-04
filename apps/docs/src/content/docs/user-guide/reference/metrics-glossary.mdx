@@ -1,18 +1,164 @@
 ---
-title: "Metrics glossary"
-description: "Exact definitions of every computed figure: realised and unrealised P&L, win rate, R:R, expectancy, average win/loss, equity-curve basis, and fee handling."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Metrics glossary
+description: Exact definitions of every figure Tradr computes — gross and net P&L, return percentage, both risk/reward ratios, win rate, profit factor, and how fees are allocated.
 ---
 
-Exact definitions of every computed figure: realised and unrealised P&L, win rate, R:R, expectancy, average win/loss, equity-curve basis, and fee handling.
+Every number in Tradr is derived from your fills. Nothing is stored as a running
+total, so correcting a fill corrects every figure that depends on it.
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+This page gives the exact definition of each one, including the parts that are
+easy to assume wrongly.
+
+## Per position
+
+### Average entry / average exit
+
+The quantity-weighted average price across the fills of that type.
+
+Two entries — 100 at 190.00 and 50 at 195.00 — average to **191.6667**, not
+192.50. The larger fill counts for more.
+
+### Gross P&L
+
+```
+(average exit − average entry) × quantity exited × direction × contract size
+```
+
+Direction is +1 for a long and −1 for a short. Contract size is 100 for an
+option and 1 for a stock. Fees are not included.
+
+### Net P&L
+
+Gross P&L, minus the fees attributable to the quantity exited. **This is the
+figure that reaches your account balance.**
+
+### Fees
+
+Not simply "the fees on the exit". Each exit carries:
+
+- its own fee, plus
+- a **proportional share of the entry fees**, for the quantity being closed.
+
+Close 60 of 150 units and 60/150 of the entry fees come with it. Close the
+remaining 90 and the rest follows. This keeps a partial exit from either escaping
+its share of the entry cost or paying all of it up front.
+
+The displayed fee figure is derived as gross minus net, so
+`gross − fees = net` holds exactly rather than to within a rounding error.
+
+### Return %
+
+```
+net P&L ÷ (average entry × quantity exited × contract size + allocated entry fees) × 100
+```
+
+The denominator is what the closed portion cost you. For a short position it is
+the proceeds of the sale, not the margin you posted — margin varies by broker and
+Tradr does not know yours.
+
+### Target R/R
+
+```
+|target price − average entry| ÷ |average entry − stop loss|
+```
+
+Planned reward per unit of risk, from the trade plan you recorded.
+
+**It moves when you scale in.** Both distances are measured from the *average*
+entry, so a second fill at a worse price re-bases the ratio even though your
+target and stop have not moved.
+
+Null when there is no target, no stop, or when the stop equals the average entry
+— the risk per unit would be zero.
+
+### Actual R/R
+
+```
+(average exit − average entry) × direction ÷ |average entry − stop loss|
+```
+
+What you actually got, in the same units as the plan. **Signed** — negative when
+the trade went against you, so a −1.0 means you lost exactly the risk you planned.
+
+## Across positions
+
+These appear on the performance page. They count **closed positions only**, in a
+single currency at a time.
+
+### Win, loss, breakeven
+
+A position is classified by its net P&L **rounded to the currency's smallest
+unit**. Exactly zero after rounding is a **breakeven**, not a win and not a loss.
+A position that made half a cent is a breakeven in USD.
+
+### Win rate
+
+```
+wins ÷ (wins + losses) × 100
+```
+
+**Breakevens are excluded from the denominator**, not counted as losses. A
+record of 6 wins, 3 losses and 1 breakeven gives a 66.7% win rate, not 60%.
+
+That choice makes the figure comparable between a strategy that scratches trades
+and one that does not. Breakevens are reported separately as the breakeven rate,
+which *does* divide by the total.
+
+Null when nothing has been decided — no wins and no losses in range.
+
+### Breakeven rate
+
+```
+breakevens ÷ total positions × 100
+```
+
+Unlike win rate, this one uses every closed position as its denominator.
+
+### Average win / average loss
+
+The mean net P&L of winning and of losing positions respectively. Average loss is
+negative. Breakevens are in neither.
+
+### Profit factor
+
+```
+sum of winning net P&L ÷ |sum of losing net P&L|
+```
+
+Above 1.0 means the wins outweigh the losses. Null when there are **no wins or no
+losses** — not infinity, and not zero. With no losses there is no meaningful
+ratio, and reporting one would flatter a two-trade record.
+
+### Largest win / largest loss
+
+The single best and single worst net P&L in range.
+
+### Equity curve
+
+The running total of net P&L, bucket by bucket, over the range you selected. It
+starts at zero rather than at your account balance: it shows what your trading
+did, not what your account is worth.
+
+## Things worth knowing
+
+**Realized P&L does not wait for a close.** A partial exit realizes its share
+immediately, so an open position can carry a realized P&L and contribute to your
+balance. The performance statistics above are a different question — they count
+positions that have gone flat, which is why a half-closed position appears in your
+balance but not yet in your win rate.
+
+**Currencies are never mixed.** Statistics are computed per currency. Positions in
+a currency Tradr has no rate for are excluded and reported as excluded rather than
+silently dropped.
+
+**A reopened position keeps its last flat figures** until it goes flat again.
+Recomputing from the current fills would give a different number, because the
+fills have changed since — so the last completed result is held rather than
+recalculated.
+
+## Next steps
+
+- [Review performance & P&L](/user-guide/performance/) — where these appear.
+- [Log and manage positions](/user-guide/positions/) — where the fills come from.
+- [Accounts & the multi-currency ledger](/user-guide/accounts/) — how P&L reaches
+  a balance.
