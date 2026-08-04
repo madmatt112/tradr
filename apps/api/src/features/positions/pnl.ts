@@ -16,6 +16,22 @@ export interface PnlResult {
   totalExitQuantity: number;
   realizedPnl: number | null;
   returnPercentage: number | null;
+  /**
+   * Pre-fee realized P&L. `realizedPnl` minus nothing — the price move alone.
+   * Surfaced so callers can show a fee breakdown without recomputing it (three
+   * sites previously did, inconsistently).
+   */
+  grossPnl: number | null;
+  /**
+   * Fees actually recorded on the fills and subtracted from `grossPnl` to reach
+   * `realizedPnl`: all exit fees plus entry fees pro-rated by
+   * `exitQty / entryQty`. NOT a brokerage-schedule estimate — a fee schedule is
+   * an entry-time convenience that populates `fills.fees`, and must never be
+   * re-applied at read time.
+   *
+   * Invariant: `grossPnl − fees === realizedPnl`.
+   */
+  fees: number | null;
 }
 
 export function aggregateFills(
@@ -71,6 +87,8 @@ export function computePnlFromTotals(
       totalExitQuantity: 0,
       realizedPnl: null,
       returnPercentage: null,
+      grossPnl: null,
+      fees: null,
     };
   }
 
@@ -90,6 +108,8 @@ export function computePnlFromTotals(
       totalExitQuantity: 0,
       realizedPnl: null,
       returnPercentage: null,
+      grossPnl: null,
+      fees: null,
     };
   }
 
@@ -100,14 +120,21 @@ export function computePnlFromTotals(
     .times(exitQty.div(entryQty))
     .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
 
-  const realizedPnl = avgExitPrice!
+  const grossPnl = avgExitPrice!
     .minus(avgEntryPrice)
     .times(exitQty)
     .times(sideMultiplier)
     .times(contractMultiplier)
-    .minus(exitFees)
-    .minus(allocatedEntryFees)
     .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
+
+  // Total fees recorded on the fills that this realization bears.
+  const totalFees = exitFees
+    .plus(allocatedEntryFees)
+    .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
+
+  // Derived from the rounded components so `grossPnl − fees === realizedPnl`
+  // holds exactly, rather than rounding the unrounded expression separately.
+  const realizedPnl = grossPnl.minus(totalFees);
 
   // Return percentage denominator: avgEntryPrice × exitQty × contractMultiplier + allocatedEntryFees.
   // For short positions, this represents gross sale proceeds (notional sold), not margin requirement.
@@ -128,5 +155,82 @@ export function computePnlFromTotals(
     totalExitQuantity: exitQty.toNumber(),
     realizedPnl: realizedPnl.toNumber(),
     returnPercentage: returnPercentage?.toNumber() ?? null,
+    grossPnl: grossPnl.toNumber(),
+    fees: totalFees.toNumber(),
   };
+}
+
+export interface RealizationEvent {
+  occurredAt: Date;
+  grossPnl: Decimal;
+  fees: Decimal;
+  netPnl: Decimal;
+}
+
+/**
+ * Decompose a position's fills into the stream of REALIZATION EVENTS they
+ * produce — one per fill that changes cumulative realized P&L, carrying the
+ * delta and dated at that fill's `filledAt`.
+ *
+ * This is the same rule the ledger's fill hook applies (`postRealizedDelta`):
+ * recompute the cumulative figure over all fills up to and including each fill,
+ * and emit the difference from the previous cumulative. Deriving it the same way
+ * means performance and the ledger cannot drift apart.
+ *
+ * Recomputing from scratch at each step — rather than accumulating per fill — is
+ * what keeps entry-fee proration exact: entry fees are allocated by
+ * `exitQty / entryQty`, so every new fill reprices the whole position.
+ *
+ * ANY fill can produce an event, not just exits: adding a late entry changes the
+ * average cost and therefore retroactively changes P&L already realized, which
+ * surfaces as a negative delta. Entry-only positions realize nothing and produce
+ * no events.
+ *
+ * `grossPnl − fees === netPnl` holds per event, because each is the difference
+ * of two figures for which the invariant already holds.
+ */
+export function computeRealizationEvents(
+  fills: readonly { type: string; price: string; quantity: string; fees: string; filledAt: Date }[],
+  side: 'long' | 'short',
+  assetType: 'stock' | 'option',
+  currencyMinorUnits: number,
+): RealizationEvent[] {
+  const ordered = [...fills].sort((a, b) => a.filledAt.getTime() - b.filledAt.getTime());
+  const events: RealizationEvent[] = [];
+
+  let prevGross = new Decimal(0);
+  let prevFees = new Decimal(0);
+  let prevNet = new Decimal(0);
+
+  for (let i = 0; i < ordered.length; i++) {
+    const pnl = computePnlFromTotals(
+      aggregateFills(ordered.slice(0, i + 1)),
+      side,
+      assetType,
+      currencyMinorUnits,
+    );
+    // null realizedPnl ⇒ no exits yet ⇒ nothing realized.
+    const gross = new Decimal(pnl.grossPnl ?? 0);
+    const fees = new Decimal(pnl.fees ?? 0);
+    const net = new Decimal(pnl.realizedPnl ?? 0);
+
+    const dGross = gross.minus(prevGross);
+    const dFees = fees.minus(prevFees);
+    const dNet = net.minus(prevNet);
+
+    if (!dGross.isZero() || !dFees.isZero() || !dNet.isZero()) {
+      events.push({
+        occurredAt: ordered[i]!.filledAt,
+        grossPnl: dGross,
+        fees: dFees,
+        netPnl: dNet,
+      });
+    }
+
+    prevGross = gross;
+    prevFees = fees;
+    prevNet = net;
+  }
+
+  return events;
 }

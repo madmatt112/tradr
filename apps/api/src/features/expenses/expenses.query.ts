@@ -23,10 +23,7 @@ type ExpensePatch = Partial<Omit<NewExpense, 'id' | 'userId' | 'createdAt'>>;
  * Insert a new expense row. Transaction-only — write-side validation in the
  * service owns the surrounding transaction.
  */
-export async function insertExpense(
-  tx: Transaction,
-  data: NewExpense,
-): Promise<ExpenseRow> {
+export async function insertExpense(tx: Transaction, data: NewExpense): Promise<ExpenseRow> {
   const rows = await tx.insert(expenses).values(data).returning();
   return rows[0];
 }
@@ -103,10 +100,7 @@ export async function listExpenses(
   const { year, page, pageSize } = opts;
 
   const yearPredicate = year
-    ? and(
-        gte(expenses.occurredAt, `${year}-01-01`),
-        lte(expenses.occurredAt, `${year}-12-31`),
-      )
+    ? and(gte(expenses.occurredAt, `${year}-01-01`), lte(expenses.occurredAt, `${year}-12-31`))
     : undefined;
 
   const rowsPlusOne = await db
@@ -192,10 +186,7 @@ export async function aggregateExpenseTotalsByFilter(
     .from(expenses)
     .where(and(eq(expenses.userId, userId), yearPredicate));
 
-  const [perCurrencyRows, countRows] = await Promise.all([
-    perCurrencyQuery,
-    countQuery,
-  ]);
+  const [perCurrencyRows, countRows] = await Promise.all([perCurrencyQuery, countQuery]);
 
   return {
     perCurrency: perCurrencyRows,
@@ -222,6 +213,16 @@ export type RealisedPositionRow = {
   side: 'long' | 'short';
   accountId: string;
   currency: string;
+  /**
+   * When this position's loss/gain was actually REALIZED — the latest realizing
+   * fill in the year, not the position's close date. Never null: it comes from
+   * the ledger rows that produced this row.
+   *
+   * Since ledger-balances Req 9 a position realizes P&L per fill, so a position
+   * can be sitting OPEN with a realized loss. `closedAt` is null for those, and
+   * the wash-sale matcher used to anchor on `closedAt` — skipping them entirely.
+   */
+  realisedAt: Date;
 };
 
 /**
@@ -250,6 +251,7 @@ export async function listRealisedPositionsForYear(
     .select({
       positionId: positions.id,
       realisedPnl: sql<string>`SUM(CASE WHEN ${ledgerEntries.direction} = 'credit' THEN ${ledgerEntries.amount} ELSE -${ledgerEntries.amount} END)::text`,
+      realisedAt: sql<Date>`MAX(${ledgerEntries.occurredAt})`,
       openedAt: positions.openedAt,
       closedAt: positions.closedAt,
       symbol: positions.symbol,
@@ -332,16 +334,10 @@ export async function listCandidatePositionsByYear(
       and(
         eq(positions.userId, userId),
         or(
-          and(
-            gte(positions.openedAt, window.start),
-            lte(positions.openedAt, window.end),
-          ),
+          and(gte(positions.openedAt, window.start), lte(positions.openedAt, window.end)),
           and(
             sql`${positions.openedAt} < ${startIso}`,
-            or(
-              sql`${positions.closedAt} IS NULL`,
-              sql`${positions.closedAt} > ${startIso}`,
-            ),
+            or(sql`${positions.closedAt} IS NULL`, sql`${positions.closedAt} > ${startIso}`),
           ),
         ),
       ),
@@ -407,12 +403,9 @@ export async function aggregateFeesByAccountForYear(
         sql`${fills.filledAt} < ${windowEnd}`,
       ),
     )
-    .groupBy(
-      accounts.id,
-      accounts.name,
-      positions.assetType,
-      accounts.currency,
-    ) as Promise<FeeRollupRow[]>;
+    .groupBy(accounts.id, accounts.name, positions.assetType, accounts.currency) as Promise<
+    FeeRollupRow[]
+  >;
 }
 
 // ---------------------------------------------------------------------------
@@ -448,8 +441,5 @@ export async function updateUserTaxJurisdiction(
   userId: string,
   value: TaxJurisdiction | null,
 ): Promise<void> {
-  await tx
-    .update(users)
-    .set({ taxJurisdiction: value })
-    .where(eq(users.id, userId));
+  await tx.update(users).set({ taxJurisdiction: value }).where(eq(users.id, userId));
 }

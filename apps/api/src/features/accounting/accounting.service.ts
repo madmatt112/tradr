@@ -5,10 +5,11 @@ import type {
   PreviewRateChangeInput,
   PreviewRateChangeResponse,
 } from '@tradr/shared';
+import { getCurrencyMinorUnits } from '@tradr/shared';
 
 import type { Database } from '@/db';
-import { findAccountsByUser } from '@/features/accounts/accounts.query';
-import { MissingRateError, NotFoundError, ValidationError } from '@/lib/errors';
+import { findAccountById, findAccountsByUser } from '@/features/accounts/accounts.query';
+import { ConflictError, MissingRateError, NotFoundError, ValidationError } from '@/lib/errors';
 import { withTransaction } from '@/lib/transaction';
 
 import {
@@ -17,12 +18,14 @@ import {
   findExchangeRateById,
   findSpotRate,
   findUserDisplayCurrency,
+  insertLedgerEntries,
   listExchangeRatesForUser,
+  lockAccountForUpdate,
   setUserDisplayCurrency as setUserDisplayCurrencyQuery,
   upsertExchangeRate,
   type ExchangeRateRow,
+  type LedgerEntryRow,
 } from './accounting.query';
-
 
 // ---------------------------------------------------------------------------
 // Threshold semantics (design.md §Component 6)
@@ -75,10 +78,7 @@ export async function createExchangeRate(
   });
 }
 
-export async function getUserDisplayCurrency(
-  db: Database,
-  userId: string,
-): Promise<string | null> {
+export async function getUserDisplayCurrency(db: Database, userId: string): Promise<string | null> {
   return findUserDisplayCurrency(db, userId);
 }
 
@@ -90,18 +90,11 @@ export async function setUserDisplayCurrency(
   await setUserDisplayCurrencyQuery(db, userId, currency);
 }
 
-export async function listExchangeRates(
-  db: Database,
-  userId: string,
-): Promise<ExchangeRateRow[]> {
+export async function listExchangeRates(db: Database, userId: string): Promise<ExchangeRateRow[]> {
   return listExchangeRatesForUser(db, userId);
 }
 
-export async function deleteExchangeRate(
-  db: Database,
-  userId: string,
-  id: string,
-): Promise<void> {
+export async function deleteExchangeRate(db: Database, userId: string, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
     const result = await deleteExchangeRateQuery(tx, userId, id);
     if (!result.deleted) throw new NotFoundError('ExchangeRate', id);
@@ -421,4 +414,87 @@ function computeExceedsThreshold(before: Decimal | null, after: Decimal | null):
   if (before!.isZero()) return false; // baseline zero — relative move undefined
   const move = after!.minus(before!).abs().dividedBy(before!.abs());
   return move.greaterThan(THRESHOLD);
+}
+
+// ---------------------------------------------------------------------------
+// Cash balance reconciliation (Req 8, design.md §C11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Make an account's derived balance equal `targetBalance` by INSERTing one
+ * `balance_adjustment` ledger row for the difference.
+ *
+ * The caller supplies the TARGET, never a delta (Req 8.2). A delta computed in
+ * the browser is stale the moment a position close commits; computing it here,
+ * inside the same transaction and behind the same row lock as the INSERT, makes
+ * `newBalance === targetBalance` a guarantee rather than a hope.
+ *
+ * What is being reconciled: the account's cash balance as Tradr models it —
+ * `starting_balance + realized P&L`. Tradr holds no mark-to-market, so this
+ * figure excludes the market value of open positions. That is a product
+ * decision (Req 8, "What is being reconciled"), and the obligation it creates
+ * is disclosure in the UI (Req 8.11), not a guard here: open positions do NOT
+ * block or warn at this layer.
+ *
+ * Append-only. This adds a row; it never edits or deletes one. A wrong figure
+ * is corrected by reconciling again (Req 8.9) — both rows persist as the audit
+ * trail.
+ */
+export async function reconcileAccountBalance(
+  db: Database,
+  userId: string,
+  accountId: string,
+  targetBalance: string,
+): Promise<{ entry: LedgerEntryRow; previousBalance: string; newBalance: string }> {
+  return withTransaction(db, async (tx) => {
+    const locked = await lockAccountForUpdate(tx, userId, accountId);
+    if (!locked) throw new NotFoundError('Account', accountId);
+
+    const target = new Decimal(targetBalance);
+
+    // The user types a figure read off a broker statement, so it must be
+    // expressible in that currency's minor units (Req 8.6). The close hook
+    // applies the same rule via InvariantViolationError; here the input is
+    // user-supplied, so a 400 is the correct shape rather than a 500.
+    const minorUnits = getCurrencyMinorUnits(locked.currency);
+    if (target.decimalPlaces() > minorUnits) {
+      throw new ValidationError(
+        `Target balance ${targetBalance} has more decimal places than ${locked.currency} allows (${minorUnits})`,
+      );
+    }
+
+    const [account] = await findAccountById(tx, accountId, userId);
+    // `balance` is a numeric(18,4) rendered to text by the projection — hand it
+    // straight to Decimal. NEVER parseFloat a numeric column.
+    const previous = new Decimal(account.balance);
+    const delta = target.minus(previous);
+
+    if (delta.isZero()) {
+      throw new ConflictError('Account balance already matches the target');
+    }
+
+    // `amount` is a non-negative magnitude (`ledger_amount_nonneg_chk`); the
+    // sign lives in `direction`, exactly as it does for position P&L.
+    const [entry] = await insertLedgerEntries(tx, [
+      {
+        userId,
+        accountId,
+        positionId: null,
+        entryType: 'balance_adjustment',
+        direction: delta.isPositive() ? 'credit' : 'debit',
+        amount: delta.abs().toFixed(4),
+        currency: locked.currency,
+        symbol: null,
+        occurredAt: new Date(),
+        groupId: crypto.randomUUID(),
+        reversesGroupId: null,
+      },
+    ]);
+
+    return {
+      entry,
+      previousBalance: previous.toFixed(4),
+      newBalance: target.toFixed(4),
+    };
+  });
 }

@@ -155,6 +155,20 @@
       "when": 1784830539522,
       "tag": "0021_dashboard_forty_px_rows",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785512319228,
+      "tag": "0022_ledger_balance_adjustment",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1785526351101,
+      "tag": "0023_position_last_flat_snapshot",
+      "breakpoints": true
     }
   ]
 }

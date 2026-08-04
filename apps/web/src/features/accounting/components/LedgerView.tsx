@@ -97,11 +97,18 @@ export function LedgerView({ accountId, currency }: Props) {
         <TableBody>
           {data.entries.map((entry, i) => {
             const isReversal = entry.entryType === 'position_pnl_reversal';
+            // Branch on entryType BEFORE positionId. A balance adjustment has no
+            // position by design (Req 8.12), so falling through to the
+            // positionId-null branch below would label it "(deleted)" and read
+            // as an orphaned trade row.
+            const isAdjustment = entry.entryType === 'balance_adjustment';
             return (
               <TableRow key={entry.id}>
                 <TableCell>{new Date(entry.occurredAt).toLocaleString()}</TableCell>
                 <TableCell>
-                  {entry.positionId ? (
+                  {isAdjustment ? (
+                    <Badge variant="secondary">Balance adjustment</Badge>
+                  ) : entry.positionId ? (
                     <Link
                       to="/positions/$positionId"
                       params={{ positionId: entry.positionId }}

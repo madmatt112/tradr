@@ -1456,6 +1456,76 @@ describe('boundary-year transition + invariants', () => {
     // spec (d-536e8750) wants orphans excluded, it must extend the WHERE
     // clause or join the originals — this test will then need to be updated.
   });
+
+  it('balance_adjustment rows are excluded from realised P&L (ledger-balances Req 8.10)', async () => {
+    vi.useRealTimers();
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    const me = await getMe(cookie);
+
+    // Fixture (a): a closed position with a real +100 realised P&L row, so the
+    // summary has a non-zero baseline to move away from if the exclusion broke.
+    // eslint-disable-next-line no-restricted-syntax
+    const [pos] = await db
+      .insert(positions)
+      .values({
+        userId: me.id,
+        accountId: acct.id,
+        symbol: 'ADJ',
+        side: 'long',
+        assetType: 'stock',
+        status: 'closed',
+        openedAt: new Date('2026-05-15T12:00:00Z'),
+        closedAt: new Date('2026-06-15T12:00:00Z'),
+      })
+      .returning();
+
+    await db.insert(ledgerEntries).values({
+      userId: me.id,
+      accountId: acct.id,
+      positionId: pos!.id,
+      entryType: 'position_pnl',
+      direction: 'credit',
+      amount: '100.0000',
+      currency: 'USD',
+      occurredAt: new Date('2026-06-15T12:00:00Z'),
+      groupId: crypto.randomUUID(),
+      reversesGroupId: null,
+    });
+
+    // Fixture (b): a large cash balance adjustment in the same year and
+    // account. It carries a NULL positionId by design, so
+    // `listRealisedPositionsForYear`'s INNER JOIN on positions drops it before
+    // its entry-type filter is even consulted. That is why the filter in
+    // expenses.query.ts is deliberately NOT widened with 'balance_adjustment'
+    // (design §C13) — a balance adjustment is not realised trading P&L and
+    // must never reach a tax summary.
+    await db.insert(ledgerEntries).values({
+      userId: me.id,
+      accountId: acct.id,
+      positionId: null,
+      entryType: 'balance_adjustment',
+      direction: 'credit',
+      amount: '50000.0000',
+      currency: 'USD',
+      occurredAt: new Date('2026-07-01T12:00:00Z'),
+      groupId: crypto.randomUUID(),
+      reversesGroupId: null,
+    });
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-15T12:00:00Z'));
+    await extendSessions(new Date('2026-12-15T11:45:00Z'));
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const usd = body.realisedPnl.perCurrency.find(
+      (r: { currency: string }) => r.currency === 'USD',
+    );
+    // The position's 100, and NOT the 50,000 adjustment.
+    expect(usd?.amount).toBe('100.00');
+  });
 });
 
 // DO NOT add describe() blocks below this line — see Task 17.4 (boundary-year vi.useFakeTimers scoping).

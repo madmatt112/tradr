@@ -5,10 +5,22 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { Database, Transaction } from '@/db';
 import { accounts, exchangeRates, ledgerEntries, users } from '@/db/schema';
 
-// All ledger reads filter `entryType IN ('position_pnl', 'position_pnl_reversal')`.
-// v1 emits only `'position_pnl'`; the wider filter ships in v1 so the future
-// reversal spec (d-536e8750) does not need to touch these query sites.
-const PNL_ENTRY_TYPES = ['position_pnl', 'position_pnl_reversal'] as const;
+// Every balance-derivation read filters on this list. It is duplicated in FIVE
+// places, three of them raw SQL that no type-checker will catch — widen them
+// together or balances silently disagree (ledger-balances design.md §"The
+// entry-type list is duplicated in five places"):
+//   1. this constant                                     (list + dashboard totals)
+//   2. `listLedgerEntriesForAccount`'s raw db.execute     (running-balance anchor)
+//   3. `balanceLateral` in accounts.query.ts              (EVERY account balance)
+//   4+5. both partial index predicates in accounting.schema.ts
+// A SIXTH copy in expenses.query.ts is deliberately NOT widened — see §C13:
+// `balance_adjustment` rows carry a NULL positionId and are excluded from the
+// tax realized-P&L summary by its INNER JOIN, which is the correct outcome.
+const BALANCE_ENTRY_TYPES = [
+  'position_pnl',
+  'position_pnl_reversal',
+  'balance_adjustment',
+] as const;
 
 // ---------------------------------------------------------------------------
 // Row / input types
@@ -114,6 +126,103 @@ export async function reverseCloseForPosition(
   }));
 
   return insertLedgerEntries(tx, reversals);
+}
+
+/**
+ * Signed sum of what has ALREADY been posted as realized P&L for a position —
+ * the `alreadyPosted` term of the per-fill delta rule (design §C15; Req 9.2).
+ *
+ *   delta = cumulativeRealizedNow − alreadyPostedForThisPosition
+ *
+ * Counts only **un-reversed** `position_pnl` rows, using the same "un-reversed"
+ * definition as `reverseCloseForPosition`: a row whose `groupId` is not
+ * referenced by any `position_pnl_reversal.reversesGroupId` for the position.
+ *
+ * That filter is what makes reopen work. A reopen reverses every posted row, so
+ * the un-reversed set becomes empty and the baseline resets to zero — the
+ * re-close then posts the full cumulative amount once, rather than a delta
+ * against postings that have already been neutralized.
+ *
+ * `position_pnl_reversal` rows are deliberately NOT summed. They exist to cancel
+ * originals in the *balance* derivation; here they are the thing that removes an
+ * original from the baseline, not a contributor to it.
+ *
+ * Returns the signed `total` AND the `rowCount` behind it. The count is not
+ * redundant with `total.isZero()`: a position whose postings net to zero (say
+ * +45 then −45 after an edit) has rows, while a never-posted position has none.
+ * The close hook needs that distinction to honour Req 2's exact-zero-P&L row —
+ * see `postRealizedDelta`.
+ *
+ * Read-only, but transaction-scoped because every caller runs inside the
+ * fill/close transaction that is about to write.
+ */
+export async function sumPostedRealizedForPosition(
+  tx: Transaction,
+  { userId, positionId }: { userId: string; positionId: string },
+): Promise<{ total: Decimal; rowCount: number }> {
+  const rev = alias(ledgerEntries, 'rev');
+  const rows = await tx
+    .select({ direction: ledgerEntries.direction, amount: ledgerEntries.amount })
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.userId, userId),
+        eq(ledgerEntries.positionId, positionId),
+        eq(ledgerEntries.entryType, 'position_pnl'),
+        notExists(
+          tx
+            .select({ id: rev.id })
+            .from(rev)
+            .where(
+              and(
+                eq(rev.entryType, 'position_pnl_reversal'),
+                eq(rev.positionId, positionId),
+                eq(rev.reversesGroupId, ledgerEntries.groupId),
+              ),
+            ),
+        ),
+      ),
+    );
+
+  // Summed in JS rather than SQL: the row count per position is tiny (one per
+  // realization event) and decimal.js keeps the arithmetic identical to the
+  // rest of the posting path. `amount` is a numeric string — never parseFloat.
+  const total = rows.reduce(
+    (acc, row) => (row.direction === 'credit' ? acc.plus(row.amount) : acc.minus(row.amount)),
+    new Decimal(0),
+  );
+  return { total, rowCount: rows.length };
+}
+
+/**
+ * Row-lock an account and return the fields reconciliation needs (Req 8.3).
+ * Returns `null` when the account does not exist or belongs to another user —
+ * the caller turns that into a `NotFoundError`, so a probe cannot distinguish
+ * "no such account" from "not yours".
+ *
+ * This is a bare SELECT rather than a reuse of `findAccountById` because that
+ * query derives the balance through a LATERAL `LEFT JOIN`, and Postgres rejects
+ * `FOR UPDATE` on the nullable side of an outer join. The two therefore have to
+ * be separate statements: lock here, then read the balance.
+ *
+ * The lock serializes concurrent reconciliations of the same account so the
+ * read-compute-insert sequence cannot interleave. It is safe with respect to
+ * the close-flow lock order (`positions → fills → accounts → ledger_entries`):
+ * this flow never touches `positions`, so it takes a strict suffix of that
+ * order and cannot form an AB/BA cycle against it.
+ */
+export async function lockAccountForUpdate(
+  tx: Transaction,
+  userId: string,
+  accountId: string,
+): Promise<{ id: string; currency: string } | null> {
+  const rows = await tx
+    .select({ id: accounts.id, currency: accounts.currency })
+    .from(accounts)
+    .where(and(eq(accounts.id, accountId), eq(accounts.userId, userId)))
+    .limit(1)
+    .for('update');
+  return rows[0] ?? null;
 }
 
 /**
@@ -228,7 +337,7 @@ export async function listLedgerEntriesForAccount(
       and(
         eq(ledgerEntries.userId, userId),
         eq(ledgerEntries.accountId, accountId),
-        inArray(ledgerEntries.entryType, [...PNL_ENTRY_TYPES]),
+        inArray(ledgerEntries.entryType, [...BALANCE_ENTRY_TYPES]),
       ),
     )
     .orderBy(desc(ledgerEntries.occurredAt), desc(ledgerEntries.createdAt))
@@ -268,7 +377,7 @@ export async function listLedgerEntriesForAccount(
     FROM ledger_entries
     WHERE user_id = ${userId}
       AND account_id = ${accountId}
-      AND entry_type IN ('position_pnl', 'position_pnl_reversal')
+      AND entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')
       AND (
         occurred_at < ${pageFirstOccurredAt}
         OR (occurred_at = ${pageFirstOccurredAt} AND created_at < ${pageFirstCreatedAt})
@@ -343,7 +452,7 @@ export async function aggregateBalancesForAccounts(
       and(
         eq(ledgerEntries.userId, userId),
         inArray(ledgerEntries.accountId, accountIds),
-        inArray(ledgerEntries.entryType, [...PNL_ENTRY_TYPES]),
+        inArray(ledgerEntries.entryType, [...BALANCE_ENTRY_TYPES]),
       ),
     )
     .groupBy(ledgerEntries.accountId);

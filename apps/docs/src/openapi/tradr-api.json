@@ -3398,6 +3398,88 @@
         ]
       }
     },
+    "/api/ledger/{accountId}/reconcile": {
+      "post": {
+        "description": "Posts a single `balance_adjustment` ledger entry for the difference between the account's current derived balance and `targetBalance`, so the balance afterwards equals `targetBalance` exactly.\nThe client sends the TARGET balance, never a delta — the server computes the difference inside the transaction that writes the row, behind a row lock on the account, so a concurrent position close cannot race it.\nThe balance being reconciled is Tradr's cash balance for the account: starting balance plus realized P&L from closed trades. Tradr holds no mark-to-market, so it excludes the market value of open positions. Open positions do not block or alter this operation.\nAppend-only: this adds a row and never edits or deletes one. A wrong figure is corrected by reconciling again; both entries persist.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "targetBalance": {
+                    "description": "Decimal string with at most 4 fractional digits, and no more than the account currency's minor units. May be negative (a margin/debit balance).\n",
+                    "example": "10250.00",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "targetBalance"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "entry": {
+                      "type": "object"
+                    },
+                    "newBalance": {
+                      "example": "10250.0000",
+                      "type": "string"
+                    },
+                    "previousBalance": {
+                      "example": "10000.0000",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The adjustment entry, plus the balance either side of it."
+          },
+          "400": {
+            "description": "targetBalance is malformed or too precise for the currency."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "404": {
+            "description": "No such account for this user."
+          },
+          "409": {
+            "description": "The balance already equals targetBalance — nothing to adjust."
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "summary": "Reconcile an account's cash balance to a stated figure.",
+        "tags": [
+          "Accounting"
+        ]
+      }
+    },
     "/api/performance": {
       "get": {
         "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. When feature gating is enabled and the user is a non-admin Free user, the window is clamped to the last 6 calendar months — never an error: the response is computed over the clamped window and marked with the additive `tierWindow` field. History metadata (per-currency earliest/most-recent closed timestamps and totals) is never clamped.\n",

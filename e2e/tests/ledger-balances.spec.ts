@@ -89,12 +89,30 @@ interface MockRate {
  * the latest writes — the same way TanStack Query refetches against a real
  * backend after a mutation.
  */
+interface MockLedgerEntry {
+  id: string;
+  accountId: string;
+  positionId: string | null;
+  entryType: string;
+  direction: 'credit' | 'debit';
+  amount: string;
+  currency: string;
+  symbol: string | null;
+  occurredAt: string;
+  createdAt: string;
+  groupId: string;
+}
+
 interface MockState {
   accounts: ReturnType<typeof usdAccount>[];
   rates: MockRate[];
   displayCurrency: string | null;
   /** Per (base,quote) pair, false until the rate is created. */
   ratePresent: Record<string, boolean>;
+  /** Ledger rows, newest first, served by GET /ledger/:accountId. */
+  ledger: MockLedgerEntry[];
+  /** Cumulative balance before `ledger[0]` — the API's page anchor. */
+  ledgerAnchor: string;
 }
 
 function freshState(): MockState {
@@ -103,6 +121,8 @@ function freshState(): MockState {
     rates: [],
     displayCurrency: null,
     ratePresent: {},
+    ledger: [],
+    ledgerAnchor: '0.00',
   };
 }
 
@@ -165,13 +185,72 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
     await jsonResponse(route, acct);
   });
 
-  // GET /ledger/:accountId — minimal empty-page response so the detail page
-  // mounts without erroring. The single-currency scenario asserts the balance
-  // on the AccountBalance card, not the ledger rows.
+  // POST /ledger/:accountId/reconcile — cash balance reconciliation (Req 8).
+  // Mirrors the server: the client posts a TARGET, the "server" computes the
+  // delta against the live balance, appends one balance_adjustment row and
+  // moves the account balance onto the target. Registered BEFORE the ledger
+  // GET route so the more specific path is not shadowed.
+  await page.route(/\/api\/ledger\/[0-9a-f-]{36}\/reconcile$/i, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    const url = new URL(route.request().url());
+    const accountId = url.pathname.split('/').slice(-2)[0];
+    const state = getState();
+    const acct = state.accounts.find((a) => a.id === accountId);
+    if (!acct) {
+      await jsonResponse(route, { error: { code: 'NOT_FOUND', message: 'not found' } }, 404);
+      return;
+    }
+
+    const { targetBalance } = route.request().postDataJSON() as { targetBalance: string };
+    const previous = Number(acct.balance);
+    const delta = Math.round((Number(targetBalance) - previous) * 10000) / 10000;
+    if (delta === 0) {
+      await jsonResponse(
+        route,
+        { error: { code: 'CONFLICT', message: 'Account balance already matches the target' } },
+        409,
+      );
+      return;
+    }
+
+    const entry: MockLedgerEntry = {
+      id: `adj-${state.ledger.length + 1}`,
+      accountId,
+      positionId: null,
+      entryType: 'balance_adjustment',
+      direction: delta > 0 ? 'credit' : 'debit',
+      amount: Math.abs(delta).toFixed(4),
+      currency: acct.currency,
+      symbol: null,
+      occurredAt: NOW_ISO,
+      createdAt: NOW_ISO,
+      groupId: `grp-${state.ledger.length + 1}`,
+    };
+    state.ledgerAnchor = previous.toFixed(2);
+    state.ledger = [entry, ...state.ledger];
+    acct.balance = Number(targetBalance).toFixed(2);
+
+    await jsonResponse(
+      route,
+      {
+        entry,
+        previousBalance: previous.toFixed(4),
+        newBalance: Number(targetBalance).toFixed(4),
+      },
+      201,
+    );
+  });
+
+  // GET /ledger/:accountId — serves the mutable ledger state. Defaults to an
+  // empty page so detail pages mount without erroring; the reconcile scenario
+  // populates it.
   await page.route(/\/api\/ledger\/[0-9a-f-]{36}(\?.*)?$/i, (route) =>
     jsonResponse(route, {
-      entries: [],
-      runningBalanceAtFirstRow: '0.00',
+      entries: getState().ledger,
+      runningBalanceAtFirstRow: getState().ledgerAnchor,
       page: 1,
       pageSize: 50,
       hasMore: false,
@@ -358,6 +437,56 @@ test.describe('Ledger balances — single currency user', () => {
     state.accounts = [usdAccount('1050.00')];
     await page.goto(`/accounts/${USD_ACCOUNT_ID}`);
     await expect(page.getByText('$1,050.00')).toBeVisible();
+  });
+
+  // Requirement 8 — the user states the account's real cash balance and Tradr
+  // posts one adjusting entry for the difference.
+  test('reconciling the cash balance updates the balance card and the ledger', async ({ page }) => {
+    await page.goto(`/accounts/${USD_ACCOUNT_ID}`);
+    // Scope to the card: after the reconcile the same figure also appears in
+    // the ledger's running-balance column, which is correct but ambiguous to a
+    // bare text locator.
+    const balanceCard = page.getByTestId('account-balance');
+    await expect(balanceCard).toHaveText('$1,000.00');
+
+    await page.getByRole('button', { name: 'Reconcile' }).click();
+
+    // The disclosure copy is the reason this flow needs no open-positions
+    // warning — it says which figure to type (Req 8.11).
+    await expect(page.getByRole('heading', { name: 'Reconcile cash balance' })).toBeVisible();
+    await expect(
+      page.getByText('does not include the market value of open positions'),
+    ).toBeVisible();
+
+    // Submit is gated until a non-zero delta is entered.
+    const submit = page.getByRole('button', { name: 'Post adjustment' });
+    await expect(submit).toBeDisabled();
+
+    // A target equal to the current balance is a no-op, not an adjustment.
+    await page.getByLabel('Actual cash balance').fill('1000');
+    await expect(page.getByTestId('reconcile-adjustment')).toContainText('already matches');
+    await expect(submit).toBeDisabled();
+
+    // The real figure off the broker statement.
+    await page.getByLabel('Actual cash balance').fill('1250.50');
+    await expect(page.getByTestId('reconcile-adjustment')).toContainText('credit');
+    await expect(page.getByTestId('reconcile-adjustment')).toContainText('250.50');
+    await expect(submit).toBeEnabled();
+
+    await submit.click();
+
+    // The mutation's invalidation set refetches the account, so the card lands
+    // on the target without a reload.
+    await expect(balanceCard).toHaveText('$1,250.50');
+
+    // The adjustment shows in the ledger as a labelled row — NOT as
+    // "(deleted)", which is where a null-positionId row would otherwise fall
+    // through (Req 8.12).
+    await expect(page.getByText('Balance adjustment')).toBeVisible();
+    await expect(page.getByText('(deleted)')).toHaveCount(0);
+    // Credit column carries the delta; the running balance ties out to the card.
+    await expect(page.getByRole('cell', { name: '$250.50' })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '$1,250.50' })).toBeVisible();
   });
 });
 

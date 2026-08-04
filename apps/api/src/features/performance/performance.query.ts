@@ -16,16 +16,8 @@ export interface SnapshotFill {
   price: string;
   quantity: string;
   fees: string;
-}
-
-export interface SnapshotFeeSchedule {
-  stockPerShareCommission: string;
-  stockMinPerFill: string;
-  stockMaxPerFill: string;
-  optionsPerContractCommission: string;
-  optionsPerContractExchangeFee: string;
-  optionsMinPerFill: string;
-  optionsMaxPerFill: string;
+  /** Needed to date each realization event (bucket B). */
+  filledAt: string;
 }
 
 export interface SnapshotPosition {
@@ -33,8 +25,16 @@ export interface SnapshotPosition {
   side: string;
   assetType: string;
   currency: string;
-  closedAt: string;
-  feeSchedule: SnapshotFeeSchedule | null;
+  /**
+   * NULL for a position that is not currently flat. Such positions still
+   * contribute their realized P&L to bucket-B metrics via their fills; they are
+   * excluded from the flat-only bucket-A statistics.
+   */
+  closedAt: string | null;
+  status: string;
+  /** Latched flat snapshot — see positions.schema.ts. Null if never flat. */
+  lastFlatAt: string | null;
+  lastFlatNetPnl: string | null;
   fills: SnapshotFill[];
 }
 
@@ -78,26 +78,33 @@ export async function fetchTimeframeSnapshot(
   const supported = `{${(CURRENCY_CODES as readonly string[]).join(',')}}`;
   const result = await tx.execute<{ envelope: TimeframeSnapshot }>(sql`
     WITH closed AS (
-      SELECT
-        p.id, p.side, p.asset_type, p.closed_at,
-        a.currency,
-        fs.stock_per_share_commission,
-        fs.stock_min_per_fill,
-        fs.stock_max_per_fill,
-        fs.options_per_contract_commission,
-        fs.options_per_contract_exchange_fee,
-        fs.options_min_per_fill,
-        fs.options_max_per_fill
+      -- Positions RELEVANT to the window, which is no longer the same as
+      -- "closed in the window": a partial exit realizes P&L while the position
+      -- stays open (bucket B), so any position with a fill in the window
+      -- qualifies too. The service splits the two populations — see
+      -- performance.service.ts §buckets. Fee-schedule columns are gone: fees
+      -- come from fills.fees and are never re-applied at read time.
+      SELECT DISTINCT
+        p.id, p.side, p.asset_type, p.closed_at, p.status,
+        p.last_flat_at, p.last_flat_net_pnl,
+        a.currency
       FROM positions p
       JOIN accounts a ON a.id = p.account_id AND a.user_id = p.user_id
-      LEFT JOIN brokerages b ON b.id = a.brokerage_id
-      LEFT JOIN fee_schedules fs ON fs.brokerage_id = b.id
       WHERE p.user_id = ${userId}
-        AND p.status = 'closed'
-        AND p.closed_at IS NOT NULL
-        AND p.closed_at >= ${startInstant.toISOString()}
-        AND p.closed_at <  ${endInstant.toISOString()}
         AND a.currency = ANY(${supported}::text[])
+        AND (
+          (
+            COALESCE(p.last_flat_at, p.closed_at) IS NOT NULL
+            AND COALESCE(p.last_flat_at, p.closed_at) >= ${startInstant.toISOString()}
+            AND COALESCE(p.last_flat_at, p.closed_at) <  ${endInstant.toISOString()}
+          )
+          OR EXISTS (
+            SELECT 1 FROM fills f
+            WHERE f.position_id = p.id
+              AND f.filled_at >= ${startInstant.toISOString()}
+              AND f.filled_at <  ${endInstant.toISOString()}
+          )
+        )
     ),
     position_fills AS (
       SELECT
@@ -105,7 +112,8 @@ export async function fetchTimeframeSnapshot(
         jsonb_agg(
           jsonb_build_object(
             'type', f.type, 'price', f.price::text,
-            'quantity', f.quantity::text, 'fees', f.fees::text
+            'quantity', f.quantity::text, 'fees', f.fees::text,
+            'filledAt', f.filled_at
           ) ORDER BY f.filled_at
         ) AS fills
       FROM fills f
@@ -136,18 +144,8 @@ export async function fetchTimeframeSnapshot(
       'positions', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           'id', c.id, 'side', c.side, 'assetType', c.asset_type,
-          'currency', c.currency, 'closedAt', c.closed_at,
-          'feeSchedule', CASE WHEN c.stock_per_share_commission IS NULL THEN NULL
-            ELSE jsonb_build_object(
-              'stockPerShareCommission',       c.stock_per_share_commission::text,
-              'stockMinPerFill',               c.stock_min_per_fill::text,
-              'stockMaxPerFill',               c.stock_max_per_fill::text,
-              'optionsPerContractCommission',  c.options_per_contract_commission::text,
-              'optionsPerContractExchangeFee', c.options_per_contract_exchange_fee::text,
-              'optionsMinPerFill',             c.options_min_per_fill::text,
-              'optionsMaxPerFill',             c.options_max_per_fill::text
-            )
-          END,
+          'currency', c.currency, 'closedAt', c.closed_at, 'status', c.status,
+          'lastFlatAt', c.last_flat_at, 'lastFlatNetPnl', c.last_flat_net_pnl::text,
           'fills', COALESCE(pf.fills, '[]'::jsonb)
         ))
         FROM closed c LEFT JOIN position_fills pf ON pf.position_id = c.id
@@ -176,13 +174,31 @@ export async function fetchHistoryMetadata(
       WHERE p.user_id = ${userId} AND p.status = 'closed' AND p.closed_at IS NOT NULL
             AND a.currency = ANY(${supported}::text[])
     ),
+    -- Currency DISCOVERY must include positions that have realized P&L without
+    -- being flat: a user whose only activity is partial exits has zero closed
+    -- positions, and keying the currency list on closed_full_supported alone
+    -- would return no currencies at all — hiding bucket-B data entirely.
+    -- The historyRange aggregates below stay closed-only (they describe closed
+    -- positions), hence the FILTER clauses.
+    realized_full_supported AS (
+      SELECT p.id, p.closed_at, a.currency,
+             (p.status = 'closed' AND p.closed_at IS NOT NULL) AS is_flat
+      FROM positions p
+      JOIN accounts a ON a.id = p.account_id AND a.user_id = p.user_id
+      WHERE p.user_id = ${userId}
+        AND a.currency = ANY(${supported}::text[])
+        AND (
+          (p.status = 'closed' AND p.closed_at IS NOT NULL)
+          OR EXISTS (SELECT 1 FROM fills f WHERE f.position_id = p.id AND f.type = 'exit')
+        )
+    ),
     per_currency AS (
       SELECT
         currency,
-        MIN(closed_at)  AS earliest_closed_at,
-        MAX(closed_at)  AS most_recent_closed_at,
-        COUNT(*)        AS total_closed_positions
-      FROM closed_full_supported
+        MIN(closed_at) FILTER (WHERE is_flat)  AS earliest_closed_at,
+        MAX(closed_at) FILTER (WHERE is_flat)  AS most_recent_closed_at,
+        COUNT(*)       FILTER (WHERE is_flat)  AS total_closed_positions
+      FROM realized_full_supported
       GROUP BY currency
     ),
     any_accounts AS (

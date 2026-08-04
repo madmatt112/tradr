@@ -27,9 +27,12 @@ import {
 } from '@/features/accounting/accounting.service';
 import { insertPositionCloseLedgerEntries } from '@/features/accounting/ledger-hook';
 import {
-  assertCloseReverseHooksCoRegistered,
+  assertLedgerHooksCoRegistered,
   replaceCloseHook,
+  replaceFillHook,
+  replaceReverseHook,
   unregisterCloseHook,
+  unregisterFillHook,
   unregisterReverseHook,
 } from '@/features/positions/positions.service';
 import { InvariantViolationError, MissingRateError } from '@/lib/errors';
@@ -522,23 +525,42 @@ describe('reverseCloseForPosition (ledger reversal)', () => {
   });
 });
 
-describe('close/reverse co-registration invariant (Req 7.8)', () => {
-  it('passes when close + reverse hooks are co-registered (bootstrap state)', () => {
-    // beforeAll ran bootstrap() → 'ledger' close AND 'ledger' reverse are both
+describe('ledger hook co-registration invariant (Req 7.8, extended by Req 9.13)', () => {
+  it('passes when close + reverse + fill hooks are co-registered (bootstrap state)', () => {
+    // beforeAll ran bootstrap() → 'ledger' close, reverse AND fill are all
     // registered, so the invariant holds.
-    expect(() => assertCloseReverseHooksCoRegistered()).not.toThrow();
+    expect(() => assertLedgerHooksCoRegistered()).not.toThrow();
   });
 
   it('throws when a close hook is registered without its same-named reverse hook', () => {
-    // Register an orphan close hook (no matching reverse hook) → invariant fails.
+    // Register an orphan close hook (no matching reverse/fill hook) → fails.
     replaceCloseHook('orphan-close', async () => {});
     try {
-      expect(() => assertCloseReverseHooksCoRegistered()).toThrow(InvariantViolationError);
+      expect(() => assertLedgerHooksCoRegistered()).toThrow(InvariantViolationError);
     } finally {
       unregisterCloseHook('orphan-close');
     }
     // Cleanup restores the co-registered state.
-    expect(() => assertCloseReverseHooksCoRegistered()).not.toThrow();
+    expect(() => assertLedgerHooksCoRegistered()).not.toThrow();
+  });
+
+  it('throws when a close hook has a reverse hook but no same-named fill hook (Req 9.13)', () => {
+    // Partial P&L posted by a fill hook must be reversible on reopen, so a close
+    // hook whose fill counterpart is missing is the same class of bug as a
+    // missing reverse hook. Register close + reverse but NOT fill.
+    replaceCloseHook('half-wired', async () => {});
+    replaceReverseHook('half-wired', async () => {});
+    try {
+      expect(() => assertLedgerHooksCoRegistered()).toThrow(InvariantViolationError);
+      // Adding the missing fill hook satisfies the invariant.
+      replaceFillHook('half-wired', async () => {});
+      expect(() => assertLedgerHooksCoRegistered()).not.toThrow();
+    } finally {
+      unregisterCloseHook('half-wired');
+      unregisterReverseHook('half-wired');
+      unregisterFillHook('half-wired');
+    }
+    expect(() => assertLedgerHooksCoRegistered()).not.toThrow();
   });
 });
 

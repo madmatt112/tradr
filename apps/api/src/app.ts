@@ -5,6 +5,7 @@ import { runMigrations } from '@/db/migrate';
 import accountingRouter from '@/features/accounting/accounting.route';
 import {
   insertPositionCloseLedgerEntries,
+  postFillLedgerEntries,
   reversePositionCloseLedgerEntries,
 } from '@/features/accounting/ledger-hook';
 import accounts from '@/features/accounts/accounts.route';
@@ -31,8 +32,9 @@ import performance from '@/features/performance/performance.route';
 import fillsRouter from '@/features/positions/fills.route';
 import positions from '@/features/positions/positions.route';
 import {
-  assertCloseReverseHooksCoRegistered,
+  assertLedgerHooksCoRegistered,
   replaceCloseHook,
+  replaceFillHook,
   replaceReverseHook,
 } from '@/features/positions/positions.service';
 import { initStockQuoteCache } from '@/features/symbols/stock-quote.client';
@@ -136,7 +138,13 @@ export async function bootstrap(): Promise<void> {
   // dropped `ledger_position_pnl_unique_idx` (task 26) — every close hook MUST
   // have a same-named reverse hook or bootstrap throws.
   replaceReverseHook('ledger', reversePositionCloseLedgerEntries);
-  assertCloseReverseHooksCoRegistered();
+  // Fill hook (Req 9): posts the realized-P&L delta on every fill mutation, so a
+  // partial exit moves the balance immediately instead of waiting for the
+  // position to go flat. Co-registered with the other two — the invariant below
+  // requires all three, because partial P&L posted by the fill hook must be
+  // reversible on reopen.
+  replaceFillHook('ledger', postFillLedgerEntries);
+  assertLedgerHooksCoRegistered();
   initDashboardCache();
   initChangelogCache();
   initStockQuoteCache();
