@@ -1,0 +1,9 @@
+# STYLE.md rule 2: procedural sentences under 20 words, descriptive under 25.
+# A linter cannot tell the two apart, so this enforces the looser bound — the
+# one that is unambiguously a violation either way.
+extends: occurrence
+message: "Sentence is over 25 words — split it (docs/STYLE.md rule 2)."
+level: error
+scope: sentence
+max: 25
+token: '\b(\w+)\b'

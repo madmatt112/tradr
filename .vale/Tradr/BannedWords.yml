@@ -1,0 +1,15 @@
+extends: existence
+message: "'%s' — see docs/STYLE.md. Delete it, or say what actually happens."
+level: error
+ignorecase: true
+tokens:
+  - simply
+  - just
+  - easily
+  - obviously
+  - should work
+  - ought to
+  - leverage
+  - utilise
+  - utilize
+  - in order to
