@@ -732,3 +732,131 @@ describe('CalculatorForm — buying-power cap basis', () => {
     expect(screen.queryByTestId('cap-basis-note')).toBeNull();
   });
 });
+
+// -----------------------------------------------------------------------------
+// Account picker on the dollar basis
+//
+// Same DEPLOYED_ACCOUNT: $5,000 equity, $1,000 cash. Entry $50 / stop $48 with a
+// $1,000 dollar risk gives a 500-share budget ($25,000) — a direct dollar risk
+// overshoots exactly as readily as a percentage one.
+// -----------------------------------------------------------------------------
+
+describe('CalculatorForm — dollar basis account sourcing', () => {
+  it('offers the account picker on the dollar basis', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [DEPLOYED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    expect(selectByOptionValue(DEPLOYED_ACCOUNT.id)).toBeTruthy();
+  });
+
+  it('caps a dollar-basis size at the account cash', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [DEPLOYED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fill('Dollar risk', '1000');
+    fireEvent.change(selectByOptionValue(DEPLOYED_ACCOUNT.id), {
+      target: { value: DEPLOYED_ACCOUNT.id },
+    });
+    fireEvent.blur(input('Dollar risk'));
+
+    // floor($1,000 cash / $50) = 20, not the 500 the risk alone allows.
+    expect(await screen.findByText('20', undefined, { timeout: 2000 })).toBeTruthy();
+    expect(screen.getByText(/limited by account buying power/i)).toBeTruthy();
+  });
+
+  it('stays uncapped on the dollar basis with no account selected', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [DEPLOYED_ACCOUNT] });
+    await mount();
+    await results(user, 'Dollar', {
+      'Entry price': '50',
+      'Stop loss': '48',
+      'Dollar risk': '1000',
+    });
+
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+    expect(screen.queryByText(/limited by account buying power/i)).toBeNull();
+  });
+
+  it('does NOT put a balance on the form in dollar mode', async () => {
+    // A balance here would be a second risk basis. The schema's "exactly one
+    // basis" refine would then reject the input the moment a risk percent
+    // appeared, so the account must contribute only the cap and the currency.
+    const user = userEvent.setup();
+    setAccounts({ data: [DEPLOYED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    fireEvent.change(selectByOptionValue(DEPLOYED_ACCOUNT.id), {
+      target: { value: DEPLOYED_ACCOUNT.id },
+    });
+    expect(screen.queryByLabelText('Balance')).toBeNull();
+
+    // And the dollar basis still computes — proof the refine is satisfied.
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fill('Dollar risk', '1000');
+    fireEvent.blur(input('Dollar risk'));
+    expect(await screen.findByText('20', undefined, { timeout: 2000 })).toBeTruthy();
+  });
+
+  it('keeps the account across a basis switch and re-seeds the balance', async () => {
+    // Dropping the account on switch would silently remove the cap from someone
+    // who only changed how they express risk.
+    const user = userEvent.setup();
+    setAccounts({ data: [DEPLOYED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    fireEvent.change(selectByOptionValue(DEPLOYED_ACCOUNT.id), {
+      target: { value: DEPLOYED_ACCOUNT.id },
+    });
+    await switchBasis(user, 'Percent');
+
+    // Still selected, and the Balance field is populated rather than left blank
+    // next to a visibly-chosen account.
+    expect(selectByOptionValue(DEPLOYED_ACCOUNT.id).value).toBe(DEPLOYED_ACCOUNT.id);
+    expect(input('Balance').value).toBe('5000');
+  });
+
+  it('follows the account currency on the dollar basis', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [{ ...CAD_ACCOUNT, cash: '50000' }] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fill('Dollar risk', '1000');
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    fireEvent.blur(input('Dollar risk'));
+
+    // Actual dollar risk 2 × 500 = 1000, rendered in CAD — showing a CAD
+    // account's figures in USD would misstate them.
+    await screen.findByText('Position Sizing', undefined, { timeout: 2000 });
+    expect(screen.getAllByText(fmtMoney(1000, 'CAD')).length).toBeGreaterThan(0);
+  });
+
+  it('words the cap note for the dollar basis', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [DEPLOYED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    fireEvent.change(selectByOptionValue(DEPLOYED_ACCOUNT.id), {
+      target: { value: DEPLOYED_ACCOUNT.id },
+    });
+
+    const note = screen.getByTestId('cap-basis-note');
+    expect(note.textContent).toContain(fmtMoney(1000));
+    // Not the percent-basis reassurance — there is no risk percentage here.
+    expect(note.textContent).toMatch(/dollar risk is unchanged/i);
+    expect(note.textContent).not.toMatch(/percent of the balance/i);
+  });
+});

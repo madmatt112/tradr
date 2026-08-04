@@ -64,10 +64,10 @@ export const CalculatorInputSchema = z
     stopLoss: positiveDecimal(PRICE_MAX),
     dollarRisk: optionalEmptyToUndefined(positiveDecimal(DOLLAR_RISK_MAX)),
     balance: optionalEmptyToUndefined(signedBoundedDecimal(ACCOUNT_BALANCE_MAX)),
-    // The figure the BUYING-POWER CAP is computed against, when it should not be
-    // `balance`. Percent basis only, and optional: absent ⇒ the cap falls back to
-    // `balance`, which is the pre-existing behaviour, so every existing client and
-    // the whole dollar basis are unaffected.
+    // The figure the BUYING-POWER CAP is computed against. Valid in EITHER risk
+    // basis, and optional: absent ⇒ the percent basis caps against `balance` (the
+    // pre-existing behaviour) and the dollar basis is uncapped (likewise), so
+    // every existing client is unaffected.
     //
     // It exists because `balance` answers two different questions and only one of
     // them is about equity. "Risk 1% of my account" means 1% of total equity — that

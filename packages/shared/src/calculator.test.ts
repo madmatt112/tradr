@@ -538,14 +538,48 @@ describe('calculateTrade — buyingPower cap basis', () => {
     expect(result.totalPositionValue).toBe('20000.00'); // 50 × 4 × 100
   });
 
-  it('is ignored on the dollar basis, which has no cap at all', () => {
-    // dollarRisk 1000 / perUnitRisk 2 = 500 shares = $25,000 of stock, against
-    // a supplied buyingPower of $100. The dollar basis is uncapped by design
-    // and this change does not alter that.
-    const result = calculateTrade(baseInput({ buyingPower: '100' }));
+  it('caps the DOLLAR basis too when buyingPower is supplied', () => {
+    // dollarRisk 1000 / perUnitRisk 2 = 500 shares = $25,000 of stock. A direct
+    // dollar risk overshoots exactly as readily as a percentage one, so the cap
+    // applies here as well: floor(10000 / 50) = 200.
+    const result = calculateTrade(baseInput({ buyingPower: '10000' }));
+    expect(result.positionSize).toBe(200);
+    expect(result.buyingPowerLimited).toBe(true);
+    // Percent-only echo — absent on the dollar basis even when the cap binds.
+    expect(result.derivedDollarRisk).toBeUndefined();
+  });
+
+  it('leaves the dollar basis uncapped when buyingPower is absent', () => {
+    // No account selected ⇒ no cap figure ⇒ the original uncapped behaviour.
+    const result = calculateTrade(baseInput());
     expect(result.positionSize).toBe(500);
     expect(result.buyingPowerLimited).toBeUndefined();
     expect(result.sizingStatus).toBeUndefined();
+  });
+
+  it('reports buying-power-zero on the dollar basis WITHOUT a derivedDollarRisk', () => {
+    // The crash case: the percent path echoes `derivedDollarRisk` on this
+    // outcome, and `to2dp(null!)` constructs `new Decimal(null)`, which THROWS.
+    // A dollar-basis position against an account that cannot fund one unit has
+    // no derived risk to echo, so the echo has to be conditional.
+    const result = calculateTrade(baseInput({ entryPrice: '100', buyingPower: '50' }));
+    expect(result.positionSize).toBe(0);
+    expect(result.sizingStatus).toBe('buying-power-zero');
+    expect(result.derivedDollarRisk).toBeUndefined();
+  });
+
+  it('caps the dollar basis at negative buying power without a negative size', () => {
+    const result = calculateTrade(baseInput({ buyingPower: '-1000' }));
+    expect(result.positionSize).toBe(0);
+    expect(result.sizingStatus).toBe('buying-power-zero');
+  });
+
+  it('still prefers insufficient-risk over a dollar-basis cap', () => {
+    // dollarRisk 1 / perUnitRisk 2 → 0 shares, decided before the cap runs.
+    const result = calculateTrade(baseInput({ dollarRisk: '1', buyingPower: '0' }));
+    expect(result.positionSize).toBe(0);
+    expect(result.sizingStatus).toBeUndefined();
+    expect(result.derivedDollarRisk).toBeUndefined();
   });
 
   it('treats an empty-string buyingPower as absent', () => {

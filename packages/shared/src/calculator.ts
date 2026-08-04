@@ -96,21 +96,30 @@ export function calculateTrade(input: CalculatorInput): CalculatorOutput {
     return derivedDollarRisk ? { ...base, derivedDollarRisk: to2dp(derivedDollarRisk) } : base;
   }
 
+  // The figure the cap is computed against:
+  //
+  //   explicit `buyingPower`  → use it, in EITHER risk basis
+  //   percent basis, no field → `balance`, the original REQ-8 behaviour
+  //   dollar basis, no field  → none; the size is uncapped, as it always was
+  //
+  // The cap used to be percent-only because a balance only existed there. It is
+  // keyed on having a cap basis at all, not on the risk basis: "can I afford
+  // this" is the same question however the risk was expressed, and a direct
+  // dollar risk overshoots exactly as readily as a percentage one — $1,000 of
+  // risk at a $2 stop is $25,000 of stock no matter which box it was typed in.
+  //
+  // The risk budget is untouched by all of this. `balance` answers "risk 1% of
+  // my account" (equity); the cap answers "can I afford this" (liquid funds).
+  let capBasis: Decimal | null = null;
+  if (input.buyingPower !== undefined) {
+    capBasis = new Decimal(input.buyingPower);
+  } else if (isPercent) {
+    capBasis = balanceDec!;
+  }
+
   let finalSize = riskDerivedSize;
   let buyingPowerLimited = false;
-  if (isPercent) {
-    // The cap is computed against `buyingPower` when supplied, `balance`
-    // otherwise. These are deliberately DIFFERENT questions:
-    //
-    //   risk budget → balance   "risk 1% of my account" means 1% of equity
-    //   cap         → cash      "can I afford this" means liquid funds
-    //
-    // Using equity for the cap overstates it by whatever is already deployed,
-    // which is how the calculator could size a position larger than the account
-    // could actually fund. Absent `buyingPower` the two collapse back to one
-    // figure and the behaviour is exactly as before.
-    const capBasis = input.buyingPower !== undefined ? new Decimal(input.buyingPower) : balanceDec!;
-
+  if (capBasis !== null) {
     // entry is a validated positive decimal and multiplier ∈ {1,100} ⇒
     // entry×multiplier > 0 ⇒ no divide-by-zero.
     const cap = capBasis.div(entry.times(multiplier)).floor().toNumber();
@@ -121,10 +130,13 @@ export function calculateTrade(input: CalculatorInput): CalculatorOutput {
     // or negative cash, and `floor(negative / positive)` is negative, which
     // would otherwise sail past the guard and cap the size to a negative number.
     if (cap <= 0) {
-      return {
-        ...zeroOut(perUnitRiskStr, 'buying-power-zero'),
-        derivedDollarRisk: to2dp(derivedDollarRisk!),
-      };
+      const zero = zeroOut(perUnitRiskStr, 'buying-power-zero');
+      // `derivedDollarRisk` is a percent-basis echo and has no dollar-basis
+      // meaning. The conditional is load-bearing, not tidiness: `to2dp(null!)`
+      // constructs `new Decimal(null)`, which throws — so a dollar-basis
+      // position whose account cannot fund one unit would 500 instead of
+      // returning this outcome.
+      return derivedDollarRisk ? { ...zero, derivedDollarRisk: to2dp(derivedDollarRisk) } : zero;
     }
     if (cap < riskDerivedSize) {
       finalSize = cap;

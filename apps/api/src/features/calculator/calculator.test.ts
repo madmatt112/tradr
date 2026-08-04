@@ -573,3 +573,53 @@ describe('POST /api/calculator — buyingPower', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('POST /api/calculator — buyingPower on the dollar basis', () => {
+  const dollarTrade = {
+    entryPrice: '50',
+    stopLoss: '48',
+    dollarRisk: '1000',
+    direction: 'long',
+    mode: 'stock',
+  };
+
+  it('caps a dollar-basis size and flags it', async () => {
+    const { cookie } = await registerAndGetCookie();
+    // 1000 / 2 = 500 shares uncapped; floor(10000 / 50) = 200 binds.
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      ...dollarTrade,
+      buyingPower: '10000',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(200);
+    expect(body.buyingPowerLimited).toBe(true);
+    // Percent-only echo stays absent even though the cap fired.
+    expect(body.derivedDollarRisk).toBeUndefined();
+  });
+
+  it('leaves the dollar basis uncapped when buyingPower is omitted', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/calculator', cookie, dollarTrade);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(500);
+    expect(body.buyingPowerLimited).toBeUndefined();
+  });
+
+  it('returns buying-power-zero on the dollar basis as a 200, not a 500', async () => {
+    // Guards the `to2dp(null!)` crash: the percent path echoes derivedDollarRisk
+    // on this outcome, and there is none to echo here.
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      ...dollarTrade,
+      entryPrice: '100',
+      buyingPower: '50',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(0);
+    expect(body.sizingStatus).toBe('buying-power-zero');
+    expect(body.derivedDollarRisk).toBeUndefined();
+  });
+});

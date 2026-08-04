@@ -140,10 +140,22 @@ export function CalculatorForm() {
   // cash/position split).
   //
   // Only the cap. The risk budget stays `riskPercent × balance` either way.
-  const buyingPower =
-    riskBasis === 'percent' && capBasis === 'cash'
-      ? (selectedAccount?.cash ?? undefined)
-      : undefined;
+  //
+  // Supplied in BOTH risk bases. A direct dollar risk overshoots exactly as
+  // readily as a percentage one — $1,000 of risk at a $2 stop is $25,000 of
+  // stock however it was expressed — so the cap belongs wherever an account is
+  // selected, not only where a balance happens to exist.
+  //
+  // Under the 'balance' preference this passes the account's balance rather than
+  // undefined. In the percent basis that is the same figure the fallback would
+  // have used, so nothing changes; in the dollar basis there is no fallback to
+  // inherit, and passing it is what makes the preference mean the same thing in
+  // both modes instead of silently doing nothing in one of them.
+  const buyingPower = selectedAccount
+    ? capBasis === 'cash'
+      ? (selectedAccount.cash ?? undefined)
+      : (selectedAccount.balance ?? undefined)
+    : undefined;
 
   let result: CalculatorOutput | null = null;
   let error: string | null = null;
@@ -155,8 +167,10 @@ export function CalculatorForm() {
     }
   }
 
-  // Percent + account-sourced balance ⇒ the account's currency; else USD (D9).
-  const currency = riskBasis === 'percent' && selectedAccount ? selectedAccount.currency : 'USD';
+  // An account-sourced figure ⇒ the account's currency; else USD (D9). No longer
+  // gated on the percent basis: the dollar basis can now source an account too,
+  // and showing a CAD account's cap in dollars would misstate it.
+  const currency = selectedAccount ? selectedAccount.currency : 'USD';
 
   const brokerageHint =
     feeMode === 'brokerage' && !values.feeSchedule
@@ -236,14 +250,24 @@ export function CalculatorForm() {
     setValue('feeSchedule', parsed, { shouldValidate: true });
   };
 
+  // The selected account SURVIVES a basis switch — it is meaningful in both now,
+  // and dropping it would silently remove the cap from a user who only changed
+  // how they express risk. Only the basis-scoped FIELDS are cleared, which the
+  // "exactly one risk basis" refine requires.
   const handleRiskBasisChange = (next: string) => {
     const nextBasis = next as RiskBasis;
     if (nextBasis === 'percent') {
       setValue('dollarRisk', undefined, { shouldValidate: true });
+      // Re-seed the balance the account carries. Without this, switching to
+      // percent with an account already chosen shows a selected account and an
+      // empty Balance — an incomplete form the user has to fix by re-picking
+      // the account they can already see is picked.
+      if (selectedAccount) {
+        setValue('balance', selectedAccount.balance ?? undefined, { shouldValidate: true });
+      }
     } else {
       setValue('balance', undefined, { shouldValidate: true });
       setValue('riskPercent', undefined, { shouldValidate: true });
-      setSelectedAccount(null);
     }
     setRiskBasis(nextBasis);
   };
@@ -251,10 +275,85 @@ export function CalculatorForm() {
   const handleAccountSelect = (accountId: string) => {
     const account = accounts.find((a) => a.id === accountId);
     if (!account) return;
-    // Absent balance ⇒ not-yet-supplied → neutral incomplete state (D8, REQ-3.5).
-    setValue('balance', account.balance ?? undefined, { shouldValidate: true });
+    // The balance is a PERCENT-BASIS field. Setting it in dollar mode would put
+    // a second risk basis on the form, and `CalculatorInputSchema`'s
+    // "exactly one basis" refine would start rejecting the input the moment a
+    // risk percent was also present. In dollar mode the account contributes only
+    // the cap figure and the display currency.
+    if (riskBasis === 'percent') {
+      // Absent balance ⇒ not-yet-supplied → neutral incomplete state (D8, REQ-3.5).
+      setValue('balance', account.balance ?? undefined, { shouldValidate: true });
+    }
     setSelectedAccount(account);
   };
+
+  // Rendered in BOTH risk bases. In the percent basis it also supplies the
+  // balance to size against; in the dollar basis it supplies only the cap figure
+  // and the display currency, because a dollar risk is typed directly and a
+  // `balance` set here would be a second, contradictory risk basis.
+  const accountPicker = (
+    <div className="space-y-2 pt-2">
+      <Label>Account</Label>
+      {accountsQuery.isLoading ? (
+        <Select disabled>
+          <SelectTrigger className="w-full cursor-pointer">
+            <SelectValue placeholder="Loading accounts…" />
+          </SelectTrigger>
+          <SelectContent />
+        </Select>
+      ) : accountsQuery.isError ? (
+        <>
+          <Select disabled>
+            <SelectTrigger className="w-full cursor-pointer">
+              <SelectValue placeholder="Failed to load accounts" />
+            </SelectTrigger>
+            <SelectContent />
+          </Select>
+          <p className="mt-1 text-sm text-destructive">Failed to load accounts</p>
+        </>
+      ) : accounts.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No accounts configured —{' '}
+          <Link to="/accounts" className="underline hover:text-foreground">
+            set one up
+          </Link>
+        </p>
+      ) : (
+        <Select value={selectedAccount?.id ?? ''} onValueChange={handleAccountSelect}>
+          <SelectTrigger className="w-full cursor-pointer">
+            <SelectValue placeholder="Select an account" />
+          </SelectTrigger>
+          <SelectContent>
+            {accounts.map((a) => (
+              <SelectItem key={a.id} value={a.id}>
+                {a.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      {/*
+        The cap is otherwise invisible: two accounts with the same balance size
+        differently depending on how much is deployed, and without this the
+        smaller number has no visible cause. Shown only when a CASH figure is
+        actually doing the capping — under the 'balance' preference, and for a
+        hand-typed balance, the cap is the figure already on screen.
+
+        The second clause differs by basis because the reassurance differs: in
+        percent mode the worry is that the risk percentage changed too (it did
+        not), and in dollar mode it is that the typed dollar risk changed (it
+        did not).
+      */}
+      {capBasis === 'cash' && selectedAccount?.cash !== undefined && (
+        <p className="text-xs text-muted-foreground" data-testid="cap-basis-note">
+          Sizing capped by {formatMoney(selectedAccount.cash, selectedAccount.currency)} cash —{' '}
+          {riskBasis === 'percent'
+            ? 'risk stays a percent of the balance.'
+            : 'your dollar risk is unchanged.'}
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -443,19 +542,6 @@ export function CalculatorForm() {
                 {errors.balance && (
                   <p className="text-sm text-destructive">{errors.balance.message}</p>
                 )}
-                {/*
-                  The cap basis is otherwise invisible: two accounts with the same
-                  balance size differently depending on how much is deployed, and
-                  without this the user has no way to see why. Shown only when a
-                  cash figure is actually in play — a hand-typed balance caps
-                  against itself and needs no note.
-                */}
-                {buyingPower !== undefined && selectedAccount && (
-                  <p className="text-xs text-muted-foreground" data-testid="cap-basis-note">
-                    Sizing capped by {formatMoney(buyingPower, selectedAccount.currency)} cash —
-                    risk stays a percent of the balance.
-                  </p>
-                )}
               </div>
 
               <div className="space-y-2">
@@ -473,50 +559,10 @@ export function CalculatorForm() {
                   <p className="text-sm text-destructive">{errors.riskPercent.message}</p>
                 )}
               </div>
-
-              <div className="space-y-2">
-                <Label>Account</Label>
-                {accountsQuery.isLoading ? (
-                  <Select disabled>
-                    <SelectTrigger className="w-full cursor-pointer">
-                      <SelectValue placeholder="Loading accounts…" />
-                    </SelectTrigger>
-                    <SelectContent />
-                  </Select>
-                ) : accountsQuery.isError ? (
-                  <>
-                    <Select disabled>
-                      <SelectTrigger className="w-full cursor-pointer">
-                        <SelectValue placeholder="Failed to load accounts" />
-                      </SelectTrigger>
-                      <SelectContent />
-                    </Select>
-                    <p className="mt-1 text-sm text-destructive">Failed to load accounts</p>
-                  </>
-                ) : accounts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No accounts configured —{' '}
-                    <Link to="/accounts" className="underline hover:text-foreground">
-                      set one up
-                    </Link>
-                  </p>
-                ) : (
-                  <Select value={selectedAccount?.id ?? ''} onValueChange={handleAccountSelect}>
-                    <SelectTrigger className="w-full cursor-pointer">
-                      <SelectValue placeholder="Select an account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {accounts.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
             </div>
           )}
+
+          {accountPicker}
         </div>
 
         <div className="space-y-2">

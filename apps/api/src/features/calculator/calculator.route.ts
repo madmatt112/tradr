@@ -32,16 +32,18 @@ calculatorRouter.use(authMiddleware);
  *       (`entryPrice`, `stopLoss`, `direction`, `mode`) plus **exactly one** risk
  *       basis: a direct `dollarRisk`, OR a `balance` + `riskPercent` (the dollar
  *       risk is then derived as `balance × riskPercent ÷ 100` at full precision).
- *       Supplying both bases, or neither, is a 400. In the percent basis the
- *       position size is also capped to what the account can fund at entry —
- *       `floor(buyingPower ÷ (entry × multiplier))`, falling back to `balance`
- *       when `buyingPower` is omitted. The risk budget is always a percent of
- *       `balance`; only the cap consults `buyingPower`. The three percent-only
- *       response fields (`derivedDollarRisk`, `sizingStatus`,
- *       `buyingPowerLimited`) are absent from dollar-basis results. Non-sizing
- *       outcomes (non-positive balance, derived risk over the ceiling,
- *       insufficient risk, cap basis funds zero units) are valid **200**s with
- *       `positionSize: 0` and a `sizingStatus` discriminator — not 400s.
+ *       Supplying both bases, or neither, is a 400. The position size is also
+ *       capped to what the account can fund at entry —
+ *       `floor(capBasis ÷ (entry × multiplier))` — where `capBasis` is
+ *       `buyingPower` when supplied (**either** risk basis), else `balance` on
+ *       the percent basis, else no cap at all on the dollar basis. The risk
+ *       budget is always a percent of `balance`; only the cap consults
+ *       `buyingPower`. `derivedDollarRisk` remains percent-only, but
+ *       `sizingStatus` and `buyingPowerLimited` can now appear on a dollar-basis
+ *       result whenever `buyingPower` is supplied. Non-sizing outcomes
+ *       (non-positive balance, derived risk over the ceiling, insufficient risk,
+ *       cap basis funds zero units) are valid **200**s with `positionSize: 0`
+ *       and a `sizingStatus` discriminator — not 400s.
  *     tags: [Calculator]
  *     requestBody:
  *       required: true
@@ -73,12 +75,14 @@ calculatorRouter.use(authMiddleware);
  *               buyingPower:
  *                 type: string
  *                 description: >
- *                   Optional percent-basis figure the BUYING-POWER CAP is computed
- *                   against, when it should not be `balance`. Absent ⇒ the cap uses
- *                   `balance` (the original behaviour). Supply an account's `cash`
- *                   here to stop the calculator sizing a position the account
- *                   cannot fund: total equity overstates fundable capital by
- *                   whatever is already deployed. Sign-agnostic — a fully-deployed
+ *                   Optional figure the BUYING-POWER CAP is computed against, valid
+ *                   in EITHER risk basis. Absent ⇒ the percent basis caps against
+ *                   `balance` (the original behaviour) and the dollar basis is
+ *                   uncapped (likewise). Supply an account's `cash` here to stop
+ *                   the calculator sizing a position the account cannot fund:
+ *                   total equity overstates fundable capital by whatever is
+ *                   already deployed, and a direct dollar risk overshoots just as
+ *                   readily as a percentage one. Sign-agnostic — a fully-deployed
  *                   or margined account can present ≤ 0 cash, which yields
  *                   `sizingStatus: buying-power-zero`. Never affects the risk
  *                   budget.
@@ -95,10 +99,12 @@ calculatorRouter.use(authMiddleware);
  *           `actualDollarRisk`, `totalPositionValue`; `perUnitReward` /
  *           `riskRewardRatio` when a target is set, and the fee fields when fees
  *           are supplied. Percent basis additionally echoes `derivedDollarRisk`
- *           (2dp, when balance > 0), `sizingStatus`
+ *           (2dp, when balance > 0). `sizingStatus`
  *           (`nothing-to-size-against` | `exceeds-maximum` | `buying-power-zero`)
- *           on the zero-position outcomes, and `buyingPowerLimited: true` when the
- *           buying-power cap set the size.
+ *           on the zero-position outcomes and `buyingPowerLimited: true` when the
+ *           cap set the size appear on EITHER basis — the latter two require only
+ *           that a cap basis existed, which on the dollar basis means
+ *           `buyingPower` was supplied.
  *       400: { description: 'Validation error — both/neither risk basis, riskPercent ∉ (0,100], bad balance/price format, or a structural price error.' }
  *       401: { description: Authentication required. }
  */
