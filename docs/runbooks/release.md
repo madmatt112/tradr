@@ -84,6 +84,12 @@ The Release workflow runs in three stages:
 
 ## Failure modes
 
+- **The bump commit itself reds CI on the OpenAPI drift gate:** the published
+  API reference embeds `apps/api`'s version as `info.version`, and CI checks the
+  committed artifact against a fresh generate. `make release` regenerates it in
+  the same commit for exactly this reason. Bumping the `package.json` versions
+  by hand without regenerating reds `checks` on a commit that has no other
+  reason to fail, and the gate then blocks the release.
 - **Gate fails (CI red or missing):** nothing was published. Fix the problem
   on `main`. If the fix lands in a new commit, delete and re-cut the tag on
   the new commit (below) — re-running the failed workflow run would still

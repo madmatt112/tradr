@@ -67,13 +67,20 @@ seed-demo: .env
 # Full process + failure modes: docs/runbooks/release.md
 VERSIONED_PKGS := apps/api apps/web packages/shared bench e2e
 
+# The published API reference embeds apps/api's version as `info.version`, and CI
+# gates on the committed artifact matching a fresh generate. Bumping the package
+# versions without regenerating therefore reds CI on the bump commit itself, which
+# blocks release.yml's ci-gate and publishes nothing. Regenerate in the same commit.
+OPENAPI_ARTIFACT := apps/docs/src/openapi/tradr-api.json
+
 .PHONY: release
 release:
 	@test -n "$(VERSION)" || { echo "usage: make release VERSION=1.2.3"; exit 1; }
 	@echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be bare semver (1.2.3, no leading v)"; exit 1; }
 	@git diff --quiet HEAD || { echo "working tree not clean — commit or stash first"; exit 1; }
 	@for p in $(VERSIONED_PKGS); do (cd $$p && npm pkg set version=$(VERSION)); done
-	git add $(addsuffix /package.json,$(VERSIONED_PKGS))
+	pnpm --filter @tradr/docs openapi:generate
+	git add $(addsuffix /package.json,$(VERSIONED_PKGS)) $(OPENAPI_ARTIFACT)
 	git commit -m "chore(release): v$(VERSION)"
 	git tag v$(VERSION)
 	@echo "Tagged v$(VERSION). Publish with: git push origin HEAD v$(VERSION)"
