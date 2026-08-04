@@ -1,18 +1,154 @@
 ---
-title: "Security model"
-description: "Session cookies, bcrypt, app-level row scoping, AES-256-GCM BYOK key encryption, rate limiting, CORS/anti-CSRF for split-origin, and FEATURE_GATING."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Security model
+description: What Tradr protects, how — sessions, password storage, encryption of provider keys, rate limiting, and network exposure — and what it deliberately leaves to you.
 ---
 
-Session cookies, bcrypt, app-level row scoping, AES-256-GCM BYOK key encryption, rate limiting, CORS/anti-CSRF for split-origin, and FEATURE_GATING.
+import SelfHosted from '@/components/SelfHosted.astro';
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
+This page is for someone deciding whether to trust Tradr with their trading
+history. It states what the application does, and — more usefully — what it does
+not do and leaves to you.
+
+## What is at stake
+
+Tradr holds your **trading history**: positions, fills, account balances, and
+whatever you wrote in your notes. On an instance where the advisor is used, it
+also holds **provider API keys**, which can spend money.
+
+It does **not** hold brokerage credentials, and it cannot place orders. There is
+no broker connection — trades arrive by CSV or by hand. A compromised Tradr
+instance exposes a record of your trading; it does not expose your brokerage
+account.
+
+## Accounts and sessions
+
+**Passwords** are hashed with bcrypt. The plaintext is never stored, and a login
+against a non-existent account still performs a hash comparison so that response
+timing does not reveal which emails are registered.
+
+**Sessions** are an `HttpOnly` cookie, so page JavaScript cannot read it. It is
+`SameSite=Lax` and expires after 24 hours. `Secure` is set whenever the api runs
+in production mode.
+
+The cookie is signed with `SESSION_SECRET`. Changing that value invalidates every
+session at once, which is the lever to pull if you think one has leaked.
+
+## Separation between users
+
+Every query is scoped by user id in the application layer. There is no row-level
+security in the database, so that scoping is the boundary — a query written
+without it would cross users.
+
+This is worth knowing rather than glossing: it means the protection lives in the
+code, and it is why an instance should run a released version rather than an
+arbitrary commit.
+
+## Provider API keys
+
+Keys you paste in for the advisor are encrypted at rest with **AES-256-GCM**,
+using `ENCRYPTION_KEY`. GCM authenticates as well as encrypts, so a modified
+ciphertext fails to decrypt rather than producing wrong plaintext.
+
+Set `ENCRYPTION_KEY_FINGERPRINT` as well. Without it, booting with the wrong key
+fails **late and quietly** — the app runs and keys simply refuse to decrypt. With
+it, the api refuses to start and says why.
+
+:::danger
+`ENCRYPTION_KEY` is not recoverable and not derivable from anything else. Lose it
+and every stored provider key is unreadable. Keep it with your backups — see
+[Back up and restore](/self-hosting/backup-restore/).
 :::
+
+## What reaches a third party
+
+With nothing configured, **nothing leaves your instance**. No telemetry, no
+outbound calls, no error reporting.
+
+Each of these is off until you turn it on:
+
+| Configured | What is sent |
+| --- | --- |
+| An LLM key | Advisor conversations, and the position data the advisor was asked about, to that provider |
+| Analytics | Product events — no trade data, users identified by an opaque id |
+| Email | Address and message content to your SMTP server |
+| Market data | The symbols you look up |
+
+The advisor is the one to think hardest about: using it means sending trading
+data to a model provider, under that provider's terms. That is inherent to the
+feature, not something Tradr adds.
+
+## Network exposure
+
+The shipped Compose stack publishes **one port**. `postgres` and `api` are
+reachable only inside the Compose network, so the database is not on your host's
+interface.
+
+**TLS is yours to provide.** The stack does not terminate HTTPS. Put a reverse
+proxy in front of it — see
+[Put TLS in front of the stack](/self-hosting/tls-reverse-proxy/). Without one,
+session cookies cross the network in the clear.
+
+If you do put a proxy in front, set `TRUSTED_PROXIES` to its address. Rate
+limiting is per-IP, and behind an untrusted proxy every request appears to come
+from the proxy — so the limit applies to everyone at once instead of per client.
+
+## Rate limiting
+
+Authentication endpoints are rate limited per IP, which blunts credential
+stuffing and brute force. On a single instance the counters are in memory, so
+they reset when the api restarts.
+
+<SelfHosted>
+  There is no lockout after N failed attempts, and no CAPTCHA. For an instance
+  with a handful of known users that is a reasonable trade; if yours is exposed to
+  the internet with open registration, put an authenticating proxy in front.
+</SelfHosted>
+
+## What is off by default
+
+Feature gating (`FEATURE_GATING`) ships **off**, and with it every plan limit. A
+self-hosted instance has no tiers. The billing, object storage, and Redis paths
+are inert until configured, and the test suite enforces that an unconfigured
+instance behaves as a plain journal.
+
+That is the design rule: a capability you have not configured is **absent, not
+disabled**. It makes no outbound calls and logs no errors.
+
+## What Tradr does not do
+
+Stated plainly, because a security page that only lists strengths is not useful:
+
+- **No two-factor authentication.** A password is the only factor.
+- **No audit log of user actions.** Admin actions are recorded; ordinary ones are not.
+- **No account lockout** after repeated failures — only rate limiting.
+- **No encryption of trade data at rest** beyond whatever your disk provides.
+  Provider keys are encrypted; positions and notes are not.
+- **No row-level security** in the database, as above.
+- **No security guarantee before 1.0.** The project is pre-1.0 and has not been
+  independently audited.
+
+If any of those is disqualifying for your situation, better to know now.
+
+## Keeping an instance safe
+
+1. Run a released version, and upgrade when one ships. See
+   [Upgrade an instance](/self-hosting/upgrades/).
+2. Put TLS in front of it.
+3. Generate the three secrets rather than inventing them — `docker/quickstart.sh`
+   does this.
+4. Set `ENCRYPTION_KEY_FINGERPRINT`.
+5. Keep `.env` with your backups, and keep both somewhere the server cannot reach.
+6. Do not expose Postgres. The shipped Compose file already does not.
+
+## Reporting a vulnerability
+
+Report privately, not as a public issue. The process, the scope, and what to
+expect are in
+[`SECURITY.md`](https://github.com/madmatt112/tradr/blob/main/SECURITY.md).
+
+## Next steps
+
+- [Put TLS in front of the stack](/self-hosting/tls-reverse-proxy/).
+- [Back up and restore](/self-hosting/backup-restore/) — including the key that
+  makes a backup readable.
+- [Environment variables](/self-hosting/reference/env-vars/) — every setting named here.

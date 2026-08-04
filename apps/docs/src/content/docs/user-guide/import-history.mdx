@@ -18,14 +18,136 @@ presets so a familiar export maps in one click, but the transport is always a
 file you supply. A direct read-only IBKR connection is planned; until it ships,
 CSV is the only import path, and this page will say so.
 
-## Import a CSV
+## Before you start
 
-:::note
-This section is not written yet. The importer is in the app under
-**Positions → Import**; it walks you through upload, column mapping, a preview,
-and a commit step. This page will document the broker presets, the column
-mapping rules, and the file and row limits.
+Create an account first. An import needs somewhere to put the trades, and the
+importer will not proceed without one. See
+[Accounts](/user-guide/accounts/).
+
+Imports are **additive**. They add positions and fills to the target account and
+never replace what is there, so importing the same file twice gives you the
+trades twice. There is no de-duplication.
+
+## Step 1 — Choose the target account
+
+Open **Import** and pick the account under **1. Target account**.
+
+## Step 2 — Upload the file
+
+Select **Choose file** and pick your export. The server parses and validates it
+on upload; nothing is written to your account yet.
+
+The limits are 10 MB per file and 10,000 data rows. Split a larger export and
+import it in parts.
+
+## Step 3 — Map the columns
+
+Tradr does not guess what your columns mean. Tell it, either by choosing a preset
+or by mapping each field by hand.
+
+**Presets** pre-fill the mapping for a known export format — Interactive Brokers
+Flex Query trades, a generic one-row-per-fill layout, and formats used by common
+journalling tools. Choosing one fills the fields in; you can then adjust any of
+them. A preset is a starting point, not a lock.
+
+Set these alongside the mapping:
+
+| Setting | What it controls |
+| --- | --- |
+| **Row shape** | Whether each row is one fill (**Execution**) or a whole round trip with entry and exit on one line (**Round-trip**). Set independently of the preset. |
+| **Timezone** | The zone your export's timestamps are written in. |
+| **Date format** | How to read the date column — ISO, US, and so on. |
+| **Number format** | Whether `1,234.56` or `1.234,56`. |
+
+For execution rows, these fields are **required**:
+
+- Symbol
+- Asset type
+- Price
+- Quantity
+- Filled at (date/time)
+- Exactly **one** of Type (entry/exit) or Action (buy/sell)
+
+**Preview import** stays disabled until all of them are mapped, and the page
+lists what is still missing.
+
+:::caution[Asset type has to be a column]
+Every field maps to a **column in your file**. There is no "treat every row as a
+stock" option, so an export with no asset-type column cannot be mapped as it
+stands — including some formats Tradr ships a preset for.
+
+Add the column before you upload. One value for every row is fine:
+
+```
+Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees
+AAPL,STK,BUY,100,181.50,2026-03-02T09:35:00,1.00
+```
 :::
+
+## Step 4 — Read the preview
+
+Select **Preview import**. Nothing has been written yet — this is the check.
+
+The summary counts what Tradr found:
+
+| | Meaning |
+| --- | --- |
+| **Rows parsed** | Data rows read from the file |
+| **Rows valid** | Rows that mapped cleanly |
+| **Rows with errors** | Rows Tradr could not read. They are listed with their line numbers. |
+| **Positions** | Positions these rows will become |
+| **Fills** | Fills across those positions |
+
+Below the summary, each proposed position is shown with its fills and, when the
+rows close it, its proposed P&L.
+
+### How rows become positions
+
+Fills are grouped **by symbol and direction**. A position runs from its first
+entry until the quantity returns to flat; the next fill after that starts a new
+position.
+
+So four rows — buy 100 AAPL, sell 100 AAPL, buy 50 MSFT, sell 50 MSFT — become
+two closed positions, not one and not four.
+
+Row numbers in the preview count the file's lines, so the header is row 1 and the
+first trade is row 2. That matches what your spreadsheet shows.
+
+## Step 5 — Confirm
+
+Select **Confirm import**.
+
+**Expected result:** `Added 2 positions and 4 fills to the target account.`, with
+a link through to them.
+
+The realized P&L posts to the account balance at the same time. In the worked
+example above, a $25,000.00 account becomes $25,303.50 — plus $473.00 from AAPL,
+minus $169.50 from MSFT, both after fees.
+
+A preview you do not confirm expires after 30 minutes.
+
+## If something is wrong afterwards
+
+There is no "undo import". Positions imported are ordinary positions: open one
+and fix a fill, or delete it. Deleting reverses its P&L out of the balance. See
+[Log and manage positions](/user-guide/positions/).
+
+For a bad import of any size, deleting position by position is the only path
+today. Preview carefully — that is what the step is for.
+
+## Troubleshooting
+
+- **`Preview import` stays greyed out** — a required field is unmapped. The line
+  above the button names which.
+- **Rows with errors is not zero** — open the list. It gives the line number and
+  what failed, usually a date that does not match the chosen date format.
+- **Every row failed on the date** — the **Date format** or **Timezone** setting
+  does not match the file.
+- **Quantities look wrong by a factor of a thousand** — the **Number format** is
+  reading `1,234` as `1.234` or the reverse.
+- **The P&L in the preview is not what you expect** — check whether your export
+  already nets fees out of the price. Tradr subtracts mapped fees itself, so fees
+  counted twice show up here, before anything is written.
 
 ## Related
 
