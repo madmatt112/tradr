@@ -399,16 +399,33 @@ export async function runResetPassword(argv: string[]): Promise<number> {
   }
 }
 
-function usage(): void {
-  console.error('Usage:');
-  console.error('  tradr migrate --status');
-  console.error('  tradr storage migrate-to-inline');
-  console.error('  tradr storage gc');
-  console.error('  tradr reset-password <email> [--password <value>]');
+const USAGE = [
+  'Usage:',
+  '  tradr migrate --status',
+  '  tradr storage migrate-to-inline',
+  '  tradr storage gc',
+  '  tradr reset-password <email> [--password <value>]',
+];
+
+/**
+ * Print the usage block.
+ *
+ * `asError` distinguishes the two callers. An unrecognised command is a failure:
+ * usage goes to stderr and the process exits non-zero. An explicit `--help` is a
+ * success: it goes to stdout and exits 0, so `tradr --help | less` works and a
+ * shell script asking for help does not see a failure.
+ */
+function usage(asError = true): void {
+  const write = asError ? console.error : console.log;
+  for (const line of USAGE) write(line);
 }
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
+  if (args[0] === '--help' || args[0] === '-h' || args[0] === 'help') {
+    usage(false);
+    return 0;
+  }
   if (args[0] === 'migrate' && args.includes('--status')) {
     return runStatus();
   }

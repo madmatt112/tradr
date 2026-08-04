@@ -70,6 +70,17 @@ jobs:
           pnpm --filter @tradr/docs openapi:generate
           git diff --exit-code apps/docs/src/openapi/tradr-api.json
 
+      # The same argument for the four generated reference PAGES: env vars from
+      # .env.example, the CLI from its own usage block, plan limits from the cap
+      # table the server enforces, and the schema from the Drizzle snapshot.
+      # Each generator also fails on a stale parse (too few keys, an undocumented
+      # subcommand, a missing limit), which the diff alone cannot catch — a
+      # wrong-but-stable artifact matches itself.
+      - name: Check the generated reference pages are up to date
+        run: |
+          pnpm --filter @tradr/docs reference:generate
+          git diff --exit-code apps/docs/src/content/docs
+
       - name: Build frontend
         run: pnpm --filter @tradr/web build
 

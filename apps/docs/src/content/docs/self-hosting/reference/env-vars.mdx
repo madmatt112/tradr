@@ -1,33 +1,203 @@
 ---
-title: Environment variable reference
-description: Every .env key — required vs optional, defaults, generation recipes, and the hand-synced cross-container constraints. Mirrors the annotated .env.example.
+title: Environment variables
+description: Every environment variable Tradr reads, its default, and what it does — generated from .env.example so it cannot drift from the template you copy.
 ---
 
-The authoritative, always-current source is the **annotated `.env.example`** at
-the repository root — every key is documented inline next to its default and
-generation recipe. This page will mirror it; until it is fully expanded, use
-`.env.example` and the walkthrough in [Self-host with Docker
-Compose](/self-hosting/docker-compose/).
+{/* GENERATED FILE — do not edit.
+    Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
+    Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-## The required trio
+Tradr reads **78 environment variables**, of which **3 are required** —
+everything else has a working default or turns a feature off when unset.
 
-Only three values must be set — everything else has a working default:
+This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
+the file you copy to `.env`. CI regenerates it and fails if the two disagree, so it
+cannot fall behind the template.
 
-- `POSTGRES_PASSWORD` — `openssl rand -hex 24`
-- `SESSION_SECRET` — `openssl rand -base64 24` (at least 32 characters)
-- `ENCRYPTION_KEY` — `openssl rand -hex 32` (32-byte hex, AES-256-GCM)
+## Required
 
-`POSTGRES_USER` and `POSTGRES_DB` default to `tradr`. `FEATURE_GATING` defaults to
-`false` (self-hosters stay unrestricted). Every optional integration — LLM keys,
-Stripe, PostHog, SMTP — is **absent when unset, not broken**.
+An instance does not start without these three. `docker/quickstart.sh` generates all
+of them for you — see [Install with Docker Compose](/self-hosting/docker-compose/).
 
-## Where the api's `DATABASE_URL` comes from
+| Variable | How to generate one |
+| --- | --- |
+| `POSTGRES_PASSWORD` | `openssl rand -hex 24` — hex avoids the URL-reserved characters that would corrupt the connection string |
+| `SESSION_SECRET` | `openssl rand -base64 24` — signs session cookies, minimum 32 characters |
+| `ENCRYPTION_KEY` | `openssl rand -hex 32` — a 32-byte key that encrypts stored provider API keys |
 
-In the compose stack the api's `DATABASE_URL` is **not** read from `.env` — compose
-builds it from your `POSTGRES_*` values in `api.environment`. Set `DATABASE_URL`
-directly only for non-compose runs against an external Postgres.
-
-:::note
-This page is a stub — the full per-key table lands with the reference content
-(docs-as-code). See `.env.example` for the complete, annotated list today.
+:::danger[Keep `ENCRYPTION_KEY` with your backups]
+A restored database still holds the provider API keys it encrypted. Without the
+original `ENCRYPTION_KEY` nothing can decrypt them. See
+[Back up and restore](/self-hosting/backup-restore/).
 :::
+
+## Reading the tables
+
+Of the 78 variables, **50 ship unset** — either commented out in the
+template or present with an empty value. An unset optional variable means the feature
+is **absent, not broken**: nothing logs an error and no outbound call is made.
+
+| Default column | Meaning |
+| --- | --- |
+| **Required** | No default. Supply a value or the instance will not start. |
+| Optional | Ships unset. The capability it controls is off. |
+| A value | The template ships this default; override it only if you need to. |
+
+## Database
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `POSTGRES_USER` | `tradr` | Single source of DB credentials for the compose stack. docker-compose.yml builds DATABASE_URL from these in api.environment (the URL is NOT read from .env), and postgres is initialised with them. |
+| `POSTGRES_PASSWORD` | **Required** | Generate a URL-safe password (hex avoids URL-reserved chars like @ : / ?): `openssl rand -hex 24` |
+| `POSTGRES_DB` | `tradr` | — |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5433/tradr_dev` | For NON-compose runs (e.g. local dev against an external postgres), set DATABASE_URL directly. In the compose stack this value is IGNORED — compose overrides it in api.environment. |
+| `DB_POOL_SIZE` | `10` | — |
+| `MIGRATE_TEST_DATABASE_URL` | `postgresql://postgres:postgres@localhost:5433/tradr_test_migrate` | Migration test DBs (used only by `pnpm test --project=migrations`) |
+| `MIGRATE_TEST_USER_DATABASE_URL` | `postgresql://tradr_test_user:tradr_test_user@localhost:5433/tradr_test_migrate` | — |
+
+## Auth
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SESSION_SECRET` | **Required** | Generate (≥32 chars): `openssl rand -base64 24` |
+
+## Server
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `PORT` | `3100` | — |
+| `NODE_ENV` | `development` | — |
+| `TRUSTED_PROXIES` | `172.28.0.0/24` | Rate limiting behind the reverse proxy. Keep in sync with the compose network subnet (TRADR_SUBNET, default 172.28.0.0/24 in docker-compose.yml). |
+| `WEEK_START_DAY` | `0` | Performance charts — 0 = Sunday, 1 = Monday (week-start bucket boundary) |
+| `SKIP_POST_MIGRATIONS` | `false` | Opt-out for hosted operators with large `positions` tables (run `pnpm migrate:post` out-of-band instead) |
+
+## Web (consumed by docker-compose.yml / nginx, NOT the api)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `WEB_PORT` | `8080` | Host port the web container publishes (maps to container :80). |
+| `API_BASE_URL` | Optional | Upstream API base URL for the nginx reverse proxy. Leave blank to use the compose default (the internal `api` service). |
+| `APP_VERSION` | Optional | Optional version string (e.g. v0.1.0). LEAVE THIS COMMENTED OUT. The release workflow bakes APP_VERSION into the api image, and GET /api/health reports it. The api reads this file through compose's `env_file:`, and env_file OVERRIDES the image's baked value — so an uncommented, blank APP_VERSION here erases the released version and /api/health silently drops its `version` field. Commented out, the image's own stamp survives. Set it only to override the stamp deliberately. |
+| `ADVISOR_NGINX_PROXY_TIMEOUT` | `180s` | nginx proxy read timeout for advisor streaming responses. MUST exceed the app ADVISOR_STREAM_TIMEOUT_MS below, or nginx will cut the stream early. |
+| `CSV_IMPORT_NGINX_PROXY_TIMEOUT` | `300s` | nginx proxy read timeout for the dedicated /api/csv-import/ route. A large within-cap synchronous import can exceed nginx's default 60s; this raises the timeout for that route only (other routes unchanged). Keep CSV_IMPORT_CLAIM_TIMEOUT_SECONDS (api) ≥ 2 × this value — the two live in different containers and are hand-synced. |
+| `MAX_UPLOAD_SIZE` | `20m` | nginx client_max_body_size for uploads. Must accommodate ADVISOR_MAX_IMAGES_PER_MESSAGE images per request, or large uploads 413. OPERATOR CONSTRAINT: keep MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (below), or oversized CSV imports are rejected by nginx before the api can size them. |
+
+## Advisor — encryption
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ENCRYPTION_KEY` | **Required** | Generate the active key: `openssl rand -hex 32` |
+| `ENCRYPTION_KEY_PREVIOUS` | Optional | Previous key, kept during rotation so existing ciphertext can still decrypt. |
+| `ENCRYPTION_KEY_FINGERPRINT` | Optional | Safety check: sha256 of the raw key bytes. If set, the app aborts on startup if it doesn't match the loaded ENCRYPTION_KEY — guards against deploying with the wrong key. Generate from your key: `openssl rand -hex 32 \| xxd -r -p \| openssl dgst -sha256 -binary \| xxd -p -c 32` |
+
+## Advisor — streaming/limits
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ADVISOR_STREAM_TIMEOUT_MS` | `120000` | Keep below ADVISOR_NGINX_PROXY_TIMEOUT (180s) so the app times out first. |
+| `ADVISOR_MAX_IMAGES_PER_MESSAGE` | `4` | Max images per message. Keep MAX_UPLOAD_SIZE large enough for this many. |
+| `ADVISOR_BUILTIN_PERSONA_PROMPT_DEFAULT_TRADING_ADVISOR` | Optional | Optional: override built-in persona system prompts |
+| `ADVISOR_BUILTIN_PERSONA_PROMPT_RISK_COACH` | Optional | — |
+| `ADVISOR_BUILTIN_PERSONA_PROMPT_CHART_REVIEWER` | Optional | — |
+| `UNUSUAL_WHALES_BASE_URL` | Optional | Optional: Unusual Whales API base URL. Defaults to the real host; override only for an out-of-process E2E pointing the server at a local stub. |
+| `GEMINI_BASE_URL` | Optional | Optional: OpenAI-compatible base URLs for the Gemini / OpenRouter advisor adapters. Default to the real hosts; override only for an out-of-process E2E pointing the server at a local stub. |
+| `OPENROUTER_BASE_URL` | Optional | — |
+
+## CSV import (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `CSV_IMPORT_MAX_FILE_BYTES` | `10485760` | All optional with defaults — the feature works out of the box. Two operator constraints span containers and are HAND-SYNCED (no auto-coupling): `1. MAX_UPLOAD_SIZE (nginx, above) ≥ CSV_IMPORT_MAX_FILE_BYTES below. && 2. CSV_IMPORT_CLAIM_TIMEOUT_SECONDS ≥ 2 × CSV_IMPORT_NGINX_PROXY_TIMEOUT. && CSV_IMPORT_NGINX_PROXY_TIMEOUT is a web/nginx var (default 300s) — the two && timeouts live in DIFFERENT containers, so keep them in sync by hand.` Authoritative per-CSV byte cap (Node Gate 2), counting actual bytes read. |
+| `CSV_IMPORT_MAX_REQUEST_BYTES` | `65536` | Cap on the multipart `request` JSON part (mapping + options blob). |
+| `CSV_IMPORT_MAX_ROWS` | `10000` | Max data rows per import (sized to the nginx import-route timeout). |
+| `CSV_IMPORT_STAGING_TTL_MINUTES` | `30` | Staged preview row lifetime, in minutes. |
+| `CSV_IMPORT_MAX_STAGED_BYTES` | `25165824` | Hard cap on the staged `result` JSONB; exceeded → 413. |
+| `CSV_IMPORT_CLAIM_TIMEOUT_SECONDS` | `600` | Age (seconds) past which an orphaned `committing` row is deleted on recovery. |
+
+## Wallet billing (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `STRIPE_SECRET_KEY` | Optional | ALL optional. When unconfigured the billing feature is ABSENT (not broken): no purchase UI, advisor stays BYOK-only. Both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required to enable the purchase + webhook path. Stripe secret key (server-side). Required for purchases. Optional. |
+| `STRIPE_WEBHOOK_SECRET` | Optional | Stripe webhook signing secret. Required for the webhook path. Optional. |
+| `STRIPE_PUBLISHABLE_KEY` | Optional | Stripe publishable key. Unused by the redirect checkout flow (reserved). Optional. |
+
+## Pro subscription (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `STRIPE_PRO_PRICE_ID` | Optional | Pro subscription Price id — the Price the subscription checkout sells RIGHT NOW. Pro is purchasable only when STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and this var are ALL set ('' is read as unset). Optional. SETUP: `1. In the Stripe Dashboard, create ONE Product for your Pro plan. && 2. On that Product, create a recurring monthly Price. && 3. Set STRIPE_PRO_PRICE_ID to that Price id (price_...). && 4. To change the price you sell: create a new Price on the same Product, && point this var at it and restart the api container — a CONFIGURATION && change, never a deploy. && 5. Grandfathering is Stripe-natural: existing subscriptions keep the Price && they subscribed at; only NEW checkouts sell the configured Price.` |
+| `ANTHROPIC_API_KEY` | Optional | DUNNING HORIZON (support bound): past-due grace follows your Stripe dunning configuration, bounded app-side at 28 days from entering past_due. A dunning configuration longer than 28 days is UNSUPPORTED — Pro lapses mid-dunning. UNCONFIGURING STRIPE: removing the Stripe keys while live subscriptions exist is UNSUPPORTED — cancel or migrate the subscriptions first. (Subscription state still renders from the local mirror, but purchase, Portal, and webhook updates are unavailable until the keys return.) WEBHOOK ENDPOINT (operational spec): register ONE endpoint for /api/billing/webhook and PIN its API version to 2025-10-29 (clover). An endpoint left on an older API version renders subscription payloads whose fields the app cannot read (period end / invoice linkage arrive undefined) — a hard misconfiguration. Register EXACTLY these events: `checkout.session.completed (existing — credit packs) && checkout.session.async_payment_succeeded (existing) && charge.dispute.created (existing) && charge.refunded (existing) && customer.subscription.created (subscription mirror) && customer.subscription.updated (subscription mirror) && customer.subscription.deleted (subscription mirror) && invoice.paid (dunning recovery) && invoice.payment_failed (past-due anchor)` CUSTOMER PORTAL (operator duties): subscription self-service uses the Stripe Customer Portal DEFAULT configuration — set it in the Dashboard as follows: `cancel at period end: ON, payment-method update: ON, invoice history: ON, && immediate cancel: OFF, plan switches: OFF (there is one plan).` Platform LLM keys (per provider). Absent ⇒ advisor stays BYOK-only. Optional. |
+| `OPENAI_API_KEY` | Optional | — |
+| `MIN_RESERVATION_CREDITS` | `1` | Minimum available credits required to pass the pre-stream gate. Optional (default 1). |
+| `RESERVATION_TTL_MS` | `600000` | Reservation hold TTL (ms) for crash-recovery. MUST be strictly greater than the per-turn wall-clock budget (480000ms). Optional (default 600000). |
+| `PRICING_MARKUP` | `1.2` | Pricing markup over raw provider cost, as a decimal string (1.2 = 20%). Optional. |
+
+## Admin platform (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `FEATURE_GATING` | `false` | Feature gating. Default OFF — self-hosters are unrestricted unless this is explicitly enabled. Must be exactly 'true' or 'false'. |
+| `FEATURE_GATING_ADVISOR_TURNS_PER_MONTH` | `200` | The PRO platform-turn allowance (its ONE meaning): committed platform-key advisor turns per UTC calendar month for Pro users when gating is ON. The default 200 equals the previous flat cap, so existing deployments keep their configured intent. Server config, never client input. Must be a positive integer. |
+| `SEED_ADMIN_EMAIL` | Optional | First-admin bootstrap: register normally, set SEED_ADMIN_EMAIL to that account's email, then restart (`docker compose up -d` re-creates the container). At startup, IF the instance has zero admins, this email is promoted to admin. It is a bootstrap mechanism, not a standing override — a later demotion is not undone. SQL fallback (emails are stored lowercase; use the lowercase form): `UPDATE users SET is_admin = true WHERE email = '<you>';` |
+
+## Changelog (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `CHANGELOG_GITHUB_REPO` | Optional | GitHub repo whose Releases feed the in-app changelog, as an owner/repo slug — point a fork here. Optional (default madmatt112/tradr). |
+| `CHANGELOG_GITHUB_BASE_URL` | Optional | GitHub API base URL — test/E2E seam; leave unset in production. Optional (default https://api.github.com). |
+
+## Symbol search + delayed quotes (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `STOCK_QUOTE_API_KEY` | Optional | Symbol AUTOCOMPLETE needs NO key — it is backed by the public SEC ticker file. Only the delayed LAST-PRICE lookup needs a key. Absent ⇒ that affordance is simply absent for everyone (isStockQuoteConfigured false); a fresh clone + `docker compose up` runs identically with it unset. api-only: the frontend learns configuredness from an authed config endpoint, not from a web env var. Platform-global delayed-quote provider key (API Ninjas). Optional. |
+| `STOCK_QUOTE_BASE_URL` | Optional | Quote-provider base URL — test/E2E seam; leave unset in production. Optional (default https://api.api-ninjas.com). |
+| `SEC_USER_AGENT` | Optional | SEC contact User-Agent for the ticker-file fetch (SEC asks for a contact). Override to your own contact if you like; the default is a safe non-personal value. Optional (default tradr (+https://github.com/madmatt112/tradr)). |
+| `SEC_TICKERS_URL` | Optional | SEC ticker file URL — test/E2E seam; leave unset in production. Optional (default https://www.sec.gov/files/company_tickers_exchange.json). |
+
+## Transactional email (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SMTP_HOST` | Optional | ALL seven vars OPTIONAL. Email (self-service password reset + verification emails) turns on ONLY when ALL THREE of SMTP_HOST + EMAIL_FROM + WEB_BASE_URL are set (all-or-nothing); leave every var unset/empty to run without email (reset falls back to the operator CLI `tradr reset-password`; verification is not required). A PARTIAL set — any email var set while that trio is incomplete, or SMTP_USER without SMTP_PASS (and vice versa) — FAILS LOUD at startup naming the offending vars. SMTP server hostname. Presence anchor of the required trio. |
+| `SMTP_PORT` | Optional | SMTP port. Optional (default 587). |
+| `SMTP_TLS_MODE` | Optional | TLS mode. One of: 'implicit' (TLS from the first byte, usually port 465), 'starttls' (plaintext upgrade on port 587 — the default), or 'none' (cleartext — local relays/mail catchers only). Optional (default starttls). |
+| `SMTP_USER` | Optional | SMTP credentials — an OPTIONAL PAIR for auth-optional local relays: set both or neither. |
+| `SMTP_PASS` | Optional | — |
+| `EMAIL_FROM` | Optional | From address for outgoing mail (bare address; case preserved). Part of the required trio. |
+| `EMAIL_FROM_NAME` | Optional | Optional display name for the From header (no CR/LF). |
+| `WEB_BASE_URL` | Optional | Public web origin emailed links land on — ORIGIN ONLY (scheme + host + optional port; no path/query/fragment; a trailing slash is stripped). Part of the required trio. Single-container compose: the site's public URL (e.g. https://tradr.example.com). Split-origin (hosted): the WEB origin (where the reset/verify pages live), NEVER the API origin — it names the same web origin CORS_ALLOWED_ORIGINS allows, but the two serve different mechanisms and are not cross-checked. |
+
+## Observability (PostHog product analytics)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `POSTHOG_API_KEY` | Optional | ALL four vars are OPTIONAL. Each PostHog surface is ABSENT when its key is unset — a fresh clone + `docker compose up` runs identically with none set (no SDK loaded, no outbound calls, no errors). Configure only what you want. PRIVACY POSTURE (what is / isn't sent): `• PostHog (frontend) uses MEMORY-ONLY persistence (cookieless); autocapture, && session replay, and surveys are DISABLED in the SDK, and client IP is && neutralised in-SDK ($ip=null, $geoip_* dropped). Pageviews ARE captured, && but MASKED: only the matched route PATTERN (e.g. /_auth/positions/ && $positionId) is sent — never the resolved id, query string, or referrer. && OPERATOR ACTION: also enable PostHog project-side "Discard client IP data" && for defence in depth. && • PostHog (backend) sends deliberate, non-financial product events keyed by an && OPAQUE user surrogate — no PII, no trade data, in any payload. Event values && pass a redaction guard that masks secrets/emails/upload-filenames.` Structured logs go to stdout (captured by your container orchestrator); Tradr ships no logs to a third-party sink of its own. SHUTDOWN FLUSH: on SIGTERM the PostHog flush is bounded at 3s, comfortably under Docker's default ~10s SIGTERM→SIGKILL grace. If you need longer to drain, raise `stop_grace_period` for the api service in a compose override. --- Backend (api container) --- PostHog project API key. Absent ⇒ backend PostHog surface OFF. Optional. |
+| `POSTHOG_HOST` | Optional | PostHog ingestion host. Optional (default https://us.i.posthog.com); '' is read as the default (does not need a key set to be valid). |
+| `POSTHOG_PUBLIC_KEY` | Optional | --- Frontend (web container; read by the nginx entrypoint into /config.js) --- PostHog browser project key. Absent ⇒ frontend PostHog OFF. Optional. |
+| `POSTHOG_PUBLIC_HOST` | Optional | PostHog browser ingestion host. Optional (default https://us.i.posthog.com). |
+
+## Hosted platform (api container)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `REDIS_URL` | Optional | ALL optional — SELF-HOSTERS LEAVE EVERYTHING BELOW UNSET. Each capability is a no-op when its config is absent/empty: with none configured the stack behaves EXACTLY as today (advisor images inline base64-in-JSONB, process-local rate limiter, same-origin SameSite=Lax cookies, migrations over DATABASE_URL, prepared statements on). These are only needed to run the managed offering. An empty value is treated as unset. PRIVACY POSTURE: object storage and split-origin add NO third-party trackers — advisor images move from one operator-controlled store (Postgres) to another (the operator's own bucket), never to a shared/third-party surface. Object- storage credentials and REDIS_URL are SECRETS: server-side env only, never emitted to the frontend /config.js seam. Centralized rate-limit store (REQ-7). Set to a redis:// URL to share one rate limit across N API containers; unset ⇒ process-local in-memory limiter. Optional. |
+| `DIRECT_DATABASE_URL` | Optional | Non-pooled direct DB URL for migrations + CLI (REQ-9.1). Required only when the app runs behind a transaction-mode pooler; unset ⇒ migrations use DATABASE_URL. Optional. |
+| `DB_TRANSACTION_POOLER` | Optional | App-pool prepared-statement mode. Set 'true' behind a transaction-mode pooler so the driver uses prepare:false (REQ-9.2); unset/'false' ⇒ prepared statements on, exactly as today. Must be exactly 'true' or 'false'. Optional (default false). |
+| `OBJECT_STORAGE_ENDPOINT` | Optional | Object storage for advisor images (REQ-2). All FOUR of ENDPOINT + BUCKET + ACCESS_KEY_ID + SECRET_ACCESS_KEY are required to enable it; partial/unset ⇒ images stay inline base64-in-JSONB as today. S3-compatible (Cloudflare R2 / AWS S3 / MinIO). All optional. |
+| `OBJECT_STORAGE_BUCKET` | Optional | — |
+| `OBJECT_STORAGE_REGION` | Optional | — |
+| `OBJECT_STORAGE_ACCESS_KEY_ID` | Optional | — |
+| `OBJECT_STORAGE_SECRET_ACCESS_KEY` | Optional | — |
+| `OBJECT_STORAGE_FORCE_PATH_STYLE` | Optional | Path-style addressing (needed for MinIO). Must be 'true' or 'false'. Optional (default true). |
+| `CORS_ALLOWED_ORIGINS` | Optional | Split-origin CORS allow-list (REQ-5), comma-separated exact origins (never '*' for credentialed requests). Non-empty ⇒ CORS + SameSite=None;Secure cookies + anti-CSRF turn on together; unset ⇒ same-origin only, SameSite=Lax, exactly as today. Implies TLS on both origins. Optional. |
+| `ADVISOR_IMAGE_MAX_BYTES` | Optional | Operator-tunable per-image advisor byte cap override (REQ-4.6), in encoded bytes. Unset ⇒ the built-in shared-schema default. Optional. |
+| `ADVISOR_MAX_REQUEST_BYTES` | Optional | Stream-route request body floor (REQ-4), in bytes. Unset ⇒ a value DERIVED from the per-image cap × ADVISOR_MAX_IMAGES_PER_MESSAGE + framing. Optional. |
+
+## Next steps
+
+- [Install with Docker Compose](/self-hosting/docker-compose/) — where these are set.
+- [Configure email, Stripe, and LLM keys](/self-hosting/optional-integrations/) — the opt-in integrations.
+- [Upgrade an instance](/self-hosting/upgrades/) — what changes between releases.

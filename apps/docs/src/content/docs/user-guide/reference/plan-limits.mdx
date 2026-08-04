@@ -1,19 +1,51 @@
 ---
 title: Plan limits
-description: Hosted usage limits when feature gating is on — for example, AI advisor turns per month.
+description: What the Free and Pro plans allow on the hosted app — accounts, positions, history window, advisor turns, images, and CSV imports. Self-hosted instances have no limits.
 ---
 
-import SelfHosted from '@/components/SelfHosted.astro';
+import SelfHosted from "@/components/SelfHosted.astro";
 
-When feature gating is on, some actions have usage limits — for example, how many
-AI advisor turns you get per month.
+{/* GENERATED FILE — do not edit.
+    Source: apps/api/src/features/billing/tier-limits.constants.ts
+    Generator: apps/docs/scripts/gen-plan-limits.mjs */}
 
 <SelfHosted>
-  Feature gating is **off by default** on a self-hosted instance, so these limits
-  do not apply unless you enable `FEATURE_GATING`.
+  **None of this applies to a self-hosted instance.** Plan limits are enforced only
+  when `FEATURE_GATING` is on, and it ships off. An instance you run yourself has no
+  tiers and no caps — see
+  [Hosted vs self-hosted](/user-guide/explanation/hosted-vs-self-hosted/).
 </SelfHosted>
 
-:::note
-The per-plan limits table is not published here yet. It will be generated from
-the limits the API enforces, so the page and the product cannot disagree.
-:::
+These are the caps on the hosted app. They come from the same table the server
+checks against, so what is published here is what is enforced.
+
+| | Free | Pro |
+| --- | --- | --- |
+| **Accounts** | 1 | Unlimited |
+| **Positions** | 1,000 | Unlimited |
+| **History window** | 6 months | Unlimited |
+| **Advisor turns / month** | 25 | 200 |
+| **Advisor images / month** | 20 | 500 |
+| **CSV imports / month** | 10 | Unlimited |
+
+## What each limit means
+
+- **Accounts** — Brokerage accounts you can track at once.
+- **Positions** — Stored positions across every account.
+- **History window** — How far back the performance charts and the advisor can read.
+- **Advisor turns / month** — Advisor replies using the platform key. Turns on your own key are never capped.
+- **Advisor images / month** — Charts and screenshots you can attach to an advisor conversation.
+- **CSV imports / month** — Import runs, not rows.
+
+Monthly counters reset at the start of each calendar month, measured in UTC.
+
+## Bringing your own key
+
+The advisor-turn cap applies to turns that run on the platform key. Add your own
+provider key in **Settings** and those turns are uncapped on either plan — you are
+paying the provider directly. See [Use the AI advisor](/user-guide/ai-advisor/).
+
+## Next steps
+
+- [Hosted vs self-hosted](/user-guide/explanation/hosted-vs-self-hosted/) — what's different.
+- [Use the AI advisor](/user-guide/ai-advisor/) — platform key versus your own.
