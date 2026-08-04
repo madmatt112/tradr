@@ -1,0 +1,60 @@
+name: Link check
+
+# Checks that OUTBOUND links in this repository's markdown still resolve.
+#
+# `starlightLinksValidator()` already fails the docs build on a broken link
+# BETWEEN doc pages, and that runs in `checks`. Nothing checked links pointing
+# OUT — to the sites, to GitHub, to third-party docs. That is the exact gap that
+# left seven links pointing at a repository that had been renamed: no code
+# changed, so no build broke, and the links rotted in place.
+#
+# Deliberately NOT part of the required `checks` job. An external link check
+# depends on other people's servers, so a required one would block merges on a
+# third party's 503. This runs weekly and on markdown changes, and its failures
+# are read rather than enforced — the same posture the security scanners were
+# introduced with.
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Rot is found by the calendar, not by a code change,
+    # so the scheduled run is the one that matters.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '**/*.mdx'
+      - '.github/workflows/link-check.yml'
+      - 'lychee.toml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: link-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lychee:
+    name: lychee
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Restores lychee's response cache so a weekly run re-checks what changed
+      # rather than hammering every host from scratch.
+      - name: Restore lychee cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.sha }}
+          restore-keys: lychee-
+
+      - name: Check links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --config lychee.toml .
+          fail: true
+          jobSummary: true
