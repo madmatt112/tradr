@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { DisplayCurrencySelect } from '@/features/accounting/components/DisplayCurrencySelect';
 import { ExchangeRatesPage } from '@/features/accounting/components/ExchangeRatesPage';
+import { BuyingPowerBasisSelect } from '@/features/calculator/components/BuyingPowerBasisSelect';
 
 // FX/display-currency settings live under the Profile tab (design §Component 8).
 const ProfileSearchSchema = z.object({
@@ -15,6 +16,7 @@ function SettingsProfile() {
   return (
     <div className="space-y-8">
       <DisplayCurrencySelect />
+      <BuyingPowerBasisSelect />
       <ExchangeRatesPage initialBase={base} initialQuote={quote} />
     </div>
   );

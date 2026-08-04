@@ -34,10 +34,12 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { useBrokerages } from '@/features/brokerages/hooks/useBrokerages';
+import { useBuyingPowerBasisQuery } from '@/features/calculator/hooks/useBuyingPowerBasis';
 import { OptionsChainViewer } from '@/features/options/components/OptionsChainViewer';
 import type { OptionContract } from '@/features/options/hooks/useOptionsChain';
 import { useStockQuote } from '@/hooks/useStockQuote';
 import { useStockQuoteConfig } from '@/hooks/useStockQuoteConfig';
+import { formatMoney } from '@/lib/format';
 
 import { CalculatorResults } from './CalculatorResults';
 
@@ -108,6 +110,12 @@ export function CalculatorForm() {
   const accountsQuery = useAccounts();
   const accounts = accountsQuery.data ?? [];
 
+  // Which account figure the buying-power cap sizes against. Defaults to 'cash'
+  // while the preference is in flight so a slow settings fetch cannot silently
+  // hand back the looser cap — the conservative value is the safe one to guess.
+  const buyingPowerBasisQuery = useBuyingPowerBasisQuery();
+  const capBasis = buyingPowerBasisQuery.data?.basis ?? 'cash';
+
   const values = watch();
   const direction = values.direction;
   const mode = values.mode;
@@ -120,11 +128,28 @@ export function CalculatorForm() {
       ? values.balance !== undefined && values.riskPercent !== undefined
       : values.dollarRisk !== undefined;
 
+  // The figure the buying-power CAP sizes against, derived rather than written
+  // into the form. Deriving it means a preference that resolves after the user
+  // has already picked an account still applies, and it cannot go stale against
+  // `selectedAccount` — a `setValue` at account-select time would do neither.
+  //
+  // Undefined ⇒ `calculateTrade` caps against `balance`, which is the right
+  // fallback for all three ways there is no cash figure to use: the 'balance'
+  // preference, a hand-typed balance with no account selected, and an account
+  // whose `cash` is absent (the field is optional for fixtures predating the
+  // cash/position split).
+  //
+  // Only the cap. The risk budget stays `riskPercent × balance` either way.
+  const buyingPower =
+    riskBasis === 'percent' && capBasis === 'cash'
+      ? (selectedAccount?.cash ?? undefined)
+      : undefined;
+
   let result: CalculatorOutput | null = null;
   let error: string | null = null;
   if (isValid && basisComplete) {
     try {
-      result = calculateTrade(values);
+      result = calculateTrade({ ...values, buyingPower });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Calculation error';
     }
@@ -417,6 +442,19 @@ export function CalculatorForm() {
                 />
                 {errors.balance && (
                   <p className="text-sm text-destructive">{errors.balance.message}</p>
+                )}
+                {/*
+                  The cap basis is otherwise invisible: two accounts with the same
+                  balance size differently depending on how much is deployed, and
+                  without this the user has no way to see why. Shown only when a
+                  cash figure is actually in play — a hand-typed balance caps
+                  against itself and needs no note.
+                */}
+                {buyingPower !== undefined && selectedAccount && (
+                  <p className="text-xs text-muted-foreground" data-testid="cap-basis-note">
+                    Sizing capped by {formatMoney(buyingPower, selectedAccount.currency)} cash —
+                    risk stays a percent of the balance.
+                  </p>
                 )}
               </div>
 

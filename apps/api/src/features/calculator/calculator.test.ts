@@ -409,3 +409,167 @@ describe('POST /api/calculator', () => {
     expect(body.actualDollarRisk).toBe('100.00');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Buying-power basis — the stored preference
+// ---------------------------------------------------------------------------
+
+describe('GET/PUT /api/users/me/buying-power-basis', () => {
+  async function getBasis(cookie: string) {
+    const res = await authedRequest('GET', '/api/users/me/buying-power-basis', cookie);
+    expect(res.status).toBe(200);
+    return (await res.json()).basis;
+  }
+
+  it('defaults a brand-new user to cash', async () => {
+    // The default is load-bearing, not cosmetic: 'balance' would let the
+    // calculator size a position the account cannot fund.
+    const { cookie } = await registerAndGetCookie();
+    expect(await getBasis(cookie)).toBe('cash');
+  });
+
+  it('round-trips a change to balance and back', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const toBalance = await authedRequest('PUT', '/api/users/me/buying-power-basis', cookie, {
+      basis: 'balance',
+    });
+    expect(toBalance.status).toBe(200);
+    expect((await toBalance.json()).basis).toBe('balance');
+    expect(await getBasis(cookie)).toBe('balance');
+
+    const toCash = await authedRequest('PUT', '/api/users/me/buying-power-basis', cookie, {
+      basis: 'cash',
+    });
+    expect(toCash.status).toBe(200);
+    expect(await getBasis(cookie)).toBe('cash');
+  });
+
+  it('rejects a value outside the enum', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('PUT', '/api/users/me/buying-power-basis', cookie, {
+      basis: 'equity',
+    });
+    expect(res.status).toBe(400);
+    // The rejected write must not have landed.
+    expect(await getBasis(cookie)).toBe('cash');
+  });
+
+  it('rejects a missing body field', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('PUT', '/api/users/me/buying-power-basis', cookie, {});
+    expect(res.status).toBe(400);
+  });
+
+  it('requires authentication on both verbs', async () => {
+    const get = await app.request('/api/users/me/buying-power-basis', {
+      headers: { 'X-Forwarded-For': uniqueIp() },
+    });
+    expect(get.status).toBe(401);
+
+    const put = await app.request('/api/users/me/buying-power-basis', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': uniqueIp() },
+      body: JSON.stringify({ basis: 'balance' }),
+    });
+    expect(put.status).toBe(401);
+  });
+
+  it('is scoped per user', async () => {
+    const a = await registerAndGetCookie();
+    const b = await registerAndGetCookie();
+
+    await authedRequest('PUT', '/api/users/me/buying-power-basis', a.cookie, {
+      basis: 'balance',
+    });
+
+    expect(await getBasis(a.cookie)).toBe('balance');
+    expect(await getBasis(b.cookie)).toBe('cash');
+  });
+});
+
+describe('POST /api/calculator — buyingPower', () => {
+  it('caps against buyingPower while the risk budget stays on balance', async () => {
+    const { cookie } = await registerAndGetCookie();
+    // $5,000 equity, $4,000 deployed ⇒ $1,000 cash. Budget 1% = $50 → 25
+    // shares; cap = floor(1000 / 50) = 20 binds.
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      entryPrice: '50',
+      stopLoss: '48',
+      balance: '5000',
+      buyingPower: '1000',
+      riskPercent: '1',
+      direction: 'long',
+      mode: 'stock',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(20);
+    expect(body.buyingPowerLimited).toBe(true);
+    expect(body.derivedDollarRisk).toBe('50.00');
+  });
+
+  it('falls back to balance when buyingPower is omitted', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      entryPrice: '50',
+      stopLoss: '48',
+      balance: '5000',
+      riskPercent: '1',
+      direction: 'long',
+      mode: 'stock',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(25);
+    expect(body.buyingPowerLimited).toBeUndefined();
+  });
+
+  it('reports buying-power-zero for a fully-deployed account, not a 400', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      entryPrice: '50',
+      stopLoss: '48',
+      balance: '5000',
+      buyingPower: '0',
+      riskPercent: '1',
+      direction: 'long',
+      mode: 'stock',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(0);
+    expect(body.sizingStatus).toBe('buying-power-zero');
+  });
+
+  it('accepts a negative buyingPower and zeroes the size', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      entryPrice: '50',
+      stopLoss: '48',
+      balance: '5000',
+      buyingPower: '-500',
+      riskPercent: '1',
+      direction: 'long',
+      mode: 'stock',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.positionSize).toBe(0);
+    expect(body.sizingStatus).toBe('buying-power-zero');
+  });
+
+  it('400s on an unparseable buyingPower', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/calculator', cookie, {
+      entryPrice: '50',
+      stopLoss: '48',
+      balance: '5000',
+      buyingPower: 'lots',
+      riskPercent: '1',
+      direction: 'long',
+      mode: 'stock',
+    });
+    expect(res.status).toBe(400);
+  });
+});

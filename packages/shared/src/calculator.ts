@@ -99,10 +99,28 @@ export function calculateTrade(input: CalculatorInput): CalculatorOutput {
   let finalSize = riskDerivedSize;
   let buyingPowerLimited = false;
   if (isPercent) {
+    // The cap is computed against `buyingPower` when supplied, `balance`
+    // otherwise. These are deliberately DIFFERENT questions:
+    //
+    //   risk budget → balance   "risk 1% of my account" means 1% of equity
+    //   cap         → cash      "can I afford this" means liquid funds
+    //
+    // Using equity for the cap overstates it by whatever is already deployed,
+    // which is how the calculator could size a position larger than the account
+    // could actually fund. Absent `buyingPower` the two collapse back to one
+    // figure and the behaviour is exactly as before.
+    const capBasis = input.buyingPower !== undefined ? new Decimal(input.buyingPower) : balanceDec!;
+
     // entry is a validated positive decimal and multiplier ∈ {1,100} ⇒
     // entry×multiplier > 0 ⇒ no divide-by-zero.
-    const cap = balanceDec!.div(entry.times(multiplier)).floor().toNumber();
-    if (cap === 0) {
+    const cap = capBasis.div(entry.times(multiplier)).floor().toNumber();
+
+    // `<= 0`, not `=== 0`. The old strict check was safe only because the cap
+    // basis was `balance`, already proven positive above. `buyingPower` carries
+    // no such guarantee — a fully-deployed or margined account can present zero
+    // or negative cash, and `floor(negative / positive)` is negative, which
+    // would otherwise sail past the guard and cap the size to a negative number.
+    if (cap <= 0) {
       return {
         ...zeroOut(perUnitRiskStr, 'buying-power-zero'),
         derivedDollarRisk: to2dp(derivedDollarRisk!),

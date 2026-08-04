@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 
-import { CalculatorInputSchema, calculateTrade } from '@tradr/shared';
+import { BuyingPowerBasisBodySchema, CalculatorInputSchema, calculateTrade } from '@tradr/shared';
 
+import { db } from '@/db';
 import { ValidationError } from '@/lib/errors';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
+
+import { getBuyingPowerBasis, setBuyingPowerBasis } from './calculator.query';
 
 type AuthEnv = {
   Variables: {
@@ -30,13 +33,15 @@ calculatorRouter.use(authMiddleware);
  *       basis: a direct `dollarRisk`, OR a `balance` + `riskPercent` (the dollar
  *       risk is then derived as `balance × riskPercent ÷ 100` at full precision).
  *       Supplying both bases, or neither, is a 400. In the percent basis the
- *       position size is also capped to what the balance can fund at entry
- *       (`floor(balance ÷ (entry × multiplier))`); the three percent-only response
- *       fields (`derivedDollarRisk`, `sizingStatus`, `buyingPowerLimited`) are
- *       absent from dollar-basis results. Non-sizing outcomes (non-positive
- *       balance, derived risk over the ceiling, insufficient risk, balance funds
- *       zero units) are valid **200**s with `positionSize: 0` and a `sizingStatus`
- *       discriminator — not 400s.
+ *       position size is also capped to what the account can fund at entry —
+ *       `floor(buyingPower ÷ (entry × multiplier))`, falling back to `balance`
+ *       when `buyingPower` is omitted. The risk budget is always a percent of
+ *       `balance`; only the cap consults `buyingPower`. The three percent-only
+ *       response fields (`derivedDollarRisk`, `sizingStatus`,
+ *       `buyingPowerLimited`) are absent from dollar-basis results. Non-sizing
+ *       outcomes (non-positive balance, derived risk over the ceiling,
+ *       insufficient risk, cap basis funds zero units) are valid **200**s with
+ *       `positionSize: 0` and a `sizingStatus` discriminator — not 400s.
  *     tags: [Calculator]
  *     requestBody:
  *       required: true
@@ -60,13 +65,26 @@ calculatorRouter.use(authMiddleware);
  *               balance:
  *                 type: string
  *                 description: >
- *                   Percent-basis balance to size against and cap against.
- *                   Sign-agnostic finite decimal within the account-balance domain
- *                   (a losing account's balance can be ≤ 0). Percent basis requires
- *                   both `balance` and `riskPercent`.
+ *                   Percent-basis balance the RISK BUDGET is derived from, and the
+ *                   default basis for the buying-power cap. Sign-agnostic finite
+ *                   decimal within the account-balance domain (a losing account's
+ *                   balance can be ≤ 0). Percent basis requires both `balance` and
+ *                   `riskPercent`.
+ *               buyingPower:
+ *                 type: string
+ *                 description: >
+ *                   Optional percent-basis figure the BUYING-POWER CAP is computed
+ *                   against, when it should not be `balance`. Absent ⇒ the cap uses
+ *                   `balance` (the original behaviour). Supply an account's `cash`
+ *                   here to stop the calculator sizing a position the account
+ *                   cannot fund: total equity overstates fundable capital by
+ *                   whatever is already deployed. Sign-agnostic — a fully-deployed
+ *                   or margined account can present ≤ 0 cash, which yields
+ *                   `sizingStatus: buying-power-zero`. Never affects the risk
+ *                   budget.
  *               riskPercent:
  *                 type: string
- *                 description: Percent of balance to risk (0 < p ≤ 100).
+ *                 description: Percent of `balance` to risk (0 < p ≤ 100). Always a percent of balance, never of `buyingPower`.
  *               targetPrice: { type: string, description: Optional positive decimal for R:R. }
  *               feeSchedule: { type: object, description: Optional brokerage fee schedule (mutually exclusive with manualFees). }
  *               manualFees: { type: string, description: Optional flat fee estimate (mutually exclusive with feeSchedule). }
@@ -94,5 +112,90 @@ calculatorRouter.post('/', validate('json', CalculatorInputSchema), async (c) =>
     throw new ValidationError(message);
   }
 });
+
+// ---------------------------------------------------------------------------
+// User buying-power basis
+//
+// A stored preference, unlike POST /api/calculator above, which stays a pure
+// function of its request body. The preference decides which account figure a
+// CLIENT sends as `buyingPower`; the calculation itself never reads it. Keeping
+// the sizing endpoint stateless means an API consumer picks its own basis
+// explicitly rather than inheriting a setting it cannot see.
+//
+// It gets its OWN router because the per-preference convention is an absolute
+// `/api/users/me/<preference>` path — as with `/users/me/display-currency`
+// (accounting) and `/users/me/tax-jurisdiction` (expenses) — and those live on
+// routers mounted bare at `/api`. `calculatorRouter` is mounted at
+// `/api/calculator`, so a `/users/me/...` path declared on it would resolve to
+// `/api/calculator/users/me/...`. Mounted at `/api` in app.ts.
+// ---------------------------------------------------------------------------
+
+export const calculatorPreferencesRouter = new Hono<AuthEnv>();
+
+calculatorPreferencesRouter.use(authMiddleware);
+
+/**
+ * @swagger
+ * /api/users/me/buying-power-basis:
+ *   get:
+ *     summary: Get the calculator's buying-power basis.
+ *     description: >
+ *       Authed. Which account figure the position-sizing calculator caps position
+ *       size against — `cash` (balance less the cost basis of open positions) or
+ *       `balance` (total equity). Never null; the column defaults to `cash`.
+ *     tags: [Calculator]
+ *     responses:
+ *       200:
+ *         description: The stored basis.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 basis: { type: string, enum: [cash, balance], example: cash }
+ *       401: { description: Authentication required. }
+ */
+calculatorPreferencesRouter.get('/users/me/buying-power-basis', async (c) => {
+  const userId = c.get('userId');
+  const basis = await getBuyingPowerBasis(db, userId);
+  return c.json({ basis }, 200);
+});
+
+/**
+ * @swagger
+ * /api/users/me/buying-power-basis:
+ *   put:
+ *     summary: Set the calculator's buying-power basis.
+ *     description: >
+ *       Authed. `cash` caps position size at what the account can actually deploy;
+ *       `balance` caps at total equity, which overstates fundable capital by
+ *       whatever is already tied up in open positions. Affects only the cap — the
+ *       risk budget stays `riskPercent × balance` either way. Changes nothing
+ *       stored beyond the preference itself.
+ *     tags: [Calculator]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [basis]
+ *             properties:
+ *               basis: { type: string, enum: [cash, balance] }
+ *     responses:
+ *       200: { description: The stored basis. }
+ *       400: { description: Not one of cash | balance. }
+ *       401: { description: Authentication required. }
+ */
+calculatorPreferencesRouter.put(
+  '/users/me/buying-power-basis',
+  validate('json', BuyingPowerBasisBodySchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { basis } = c.req.valid('json');
+    await setBuyingPowerBasis(db, userId, basis);
+    return c.json({ basis }, 200);
+  },
+);
 
 export default calculatorRouter;

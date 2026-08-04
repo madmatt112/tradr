@@ -19,7 +19,9 @@ import passwordResetRouter from '@/features/auth/password-reset.route';
 import verificationRouter from '@/features/auth/verification.route';
 import { billingRouter, billingWebhookRouter } from '@/features/billing/billing.route';
 import brokeragesRouter from '@/features/brokerages/brokerages.route';
-import calculatorRouter from '@/features/calculator/calculator.route';
+import calculatorRouter, {
+  calculatorPreferencesRouter,
+} from '@/features/calculator/calculator.route';
 import { changelogRouter } from '@/features/changelog/changelog.route';
 import { initChangelogCache } from '@/features/changelog/changelog.service';
 import csvImport from '@/features/csv-import/csv-import.route';
@@ -97,6 +99,9 @@ app.route('/api/positions', positions);
 app.route('/api/positions', fillsRouter);
 app.route('/api/performance', performance);
 app.route('/api/symbols', symbolsRouter);
+// Mounted bare at /api so it can own the absolute /api/users/me/buying-power-basis
+// path, matching the accounting and expenses preference routes below.
+app.route('/api', calculatorPreferencesRouter);
 app.route('/api', accountingRouter);
 app.route('/api', expensesRouter);
 

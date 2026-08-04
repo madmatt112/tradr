@@ -226,6 +226,17 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route('**/api/users/me/display-currency', (route) =>
     route.fulfill(json({ currency: 'USD' })),
   );
+  // Mounted by the settings Profile tab and by CalculatorForm (which the
+  // dashboard's position-sizing widget embeds), so it is app-shell surface.
+  //
+  // Leaving it unmocked does NOT merely skip a fetch: the request falls through
+  // to the real API, which does not recognise the mocked session, and the api
+  // client's global 401 handler navigates the whole app to /login. The symptom
+  // is an unrelated assertion failing on a page that silently became the login
+  // (or previous) route.
+  await page.route('**/api/users/me/buying-power-basis', (route) =>
+    route.fulfill(json({ basis: 'cash' })),
+  );
   // Quick Stats tab fetches /performance; the route-under-test mock (registered
   // later by the performance specs) overrides this benign empty default.
   await page.route(/\/api\/performance(\?.*)?$/, (route) =>

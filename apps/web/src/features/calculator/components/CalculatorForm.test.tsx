@@ -23,6 +23,10 @@ const state = vi.hoisted(() => ({
   brokerages: {
     current: { data: [], isLoading: false, isError: false } as Record<string, unknown>,
   },
+  // Which account figure the buying-power cap sizes against. Mocked rather than
+  // left to fall through, so the two bases are both reachable and neither test
+  // depends on an unresolved query defaulting.
+  buyingPowerBasis: { current: { data: { basis: 'cash' } } as Record<string, unknown> },
 }));
 
 vi.mock('@/features/accounts/hooks/useAccounts', () => ({
@@ -30,6 +34,9 @@ vi.mock('@/features/accounts/hooks/useAccounts', () => ({
 }));
 vi.mock('@/features/brokerages/hooks/useBrokerages', () => ({
   useBrokerages: () => state.brokerages.current,
+}));
+vi.mock('@/features/calculator/hooks/useBuyingPowerBasis', () => ({
+  useBuyingPowerBasisQuery: () => state.buyingPowerBasis.current,
 }));
 
 // Stub the shadcn Select primitive as a native <select> so options are clickable
@@ -254,6 +261,7 @@ async function fillPercentBasis(
 beforeEach(() => {
   setAccounts({ data: [] });
   state.brokerages.current = { data: [], isLoading: false, isError: false };
+  state.buyingPowerBasis.current = { data: { basis: 'cash' } };
 });
 
 afterEach(() => {
@@ -623,5 +631,104 @@ describe('CalculatorForm — option contract hand-off (REQ-6.3/6.5)', () => {
 
     expect(screen.getByText('no-occ-row')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Use/ })).toBeNull();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Buying-power cap basis (calculator-balance-sizing)
+//
+// The account below is the shape the whole feature exists for: $5,000 of equity
+// with $4,000 already deployed, so only $1,000 is actually fundable. Entry $50 /
+// stop $48 at 1% risk gives a 25-share budget ($1,250) that the balance would
+// happily fund and the cash would not.
+// -----------------------------------------------------------------------------
+
+const DEPLOYED_ACCOUNT = {
+  id: 'acc-deployed',
+  name: 'Mostly Deployed',
+  currency: 'USD',
+  balance: '5000',
+  cash: '1000',
+  positionValue: '4000',
+};
+
+async function sizeAgainst(user: User, account: Record<string, unknown>): Promise<void> {
+  setAccounts({ data: [account] });
+  await mount();
+  await switchBasis(user, 'Percent');
+  fill('Entry price', '50');
+  fill('Stop loss', '48');
+  fill('Risk percent', '1');
+  fireEvent.change(selectByOptionValue(account.id as string), {
+    target: { value: account.id as string },
+  });
+  fireEvent.blur(input('Risk percent'));
+}
+
+describe('CalculatorForm — buying-power cap basis', () => {
+  it('caps at the account cash under the default basis', async () => {
+    const user = userEvent.setup();
+    await sizeAgainst(user, DEPLOYED_ACCOUNT);
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    // 20 shares = floor($1,000 cash / $50), not the 25 the budget alone allows.
+    expect(screen.getByText('20')).toBeTruthy();
+    expect(screen.getByText(/limited by account buying power/i)).toBeTruthy();
+    // The risk budget is untouched — still 1% of the BALANCE, not of cash.
+    expect(screen.getAllByText(fmtMoney(50)).length).toBeGreaterThan(0);
+  });
+
+  it('caps at the balance under the balance basis, funding more than the cash', async () => {
+    const user = userEvent.setup();
+    state.buyingPowerBasis.current = { data: { basis: 'balance' } };
+    await sizeAgainst(user, DEPLOYED_ACCOUNT);
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    // The full 25-share budget: $1,250 of stock against $1,000 of cash.
+    expect(screen.getByText('25')).toBeTruthy();
+    expect(screen.queryByText(/limited by account buying power/i)).toBeNull();
+  });
+
+  it('explains the cap on the form so it is not an unexplained smaller number', async () => {
+    const user = userEvent.setup();
+    await sizeAgainst(user, DEPLOYED_ACCOUNT);
+
+    const note = screen.getByTestId('cap-basis-note');
+    expect(note.textContent).toContain(fmtMoney(1000));
+    expect(note.textContent).toMatch(/percent of the balance/i);
+  });
+
+  it('shows no cap note under the balance basis', async () => {
+    const user = userEvent.setup();
+    state.buyingPowerBasis.current = { data: { basis: 'balance' } };
+    await sizeAgainst(user, DEPLOYED_ACCOUNT);
+
+    expect(screen.queryByTestId('cap-basis-note')).toBeNull();
+  });
+
+  it('falls back to the balance for an account with no cash figure', async () => {
+    // `cash` is optional on AccountSchema for fixtures predating the split.
+    const user = userEvent.setup();
+    await sizeAgainst(user, { ...DEPLOYED_ACCOUNT, cash: undefined });
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    expect(screen.getByText('25')).toBeTruthy();
+    expect(screen.queryByTestId('cap-basis-note')).toBeNull();
+  });
+
+  it('caps against the typed figure alone when the balance is hand-entered', async () => {
+    // No account selected ⇒ no cash figure exists ⇒ the cap is the balance.
+    const user = userEvent.setup();
+    await mount();
+    await fillPercentBasis(user, {
+      entry: '50',
+      stop: '48',
+      balance: '5000',
+      riskPercent: '1',
+    });
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    expect(screen.getByText('25')).toBeTruthy();
+    expect(screen.queryByTestId('cap-basis-note')).toBeNull();
   });
 });

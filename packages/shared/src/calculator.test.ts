@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { calculateTrade } from './calculator';
 import type { FeeScheduleInput } from './fees';
-import { DOLLAR_RISK_MAX, PRICE_MAX } from './schemas/calculator';
+import { CalculatorInputSchema, DOLLAR_RISK_MAX, PRICE_MAX } from './schemas/calculator';
 import type { CalculatorInput } from './schemas/calculator';
 
 const zeroFeeSchedule: FeeScheduleInput = {
@@ -436,5 +436,126 @@ describe('calculateTrade — percent basis outcomes', () => {
     expect(result.buyingPowerLimited).toBe(true);
     expect(result.actualDollarRisk).toBe('1200.00'); // 2 × 6 × 100
     expect(result.totalPositionValue).toBe('30000.00'); // 50 × 6 × 100
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buyingPower — a separate basis for the CAP only
+// ---------------------------------------------------------------------------
+//
+// `balance` answers two different questions and only one is about equity:
+//   risk budget → balance   "risk 1% of my account" means 1% of equity
+//   cap         → cash      "can I afford this" means liquid funds
+// Using equity for the cap overstates it by whatever is already deployed.
+
+describe('calculateTrade — buyingPower cap basis', () => {
+  it('caps against buyingPower while the risk budget stays on balance', () => {
+    // $5,000 equity with $4,000 deployed ⇒ $1,000 cash. entry 50 / stop 48, risk 1%.
+    //   budget = 1% × 5000 = 50 → floor(50 / 2) = 25 shares
+    //   cap    = floor(1000 / 50) = 20   ← the binding constraint
+    const result = calculateTrade(
+      percentInput({ balance: '5000', riskPercent: '1', buyingPower: '1000' }),
+    );
+    expect(result.positionSize).toBe(20);
+    expect(result.buyingPowerLimited).toBe(true);
+    // The budget is unchanged — it is still a percent of the BALANCE. Sizing
+    // the budget off cash instead would have given floor(10 / 2) = 5 shares.
+    expect(result.derivedDollarRisk).toBe('50.00');
+    expect(result.totalPositionValue).toBe('1000.00');
+  });
+
+  it('reproduces the overshoot it exists to prevent when buyingPower is omitted', () => {
+    // Same account, same trade, no cap basis ⇒ the cap falls back to balance:
+    //   cap = floor(5000 / 50) = 100, so the 25-share budget is unconstrained
+    //   and the position costs $1,250 against $1,000 of actual cash.
+    const result = calculateTrade(percentInput({ balance: '5000', riskPercent: '1' }));
+    expect(result.positionSize).toBe(25);
+    expect(result.buyingPowerLimited).toBeUndefined();
+    expect(result.totalPositionValue).toBe('1250.00');
+  });
+
+  it('stays idle when buyingPower is ample', () => {
+    // cap = floor(50000 / 50) = 1000 ≥ the 25-share budget.
+    const result = calculateTrade(
+      percentInput({ balance: '5000', riskPercent: '1', buyingPower: '50000' }),
+    );
+    expect(result.positionSize).toBe(25);
+    expect(result.buyingPowerLimited).toBeUndefined();
+  });
+
+  it('returns buying-power-zero for a fully-deployed account with a healthy balance', () => {
+    // The case that motivates the whole feature: balance funds 100 shares,
+    // cash funds none. Keyed on cash, this is a zero — not a 2-share position.
+    const result = calculateTrade(
+      percentInput({ balance: '5000', riskPercent: '1', buyingPower: '0' }),
+    );
+    expect(result.positionSize).toBe(0);
+    expect(result.sizingStatus).toBe('buying-power-zero');
+    expect(result.derivedDollarRisk).toBe('50.00');
+  });
+
+  it('returns buying-power-zero for NEGATIVE buying power rather than a negative size', () => {
+    // floor(-500 / 50) = -10. The guard is `cap <= 0`; a `cap === 0` check
+    // would let this through and cap the position at -10 shares.
+    const result = calculateTrade(
+      percentInput({ balance: '5000', riskPercent: '1', buyingPower: '-500' }),
+    );
+    expect(result.positionSize).toBe(0);
+    expect(result.sizingStatus).toBe('buying-power-zero');
+  });
+
+  it('does not let a non-positive buyingPower mask a healthy balance check', () => {
+    // `nothing-to-size-against` is about the BALANCE and is resolved first;
+    // buyingPower never reaches that branch.
+    const result = calculateTrade(
+      percentInput({ balance: '0', riskPercent: '1', buyingPower: '10000' }),
+    );
+    expect(result.sizingStatus).toBe('nothing-to-size-against');
+  });
+
+  it('still prefers insufficient-risk over a zero cap', () => {
+    // budget = 0.50 → floor(0.5 / 2) = 0 shares, decided before the cap runs.
+    const result = calculateTrade(
+      percentInput({ balance: '50', riskPercent: '1', buyingPower: '0' }),
+    );
+    expect(result.positionSize).toBe(0);
+    expect(result.sizingStatus).toBeUndefined();
+  });
+
+  it('applies the options multiplier to the buyingPower cap', () => {
+    // budget = 1% × 100000 = 1000 → floor(1000 / (2 × 100)) = 5 contracts
+    // cap    = floor(20000 / (50 × 100)) = 4  ← without the ×100 it would be 400
+    const result = calculateTrade(
+      percentInput({
+        mode: 'options',
+        balance: '100000',
+        riskPercent: '1',
+        buyingPower: '20000',
+      }),
+    );
+    expect(result.positionSize).toBe(4);
+    expect(result.buyingPowerLimited).toBe(true);
+    expect(result.totalPositionValue).toBe('20000.00'); // 50 × 4 × 100
+  });
+
+  it('is ignored on the dollar basis, which has no cap at all', () => {
+    // dollarRisk 1000 / perUnitRisk 2 = 500 shares = $25,000 of stock, against
+    // a supplied buyingPower of $100. The dollar basis is uncapped by design
+    // and this change does not alter that.
+    const result = calculateTrade(baseInput({ buyingPower: '100' }));
+    expect(result.positionSize).toBe(500);
+    expect(result.buyingPowerLimited).toBeUndefined();
+    expect(result.sizingStatus).toBeUndefined();
+  });
+
+  it('treats an empty-string buyingPower as absent', () => {
+    // The shared optionalEmptyToUndefined preprocessing — a blank form field
+    // must not parse as 0 and zero every position.
+    const parsed = CalculatorInputSchema.parse({
+      ...percentInput({ balance: '5000', riskPercent: '1' }),
+      buyingPower: '',
+    });
+    expect(parsed.buyingPower).toBeUndefined();
+    expect(calculateTrade(parsed).positionSize).toBe(25);
   });
 });

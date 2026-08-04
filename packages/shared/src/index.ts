@@ -20,8 +20,18 @@ export type {
   PreviewRateChangeInput,
   PreviewRateChangeResponse,
 } from './schemas/accounting';
-export { CalculatorInputSchema, CalculatorOutputSchema } from './schemas/calculator';
-export type { CalculatorInput, CalculatorOutput } from './schemas/calculator';
+export {
+  BuyingPowerBasisBodySchema,
+  BuyingPowerBasisEnum,
+  CalculatorInputSchema,
+  CalculatorOutputSchema,
+} from './schemas/calculator';
+export type {
+  BuyingPowerBasis,
+  BuyingPowerBasisBody,
+  CalculatorInput,
+  CalculatorOutput,
+} from './schemas/calculator';
 export {
   SymbolSearchItemSchema,
   SymbolSearchResponseSchema,

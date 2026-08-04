@@ -169,6 +169,13 @@
       "when": 1785526351101,
       "tag": "0023_position_last_flat_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1785871256384,
+      "tag": "0024_user_buying_power_basis",
+      "breakpoints": true
     }
   ]
 }
