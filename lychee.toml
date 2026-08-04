@@ -1,0 +1,70 @@
+# Configuration for the outbound link check (.github/workflows/link-check.yml).
+#
+# Scope is deliberately OUTBOUND only. Links between doc pages are already
+# checked by starlightLinksValidator() during the docs build, which runs in the
+# required `checks` job; duplicating that here would mean two things to keep in
+# step and two places to silence a false positive.
+
+cache = true
+max_cache_age = "2d"
+
+# Other people's servers fail transiently. Retry before calling a link dead, so
+# the signal stays worth reading.
+max_retries = 3
+retry_wait_time = 2
+timeout = 20
+
+# Some hosts reject the default agent outright.
+user_agent = "Mozilla/5.0 (compatible; lychee link checker; +https://github.com/madmatt112/tradr)"
+
+# 429 is rate limiting, not rot. 403 is very often a bot wall (GitHub and
+# Cloudflare both do it) rather than a missing page.
+accept = ["200", "206", "429"]
+
+# Anchor checking stays off (lychee's default). It would need every target page
+# fetched and parsed, multiplying the request count for a class of breakage that
+# is not the one this exists to catch.
+
+exclude_path = [
+  "node_modules",
+  # The docs site's own pages. Their links are root-relative Starlight ROUTES
+  # (`/self-hosting/upgrades/`), not paths on disk, so lychee resolves them as
+  # broken files — 41 false failures for links that are correct.
+  # starlightLinksValidator() already checks these during the docs build and
+  # understands the routing; this job covers what nothing else does.
+  #
+  # Neither `scheme = ["http","https"]` nor an `exclude = ["^/"]` rule fixes it:
+  # the first drops the outbound links this exists to check while keeping the
+  # false failures, and the second never matches because the links are resolved
+  # to file paths before exclusion. Both measured.
+  #
+  # The cost is that outbound links INSIDE the docs pages go unchecked. Checking
+  # them needs the built HTML rather than the MDX source — worth doing, not done
+  # here.
+  "apps/docs/src",
+  "apps/docs/dist",
+  "apps/web/dist",
+  "pnpm-lock.yaml",
+  "CHANGELOG.md",
+]
+
+exclude = [
+  # Local and example hosts that appear throughout the self-hosting docs.
+  "^https?://localhost",
+  "^https?://127\\.0\\.0\\.1",
+  "^https?://0\\.0\\.0\\.0",
+  "^https?://.*\\.example\\.com",
+  "^https?://tradr\\.example\\.com",
+  "^https?://.*\\.local",
+  # Placeholders in configuration snippets.
+  "^https?://<",
+  "your-host",
+  "other-host",
+  "src-host",
+  "staging-host",
+  # The app's own hostname is not public yet — it 404s on purpose.
+  "^https://app\\.tradr\\.cloud",
+  # Vendor endpoints that answer only to an authenticated client.
+  "^https://api\\.github\\.com",
+  "^https://us\\.i\\.posthog\\.com",
+]

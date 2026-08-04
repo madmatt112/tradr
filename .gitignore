@@ -56,3 +56,6 @@ Thumbs.db
 .playwright-mcp/
 
 .codeindex/
+
+# lychee response cache (.github/workflows/link-check.yml)
+.lycheecache
