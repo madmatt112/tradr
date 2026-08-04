@@ -258,6 +258,11 @@ server needs different values. Leave the three secrets alone.
 - **The api crash-loops after a restore and names the encryption key** — the
   `.env` on this server carries a different `ENCRYPTION_KEY` than the data was
   written with. Restore the original `.env`.
+- **The api crash-loops with `password authentication failed for user "tradr"`** —
+  you regenerated `.env` against an existing volume. Postgres applies
+  `POSTGRES_PASSWORD` once, when it initialises the data directory, and ignores it
+  on every later start. Put the original password back, or destroy the volume and
+  restore from a dump.
 - **`docker compose exec` reports `no such service: postgres`** — you are not in
   the directory that holds `docker-compose.yml`.
 
