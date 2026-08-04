@@ -120,6 +120,22 @@ export function computePnlFromTotals(
     .times(exitQty.div(entryQty))
     .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
 
+  // `realizedPnl` rounds ONCE, at the end, over the fully-unrounded expression.
+  // Do not refactor this into `round(gross) − round(fees)`: rounding twice and
+  // then subtracting is NOT equivalent and shifts the result by a minor unit.
+  // Worked counter-example — gross 100.006, exit fees 0.004, USD:
+  //   round(100.006 − 0.004) = 100.00      (this expression)
+  //   round(100.006) − round(0.004) = 100.01
+  // Pinned by "rounds once at the end" in pnl.test.ts.
+  const realizedPnl = avgExitPrice!
+    .minus(avgEntryPrice)
+    .times(exitQty)
+    .times(sideMultiplier)
+    .times(contractMultiplier)
+    .minus(exitFees)
+    .minus(allocatedEntryFees)
+    .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
+
   const grossPnl = avgExitPrice!
     .minus(avgEntryPrice)
     .times(exitQty)
@@ -127,14 +143,11 @@ export function computePnlFromTotals(
     .times(contractMultiplier)
     .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
 
-  // Total fees recorded on the fills that this realization bears.
-  const totalFees = exitFees
-    .plus(allocatedEntryFees)
-    .toDecimalPlaces(currencyMinorUnits, Decimal.ROUND_HALF_UP);
-
-  // Derived from the rounded components so `grossPnl − fees === realizedPnl`
-  // holds exactly, rather than rounding the unrounded expression separately.
-  const realizedPnl = grossPnl.minus(totalFees);
+  // Derived as `gross − net`, NOT summed independently, so
+  // `grossPnl − fees === realizedPnl` holds exactly without perturbing
+  // `realizedPnl`. The breakdown absorbs the rounding residue; the money figure
+  // does not. This is the same convention `performance.service` already used.
+  const totalFees = grossPnl.minus(realizedPnl);
 
   // Return percentage denominator: avgEntryPrice × exitQty × contractMultiplier + allocatedEntryFees.
   // For short positions, this represents gross sale proceeds (notional sold), not margin requirement.
