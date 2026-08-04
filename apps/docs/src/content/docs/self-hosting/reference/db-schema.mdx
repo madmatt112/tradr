@@ -1,18 +1,582 @@
 ---
-title: "Database schema"
-description: "Tables, columns, and relations generated from the Drizzle schema."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Database schema
+description: Every table Tradr creates, its columns, and how they reference each other — generated from the Drizzle migration snapshot.
 ---
 
-Tables, columns, and relations generated from the Drizzle schema.
+{/* GENERATED FILE — do not edit.
+    Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
+Tradr's schema is **32 tables**, created by **24 migrations** that run
+automatically when the api boots. This page is generated from the Drizzle snapshot
+for the latest migration (`0023_position_last_flat_snapshot`), so it describes the schema the migrations
+actually produce.
+
+You do not need any of this to run Tradr. It is here for writing queries against
+your own data, and for reading the code.
+
+:::caution
+The schema is not a stable interface before 1.0. Migrations are forward-only and
+additive — see [Database & migrations](/self-hosting/explanation/migrations/) — but
+a query you write against these tables may need updating on any release.
 :::
+
+## Accounts and users
+
+### `users`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `email` | `varchar(255)` | not null |
+| `password_hash` | `varchar(255)` | not null |
+| `is_admin` | `boolean` | not null, default `false` |
+| `email_verified` | `boolean` | not null, default `true` |
+| `display_currency` | `varchar(3)` | — |
+| `tax_jurisdiction` | `varchar(8)` | — |
+| `theme` | `varchar(8)` | not null, default `'system'` |
+| `advisor_default_persona_id` | `text` | — |
+| `advisor_trade_data_consent` | `boolean` | not null, default `false` |
+| `writable_account_id` | `uuid` | — |
+| `changelog_viewed_at` | `timestamp with time zone` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+### `sessions`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `token_hash` | `varchar(128)` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `last_accessed` | `timestamp with time zone` | not null, default `now()` |
+| `expires_at` | `timestamp with time zone` | not null |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `email_tokens`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `purpose` | `varchar(32)` | not null |
+| `token_hash` | `varchar(128)` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `expires_at` | `timestamp with time zone` | not null |
+| `consumed_at` | `timestamp with time zone` | — |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `accounts`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `name` | `varchar(100)` | not null |
+| `currency` | `varchar(3)` | not null |
+| `timezone` | `varchar(64)` | not null, default `'America/New_York'` |
+| `brokerage_id` | `uuid` | — |
+| `starting_balance` | `numeric(18, 4)` | not null, default `'0'` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `brokerage_id` → `brokerages.id` on delete restrict
+
+### `brokerages`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | — |
+| `name` | `varchar(100)` | not null |
+| `notes` | `text` | — |
+| `is_system` | `boolean` | not null, default `false` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `fee_schedules`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `brokerage_id` | `uuid` | not null |
+| `stock_per_share_commission` | `numeric(18, 8)` | not null, default `'0'` |
+| `stock_min_per_fill` | `numeric(18, 8)` | not null, default `'0'` |
+| `stock_max_per_fill` | `numeric(18, 8)` | not null, default `'0'` |
+| `options_per_contract_commission` | `numeric(18, 8)` | not null, default `'0'` |
+| `options_per_contract_exchange_fee` | `numeric(18, 8)` | not null, default `'0'` |
+| `options_min_per_fill` | `numeric(18, 8)` | not null, default `'0'` |
+| `options_max_per_fill` | `numeric(18, 8)` | not null, default `'0'` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `brokerage_id` → `brokerages.id` on delete cascade
+
+## Trading
+
+### `positions`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `account_id` | `uuid` | not null |
+| `symbol` | `varchar(20)` | not null |
+| `side` | `varchar(5)` | not null |
+| `asset_type` | `varchar(6)` | not null |
+| `status` | `varchar(6)` | not null, default `'draft'` |
+| `notes` | `text` | — |
+| `target_price` | `numeric(18, 8)` | — |
+| `stop_loss` | `numeric(18, 8)` | — |
+| `opened_at` | `timestamp with time zone` | — |
+| `closed_at` | `timestamp with time zone` | — |
+| `last_flat_at` | `timestamp with time zone` | — |
+| `last_flat_net_pnl` | `numeric(18, 4)` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `account_id` → `accounts.id` on delete restrict
+
+### `fills`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `position_id` | `uuid` | not null |
+| `type` | `varchar(5)` | not null |
+| `price` | `numeric(18, 8)` | not null |
+| `quantity` | `numeric(18, 8)` | not null |
+| `fees` | `numeric(18, 8)` | not null, default `'0'` |
+| `notes` | `text` | — |
+| `filled_at` | `timestamp with time zone` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `position_id` → `positions.id` on delete cascade
+
+## Money
+
+### `ledger_entries`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `account_id` | `uuid` | not null |
+| `position_id` | `uuid` | — |
+| `entry_type` | `varchar(32)` | not null |
+| `direction` | `varchar(6)` | not null |
+| `amount` | `numeric(18, 4)` | not null |
+| `currency` | `varchar(3)` | not null |
+| `symbol` | `varchar(20)` | — |
+| `occurred_at` | `timestamp with time zone` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `group_id` | `uuid` | not null |
+| `reverses_group_id` | `uuid` | — |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `account_id` → `accounts.id` on delete restrict
+- `position_id` → `positions.id` on delete set null
+
+### `expenses`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `category` | `varchar(32)` | not null |
+| `description` | `varchar(200)` | not null |
+| `amount` | `numeric(18, 4)` | not null |
+| `currency` | `varchar(3)` | not null |
+| `occurred_at` | `date` | not null |
+| `notes` | `text` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `exchange_rates`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `base_currency` | `varchar(3)` | not null |
+| `quote_currency` | `varchar(3)` | not null |
+| `rate` | `numeric(24, 12)` | not null |
+| `effective_date` | `date` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `wallets`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | primary key |
+| `balance` | `bigint` | not null, default `0` |
+| `reserved` | `bigint` | not null, default `0` |
+| `reserved_at` | `timestamp with time zone` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `wallet_transactions`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `kind` | `text` | not null |
+| `amount` | `bigint` | not null |
+| `balance_after` | `bigint` | not null |
+| `stripe_event_id` | `text` | — |
+| `stripe_payment_intent_id` | `text` | — |
+| `usage_record_id` | `uuid` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `usage_record_id` → `usage_records.id` on delete no action
+
+## Advisor
+
+### `advisor_conversations`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `title` | `varchar(200)` | not null |
+| `persona_id` | `text` | — |
+| `provider_id` | `varchar(16)` | not null |
+| `model` | `varchar(64)` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `persona_id` → `advisor_personas.id` on delete set null
+
+### `advisor_messages`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `conversation_id` | `uuid` | not null |
+| `role` | `varchar(16)` | not null |
+| `content_parts` | `jsonb` | not null |
+| `prompt_tokens` | `integer` | — |
+| `completion_tokens` | `integer` | — |
+| `client_message_id` | `uuid` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `conversation_id` → `advisor_conversations.id` on delete cascade
+
+### `advisor_summaries`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `conversation_id` | `uuid` | not null |
+| `prose` | `text` | not null |
+| `trade_data_figures` | `text` | — |
+| `covered_through_message_id` | `uuid` | — |
+| `covered_through_created_at` | `timestamp with time zone` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `conversation_id` → `advisor_conversations.id` on delete cascade
+
+### `advisor_personas`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `text` | primary key |
+| `user_id` | `uuid` | — |
+| `name` | `varchar(80)` | not null |
+| `description` | `varchar(500)` | — |
+| `system_prompt` | `text` | not null |
+| `is_builtin` | `boolean` | not null, default `false` |
+| `is_default` | `boolean` | not null, default `false` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `advisor_provider_keys`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `provider_id` | `varchar(16)` | not null |
+| `encrypted_key` | `text` | not null |
+| `key_version` | `smallint` | not null |
+| `default_model` | `varchar(64)` | not null |
+| `key_hint_tail` | `varchar(8)` | not null |
+| `last_used_at` | `timestamp with time zone` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `advisor_turn_counters`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | not null |
+| `period_key` | `varchar(7)` | not null |
+| `turn_count` | `integer` | not null, default `0` |
+| `allowance_turns` | `integer` | not null, default `0` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `advisor_image_counters`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | not null |
+| `period_key` | `varchar(7)` | not null |
+| `image_count` | `integer` | not null, default `0` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+## Import
+
+### `csv_import_staging`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `account_id` | `uuid` | not null |
+| `status` | `varchar(12)` | not null, default `'staged'` |
+| `result` | `jsonb` | not null |
+| `committed_result` | `jsonb` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `expires_at` | `timestamp with time zone` | not null |
+| `claimed_at` | `timestamp with time zone` | — |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `account_id` → `accounts.id` on delete cascade
+
+### `csv_import_counters`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | primary key |
+| `committed_count` | `integer` | not null, default `0` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+## Billing
+
+### `billing_customers`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | primary key |
+| `stripe_customer_id` | `text` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `subscriptions`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `stripe_customer_id` | `text` | not null |
+| `stripe_subscription_id` | `text` | not null |
+| `status` | `text` | not null |
+| `cancel_at_period_end` | `boolean` | not null, default `false` |
+| `current_period_end` | `timestamp with time zone` | not null |
+| `price_id` | `text` | — |
+| `price_unit_amount` | `integer` | — |
+| `price_currency` | `text` | — |
+| `stripe_created_at` | `timestamp with time zone` | not null |
+| `entered_past_due_at` | `timestamp with time zone` | — |
+| `last_event_created` | `timestamp with time zone` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `usage_records`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `conversation_id` | `uuid` | — |
+| `message_id` | `uuid` | — |
+| `provider_id` | `varchar(16)` | not null |
+| `model` | `varchar(64)` | not null |
+| `input_tokens` | `bigint` | not null |
+| `output_tokens` | `bigint` | not null |
+| `credit_cost` | `bigint` | not null |
+| `raw_cost` | `bigint` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `conversation_id` → `advisor_conversations.id` on delete set null
+- `message_id` → `advisor_messages.id` on delete set null
+
+### `webhook_events`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `stripe_event_id` | `text` | not null |
+| `event_type` | `text` | not null |
+| `status` | `text` | not null |
+| `received_at` | `timestamp with time zone` | not null, default `now()` |
+| `completed_at` | `timestamp with time zone` | — |
+| `error` | `text` | — |
+
+## Platform
+
+### `symbols`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `ticker` | `varchar(16)` | primary key |
+| `name` | `varchar(200)` | not null |
+| `exchange` | `varchar(16)` | not null |
+| `cik` | `integer` | — |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+### `symbol_sync_state`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `smallint` | primary key |
+| `last_synced_at` | `timestamp with time zone` | — |
+| `syncing` | `boolean` | not null, default `false` |
+| `syncing_started_at` | `timestamp with time zone` | — |
+| `symbol_count` | `integer` | — |
+| `last_error` | `text` | — |
+
+### `dashboard_layouts`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | primary key |
+| `widgets` | `jsonb` | not null, default `'[]'::jsonb` |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `external_api_keys`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `provider` | `varchar(32)` | not null |
+| `encrypted_key` | `text` | not null |
+| `key_version` | `smallint` | not null |
+| `key_hint_tail` | `varchar(8)` | not null |
+| `verified` | `boolean` | not null, default `false` |
+| `last_used_at` | `timestamp with time zone` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `admin_audit_log`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `action` | `text` | not null |
+| `actor_user_id` | `uuid` | — |
+| `actor_email` | `varchar(255)` | not null |
+| `target_user_id` | `uuid` | — |
+| `target_email` | `varchar(255)` | not null |
+| `old_value` | `boolean` | not null |
+| `new_value` | `boolean` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `actor_user_id` → `users.id` on delete set null
+- `target_user_id` → `users.id` on delete set null
+
+### `_post_migrations_journal`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `filename` | `text` | primary key |
+| `applied_at` | `timestamp with time zone` | not null, default `now()` |
+
+## Next steps
+
+- [Database & migrations](/self-hosting/explanation/migrations/) — how the schema changes.
+- [Back up and restore](/self-hosting/backup-restore/) — a `pg_dump` captures all of this.
+- [Architecture overview](/self-hosting/explanation/architecture/) — where the database sits.

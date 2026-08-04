@@ -1,0 +1,212 @@
+#!/usr/bin/env node
+// Generates the `tradr` CLI reference from the CLI's own usage block.
+//
+// The synopsis lines come from `USAGE` in apps/api/src/cli/tradr.ts — the same
+// array the binary prints — so the documented commands and the real ones cannot
+// disagree. What a command MEANS is prose, and prose cannot be derived from a
+// usage string, so it lives in DETAILS below.
+//
+// The coupling is deliberate and enforced in both directions:
+//
+//   a command in USAGE with no DETAILS entry  -> this generator fails
+//   a DETAILS entry with no command in USAGE  -> this generator fails
+//
+// So adding a subcommand forces its documentation in the same change, and CI
+// fails on the omission rather than publishing a reference that is quietly short
+// a command. That is the failure this whole generator exists to prevent: the
+// pre-existing page listed the CLI as having four subcommands with no mechanism
+// keeping that true.
+//
+// Usage: node scripts/gen-cli.mjs
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(scriptDir, '../../..');
+const CLI_SOURCE = join(repoRoot, 'apps/api/src/cli/tradr.ts');
+const OUT = join(scriptDir, '../src/content/docs/self-hosting/reference/cli.mdx');
+
+/** Keyed by the command word(s) preceding any <placeholder> or --flag. */
+const DETAILS = {
+  'migrate --status': {
+    title: 'migrate --status',
+    summary: 'Report whether the database schema is current.',
+    body: [
+      'Reads both migration journals and prints what is applied and what is pending.',
+      'It opens its own read-only connection and never takes the migration advisory',
+      'lock, so it is safe to run against a live instance.',
+      '',
+      '```bash',
+      'docker compose exec api tradr migrate --status',
+      '```',
+      '',
+      '**Expected result:** exit code 0, ending in `Schema is up to date.`',
+      '',
+      '| Exit code | Meaning |',
+      '| --- | --- |',
+      '| 0 | The schema is current. |',
+      '| 1 | Migrations are pending on at least one track. |',
+      '| 2 | The command cannot reach the database. |',
+      '',
+      'The exit codes make it usable as a health gate in a deploy script. See',
+      '[Database & migrations](/self-hosting/explanation/migrations/).',
+    ],
+  },
+  'reset-password': {
+    title: 'reset-password <email> [--password <value>]',
+    summary: "Set a user's password from the server.",
+    body: [
+      'The recovery path on an instance with no email configured. Without SMTP there',
+      'is no self-service reset, so the operator sets the password directly.',
+      '',
+      '```bash',
+      'docker compose exec api tradr reset-password someone@example.com',
+      '```',
+      '',
+      '**Expected result:** exit code 0, and a generated password printed to stdout.',
+      'Pass `--password <value>` to choose one instead of having it generated.',
+      '',
+      'The command does **not** mark the account verified — running a command proves',
+      'nothing about the mailbox. It does not sign existing sessions out either.',
+      '',
+      'It exits 1 when no account matches the email, and 2 when it cannot reach the',
+      'database.',
+    ],
+  },
+  'storage migrate-to-inline': {
+    title: 'storage migrate-to-inline',
+    summary: 'Pull advisor images out of object storage and back into the database.',
+    body: [
+      'Only relevant if object storage was configured and you want to turn it off.',
+      'It rewrites every image that lives as a bucket pointer back to inline data, so',
+      'the backend can be disabled without stranding a conversation.',
+      '',
+      '```bash',
+      'docker compose exec api tradr storage migrate-to-inline',
+      '```',
+      '',
+      'The command is idempotent and resumable — run it again after a failure. An',
+      'image whose object has gone missing is marked unrecoverable and the run',
+      'continues rather than aborting.',
+      '',
+      '**Self-hosted instances do not need this.** With no object storage configured,',
+      'advisor images are already stored inline.',
+    ],
+  },
+  'storage gc': {
+    title: 'storage gc',
+    summary: 'Delete bucket objects no conversation references any more.',
+    body: [
+      'Reclaims objects orphaned by deleted conversations and retried uploads. Like',
+      '`migrate-to-inline`, it applies only to an instance with object storage',
+      'configured.',
+      '',
+      '```bash',
+      'docker compose exec api tradr storage gc',
+      '```',
+      '',
+      'The sweep is age-guarded: it never reaps an object young enough to belong to a',
+      'request still in flight.',
+    ],
+  },
+};
+
+/** Extract the `tradr …` synopsis lines from the CLI's USAGE array. */
+function parseUsage(source) {
+  const block = source.match(/const USAGE = \[([\s\S]*?)\];/);
+  if (!block) {
+    throw new Error('gen-cli: could not find the USAGE array in tradr.ts — generator is stale');
+  }
+  const commands = [...block[1].matchAll(/^\s*'\s*tradr (.+?)',?\s*$/gm)].map((m) => m[1].trim());
+  if (commands.length === 0) {
+    throw new Error('gen-cli: parsed no commands from USAGE — generator is stale');
+  }
+  return commands;
+}
+
+/**
+ * The DETAILS key for a synopsis line: the command words, without arguments.
+ *
+ * Keeps the words up to the first `<placeholder>` or `[optional]` rather than
+ * stripping those out. Same result, and it avoids a strip-the-brackets pass that
+ * reads as sanitization — CodeQL flags that shape (js/incomplete-multi-character-
+ * sanitization), and it is right to: a nested `<a<b>>` survives one pass. Taking
+ * a prefix cannot leave anything behind.
+ */
+function keyFor(synopsis) {
+  const words = [];
+  for (const word of synopsis.trim().split(/\s+/)) {
+    if (word.startsWith('<') || word.startsWith('[')) break;
+    words.push(word);
+  }
+  return words.join(' ');
+}
+
+const source = readFileSync(CLI_SOURCE, 'utf8');
+const commands = parseUsage(source);
+
+const keys = commands.map(keyFor);
+const undocumented = keys.filter((k) => !(k in DETAILS));
+if (undocumented.length > 0) {
+  throw new Error(
+    `gen-cli: these commands exist in tradr.ts but have no DETAILS entry: ${undocumented.join(', ')}. ` +
+      'Document them in apps/docs/scripts/gen-cli.mjs.',
+  );
+}
+const orphaned = Object.keys(DETAILS).filter((k) => !keys.includes(k));
+if (orphaned.length > 0) {
+  throw new Error(
+    `gen-cli: these DETAILS entries no longer exist in tradr.ts: ${orphaned.join(', ')}.`,
+  );
+}
+
+const out = [];
+out.push('---');
+out.push('title: CLI reference (tradr)');
+out.push(
+  'description: The tradr command-line tool that ships inside the api container — migration status, password recovery, and object-storage maintenance.',
+);
+out.push('---');
+out.push('');
+out.push('{/* GENERATED FILE — do not edit.');
+out.push('    Source: apps/api/src/cli/tradr.ts · Generator: apps/docs/scripts/gen-cli.mjs');
+out.push('    Command descriptions live in the generator. */}');
+out.push('');
+out.push('The api image ships a `tradr` command for the jobs that need a server, not a');
+out.push('browser. Run it inside the running container:');
+out.push('');
+out.push('```bash');
+out.push('docker compose exec api tradr --help');
+out.push('```');
+out.push('');
+out.push(`**Expected result:** exit code 0, and the ${commands.length} commands below.`);
+out.push('');
+out.push('| Command | Does |');
+out.push('| --- | --- |');
+for (const command of commands) {
+  const detail = DETAILS[keyFor(command)];
+  out.push(`| \`tradr ${command}\` | ${detail.summary} |`);
+}
+out.push('');
+out.push('Every command exits **2** when it cannot reach the database, so a wrapper script');
+out.push('can tell "it failed" from "it could not run".');
+out.push('');
+
+for (const command of commands) {
+  const detail = DETAILS[keyFor(command)];
+  out.push(`## \`${detail.title}\``);
+  out.push('');
+  out.push(...detail.body);
+  out.push('');
+}
+
+out.push('## Next steps');
+out.push('');
+out.push('- [Upgrade an instance](/self-hosting/upgrades/) — where `migrate --status` fits.');
+out.push('- [Database & migrations](/self-hosting/explanation/migrations/) — what the two tracks are.');
+out.push('- [Environment variables](/self-hosting/reference/env-vars/) — the configuration surface.');
+out.push('');
+
+writeFileSync(OUT, out.join('\n'));
+console.log(`gen-cli: wrote ${OUT} (${commands.length} commands).`);

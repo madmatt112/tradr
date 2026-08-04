@@ -8,7 +8,12 @@
     "build": "astro build",
     "preview": "astro preview",
     "check-types": "astro check",
-    "openapi:generate": "node scripts/gen-openapi.mjs"
+    "openapi:generate": "node scripts/gen-openapi.mjs",
+    "env-vars:generate": "node scripts/gen-env-vars.mjs",
+    "cli:generate": "node scripts/gen-cli.mjs",
+    "plan-limits:generate": "node scripts/gen-plan-limits.mjs",
+    "db-schema:generate": "node scripts/gen-db-schema.mjs",
+    "reference:generate": "pnpm env-vars:generate && pnpm cli:generate && pnpm plan-limits:generate && pnpm db-schema:generate"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "^0.3.4",

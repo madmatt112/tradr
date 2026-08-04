@@ -1,18 +1,102 @@
 ---
-title: "CLI reference (tradr)"
-description: "tradr migrate --status, tradr storage migrate-to-inline, tradr storage gc, and tradr reset-password."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: CLI reference (tradr)
+description: The tradr command-line tool that ships inside the api container — migration status, password recovery, and object-storage maintenance.
 ---
 
-tradr migrate --status, tradr storage migrate-to-inline, tradr storage gc, and tradr reset-password.
+{/* GENERATED FILE — do not edit.
+    Source: apps/api/src/cli/tradr.ts · Generator: apps/docs/scripts/gen-cli.mjs
+    Command descriptions live in the generator. */}
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+The api image ships a `tradr` command for the jobs that need a server, not a
+browser. Run it inside the running container:
+
+```bash
+docker compose exec api tradr --help
+```
+
+**Expected result:** exit code 0, and the 4 commands below.
+
+| Command | Does |
+| --- | --- |
+| `tradr migrate --status` | Report whether the database schema is current. |
+| `tradr storage migrate-to-inline` | Pull advisor images out of object storage and back into the database. |
+| `tradr storage gc` | Delete bucket objects no conversation references any more. |
+| `tradr reset-password <email> [--password <value>]` | Set a user's password from the server. |
+
+Every command exits **2** when it cannot reach the database, so a wrapper script
+can tell "it failed" from "it could not run".
+
+## `migrate --status`
+
+Reads both migration journals and prints what is applied and what is pending.
+It opens its own read-only connection and never takes the migration advisory
+lock, so it is safe to run against a live instance.
+
+```bash
+docker compose exec api tradr migrate --status
+```
+
+**Expected result:** exit code 0, ending in `Schema is up to date.`
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | The schema is current. |
+| 1 | Migrations are pending on at least one track. |
+| 2 | The command cannot reach the database. |
+
+The exit codes make it usable as a health gate in a deploy script. See
+[Database & migrations](/self-hosting/explanation/migrations/).
+
+## `storage migrate-to-inline`
+
+Only relevant if object storage was configured and you want to turn it off.
+It rewrites every image that lives as a bucket pointer back to inline data, so
+the backend can be disabled without stranding a conversation.
+
+```bash
+docker compose exec api tradr storage migrate-to-inline
+```
+
+The command is idempotent and resumable — run it again after a failure. An
+image whose object has gone missing is marked unrecoverable and the run
+continues rather than aborting.
+
+**Self-hosted instances do not need this.** With no object storage configured,
+advisor images are already stored inline.
+
+## `storage gc`
+
+Reclaims objects orphaned by deleted conversations and retried uploads. Like
+`migrate-to-inline`, it applies only to an instance with object storage
+configured.
+
+```bash
+docker compose exec api tradr storage gc
+```
+
+The sweep is age-guarded: it never reaps an object young enough to belong to a
+request still in flight.
+
+## `reset-password <email> [--password <value>]`
+
+The recovery path on an instance with no email configured. Without SMTP there
+is no self-service reset, so the operator sets the password directly.
+
+```bash
+docker compose exec api tradr reset-password someone@example.com
+```
+
+**Expected result:** exit code 0, and a generated password printed to stdout.
+Pass `--password <value>` to choose one instead of having it generated.
+
+The command does **not** mark the account verified — running a command proves
+nothing about the mailbox. It does not sign existing sessions out either.
+
+It exits 1 when no account matches the email, and 2 when it cannot reach the
+database.
+
+## Next steps
+
+- [Upgrade an instance](/self-hosting/upgrades/) — where `migrate --status` fits.
+- [Database & migrations](/self-hosting/explanation/migrations/) — what the two tracks are.
+- [Environment variables](/self-hosting/reference/env-vars/) — the configuration surface.
