@@ -304,19 +304,15 @@ git pull
 docker compose up -d --build
 ```
 
-If instead you switched the compose services to pinned GHCR images (Step 5), pull
-the newer images and recreate:
+Migrations for the new version apply automatically on api startup, under the same
+advisory lock as the first run. Because migrations are forward-only, the policy is
+**back up before every upgrade**.
 
-```bash
-docker compose pull
-docker compose up -d
-```
+The pinned-image path, how to verify an upgrade, how far back you can roll, and
+one edit that published releases through v0.5.3 currently need are all in
+[Upgrade an instance](/self-hosting/upgrades/).
 
-Migrations for the new version apply automatically on api startup (same advisory
-lock as first run). Because migrations are forward-only, the policy is **back up
-before every upgrade** (next section).
-
-## Backups and where your data lives
+## Where your data lives
 
 All persistent data lives in the **`pgdata` named volume** mounted at
 `/var/lib/postgresql/data` in the `postgres` container. Docker prefixes the
@@ -324,36 +320,16 @@ volume with the compose project name, so it resolves to e.g. `tradr_pgdata`
 (confirm with `docker volume ls`). There is no proprietary format — a plain
 `pg_dump` is a complete, portable backup.
 
-### Logical dump (recommended, hot)
+One thing is **not** in the database: `.env`. Back it up too, and keep
+`ENCRYPTION_KEY` — a restored database cannot decrypt stored provider API keys
+without it.
 
-```bash
-docker compose exec -T postgres \
-  pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" > backup-$(date +%F).sql
-```
-
-### Volume snapshot (cold, stack stopped)
-
-```bash
-docker compose down
-docker run --rm -v tradr_pgdata:/data -v "$PWD":/backup alpine \
-  tar czf /backup/pgdata-$(date +%F).tar.gz -C /data .
-docker compose up -d
-```
-
-### Restore
-
-Restore a logical dump into a **fresh** stack (empty database):
-
-```bash
-docker compose up -d postgres
-cat backup-2026-01-01.sql | docker compose exec -T postgres \
-  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-docker compose up -d
-```
+Backup commands, a restore procedure, and the shipped drill that proves a backup
+restores are in [Back up and restore](/self-hosting/backup-restore/).
 
 <HostedOnly>
   On `app.tradr.cloud` backups are managed for you (daily platform backups) — you
-  never run `pg_dump`. This section is for self-hosters, who own their own backup
+  never run `pg_dump`. That page is for self-hosters, who own their own backup
   schedule.
 </HostedOnly>
 

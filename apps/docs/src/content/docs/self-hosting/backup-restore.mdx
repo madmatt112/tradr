@@ -1,18 +1,270 @@
 ---
-title: "Back up and restore"
-description: "pg_dump logical dumps and pgdata volume copies, restoring into a fresh stack, and where data lives (the Postgres named volume)."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Back up and restore
+description: Back up a self-hosted Tradr instance with pg_dump or a volume snapshot, restore it into a fresh stack, and prove the backup works with the shipped restore drill.
 ---
 
-pg_dump logical dumps and pgdata volume copies, restoring into a fresh stack, and where data lives (the Postgres named volume).
+import HostedOnly from '@/components/HostedOnly.astro';
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
+Tradr keeps all its state in one PostgreSQL database, so a backup is a database
+dump plus one file. This page covers both, the restore, and how to check that a
+backup restores before you need it to.
+
+## What you have to back up
+
+Two things, and they live in different places.
+
+| What | Where | Lost without it |
+| --- | --- | --- |
+| **Your data** | the `pgdata` Docker volume | Accounts, positions, fills, ledger entries, advisor conversations |
+| **Your secrets** | the `.env` file | The ability to read part of a restored database — see below |
+
+The database holds everything the application stores. A self-hosted instance also
+writes advisor images inline into the database, because object storage is a hosted
+capability and stays unconfigured here. So a plain `pg_dump` is a complete backup
+of your data. There is no second data store, and no proprietary format.
+
+### Back up `.env` too, and keep `ENCRYPTION_KEY`
+
+`.env` is **not** in the database, and one value in it is unrecoverable.
+
+Tradr encrypts each user's provider API keys at rest with `ENCRYPTION_KEY`. A
+restored database still holds those encrypted keys. Without the original
+`ENCRYPTION_KEY`, nothing can decrypt them. The only repair is for every user to
+paste their key again.
+
+Copy `.env` to the same place you keep your backups. Treat it as a secret. It
+contains `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `ENCRYPTION_KEY`.
+
+<HostedOnly>
+  Backups on `app.tradr.cloud` are managed for you. This page is for operators who
+  run their own instance.
+</HostedOnly>
+
+## Find your volume name
+
+Docker prefixes the volume with the Compose project name. The project name
+defaults to the directory you run `docker compose` in, so a clone in `tradr/`
+gives `tradr_pgdata`.
+
+Confirm it rather than assuming it:
+
+```bash
+docker volume ls | grep pgdata
+```
+
+**Expected result:** a line ending in `_pgdata`. Use that name wherever this page
+writes `tradr_pgdata`.
+
+## Method 1 — logical dump, no downtime
+
+`pg_dump` reads a consistent snapshot while the stack keeps serving. This is the
+backup to automate.
+
+```bash
+docker compose exec -T postgres \
+  sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > backup-$(date +%F).sql
+```
+
+**Expected result:** exit code 0, and a file of tens of kilobytes or more. A fresh
+instance with one account dumps to about 60 KB.
+
+Check the file before you trust it:
+
+```bash
+ls -l backup-*.sql
+tail -1 backup-$(date +%F).sql
+```
+
+**Expected result:** a non-zero size, and a last line reading
+`-- PostgreSQL database dump complete`.
+
+:::caution[Run the expansion inside the container]
+Wrap the command in `sh -c '…'`, with **single** quotes.
+
+`POSTGRES_USER` and `POSTGRES_DB` are set inside the `postgres` container, not in
+your shell. Double quotes make your shell expand them first, so `pg_dump` receives
+two empty arguments and tries to connect as your host user. It fails with
+`role "root" does not exist` — and your shell has already created the output file.
+You are left with a **0-byte backup that looks like a backup**.
 :::
+
+### Automate it
+
+Take a dump on a schedule, and keep more than one. A backup taken every night is
+worth little if last night's ran against an already-corrupt database.
+
+```bash
+# /etc/cron.d/tradr-backup — nightly at 03:15, keep 14 days
+15 3 * * * root cd /srv/tradr && docker compose exec -T postgres \
+  sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  > /srv/backups/tradr-$(date +\%F).sql \
+  && find /srv/backups -name 'tradr-*.sql' -mtime +14 -delete
+```
+
+Copy the backups somewhere the server cannot reach. A backup on the same disk as
+the database survives a mistake, not a disk.
+
+## Method 2 — volume snapshot, stack stopped
+
+A snapshot copies the Postgres data directory byte for byte. Stop the stack first.
+Copying a live data directory produces an archive that Postgres has to recover
+from, and sometimes cannot.
+
+```bash
+docker compose down
+docker run --rm -v tradr_pgdata:/data -v "$PWD":/backup alpine \
+  tar czf /backup/pgdata-$(date +%F).tar.gz -C /data .
+docker compose up -d
+```
+
+**Expected result:** an archive of a few megabytes, and the stack back up within a
+minute.
+
+A snapshot restores only into the **same Postgres major version**. Tradr ships
+`postgres:16`. A logical dump carries no such restriction, so prefer method 1
+unless you want a fast whole-instance clone.
+
+## Restore a logical dump
+
+Restore into an **empty** database. A dump does not drop what is already there, so
+restoring over live data leaves a mixture of both.
+
+### 1. Destroy the current database
+
+```bash
+docker compose down -v
+```
+
+**Expected result:** Docker reports `Volume tradr_pgdata Removed`.
+
+:::danger
+`docker compose down -v` deletes your data. Take a dump first, even a stale one.
+:::
+
+### 2. Start Postgres on its own
+
+```bash
+docker compose up -d postgres
+```
+
+Starting `postgres` alone keeps the api from booting and running migrations into
+the database you are about to overwrite.
+
+**Expected result:** `docker compose ps` lists `postgres` as healthy, and nothing
+else.
+
+### 3. Load the dump
+
+```bash
+docker compose exec -T postgres \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < backup-2026-08-04.sql
+```
+
+**Expected result:** exit code 0. `psql` prints one line per statement and ends on
+a run of `ALTER TABLE`.
+
+Keep `-v ON_ERROR_STOP=1`. Without it, `psql` prints its errors, continues to the
+end, and exits 0 — a partial restore that reports success.
+
+### 4. Start the rest of the stack
+
+```bash
+docker compose up -d
+```
+
+The api boots against the restored schema. Migrations run, find nothing pending,
+and the api starts serving.
+
+### 5. Check the restore
+
+```bash
+docker compose exec api tradr migrate --status
+```
+
+**Expected result:** exit code 0, and a final line reading `Schema is up to date.`
+
+Then log in as an account that existed before the backup. That is the only check
+that covers the whole path.
+
+## Restore a volume snapshot
+
+Replace the data directory instead of loading SQL. The stack must be down.
+
+```bash
+docker compose down
+docker volume rm tradr_pgdata
+docker volume create tradr_pgdata
+docker run --rm -v tradr_pgdata:/data -v "$PWD":/backup alpine \
+  tar xzf /backup/pgdata-2026-08-04.tar.gz -C /data
+docker compose up -d
+```
+
+**Expected result:** the api reaches healthy, and an account from before the
+snapshot logs in.
+
+Create the empty volume explicitly. Docker would create it for you on the `run`.
+Naming the step keeps a typo from extracting into a brand-new volume that the stack
+never mounts.
+
+## Prove the backup restores
+
+A backup nobody has restored is a hypothesis. The repository ships a drill that
+tests one for you:
+
+```bash
+SOURCE_DATABASE_URL=postgres://user:pass@your-host:5432/tradr \
+STAGING_ADMIN_URL=postgres://user:pass@other-host:5432/postgres \
+scripts/backup-restore-drill.sh
+```
+
+The drill dumps the source and restores it into a throwaway database on a
+**separate** server. It then checks three things: no pending migrations, no
+foreign-key orphans, and a row count per table that matches the source. It drops
+the throwaway database afterwards.
+
+**Expected result:** exit code 0. A non-zero exit names what failed.
+
+The drill never writes to the source. It refuses to run when the staging target
+resolves to the same host, port, and database as the source. Point
+`STAGING_ADMIN_URL` at a maintenance database (`…/postgres`) on a server you do not
+mind losing.
+
+Run the drill after any change to how you back up, and once in a while regardless.
+It needs `pg_dump`, `pg_restore`, `psql`, and Node on the machine you run it from.
+
+## Move an instance to another server
+
+1. Take a logical dump on the old server.
+2. Copy the dump **and** `.env` to the new server.
+3. Clone the repository on the new server.
+4. Put the old `.env` in place. Keep `ENCRYPTION_KEY` byte for byte.
+5. Run `docker compose up -d postgres`.
+6. Load the dump, as in step 3 above.
+7. Run `docker compose up -d`.
+
+**Expected result:** every account logs in with its existing password, and stored
+provider API keys still work.
+
+Change `WEB_PORT`, `TRUSTED_PROXIES`, or `WEB_BASE_URL` afterwards if the new
+server needs different values. Leave the three secrets alone.
+
+## Troubleshooting
+
+- **The backup file is 0 bytes** — the `$POSTGRES_USER` expansion ran in your
+  shell. Use the `sh -c '…'` form above.
+- **`pg_dump` reports `role "root" does not exist`** — the same cause.
+- **`psql` reports `relation … already exists` during a restore** — the target
+  database is not empty. Run `docker compose down -v`, then start again from step 2.
+- **The api crash-loops after a restore and names the encryption key** — the
+  `.env` on this server carries a different `ENCRYPTION_KEY` than the data was
+  written with. Restore the original `.env`.
+- **`docker compose exec` reports `no such service: postgres`** — you are not in
+  the directory that holds `docker-compose.yml`.
+
+## Next steps
+
+- [Upgrade an instance](/self-hosting/upgrades/) — back up first; this page is why.
+- [Database & migrations](/self-hosting/explanation/migrations/) — what runs
+  against the schema, and when.
+- [Install with Docker Compose](/self-hosting/docker-compose/) — the stack these
+  commands assume.

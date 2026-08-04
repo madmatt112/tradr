@@ -18,13 +18,10 @@ import sitemap from '@astrojs/sitemap';
 // Served at docs.tradr.cloud, on its own host.
 //
 // It was going to live at www.tradr.cloud/docs behind an edge rewrite, to keep
-// the subpath. That does not work: a Cloudflare Pages custom domain takes
-// precedence over a Workers route on the same hostname, so a Worker on
-// www.tradr.cloud/docs* never sees the request. Measured, not assumed — a probe
-// Worker on the staging host was ignored while Pages kept serving. A Pages
-// Function on the marketing project could have done it, but that puts docs
-// routing back into the marketing deploy, which is most of what moving the docs
-// out was meant to undo.
+// the subpath. That turned out to need a change to how the marketing host itself
+// is served, and the alternative — a rewrite that ships with the marketing site —
+// puts docs routing back into the marketing deploy, which is most of what moving
+// the docs out was meant to undo.
 //
 // So: a separate host, and a 301 from the old /docs paths. The link equity given
 // up is near zero — the domain has no ranking history. Nothing here needs a
