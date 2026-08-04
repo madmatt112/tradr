@@ -96,17 +96,47 @@ export function calculateTrade(input: CalculatorInput): CalculatorOutput {
     return derivedDollarRisk ? { ...base, derivedDollarRisk: to2dp(derivedDollarRisk) } : base;
   }
 
+  // The figure the cap is computed against:
+  //
+  //   explicit `buyingPower`  → use it, in EITHER risk basis
+  //   percent basis, no field → `balance`, the original REQ-8 behaviour
+  //   dollar basis, no field  → none; the size is uncapped, as it always was
+  //
+  // The cap used to be percent-only because a balance only existed there. It is
+  // keyed on having a cap basis at all, not on the risk basis: "can I afford
+  // this" is the same question however the risk was expressed, and a direct
+  // dollar risk overshoots exactly as readily as a percentage one — $1,000 of
+  // risk at a $2 stop is $25,000 of stock no matter which box it was typed in.
+  //
+  // The risk budget is untouched by all of this. `balance` answers "risk 1% of
+  // my account" (equity); the cap answers "can I afford this" (liquid funds).
+  let capBasis: Decimal | null = null;
+  if (input.buyingPower !== undefined) {
+    capBasis = new Decimal(input.buyingPower);
+  } else if (isPercent) {
+    capBasis = balanceDec!;
+  }
+
   let finalSize = riskDerivedSize;
   let buyingPowerLimited = false;
-  if (isPercent) {
+  if (capBasis !== null) {
     // entry is a validated positive decimal and multiplier ∈ {1,100} ⇒
     // entry×multiplier > 0 ⇒ no divide-by-zero.
-    const cap = balanceDec!.div(entry.times(multiplier)).floor().toNumber();
-    if (cap === 0) {
-      return {
-        ...zeroOut(perUnitRiskStr, 'buying-power-zero'),
-        derivedDollarRisk: to2dp(derivedDollarRisk!),
-      };
+    const cap = capBasis.div(entry.times(multiplier)).floor().toNumber();
+
+    // `<= 0`, not `=== 0`. The old strict check was safe only because the cap
+    // basis was `balance`, already proven positive above. `buyingPower` carries
+    // no such guarantee — a fully-deployed or margined account can present zero
+    // or negative cash, and `floor(negative / positive)` is negative, which
+    // would otherwise sail past the guard and cap the size to a negative number.
+    if (cap <= 0) {
+      const zero = zeroOut(perUnitRiskStr, 'buying-power-zero');
+      // `derivedDollarRisk` is a percent-basis echo and has no dollar-basis
+      // meaning. The conditional is load-bearing, not tidiness: `to2dp(null!)`
+      // constructs `new Decimal(null)`, which throws — so a dollar-basis
+      // position whose account cannot fund one unit would 500 instead of
+      // returning this outcome.
+      return derivedDollarRisk ? { ...zero, derivedDollarRisk: to2dp(derivedDollarRisk) } : zero;
     }
     if (cap < riskDerivedSize) {
       finalSize = cap;

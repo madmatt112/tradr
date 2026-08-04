@@ -7,6 +7,7 @@ import { useDashboardTotalQuery } from '@/features/accounting/hooks/useDashboard
 import { useMissingRatePrompt } from '@/features/accounting/hooks/useMissingRatePrompt';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { CrossCurrencyTotal } from '@/features/dashboard/components/CrossCurrencyTotal';
+import { formatMoney } from '@/lib/format';
 
 /**
  * Account Balances widget (Req 6.4).
@@ -58,9 +59,7 @@ function AccountBalancesWidget() {
       <span>
         Missing exchange rate
         {missingPairs.length > 1 ? 's' : ''}:{' '}
-        {missingPairs
-          .map((p) => `${p.baseCurrency} → ${p.quoteCurrency}`)
-          .join(', ')}
+        {missingPairs.map((p) => `${p.baseCurrency} → ${p.quoteCurrency}`).join(', ')}
       </span>
       {deeplinkTo && (
         <a
@@ -90,13 +89,29 @@ function AccountBalancesWidget() {
         {accounts.map((account) => (
           <li key={account.id} className="flex items-center justify-between py-2">
             <span className="font-medium">{account.name}</span>
-            <Numeric
-              value={account.balance != null && account.currency ? account.balance : null}
-              kind="money"
-              currency={account.currency ?? undefined}
-              direction="none"
-              className="text-muted-foreground"
-            />
+            <div className="flex flex-col items-end">
+              <Numeric
+                value={account.balance != null && account.currency ? account.balance : null}
+                kind="money"
+                currency={account.currency ?? undefined}
+                direction="none"
+                className="text-muted-foreground"
+              />
+              {/*
+                Cash / positions split (ledger-balances Req 10) — the two halves
+                of the balance above, shown only when the account actually holds
+                open positions. A flat account's split is all cash, so the second
+                line would just repeat the first.
+              */}
+              {account.cash != null &&
+                account.positionValue != null &&
+                Number(account.positionValue) !== 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {formatMoney(account.cash, account.currency ?? 'USD')} cash ·{' '}
+                    {formatMoney(account.positionValue, account.currency ?? 'USD')} pos
+                  </span>
+                )}
+            </div>
           </li>
         ))}
       </ul>

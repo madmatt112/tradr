@@ -70,7 +70,9 @@ describe('trade-data tool definitions', () => {
     }
     expect(openPositionsTool.maxEstTokens).toBe(3000);
     expect(recentClosedTool.maxEstTokens).toBe(1500);
-    expect(accountSummaryTool.maxEstTokens).toBe(1500);
+    // Raised from 1500 when the cash/position split widened each account row
+    // from five fields to seven (ledger-balances Req 10).
+    expect(accountSummaryTool.maxEstTokens).toBe(2000);
     expect(pnlSummaryTool.maxEstTokens).toBe(800);
   });
 
@@ -244,6 +246,6 @@ describe('trade-data pre-call egress cap (REQ-9.5)', () => {
     );
     expect(result.status).toBe('ok');
     expect(selectAccountSummaries).toHaveBeenCalledWith(expect.anything(), 'owner-1');
-    expect(ts.tradeDataTokens).toBe(1500);
+    expect(ts.tradeDataTokens).toBe(2000);
   });
 });

@@ -37,6 +37,8 @@ export const makePosition = (overrides: Partial<PositionListItem> = {}): Positio
   actualRR: null,
   openUnits: 100,
   closedUnits: 0,
+  // 100 open units at the default $150 avg entry, no fees.
+  openCostBasis: 15000,
   openedAt: '2026-05-01T12:00:00.000Z',
   closedAt: null,
   createdAt: '2026-05-01T12:00:00.000Z',

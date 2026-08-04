@@ -64,6 +64,22 @@ export const CalculatorInputSchema = z
     stopLoss: positiveDecimal(PRICE_MAX),
     dollarRisk: optionalEmptyToUndefined(positiveDecimal(DOLLAR_RISK_MAX)),
     balance: optionalEmptyToUndefined(signedBoundedDecimal(ACCOUNT_BALANCE_MAX)),
+    // The figure the BUYING-POWER CAP is computed against. Valid in EITHER risk
+    // basis, and optional: absent ⇒ the percent basis caps against `balance` (the
+    // pre-existing behaviour) and the dollar basis is uncapped (likewise), so
+    // every existing client is unaffected.
+    //
+    // It exists because `balance` answers two different questions and only one of
+    // them is about equity. "Risk 1% of my account" means 1% of total equity — that
+    // stays on `balance`. "Can I afford this many shares" means cash, and total
+    // equity answers it wrongly whenever capital is already deployed: a $5,000
+    // account with $4,000 in open positions would happily size a $1,250 position
+    // against $1,000 of actual cash. Splitting the two lets the caller pass cash
+    // here and leave the risk budget alone.
+    //
+    // Signed, like `balance` — cash can legitimately be negative on a margin
+    // account, and the cap guard handles that rather than the validator.
+    buyingPower: optionalEmptyToUndefined(signedBoundedDecimal(ACCOUNT_BALANCE_MAX)),
     riskPercent: optionalEmptyToUndefined(positiveDecimal(100)),
     direction: z.enum(['long', 'short']),
     mode: z.enum(['stock', 'options']),
@@ -104,3 +120,25 @@ export const CalculatorOutputSchema = z.object({
 
 export type CalculatorInput = z.infer<typeof CalculatorInputSchema>;
 export type CalculatorOutput = z.infer<typeof CalculatorOutputSchema>;
+
+/**
+ * Which account figure the calculator's buying-power cap is computed against.
+ *
+ * `'cash'` (the default) is the balance less the cost basis of open positions —
+ * what the account can actually deploy. `'balance'` is total equity, the
+ * pre-existing behaviour, kept for users who trade on margin and treat their
+ * whole equity as fundable.
+ *
+ * Cash is the default because the failure mode is asymmetric: sizing against
+ * equity tells a user with capital already deployed to open a position larger
+ * than they can fund, and they find out at the broker. Sizing against cash is
+ * at worst conservative.
+ *
+ * This does NOT change the risk budget, which is always `riskPercent × balance`
+ * — "risk 1% of my account" means 1% of equity under either setting.
+ */
+export const BuyingPowerBasisEnum = z.enum(['cash', 'balance']);
+export type BuyingPowerBasis = z.infer<typeof BuyingPowerBasisEnum>;
+
+export const BuyingPowerBasisBodySchema = z.object({ basis: BuyingPowerBasisEnum });
+export type BuyingPowerBasisBody = z.infer<typeof BuyingPowerBasisBodySchema>;

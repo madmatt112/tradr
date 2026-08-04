@@ -51,7 +51,11 @@ function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
     case 'exceeds-maximum':
       return "The derived dollar risk exceeds the calculator's maximum.";
     case 'buying-power-zero':
-      return 'The balance cannot fund one share/contract at this entry price.';
+      // Deliberately says "buying power", not "balance": under the default
+      // preference the cap is the account's CASH, so an account with a healthy
+      // balance but everything already deployed lands here. Blaming the balance
+      // would read as a bug.
+      return 'Available buying power cannot fund one share/contract at this entry price.';
     default:
       return 'Dollar risk is insufficient for one share/contract at this stop distance';
   }

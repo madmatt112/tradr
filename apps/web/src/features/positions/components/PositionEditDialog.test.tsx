@@ -61,6 +61,7 @@ function makePosition(overrides: Partial<PositionDetail> = {}): PositionDetail {
     actualRR: null,
     openUnits: 0,
     closedUnits: 0,
+    openCostBasis: 0,
     ...overrides,
   };
 }

@@ -79,6 +79,13 @@ export const AccountSchema = z.object({
   // ships derived account balances. Kept optional so existing callers/tests
   // that construct accounts without a balance continue to parse.
   balance: z.string().optional(),
+  // The two halves of `balance` (ledger-balances Req 10), same optionality
+  // rationale. `cash` is the deployable figure; `positionValue` is the cost
+  // basis of open positions and is NEGATIVE for shorts, where the unexited size
+  // is proceeds received against shares still owed. Cost basis only — neither
+  // moves with the market. `cash + positionValue === balance` always.
+  cash: z.string().optional(),
+  positionValue: z.string().optional(),
 });
 
 export type CreateAccountInput = z.infer<typeof CreateAccountSchema>;
