@@ -26,12 +26,31 @@ schema in a way you cannot undo by starting the old container again.
 3. **Note the version you are on.** You need it to go back.
 
 ```bash
-docker compose exec api printenv APP_VERSION
+curl -fsS http://localhost:8080/api/health
 ```
 
-**Expected result:** the version the running image was built at. An empty value
-means the image was built locally rather than pulled — the SPA shows `localdev` in
-its corner badge in that case.
+**Expected result:** `{"status":"ok","version":"v0.5.4"}` on a pinned release.
+
+The release workflow bakes the version into the api image, and `/api/health`
+reports it. A locally built image has no version to report, so the field is
+omitted and you get `{"status":"ok"}` — check out a release tag if you want a
+version you can name.
+
+Whichever image you run, `docker compose ps` shows the tag it came from:
+
+```bash
+docker compose ps --format '{{.Service}}\t{{.Image}}'
+```
+
+:::note[Do not set `APP_VERSION` in `.env`]
+The api reads `.env` through compose's `env_file:`, and `env_file` overrides the
+value baked into the image. An `APP_VERSION=` line that is present but blank
+therefore erases the released version, and `/api/health` silently drops its
+`version` field.
+
+`.env.example` ships the line commented out. If your `.env` predates that, comment
+it out.
+:::
 
 ### Which version bump matters
 
@@ -39,8 +58,8 @@ Tradr is pre-1.0, so the usual semver reading is inverted:
 
 | Bump | Example | What it means today |
 | --- | --- | --- |
-| **Minor** | `0.5.3` → `0.6.0` | A breaking change. Read the release notes before upgrading. |
-| **Patch** | `0.5.2` → `0.5.3` | Everything else — features, fixes, UI. |
+| **Minor** | `0.5.4` → `0.6.0` | A breaking change. Read the release notes before upgrading. |
+| **Patch** | `0.5.3` → `0.5.4` | Everything else — features, fixes, UI. |
 
 The full policy, and what counts as a breaking change, is in
 [`docs/versioning.md`](https://github.com/madmatt112/tradr/blob/main/docs/versioning.md).
@@ -66,7 +85,7 @@ a specific version:
 
 ```bash
 git fetch --tags
-git checkout v0.5.3
+git checkout v0.5.4
 docker compose up -d --build
 ```
 
@@ -80,9 +99,9 @@ Replace each service's `build:` block in `docker-compose.yml` with an image:
 ```yaml
 services:
   api:
-    image: ghcr.io/madmatt112/tradr-api:0.5.3
+    image: ghcr.io/madmatt112/tradr-api:0.5.4
   web:
-    image: ghcr.io/madmatt112/tradr-web:0.5.3
+    image: ghcr.io/madmatt112/tradr-web:0.5.4
 ```
 
 Then upgrade by editing the tag and pulling:
@@ -98,14 +117,16 @@ data survives — the volume is not part of the image.
 Pin an exact version. `:latest` moves on every release, which turns an upgrade
 into something that happens to you.
 
-:::caution[Published releases up to v0.5.3 need one edit to `.env`]
-Every published release through **v0.5.3** fails to start against the `.env` that
+:::caution[Pinning v0.5.3 or earlier needs one edit to `.env`]
+**v0.5.4 and later need nothing.** Skip this if you pin a current release.
+
+Every release through **v0.5.3** fails to start against the `.env` that
 `.env.example` and `docker/quickstart.sh` produce. The api exits immediately with a
 Zod error naming `ENCRYPTION_KEY_PREVIOUS`, and Compose restarts it in a loop. The
 `web` container answers `502 Bad Gateway` throughout.
 
-`.env.example` ships the key present but blank, and the released schema rejects a
-blank value. Comment the line out before you start a pinned release:
+Those releases shipped the key present but blank, and their config schema rejected
+a blank value. Comment the line out before you start one:
 
 ```bash
 # ENCRYPTION_KEY_PREVIOUS=
@@ -113,9 +134,8 @@ blank value. Comment the line out before you start a pinned release:
 
 **Expected result:** the api reaches `healthy` within about 30 seconds.
 
-The fix is on `main` and will ship in the next release. Building from source
-(path 1) is unaffected. `ENCRYPTION_KEY_PREVIOUS` is only used during key
-rotation, so commenting it out costs nothing.
+`ENCRYPTION_KEY_PREVIOUS` is only read during key rotation, so commenting it out
+costs nothing. Upgrading to v0.5.4 is the better fix.
 :::
 
 ## What happens on restart
@@ -151,8 +171,9 @@ docker compose ps
 curl -fsS http://localhost:8080/api/health
 ```
 
-**Expected result:** `{"status":"ok"}`. A `503` with `{"status":"error"}` means the
-api is up but cannot reach the database.
+**Expected result:** `{"status":"ok","version":"v0.5.4"}`, naming the version you
+just moved to. A `503` with `{"status":"error"}` means the api is up but cannot
+reach the database.
 
 ```bash
 docker compose exec api tradr migrate --status
@@ -192,7 +213,7 @@ docker compose pull
 docker compose up -d
 
 # built from source
-git checkout v0.5.2
+git checkout v0.5.3
 docker compose up -d --build
 ```
 
@@ -227,7 +248,7 @@ setting exists for operators who run migrations out of band from a source checko
   running. Allow the full 180 seconds, and watch it with
   `docker compose logs -f api`.
 - **`api` restarts in a loop, naming `ENCRYPTION_KEY_PREVIOUS`** — you are on a
-  published release through v0.5.3. Comment the line out in `.env`, as above.
+  release through v0.5.3. Comment the line out in `.env`, or upgrade to v0.5.4.
 - **`api` restarts in a loop, naming the encryption key** — `ENCRYPTION_KEY`
   changed, or `ENCRYPTION_KEY_FINGERPRINT` no longer matches it. Restore the
   original value.

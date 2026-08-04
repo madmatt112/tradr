@@ -309,7 +309,7 @@ advisory lock as the first run. Because migrations are forward-only, the policy 
 **back up before every upgrade**.
 
 The pinned-image path, how to verify an upgrade, how far back you can roll, and
-one edit that published releases through v0.5.3 currently need are all in
+one edit that releases through v0.5.3 need are all in
 [Upgrade an instance](/self-hosting/upgrades/).
 
 ## Where your data lives
@@ -395,9 +395,9 @@ building locally, replace the `build:` block on a service with a pinned tag:
 
 ```yaml
   api:
-    image: ghcr.io/madmatt112/tradr-api:0.5.3
+    image: ghcr.io/madmatt112/tradr-api:0.5.4
   web:
-    image: ghcr.io/madmatt112/tradr-web:0.5.3
+    image: ghcr.io/madmatt112/tradr-web:0.5.4
 ```
 
 Pin an explicit version rather than a floating tag, so an upgrade is a decision
