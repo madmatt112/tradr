@@ -281,3 +281,41 @@ describe('computePnlFromTotals', () => {
     expect(result.returnPercentage).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Rounding regression: realizedPnl must round ONCE, at the end
+// ---------------------------------------------------------------------------
+//
+// A refactor that computed `round(gross) − round(fees)` instead shifted the
+// result by a minor unit. It survived the whole suite because every other case
+// here uses figures with no sub-cent residue, and it reached CI green before
+// being caught by hand. This is the counter-example.
+
+describe('computePnlFromTotals — rounding', () => {
+  // entry 1000 @ 100 (no fees); exit 1000 @ 100.100006 with 0.004 recorded fees.
+  // gross unrounded = 100.006, fees = 0.004.
+  //   round(100.006 − 0.004) = 100.00   ← correct, one rounding
+  //   round(100.006) − round(0.004) = 100.01   ← the bug
+  const totals = {
+    entryQty: '1000',
+    exitQty: '1000',
+    entryCost: '100000',
+    exitCost: '100100.006',
+    entryFees: '0',
+    exitFees: '0.004',
+  };
+
+  it('rounds once at the end, not per component', () => {
+    const pnl = computePnlFromTotals(totals, 'long', 'stock', 2);
+    expect(pnl.realizedPnl).toBe(100);
+  });
+
+  it('keeps grossPnl − fees === realizedPnl exactly', () => {
+    const pnl = computePnlFromTotals(totals, 'long', 'stock', 2);
+    // The breakdown absorbs the rounding residue so the invariant still holds:
+    // gross rounds to 100.01, so fees must report 0.01 rather than 0.00.
+    expect(pnl.grossPnl).toBe(100.01);
+    expect(pnl.fees).toBe(0.01);
+    expect(pnl.grossPnl! - pnl.fees!).toBeCloseTo(pnl.realizedPnl!, 10);
+  });
+});
