@@ -200,7 +200,10 @@ describe('Sidebar — Changelog link + new-updates badge', () => {
       a.getAttribute('href'),
     );
     expect(hrefs.indexOf('/changelog')).toBeGreaterThanOrEqual(0);
-    expect(hrefs.indexOf('/settings')).toBe(hrefs.indexOf('/changelog') + 1);
+    // Ordering, not adjacency — which is what this test's name has always
+    // claimed. The Docs link now sits between the two, and pinning `+ 1` would
+    // make every future nav insertion look like a regression in the changelog.
+    expect(hrefs.indexOf('/settings')).toBeGreaterThan(hrefs.indexOf('/changelog'));
 
     const link = Array.from(container.querySelectorAll('a')).find(
       (a) => a.getAttribute('href') === '/changelog',
