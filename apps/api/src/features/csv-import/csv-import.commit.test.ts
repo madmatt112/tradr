@@ -216,8 +216,16 @@ describe('POST /api/csv-import/commit — replay lifecycle', () => {
     const posFills = await db.select().from(fills).where(eq(fills.positionId, posId));
     expect(posFills).toHaveLength(2);
 
+    // EXACTLY one, not merely non-zero. Realized P&L posts per fill now
+    // (ledger-balances Req 9), so a bulk import could in principle write a row
+    // per fill — but a whole trade realizes nothing on its entry and its full
+    // P&L on the balancing exit, leaving the close with a zero delta. One row,
+    // same as before per-fill posting. That equivalence is what keeps import
+    // volume and its rollback semantics unchanged; a regression here would show
+    // up as extra rows rather than as a failure elsewhere.
     const ledger = await db.select().from(ledgerEntries).where(eq(ledgerEntries.positionId, posId));
-    expect(ledger.length).toBeGreaterThan(0); // close hook fired inside the bulk tx
+    expect(ledger).toHaveLength(1); // close hook fired inside the bulk tx
+    expect(ledger[0]!.entryType).toBe('position_pnl');
 
     const staged = await db.select().from(csvImportStaging).where(eq(csvImportStaging.id, token));
     expect(staged[0]!.status).toBe('committed');
