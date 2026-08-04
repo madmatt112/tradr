@@ -6,7 +6,9 @@ import { logger } from './logger';
 
 export const envSchema = z.object({
   DATABASE_URL: z.string(),
-  SESSION_SECRET: z.string().min(32),
+  SESSION_SECRET: z
+    .string()
+    .min(32, 'must be at least 32 characters — generate with: openssl rand -base64 24'),
   PORT: z.coerce.number().default(3100),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   // Deployed-version string surfaced by GET /api/health (e.g. "v0.2.0-f51f9f5").
@@ -24,7 +26,9 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
-  ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/),
+  ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'must be 64 hex characters — generate with: openssl rand -hex 32'),
   // Both OPTIONAL keys ship uncommented-and-empty in .env.example, so the
   // documented `cp .env.example .env` path hands the schema '' — and `.optional()`
   // only tolerates *undefined*, not ''. Without the empty-tolerant preprocess
@@ -36,7 +40,7 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z
       .string()
-      .regex(/^[0-9a-fA-F]{64}$/)
+      .regex(/^[0-9a-fA-F]{64}$/, 'must be 64 hex characters — generate with: openssl rand -hex 32')
       .optional(),
   ),
   ENCRYPTION_KEY_FINGERPRINT: z.preprocess(
@@ -332,7 +336,40 @@ export const envSchema = z.object({
   ),
 });
 
-export const config = envSchema.parse(process.env);
+/** Where an operator can look up every variable, its default, and its format. */
+export const ENV_VARS_DOCS_URL = 'https://docs.tradr.cloud/self-hosting/reference/env-vars/';
+
+/**
+ * Parse the environment, and fail READABLY when it is wrong.
+ *
+ * A bare `envSchema.parse()` throws a ZodError, which Node prints as a wall of
+ * internal structure — issue objects, `addIssue` function references, a stack
+ * through the bundle. An operator staring at a crash-looping container has to
+ * dig the variable name out of it. That happened for real: every release through
+ * v0.5.4 crash-looped on a blank optional key, and the output named the variable
+ * only inside a `path: [ … ]` array several screens down.
+ *
+ * So: name the variables, say what each one wants, point at the reference, and
+ * exit. Nothing here changes WHICH environments are valid.
+ */
+function parseEnv(): z.infer<typeof envSchema> {
+  const result = envSchema.safeParse(process.env);
+  if (result.success) return result.data;
+
+  const problems = result.error.issues.map((issue) => {
+    const name = issue.path.join('.') || '(unknown)';
+    return `  ${name}: ${issue.message}`;
+  });
+
+  console.error('Tradr cannot start — the environment is not valid.\n');
+  console.error(problems.join('\n'));
+  console.error(`\nEvery variable, its default, and how to generate it:\n  ${ENV_VARS_DOCS_URL}\n`);
+  console.error('If this is a fresh install, ./docker/quickstart.sh writes a working .env.\n');
+
+  process.exit(1);
+}
+
+export const config = parseEnv();
 export type Config = z.infer<typeof envSchema>;
 
 /**

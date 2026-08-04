@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
+import { docsUrl } from '@/lib/docs';
 
 import { useCsvPreview } from '../hooks/useCsvPreview';
 import { targetFieldsForShape } from '../lib/fields';
@@ -130,7 +131,18 @@ export function ImportPage() {
         <h1 className="text-2xl font-semibold">Import trades from CSV</h1>
         <p className="text-sm text-muted-foreground">
           Imports are additive — they add positions and fills to the target account. Fees come from
-          the CSV unless no fees column is mapped.
+          the CSV unless no fees column is mapped.{' '}
+          {/* Column mapping is the step people get stuck on, and the answer is
+              longer than a tooltip. Link out rather than grow this paragraph. */}
+          <a
+            href={docsUrl('importHistory')}
+            target="_blank"
+            rel="noreferrer"
+            className="cursor-pointer font-medium text-primary underline underline-offset-2"
+          >
+            Read the import guide
+          </a>
+          .
         </p>
         {csvRemaining !== null && (
           <p

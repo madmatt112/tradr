@@ -1,5 +1,14 @@
 import { Link } from '@tanstack/react-router';
-import { LineChart, Megaphone, Receipt, Shield, Sigma, Sparkles, Upload } from 'lucide-react';
+import {
+  BookOpen,
+  LineChart,
+  Megaphone,
+  Receipt,
+  Shield,
+  Sigma,
+  Sparkles,
+  Upload,
+} from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
@@ -7,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { hasNewReleases, useChangelogReleases } from '@/features/changelog/hooks/useChangelog';
 import { derivePresetRange } from '@/features/performance/utils/derivePresetRange';
 import { useAuth } from '@/hooks/useAuth';
+import { docsUrl } from '@/lib/docs';
 import { cn } from '@/lib/utils';
 
 // Default search params for the Performance route. The route's
@@ -190,6 +200,21 @@ export function Sidebar() {
           </span>
           {!collapsed && <span>Changelog</span>}
         </Link>
+        {/* The documentation lives on its own host, so this is an <a>, not a
+            router <Link>. New tab: a reader following it is mid-task and should
+            not lose the page they were on. */}
+        <a
+          href={docsUrl('home')}
+          target="_blank"
+          rel="noreferrer"
+          title="Documentation"
+          className={cn(
+            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
+          )}
+        >
+          <BookOpen className="h-4 w-4" aria-hidden="true" />
+          {!collapsed && <span>Docs</span>}
+        </a>
         <Link
           to="/settings"
           className={cn(
