@@ -1,7 +1,7 @@
 # Tradr in-repo documentation
 
-References that live with the code, so a change to how Tradr is built, configured,
-or operated lands in the same pull request as the change itself.
+References that live with the code. A change to how Tradr is built, configured, or
+operated lands in the same pull request as the change itself.
 
 The polished, task-oriented documentation is on the docs site:
 **[User guide](https://docs.tradr.cloud/user-guide/getting-started/)** ·
@@ -39,3 +39,25 @@ and the [self-hosting guide](https://docs.tradr.cloud/self-hosting/docker-compos
   it rather than copying it.
 - **One home per topic.** If something is already documented on the docs site or in
   `.env.example`, link to it instead of writing a second copy that will drift.
+
+## What the docs deliberately do not have
+
+Recorded so these read as decisions rather than oversights.
+
+**Versioned documentation.** There is one copy and it tracks `main`. A tree per release
+means backporting every fix by hand, which is not affordable at this size. Instead every
+page carries a banner naming the version it describes, generated from `apps/api`'s
+version so it follows a release automatically.
+
+**Translations.** One language, deliberately. Starlight makes i18n easy, which is the
+trap — sixteen pages in one language beats sixteen stubs in four.
+
+**Docs analytics.** None. The product's analytics are opt-in and off by default
+([`analytics.md`](analytics.md)). Instrumenting an app someone signed into is one
+decision; turning the documentation into a surface that reports on its readers is
+another. That has a practical consequence worth stating plainly: **page priority here is
+judgement, not traffic data.** Anyone claiming otherwise is guessing.
+
+**Style enforcement over old pages.** Vale runs on the files a pull request changes, not
+the whole tree. [`STYLE.md`](STYLE.md) says not to retrofit, and a whole-tree run reports
+117 findings — almost all of it prose written before the guide existed.

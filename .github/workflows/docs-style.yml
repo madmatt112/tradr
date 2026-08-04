@@ -1,0 +1,95 @@
+name: Docs style
+
+# Enforces the mechanical parts of docs/STYLE.md with Vale.
+#
+# SCOPED TO THE FILES A PULL REQUEST CHANGES, deliberately. STYLE.md says:
+#
+#   Do not retrofit. The best existing pages were written before this guide and
+#   are better than a mechanical rewrite would make them. Apply this to new and
+#   substantially-revised content.
+#
+# A whole-tree run reports 117 findings across 40 files, almost all of it prose
+# that predates the guide. Gating on that would demand exactly the retrofit the
+# guide forbids. Linting the diff applies the rule to new and revised content and
+# nothing else — which is what the guide actually asks for.
+#
+# ADVISORY for now (continue-on-error), matching how the security scanners were
+# introduced in this repository. To make it required: clear the backlog on the
+# pages that remain, drop `continue-on-error`, and add "docs-style" to the
+# protect-main ruleset.
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - '**/*.mdx'
+      - '.vale.ini'
+      - '.vale/**'
+      - '.github/workflows/docs-style.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-style-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vale:
+    name: vale (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Need the base branch to diff against; a shallow clone has neither.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Collect the prose this PR changes
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Deleted files would fail the lint by not existing.
+          git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" \
+            -- '*.md' '*.mdx' > changed.txt || true
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "Files to lint:"
+          cat changed.txt
+
+      - name: Vale
+        if: steps.changed.outputs.count != '0'
+        run: |
+          set -uo pipefail
+          # The pinned image is the one the rules were developed against; Vale's
+          # markdown handling changes between versions.
+          docker run --rm -v "$PWD":/docs -w /docs jdkato/vale:v3.17.0 \
+            $(tr '\n' ' ' < changed.txt) | tee vale.out || true
+
+          # Report, do not fail. A PR that touches ONE line of an old page would
+          # otherwise inherit every finding that page already had — and a check
+          # that goes red for reasons the author did not cause is a check people
+          # learn to ignore. The findings are in the log and the job summary.
+          #
+          # To make this required: clear the backlog, delete the `|| true` above
+          # and the `continue-on-error` on the job, then add "docs-style" to the
+          # protect-main ruleset.
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "### Vale — docs/STYLE.md"
+            echo
+            if [ ! -s changed.txt ]; then
+              echo "No markdown changed."
+            else
+              echo '```'
+              cat vale.out 2>/dev/null || echo "(no output)"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

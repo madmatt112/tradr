@@ -1,0 +1,19 @@
+# The declared vocabulary from docs/TERMS.md — one meaning per term, one term
+# per meaning. Terminology drift is the cheapest documentation defect to prevent
+# and the most expensive to fix later, because every page has to change at once.
+extends: substitution
+message: "Use '%s', not '%s' — see docs/TERMS.md."
+level: error
+ignorecase: true
+swap:
+  # Product and deployment
+  on-prem: self-hosted
+  on-premise: self-hosted
+  sysadmin: operator
+  self-hoster: operator
+  # Trading domain
+  PnL: P&L
+  P/L: P&L
+  bring-your-own-key: BYOK
+  # Formatting
+  please run: run

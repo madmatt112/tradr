@@ -32,8 +32,8 @@ curl -fsS http://localhost:8080/api/health
 **Expected result:** `{"status":"ok","version":"v0.5.4"}` on a pinned release.
 
 The release workflow bakes the version into the api image, and `/api/health`
-reports it. A locally built image has no version to report, so the field is
-omitted and you get `{"status":"ok"}` — check out a release tag if you want a
+reports it. A locally built image has no version to report. The field is
+then omitted and you get `{"status":"ok"}`. Check out a release tag if you want a
 version you can name.
 
 Whichever image you run, `docker compose ps` shows the tag it came from:
@@ -172,7 +172,7 @@ curl -fsS http://localhost:8080/api/health
 ```
 
 **Expected result:** `{"status":"ok","version":"v0.5.4"}`, naming the version you
-just moved to. A `503` with `{"status":"error"}` means the api is up but cannot
+moved to. A `503` with `{"status":"error"}` means the api is up but cannot
 reach the database.
 
 ```bash

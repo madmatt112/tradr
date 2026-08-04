@@ -1,0 +1,46 @@
+---
+// Says which version of Tradr these pages describe.
+//
+// There is ONE copy of the docs and it tracks `main`, so a reader on an older
+// release has no way to tell what these pages assume. Versioned documentation is
+// a real cost — a tree per release, and every fix backported by hand — and the
+// decision was to defer it. This makes that decision VISIBLE instead of leaving
+// the reader to discover it by following a step that does not exist in their
+// version.
+//
+// This overrides Starlight's `Banner`, which renders only when a page sets
+// `banner` in its frontmatter. Starlight 0.41 has no site-wide banner option
+// (a top-level `banner:` key fails config validation with "Unrecognized key"),
+// and putting it in 30 files' frontmatter would drift the moment one was added.
+// Overriding the component puts it on every page from one place.
+//
+// The version comes from apps/api/package.json — which `make release` bumps, so
+// the banner follows a release without anyone remembering it — injected as a
+// Vite define by astro.config.mjs. Reading it here with a relative path does NOT
+// work: a component's `import.meta.url` points at its bundled location during
+// the build, so the path resolves somewhere that does not exist.
+declare const __TRADR_VERSION__: string;
+const version = __TRADR_VERSION__;
+---
+
+<div class="version-banner">
+  These docs describe Tradr <strong>v{version}</strong>. Running an older release? Check the
+  <a href="https://github.com/madmatt112/tradr/releases">release notes</a> for what changed.
+</div>
+
+<style>
+  .version-banner {
+    padding: 0.5rem var(--sl-nav-pad-x, 1rem);
+    background-color: var(--sl-color-bg-nav);
+    border-bottom: 1px solid var(--sl-color-hairline-shade);
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    line-height: 1.5;
+    text-align: center;
+    text-wrap: balance;
+  }
+
+  .version-banner a {
+    color: var(--sl-color-text-accent);
+  }
+</style>

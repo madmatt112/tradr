@@ -73,15 +73,41 @@ function collectUnwrittenSlugs(dir = CONTENT_DIR) {
 
 const UNWRITTEN = collectUnwrittenSlugs();
 
+/**
+ * The version these docs describe, read from the api package — the same field
+ * `make release` bumps, so the banner follows a release with nothing to remember.
+ *
+ * Injected as a Vite define rather than read inside the component: a component's
+ * `import.meta.url` points at its BUNDLED location during the build, so a
+ * relative path out to apps/api resolves somewhere that does not exist
+ * (measured: it looked for apps/docs/api/package.json). Resolving here, where
+ * the config file's own URL is stable, avoids that entirely.
+ */
+const APP_VERSION = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../api/package.json', import.meta.url)), 'utf8'),
+).version;
+
+
 export default defineConfig({
   site: 'https://docs.tradr.cloud',
   output: 'static',
+  vite: {
+    define: {
+      __TRADR_VERSION__: JSON.stringify(APP_VERSION),
+    },
+  },
   integrations: [
     starlight({
       title: 'Tradr docs',
       description:
         'Documentation for Tradr — the open-source trading journal with an AI advisor. User guide for the hosted app plus self-hosting and development guides.',
       pagefind: true,
+      // Says which version these pages describe, on every page. Starlight 0.41
+      // has no site-wide banner option, so this overrides the per-page one —
+      // see the component for why.
+      components: {
+        Banner: './src/components/VersionBanner.astro',
+      },
       // Excludes the generated API operation pages from the search index — see
       // the file for why. The API overview page stays indexed.
       routeMiddleware: './src/routeData.ts',
