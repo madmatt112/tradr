@@ -1,18 +1,247 @@
 ---
-title: "Upgrade an instance"
-description: "docker compose pull then up -d, the back-up-before-upgrade policy, forward-only migrations, the start_period grace window, and rollback caveats."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Upgrade an instance
+description: Move a self-hosted Tradr instance to a newer version — the rebuild and pinned-image paths, what migrations do on restart, how to verify the upgrade, and when a rollback is still available.
 ---
 
-docker compose pull then up -d, the back-up-before-upgrade policy, forward-only migrations, the start_period grace window, and rollback caveats.
+import HostedOnly from '@/components/HostedOnly.astro';
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
+An upgrade is a restart with newer code. Tradr keeps all its state in Postgres, so
+the containers are replaceable and the volume is not. Migrations run by themselves
+when the api boots.
+
+Back up first, every time. Migrations are forward-only, so an upgrade changes the
+schema in a way you cannot undo by starting the old container again.
+
+<HostedOnly>
+  `app.tradr.cloud` is upgraded for you, from the same published artifacts
+  self-hosters pull. There is no separate hosted version.
+</HostedOnly>
+
+## Before you start
+
+1. **Take a backup.** Follow [Back up and restore](/self-hosting/backup-restore/).
+2. **Read the release notes** at
+   [github.com/madmatt112/tradr/releases](https://github.com/madmatt112/tradr/releases).
+   Breaking changes are announced there.
+3. **Note the version you are on.** You need it to go back.
+
+```bash
+docker compose exec api printenv APP_VERSION
+```
+
+**Expected result:** the version the running image was built at. An empty value
+means the image was built locally rather than pulled — the SPA shows `localdev` in
+its corner badge in that case.
+
+### Which version bump matters
+
+Tradr is pre-1.0, so the usual semver reading is inverted:
+
+| Bump | Example | What it means today |
+| --- | --- | --- |
+| **Minor** | `0.5.3` → `0.6.0` | A breaking change. Read the release notes before upgrading. |
+| **Patch** | `0.5.2` → `0.5.3` | Everything else — features, fixes, UI. |
+
+The full policy, and what counts as a breaking change, is in
+[`docs/versioning.md`](https://github.com/madmatt112/tradr/blob/main/docs/versioning.md).
+
+## Path 1 — rebuild from source
+
+The shipped `docker-compose.yml` builds both images locally, so this is the
+default path.
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Compose rebuilds `api` and `web`, then recreates the two containers. `postgres`
+keeps running, and the `pgdata` volume is untouched.
+
+**Expected result:** Compose reports `Container tradr-api-1 Started` and
+`Container tradr-web-1 Started`. With a warm build cache this takes seconds.
+
+This path tracks whatever is on `main`. Check out a release tag first if you want
+a specific version:
+
+```bash
+git fetch --tags
+git checkout v0.5.3
+docker compose up -d --build
+```
+
+## Path 2 — pinned images
+
+Each release publishes multi-arch images to the GitHub Container Registry. Pin
+them if you want to choose your upgrade window rather than track `main`.
+
+Replace each service's `build:` block in `docker-compose.yml` with an image:
+
+```yaml
+services:
+  api:
+    image: ghcr.io/madmatt112/tradr-api:0.5.3
+  web:
+    image: ghcr.io/madmatt112/tradr-web:0.5.3
+```
+
+Then upgrade by editing the tag and pulling:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+**Expected result:** Compose pulls both images and recreates the containers. Your
+data survives — the volume is not part of the image.
+
+Pin an exact version. `:latest` moves on every release, which turns an upgrade
+into something that happens to you.
+
+:::caution[Published releases up to v0.5.3 need one edit to `.env`]
+Every published release through **v0.5.3** fails to start against the `.env` that
+`.env.example` and `docker/quickstart.sh` produce. The api exits immediately with a
+Zod error naming `ENCRYPTION_KEY_PREVIOUS`, and Compose restarts it in a loop. The
+`web` container answers `502 Bad Gateway` throughout.
+
+`.env.example` ships the key present but blank, and the released schema rejects a
+blank value. Comment the line out before you start a pinned release:
+
+```bash
+# ENCRYPTION_KEY_PREVIOUS=
+```
+
+**Expected result:** the api reaches `healthy` within about 30 seconds.
+
+The fix is on `main` and will ship in the next release. Building from source
+(path 1) is unaffected. `ENCRYPTION_KEY_PREVIOUS` is only used during key
+rotation, so commenting it out costs nothing.
 :::
+
+## What happens on restart
+
+The api runs migrations during boot, before it serves a single request.
+
+1. It takes a PostgreSQL advisory lock, so only one container migrates at a time.
+2. It applies any pending schema migrations, in order.
+3. It applies any pending post-migrations — index builds that cannot run inside a
+   transaction.
+4. It starts serving.
+
+The api healthcheck allows a **180-second `start_period`** for this. A first-run
+index build on a large `positions` table can take minutes, and the grace window
+keeps Docker from killing the container part-way through.
+
+During the window `docker compose ps` reports `health: starting`, and requests
+through `web` may return `502 Bad Gateway`. Both are expected. `restart:
+unless-stopped` does not interrupt a migration in flight.
+
+Details are in [Database & migrations](/self-hosting/explanation/migrations/).
+
+## Verify the upgrade
+
+```bash
+docker compose ps
+```
+
+**Expected result:** `api` reports `Up … (healthy)`, `postgres` reports
+`Up … (healthy)`, and `web` reports `Up`.
+
+```bash
+curl -fsS http://localhost:8080/api/health
+```
+
+**Expected result:** `{"status":"ok"}`. A `503` with `{"status":"error"}` means the
+api is up but cannot reach the database.
+
+```bash
+docker compose exec api tradr migrate --status
+```
+
+**Expected result:** exit code 0, and output ending in `Schema is up to date.`
+
+```
+Standard migrations (drizzle.__drizzle_migrations):
+  table exists: true
+  applied: 24
+  pending: none
+Post-migrations (_post_migrations_journal):
+  table exists: true
+  applied: 1
+  pending: none
+Advisory locks:
+  migrations (7064001) held: false
+  post-migrations (7064002) held: false
+Schema is up to date.
+```
+
+Exit code 1 means migrations are pending. Exit code 2 means the command cannot
+reach the database.
+
+Then log in and open a position you already had. That checks the whole path, which
+`/api/health` does not.
+
+## Go back to the previous version
+
+Redeploy the version you came from. Set the previous tag, or check out the
+previous commit, and start the stack again.
+
+```bash
+# pinned images
+docker compose pull
+docker compose up -d
+
+# built from source
+git checkout v0.5.2
+docker compose up -d --build
+```
+
+This works because the schema stays ahead of the code and the older code still
+runs against it. Contributors are required to add before they remove, so a release
+adds columns and a later release drops them.
+
+**A rollback does not undo the migration.** There are no down-migrations. What you
+are doing is running older code against a newer schema.
+
+Two limits follow:
+
+- **A release that drops something ends the range.** Once a release removes a
+  column an earlier version still reads, you cannot go back past it. Release notes
+  say so when it happens.
+- **A rollback does not restore data.** Rows written by the newer version stay.
+  Restore a [backup](/self-hosting/backup-restore/) if you need the data back as
+  well as the code.
+
+## Upgrading a large instance
+
+`SKIP_POST_MIGRATIONS=true` stops the api from building indexes during boot, so a
+large instance starts serving without waiting.
+
+**Leave it `false` on a Compose instance.** The published image ships no command to
+apply the work it skips, so the indexes stay missing and queries stay slow. The
+setting exists for operators who run migrations out of band from a source checkout.
+
+## Troubleshooting
+
+- **`api` sits at `health: starting` and `web` returns 502** — a migration is
+  running. Allow the full 180 seconds, and watch it with
+  `docker compose logs -f api`.
+- **`api` restarts in a loop, naming `ENCRYPTION_KEY_PREVIOUS`** — you are on a
+  published release through v0.5.3. Comment the line out in `.env`, as above.
+- **`api` restarts in a loop, naming the encryption key** — `ENCRYPTION_KEY`
+  changed, or `ENCRYPTION_KEY_FINGERPRINT` no longer matches it. Restore the
+  original value.
+- **`tradr migrate --status` exits 1 after an upgrade** — the api has not finished
+  booting, or it crashed before migrating. Read `docker compose logs api`.
+- **`docker compose pull` reports there is nothing to pull** — the services still
+  carry `build:` blocks. Use path 1, or pin images as in path 2.
+- **The corner badge still shows the old version** — the browser is serving a
+  cached SPA. Reload without cache.
+
+## Next steps
+
+- [Back up and restore](/self-hosting/backup-restore/) — do this before each upgrade.
+- [Database & migrations](/self-hosting/explanation/migrations/) — what runs, in
+  what order, and under which lock.
+- [Install with Docker Compose](/self-hosting/docker-compose/) — the stack this
+  page assumes.
