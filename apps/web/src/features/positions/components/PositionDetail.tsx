@@ -94,7 +94,14 @@ export function PositionDetailView({ positionId }: Props) {
   const currency = 'USD'; // The list endpoint has accountCurrency; detail doesn't. This is a known limitation.
 
   const hasManualFillFees = position.fills.some((f) => parseFloat(f.fees) > 0);
-  const hasDoubleFeeRisk = hasManualFillFees && position.brokerageFees > 0;
+  // `brokerageFees` is the fee attributed to the realized portion whatever its
+  // source, so on an account with no brokerage it is simply the manual fill fees
+  // pro-rated. Without the brokerageName guard this warning fires for every
+  // position carrying a fee — advising the user to zero out the only fees they
+  // have, which would overstate net P&L. The metric card above already gates on
+  // brokerageName for the same reason.
+  const hasDoubleFeeRisk =
+    hasManualFillFees && position.brokerageName !== null && position.brokerageFees > 0;
 
   const handleDelete = async () => {
     await deletePosition.mutateAsync();
