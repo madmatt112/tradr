@@ -1,18 +1,232 @@
 ---
-title: "Log and manage positions"
-description: "Draft, open, and close positions: multiple fills, scale-ins, partial closes, editing fees and notes, deleting a draft, and tagging strategies."
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Log and manage positions
+description: Draft, open, and close a position in Tradr — scale-ins, partial exits, fees, notes, the trade plan and its risk/reward ratios, reopening a position, and deleting one.
 ---
 
-Draft, open, and close positions: multiple fills, scale-ins, partial closes, editing fees and notes, deleting a draft, and tagging strategies.
+A **position** is the record Tradr keeps for one symbol in one direction, from the
+first share you buy to the last one you sell. Everything else in the app — your
+equity curve, the performance charts, the tax summaries — is derived from
+positions and the fills inside them.
+
+This page walks the whole lifecycle with one worked example, and states what the
+app does at each step.
+
+## Before you start
+
+A position belongs to an account, so create one first. **New Position** stays
+disabled until you have at least one.
+
+Go to **Accounts → New Account**. Name it, pick the currency and timezone, and set
+a starting balance.
+
+The timezone matters later. It defines the trading day, which is what decides
+whether a closed position can be reopened.
+
+## The three states
+
+A position is always in exactly one of three states, shown as a badge on the row
+and on the detail page.
+
+| State | Meaning | What you can do |
+| --- | --- | --- |
+| **draft** | Planned, not in the market. No fills, no effect on your balance. | Edit anything, add an entry fill, open, delete |
+| **open** | In the market. At least one entry fill, not fully exited. | Add fills, edit the plan and notes, delete |
+| **closed** | Fully exited. Entry and exit quantities match. | Edit the plan and notes, reopen, delete |
+
+A draft costs nothing and commits nothing. Use it to write a trade down before you
+take it.
+
+## Step 1 — Create the position
+
+Go to **Positions → New Position** and fill in:
+
+- **Symbol** — for example `AAPL`. Options use the OCC contract format, such as
+  `NVDA260321C120`.
+- **Side** — Long or Short.
+- **Asset Type** — Stock or Option.
+- **Account** — which account the trade belongs to.
+- **Notes** — optional, and worth writing now. This is the field you will thank
+  yourself for later.
+
+Select **Create**.
+
+**Expected result:** the position appears in the list with the status **draft**,
+and every price column reads `—`. Nothing has been bought yet.
+
+## Step 2 — Open it with the first entry fill
+
+A draft has no fills. Opening one therefore asks for the fill that puts you in the
+market — the app does not let a position go open with nothing in it.
+
+Select **Open position** on the row. Enter:
+
+- **Price** — the fill price.
+- **Quantity** — how many shares or contracts.
+- **Fees** — commission and charges for this fill. Leave `0` if you have none.
+- **Date & Time** — defaults to now. Change it when journalling an older trade.
+- **Notes** — optional, per fill.
+
+Select **Add**.
+
+**Expected result:** the status changes to **open**, `# Open` shows your quantity,
+and **Avg Entry** on the detail page shows your fill price.
+
+In the worked example: 100 shares of AAPL at 190.00, fees 1.00.
 
 :::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
+Options are counted in whole contracts. A fractional option quantity is rejected.
 :::
+
+## Step 3 — Record the trade plan
+
+Open the position and select **Edit**. On an open or closed position the only
+editable fields are **Target Price**, **Stop Loss**, and **Notes**.
+
+That restriction is deliberate. Once a position has fills, its symbol, side, asset
+type, and account are history — changing them would rewrite a trade that already
+happened. The plan fields are annotations, so they stay editable.
+
+Set a target of 210.00 and a stop of 185.00.
+
+**Expected result:** **Target R/R** appears on the detail page.
+
+### How the two ratios are calculated
+
+| Metric | Meaning |
+| --- | --- |
+| **Target R/R** | Planned reward per unit of risk: distance to your target divided by distance to your stop. |
+| **Actual R/R** | What you actually got, in the same units. Signed, so a loss shows negative. |
+
+Both measure from your **average entry**, not your first fill. This has a
+consequence worth knowing: **scaling in moves your average entry, so it moves your
+Target R/R too.** In the worked example the ratio starts at 4.00 against a 190.00
+entry, and drops to 2.75 once a second fill lifts the average to 191.6667. The
+target and stop did not move — the entry did.
+
+Neither ratio is shown when the stop equals the average entry, because the risk
+per unit would be zero.
+
+## Step 4 — Scale in
+
+Select **Add Fill**, keep the type as **Entry**, and enter the second fill.
+
+The example adds 50 shares at 195.00, fees 1.00.
+
+**Expected result:** **Avg Entry** becomes `191.6667` — the quantity-weighted
+average of 100 at 190.00 and 50 at 195.00. `# Open` becomes 150.
+
+## Step 5 — Take a partial exit
+
+Select **Add Fill** and change the type to **Exit**.
+
+The example exits 60 shares at 200.00, fees 1.00.
+
+**Expected result:** the position stays **open** with 90 units left, and the P&L
+figures fill in immediately.
+
+**Realized P&L does not wait for the close.** The moment an exit fill lands, the
+profit on that portion is realized, posted to your account balance, and counted in
+your performance figures. After this fill the example shows a gross P&L of $500.00
+on a position that is still open.
+
+Fees follow the same rule. Each exit carries its own fee plus a proportional share
+of the entry fees for the quantity being closed. Exiting 60 of 150 units takes 60/150
+of the 2.00 in entry fees, so 0.80, plus the 1.00 exit fee — a net P&L of $498.20
+against a gross of $500.00.
+
+You cannot exit more than you entered. A quantity above the open amount is
+rejected.
+
+## Step 6 — Close it
+
+Exit the rest, and the position closes itself.
+
+The example exits the remaining 90 shares at 205.00, fees 1.00.
+
+**Expected result:** the status changes to **closed** without any further action.
+The final figures for the example:
+
+| Metric | Value |
+| --- | --- |
+| Avg Entry | 191.6667 |
+| Avg Exit | 203.0000 |
+| Gross P&L | +$1,700.00 |
+| Net P&L | +$1,696.00 |
+| Actual R/R | +1.70 |
+| Return % | +5.9% |
+
+**There is no separate "close" step to remember.** The **Close Position** button
+stays disabled while any quantity is still open, and by the time it would be
+enabled the balancing exit has already closed the position. The button exists for
+the cases the automatic path does not cover.
+
+Closing stamps the close time from the **fill's** timestamp, not the moment you
+pressed the button. A trade you journal a week late is recorded on the day it
+actually closed, which is what keeps the performance and tax summaries honest.
+
+## Reopen a position
+
+Select **Reopen** on a closed position. It returns to **open** so you can add more
+fills.
+
+Two rules apply:
+
+- **Same trading day only.** A position can be reopened only on the day it was
+  opened, measured in the account's timezone. This is for re-entering a trade you
+  scratched, not for reviving last month's.
+- **Add a fill before closing again.** A reopened position starts with nothing
+  open, so a straight re-close would be a no-op. Tradr rejects it and says so.
+
+Reopening reverses the realized P&L that the close posted. Closing again posts it
+afresh from the fills as they then stand.
+
+## Edit or remove a fill
+
+Each row in the **Fills** table has a `⋯` menu for editing or deleting that fill.
+
+Use it to fix a typo in a price, a quantity, or a fee. Every derived figure —
+averages, P&L, both ratios, your account balance — recalculates from the fills, so
+correcting a fill corrects everything downstream. Nothing is cached that could
+disagree with it.
+
+You cannot add fills to a closed position. Reopen it first, or delete it and
+re-enter it.
+
+## Delete a position
+
+**Delete** is available in every state.
+
+- **A draft** disappears. It never touched your balance.
+- **An open or closed position** is removed, and any realized P&L it posted is
+  reversed out of your account balance.
+
+Deletion is permanent — there is no undo, and the fills go with it. To take a
+position out of your statistics without losing the record, there is no archive
+today; the honest options are to keep it or to delete it.
+
+## What the columns mean
+
+The **Positions** list shows, per position:
+
+| Column | Meaning |
+| --- | --- |
+| Entry Price / Exit Price | Quantity-weighted averages across the fills |
+| Target Price | Your planned exit, if you set one |
+| Target R/R · Actual R/R | Planned and realized reward per unit of risk |
+| # Open · # Closed | Units still open, and units exited |
+| P&L | Realized net P&L, including exits on positions that are still open |
+
+The tabs above the table — **All**, **Draft**, **Open**, **Closed** — filter by
+state.
+
+Full definitions of every figure are in the
+[metrics glossary](/user-guide/reference/metrics-glossary/).
+
+## Next steps
+
+- [Import your history](/user-guide/import-history/) — bring existing trades in
+  from a CSV rather than typing them.
+- [Review performance & P&L](/user-guide/performance/) — what the numbers add up
+  to across positions.
+- [Accounts & the multi-currency ledger](/user-guide/accounts/) — how a position's
+  P&L reaches your balance.
