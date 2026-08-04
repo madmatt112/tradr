@@ -2306,7 +2306,7 @@
     },
     "/api/calculator": {
       "post": {
-        "description": "Authed and stateless — the whole calculation is a pure function of the request body (no DB read, no account id). Supply the trade shape (`entryPrice`, `stopLoss`, `direction`, `mode`) plus **exactly one** risk basis: a direct `dollarRisk`, OR a `balance` + `riskPercent` (the dollar risk is then derived as `balance × riskPercent ÷ 100` at full precision). Supplying both bases, or neither, is a 400. In the percent basis the position size is also capped to what the balance can fund at entry (`floor(balance ÷ (entry × multiplier))`); the three percent-only response fields (`derivedDollarRisk`, `sizingStatus`, `buyingPowerLimited`) are absent from dollar-basis results. Non-sizing outcomes (non-positive balance, derived risk over the ceiling, insufficient risk, balance funds zero units) are valid **200**s with `positionSize: 0` and a `sizingStatus` discriminator — not 400s.\n",
+        "description": "Authed and stateless — the whole calculation is a pure function of the request body (no DB read, no account id). Supply the trade shape (`entryPrice`, `stopLoss`, `direction`, `mode`) plus **exactly one** risk basis: a direct `dollarRisk`, OR a `balance` + `riskPercent` (the dollar risk is then derived as `balance × riskPercent ÷ 100` at full precision). Supplying both bases, or neither, is a 400. The position size is also capped to what the account can fund at entry — `floor(capBasis ÷ (entry × multiplier))` — where `capBasis` is `buyingPower` when supplied (**either** risk basis), else `balance` on the percent basis, else no cap at all on the dollar basis. The risk budget is always a percent of `balance`; only the cap consults `buyingPower`. `derivedDollarRisk` remains percent-only, but `sizingStatus` and `buyingPowerLimited` can now appear on a dollar-basis result whenever `buyingPower` is supplied. Non-sizing outcomes (non-positive balance, derived risk over the ceiling, insufficient risk, cap basis funds zero units) are valid **200**s with `positionSize: 0` and a `sizingStatus` discriminator — not 400s.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2314,7 +2314,11 @@
                 "description": "Provide exactly one risk basis — `dollarRisk`, or `balance` + `riskPercent`.",
                 "properties": {
                   "balance": {
-                    "description": "Percent-basis balance to size against and cap against. Sign-agnostic finite decimal within the account-balance domain (a losing account's balance can be ≤ 0). Percent basis requires both `balance` and `riskPercent`.\n",
+                    "description": "Percent-basis balance the RISK BUDGET is derived from, and the default basis for the buying-power cap. Sign-agnostic finite decimal within the account-balance domain (a losing account's balance can be ≤ 0). Percent basis requires both `balance` and `riskPercent`.\n",
+                    "type": "string"
+                  },
+                  "buyingPower": {
+                    "description": "Optional figure the BUYING-POWER CAP is computed against, valid in EITHER risk basis. Absent ⇒ the percent basis caps against `balance` (the original behaviour) and the dollar basis is uncapped (likewise). Supply an account's `cash` here to stop the calculator sizing a position the account cannot fund: total equity overstates fundable capital by whatever is already deployed, and a direct dollar risk overshoots just as readily as a percentage one. Sign-agnostic — a fully-deployed or margined account can present ≤ 0 cash, which yields `sizingStatus: buying-power-zero`. Never affects the risk budget.\n",
                     "type": "string"
                   },
                   "direction": {
@@ -2348,7 +2352,7 @@
                     "type": "string"
                   },
                   "riskPercent": {
-                    "description": "Percent of balance to risk (0 < p ≤ 100).",
+                    "description": "Percent of `balance` to risk (0 < p ≤ 100). Always a percent of balance, never of `buyingPower`.",
                     "type": "string"
                   },
                   "stopLoss": {
@@ -2374,7 +2378,7 @@
         },
         "responses": {
           "200": {
-            "description": "A CalculatorOutput. Always carries `positionSize`, `perUnitRisk`, `actualDollarRisk`, `totalPositionValue`; `perUnitReward` / `riskRewardRatio` when a target is set, and the fee fields when fees are supplied. Percent basis additionally echoes `derivedDollarRisk` (2dp, when balance > 0), `sizingStatus` (`nothing-to-size-against` | `exceeds-maximum` | `buying-power-zero`) on the zero-position outcomes, and `buyingPowerLimited: true` when the buying-power cap set the size.\n"
+            "description": "A CalculatorOutput. Always carries `positionSize`, `perUnitRisk`, `actualDollarRisk`, `totalPositionValue`; `perUnitReward` / `riskRewardRatio` when a target is set, and the fee fields when fees are supplied. Percent basis additionally echoes `derivedDollarRisk` (2dp, when balance > 0). `sizingStatus` (`nothing-to-size-against` | `exceeds-maximum` | `buying-power-zero`) on the zero-position outcomes and `buyingPowerLimited: true` when the cap set the size appear on EITHER basis — the latter two require only that a cap basis existed, which on the dollar basis means `buyingPower` was supplied.\n"
           },
           "400": {
             "description": "Validation error — both/neither risk basis, riskPercent ∉ (0,100], bad balance/price format, or a structural price error."
@@ -4140,6 +4144,80 @@
         "summary": "Delayed spot last-price for a symbol.",
         "tags": [
           "Symbols"
+        ]
+      }
+    },
+    "/api/users/me/buying-power-basis": {
+      "get": {
+        "description": "Authed. Which account figure the position-sizing calculator caps position size against — `cash` (balance less the cost basis of open positions) or `balance` (total equity). Never null; the column defaults to `cash`.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "basis": {
+                      "enum": [
+                        "cash",
+                        "balance"
+                      ],
+                      "example": "cash",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The stored basis."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Get the calculator's buying-power basis.",
+        "tags": [
+          "Calculator"
+        ]
+      },
+      "put": {
+        "description": "Authed. `cash` caps position size at what the account can actually deploy; `balance` caps at total equity, which overstates fundable capital by whatever is already tied up in open positions. Affects only the cap — the risk budget stays `riskPercent × balance` either way. Changes nothing stored beyond the preference itself.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "basis": {
+                    "enum": [
+                      "cash",
+                      "balance"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "basis"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored basis."
+          },
+          "400": {
+            "description": "Not one of cash | balance."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Set the calculator's buying-power basis.",
+        "tags": [
+          "Calculator"
         ]
       }
     },
