@@ -9,6 +9,8 @@
 #   API_BASE_URL         -> apiBaseUrl
 #   POSTHOG_PUBLIC_KEY   -> posthogPublicKey
 #   POSTHOG_PUBLIC_HOST  -> posthogPublicHost
+#   POSTHOG_PUBLIC_ENVIRONMENT -> posthogPublicEnvironment  (deployment label
+#     stamped on every frontend event; absent => events are unstamped)
 #   APP_VERSION          -> appVersion   (corner version badge; absent => the SPA shows "localdev")
 #
 # ONE deliberate exception to the absent-when-unset rule: advisorImageMaxBytes is
@@ -59,6 +61,7 @@ emit_num() {
 emit apiBaseUrl         "${API_BASE_URL:-}"
 emit posthogPublicKey   "${POSTHOG_PUBLIC_KEY:-}"
 emit posthogPublicHost  "${POSTHOG_PUBLIC_HOST:-}"
+emit posthogPublicEnvironment "${POSTHOG_PUBLIC_ENVIRONMENT:-}"
 emit appVersion         "${APP_VERSION:-}"
 
 # Always-on image byte cap: emit the operator override or the shared default.

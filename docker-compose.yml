@@ -99,6 +99,7 @@ services:
       # z.preprocess('' → undefined, …url().default()) maps '' to the default.
       POSTHOG_API_KEY: ${POSTHOG_API_KEY:-}
       POSTHOG_HOST: ${POSTHOG_HOST:-}
+      POSTHOG_ENVIRONMENT: ${POSTHOG_ENVIRONMENT:-}
       # Hosted platform (api container). ALL optional — self-host leaves them unset
       # and behaves exactly as today (REQ-1 parity). Bare ${VAR:-} is SAFE for the
       # URL/preprocess vars (REDIS_URL / DIRECT_DATABASE_URL / OBJECT_STORAGE_ENDPOINT:
@@ -169,6 +170,7 @@ services:
       # NGINX_ENVSUBST_FILTER change is needed (it governs *.template, not config.js).
       POSTHOG_PUBLIC_KEY: ${POSTHOG_PUBLIC_KEY:-}
       POSTHOG_PUBLIC_HOST: ${POSTHOG_PUBLIC_HOST:-}
+      POSTHOG_PUBLIC_ENVIRONMENT: ${POSTHOG_PUBLIC_ENVIRONMENT:-}
     networks:
       - tradr
     restart: unless-stopped

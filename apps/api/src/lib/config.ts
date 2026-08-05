@@ -170,6 +170,13 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.string().url().default('https://us.i.posthog.com'),
   ),
+  // Deployment label stamped onto every captured event/person as an
+  // `environment` property (e.g. 'production', 'staging'). Plain optional string
+  // (POSTHOG_API_KEY idiom) — unset/'' means the property is simply ABSENT, which
+  // is the correct self-host default: a self-hoster running one deployment has no
+  // environments to tell apart. Deliberately NOT derived from NODE_ENV, which is
+  // 'production' on every deployed tier and so cannot distinguish them.
+  POSTHOG_ENVIRONMENT: z.string().optional(),
   // ─── Hosted platform (REQ-12.1) ───────────────────────────────────────────
   // ALL optional — every capability is a no-op when unconfigured (REQ-1 self-host
   // parity). With none of these set the system behaves EXACTLY as today: advisor

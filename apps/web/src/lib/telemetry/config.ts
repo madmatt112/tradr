@@ -8,6 +8,7 @@
 export interface TelemetryConfig {
   posthogPublicKey?: string;
   posthogPublicHost?: string;
+  posthogPublicEnvironment?: string;
 }
 
 /**
@@ -22,6 +23,7 @@ export function getTelemetryConfig(): TelemetryConfig {
   return {
     posthogPublicKey: cfg.posthogPublicKey,
     posthogPublicHost: cfg.posthogPublicHost,
+    posthogPublicEnvironment: cfg.posthogPublicEnvironment,
   };
 }
 

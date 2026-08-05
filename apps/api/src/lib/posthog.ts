@@ -39,12 +39,35 @@ export function initPostHog(): void {
 }
 
 /**
+ * The deployment label as a property bag, or undefined when POSTHOG_ENVIRONMENT
+ * is unset/'' — the self-host default, where there is one deployment and nothing
+ * to tell apart. Stamped at every capture exit (events, person properties,
+ * exceptions) so one project can be read per-environment, and so a mis-pointed
+ * key is VISIBLE rather than silently blending two deployments' data.
+ */
+function environmentProperties(): { environment: string } | undefined {
+  const environment = config.POSTHOG_ENVIRONMENT;
+  return environment ? { environment } : undefined;
+}
+
+/**
+ * Merge the deployment label into an outbound property bag. Spread LAST on
+ * purpose: a caller's own `environment` property is overwritten, so the label is
+ * always the deploy's, never a caller's. Returns the input untouched when
+ * unconfigured — no empty-object churn on the self-host path.
+ */
+function withEnvironment(properties: Record<string, unknown>): Record<string, unknown> {
+  const stamp = environmentProperties();
+  return stamp ? { ...properties, ...stamp } : properties;
+}
+
+/**
  * Capture a named backend business event, fire-and-forget. No-op when the
  * singleton is unset (unconfigured, or initPostHog() not run — e.g. unit tests).
  * `distinctId` is the opaque DB userId surrogate (never email). Properties pass
  * through scrubDeep — the REQ-8.5 value step at the backend capture boundary —
- * and a capture throw is swallowed via the warn-storm guard so it never
- * propagates (REQ-1.4).
+ * then pick up the deployment label — and a capture throw is swallowed via the
+ * warn-storm guard so it never propagates (REQ-1.4).
  */
 export function captureServerEvent(
   event: string,
@@ -55,7 +78,7 @@ export function captureServerEvent(
     client.capture({
       distinctId: opts.distinctId,
       event,
-      properties: scrubDeep(opts.properties ?? {}) as Record<string, unknown>,
+      properties: withEnvironment(scrubDeep(opts.properties ?? {}) as Record<string, unknown>),
     });
   } catch (err) {
     logTelemetryFailureOnce('posthog', err);
@@ -73,7 +96,7 @@ export function identifyServerUser(
 ): void {
   if (!client) return;
   try {
-    client.identify({ distinctId, properties: { $set: properties } });
+    client.identify({ distinctId, properties: { $set: withEnvironment(properties) } });
   } catch (err) {
     logTelemetryFailureOnce('posthog', err);
   }
@@ -107,7 +130,7 @@ function redactError(err: unknown): unknown {
 export function captureServerException(err: unknown, distinctId?: string): void {
   if (!client) return;
   try {
-    client.captureException(redactError(err), distinctId);
+    client.captureException(redactError(err), distinctId, environmentProperties());
   } catch (captureErr) {
     logTelemetryFailureOnce('posthog', captureErr);
   }
