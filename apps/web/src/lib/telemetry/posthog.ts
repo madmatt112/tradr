@@ -143,6 +143,18 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
   });
   posthog = ph;
 
+  // Stamp the deployment label ('production', 'staging') onto EVERY event as a
+  // super property — including the ones we never call capture() for ourselves:
+  // autocaptured $exception and the masked $pageview below. register() runs
+  // before before_send, so scrubEvent sees the property and passes it through
+  // untouched (it only rewrites the URL/geoip/exception keys). Skipped when the
+  // deploy did not set posthogPublicEnvironment — the self-host default, where
+  // there is one deployment and nothing to tell apart. Super properties live in
+  // the memory-only persistence store (REQ-3.7), so this stays cookieless.
+  if (cfg.posthogPublicEnvironment) {
+    ph.register({ environment: cfg.posthogPublicEnvironment });
+  }
+
   // Enable client-side exception autocapture: window errors + unhandled promise
   // rejections. Console errors stay OFF — a console.error is not an exception and
   // would be noise. Every $exception event routes through before_send: scrubEvent,

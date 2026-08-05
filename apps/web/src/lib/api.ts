@@ -5,6 +5,7 @@ declare global {
       advisorImageMaxBytes?: number; // per-image encoded-byte cap for the client pre-upload check (hosted-platform REQ-4.6); always emitted by the runtime-config seam
       posthogPublicKey?: string; // publishable phc_… project key
       posthogPublicHost?: string; // PostHog ingestion host
+      posthogPublicEnvironment?: string; // deployment label stamped on every event ('production', 'staging'); absent ⇒ unstamped
       appVersion?: string; // deploy-stamped version badge (prod "v1.2.3", staging "v1.2.3-abc1234"); absent ⇒ local dev
     };
   }

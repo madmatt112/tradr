@@ -28,11 +28,13 @@ describe('getTelemetryConfig', () => {
         apiBaseUrl: 'https://api.example.com',
         posthogPublicKey: 'phc_abc123',
         posthogPublicHost: 'https://us.i.posthog.com',
+        posthogPublicEnvironment: 'production',
       },
     });
     expect(getTelemetryConfig()).toEqual({
       posthogPublicKey: 'phc_abc123',
       posthogPublicHost: 'https://us.i.posthog.com',
+      posthogPublicEnvironment: 'production',
     });
   });
 

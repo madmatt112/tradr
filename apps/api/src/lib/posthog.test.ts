@@ -11,7 +11,12 @@ const h = vi.hoisted(() => {
   const PostHogCtor = vi.fn(() => ({ capture, identify, captureException, shutdown }));
   const isPostHogConfigured = vi.fn();
   const logTelemetryFailureOnce = vi.fn();
-  const config = { POSTHOG_API_KEY: 'phc_test123', POSTHOG_HOST: 'https://us.i.posthog.com' };
+  const config = {
+    POSTHOG_API_KEY: 'phc_test123',
+    POSTHOG_HOST: 'https://us.i.posthog.com',
+    // Unset by default — the self-host shape every other test asserts against.
+    POSTHOG_ENVIRONMENT: undefined as string | undefined,
+  };
   return {
     capture,
     identify,
@@ -38,6 +43,7 @@ async function load() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.config.POSTHOG_ENVIRONMENT = undefined;
 });
 
 describe('initPostHog', () => {
@@ -222,6 +228,87 @@ describe('captureServerException', () => {
 
     expect(() => captureServerException(new Error('x'), 'user-3')).not.toThrow();
     expect(h.logTelemetryFailureOnce).toHaveBeenCalledWith('posthog', expect.any(Error));
+  });
+});
+
+describe('POSTHOG_ENVIRONMENT stamp', () => {
+  it('unset: adds no environment property to a captured event (self-host default)', async () => {
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, captureServerEvent } = await load();
+
+    initPostHog();
+    captureServerEvent('position_created', { distinctId: 'user-1' });
+
+    const props = h.capture.mock.calls[0][0].properties as Record<string, unknown>;
+    expect(props).not.toHaveProperty('environment');
+  });
+
+  it('set: stamps environment onto a captured event alongside scrubbed properties', async () => {
+    h.config.POSTHOG_ENVIRONMENT = 'staging';
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, captureServerEvent } = await load();
+
+    initPostHog();
+    captureServerEvent('position_created', {
+      distinctId: 'user-1',
+      properties: { assetType: 'stock' },
+    });
+
+    expect(h.capture).toHaveBeenCalledWith({
+      distinctId: 'user-1',
+      event: 'position_created',
+      properties: { assetType: 'stock', environment: 'staging' },
+    });
+  });
+
+  it("set: the deploy's label wins over a caller-supplied environment property", async () => {
+    h.config.POSTHOG_ENVIRONMENT = 'production';
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, captureServerEvent } = await load();
+
+    initPostHog();
+    captureServerEvent('position_created', {
+      distinctId: 'user-1',
+      properties: { environment: 'not-the-deploy-label' },
+    });
+
+    const props = h.capture.mock.calls[0][0].properties as Record<string, unknown>;
+    expect(props.environment).toBe('production');
+  });
+
+  it('set: stamps environment onto person properties via $set', async () => {
+    h.config.POSTHOG_ENVIRONMENT = 'staging';
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, identifyServerUser } = await load();
+
+    initPostHog();
+    identifyServerUser('user-1', { email_verified: true });
+
+    expect(h.identify).toHaveBeenCalledWith({
+      distinctId: 'user-1',
+      properties: { $set: { email_verified: true, environment: 'staging' } },
+    });
+  });
+
+  it('set: passes environment as captureException additional properties', async () => {
+    h.config.POSTHOG_ENVIRONMENT = 'staging';
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, captureServerException } = await load();
+
+    initPostHog();
+    captureServerException(new Error('boom'), 'user-1');
+
+    expect(h.captureException.mock.calls[0][2]).toEqual({ environment: 'staging' });
+  });
+
+  it('unset: passes undefined additional properties to captureException', async () => {
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, captureServerException } = await load();
+
+    initPostHog();
+    captureServerException(new Error('boom'), 'user-1');
+
+    expect(h.captureException.mock.calls[0][2]).toBeUndefined();
   });
 });
 

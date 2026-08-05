@@ -8,14 +8,14 @@ import posthogSource from './posthog.ts?raw';
 
 // Stub the dynamically-imported posthog-js to a minimal init/capture surface.
 // vi.mock is hoisted, so the spies are created with vi.hoisted.
-const { initSpy, captureSpy, startExceptionAutocaptureSpy, captureExceptionSpy } = vi.hoisted(
-  () => ({
+const { initSpy, captureSpy, startExceptionAutocaptureSpy, captureExceptionSpy, registerSpy } =
+  vi.hoisted(() => ({
     initSpy: vi.fn(),
     captureSpy: vi.fn(),
     startExceptionAutocaptureSpy: vi.fn(),
     captureExceptionSpy: vi.fn(),
-  }),
-);
+    registerSpy: vi.fn(),
+  }));
 
 vi.mock('posthog-js', () => ({
   default: {
@@ -23,6 +23,7 @@ vi.mock('posthog-js', () => ({
     capture: captureSpy,
     startExceptionAutocapture: startExceptionAutocaptureSpy,
     captureException: captureExceptionSpy,
+    register: registerSpy,
   },
 }));
 
@@ -60,6 +61,7 @@ beforeEach(() => {
   captureSpy.mockClear();
   startExceptionAutocaptureSpy.mockClear();
   captureExceptionSpy.mockClear();
+  registerSpy.mockClear();
 });
 
 afterEach(() => {
@@ -111,6 +113,44 @@ describe('initPostHogClient', () => {
     await initPostHogClient(makeStubRouter([{ routeId: PATTERN }]));
 
     expect(initSpy.mock.calls[0][1].api_host).toBe('https://us.i.posthog.com');
+  });
+
+  it('registers environment as a super property when posthogPublicEnvironment is set', async () => {
+    window.__TRADR_CONFIG__ = {
+      posthogPublicKey: 'phc_test',
+      posthogPublicEnvironment: 'staging',
+    };
+    const { initPostHogClient } = await import('./posthog');
+
+    await initPostHogClient(makeStubRouter([{ routeId: PATTERN }]));
+
+    expect(registerSpy).toHaveBeenCalledTimes(1);
+    expect(registerSpy).toHaveBeenCalledWith({ environment: 'staging' });
+  });
+
+  it('registers nothing when posthogPublicEnvironment is absent (self-host default)', async () => {
+    window.__TRADR_CONFIG__ = { posthogPublicKey: 'phc_test' };
+    const { initPostHogClient } = await import('./posthog');
+
+    await initPostHogClient(makeStubRouter([{ routeId: PATTERN }]));
+
+    expect(registerSpy).not.toHaveBeenCalled();
+  });
+
+  it('registers before the entry pageview, so the pageview carries the label', async () => {
+    window.__TRADR_CONFIG__ = {
+      posthogPublicKey: 'phc_test',
+      posthogPublicEnvironment: 'production',
+    };
+    const { initPostHogClient } = await import('./posthog');
+
+    await initPostHogClient(makeStubRouter([{ routeId: PATTERN }]));
+
+    expect(registerSpy).toHaveBeenCalled();
+    expect(captureSpy).toHaveBeenCalledWith('$pageview');
+    expect(registerSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      captureSpy.mock.invocationCallOrder[0],
+    );
   });
 });
 
