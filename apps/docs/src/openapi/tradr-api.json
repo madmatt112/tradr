@@ -134,6 +134,11 @@
                     "minLength": 3,
                     "type": "string"
                   },
+                  "defaultRiskPercent": {
+                    "description": "Share of the account balance risked per trade, as a decimal string above 0 and up to 100 with at most 2 decimal places. Seeds the position-size calculator. Omitted means no rule is set, which leaves the calculator's field empty as before. Unlike `PUT /api/accounts/{id}`, an explicit `null` is a 400 here — there is no rule to clear on create.\n",
+                    "example": "1.00",
+                    "type": "string"
+                  },
                   "name": {
                     "minLength": 1,
                     "type": "string"
@@ -218,7 +223,7 @@
     },
     "/api/accounts/{id}": {
       "put": {
-        "description": "Authed. All fields optional. `startingBalance` is deliberately absent — it is creation-only. `timezone` IS editable: it changes only subsequent trading-day evaluations and rewrites no history.\n",
+        "description": "Authed. All fields optional. `startingBalance` is deliberately absent — it is creation-only. `timezone` IS editable: it changes only subsequent trading-day evaluations and rewrites no history, and `defaultRiskPercent` is editable for the same reason.\n",
         "parameters": [
           {
             "in": "path",
@@ -243,6 +248,12 @@
                   "currency": {
                     "maxLength": 3,
                     "minLength": 3,
+                    "type": "string"
+                  },
+                  "defaultRiskPercent": {
+                    "description": "Share of the account balance risked per trade (decimal string above 0, up to 100, at most 2 decimal places). Omitting the key leaves the stored value untouched; sending an explicit `null` clears the rule back to unset.\n",
+                    "example": "1.00",
+                    "nullable": true,
                     "type": "string"
                   },
                   "name": {

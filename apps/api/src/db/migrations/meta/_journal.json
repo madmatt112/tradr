@@ -176,6 +176,13 @@
       "when": 1785871256384,
       "tag": "0024_user_buying_power_basis",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1785962349981,
+      "tag": "0025_account_default_risk_percent",
+      "breakpoints": true
     }
   ]
 }

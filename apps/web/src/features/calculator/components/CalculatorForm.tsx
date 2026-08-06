@@ -250,6 +250,26 @@ export function CalculatorForm() {
     setValue('feeSchedule', parsed, { shouldValidate: true });
   };
 
+  // Seed the risk percent from the account's own rule (user-onboarding R1.2), at
+  // the two points that already re-seed `balance`. READ PATH ONLY — the account
+  // is never written back to from here (R1.3): a risk percent typed on one
+  // calculation is that calculation's, and the stored rule is unchanged.
+  //
+  // Only when a rule EXISTS. An account without one deliberately leaves the field
+  // exactly as it found it (R1.4) rather than clearing it the way an absent
+  // `balance` clears the balance — every account predating the column has no
+  // rule, so clearing would wipe a percent the user typed before picking their
+  // account and change today's behaviour for every existing user.
+  //
+  // The value arrives numeric(5,2)-normalised ('1.50', not '1.5'). It is a
+  // percent-basis field, so this is guarded by the basis at both call sites for
+  // the same reason `balance` is: the schema's "exactly one risk basis" refine.
+  const seedRiskPercent = (account: Account) => {
+    if (account.defaultRiskPercent) {
+      setValue('riskPercent', account.defaultRiskPercent, { shouldValidate: true });
+    }
+  };
+
   // The selected account SURVIVES a basis switch — it is meaningful in both now,
   // and dropping it would silently remove the cap from a user who only changed
   // how they express risk. Only the basis-scoped FIELDS are cleared, which the
@@ -264,6 +284,7 @@ export function CalculatorForm() {
       // the account they can already see is picked.
       if (selectedAccount) {
         setValue('balance', selectedAccount.balance ?? undefined, { shouldValidate: true });
+        seedRiskPercent(selectedAccount);
       }
     } else {
       setValue('balance', undefined, { shouldValidate: true });
@@ -283,6 +304,7 @@ export function CalculatorForm() {
     if (riskBasis === 'percent') {
       // Absent balance ⇒ not-yet-supplied → neutral incomplete state (D8, REQ-3.5).
       setValue('balance', account.balance ?? undefined, { shouldValidate: true });
+      seedRiskPercent(account);
     }
     setSelectedAccount(account);
   };
