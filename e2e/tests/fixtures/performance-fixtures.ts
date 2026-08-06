@@ -237,6 +237,16 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route('**/api/users/me/buying-power-basis', (route) =>
     route.fulfill(json({ basis: 'cash' })),
   );
+  // The reporting timezone is read on every authenticated view — the auth
+  // layout, the sidebar, and each P&L-bucketing surface — so it is app-shell
+  // surface too, and unmocked it fails the same way the note above describes.
+  //
+  // `stored: true` is what keeps this a single GET: it tells the client the
+  // user already has a zone on their row, so the one-time backfill does not
+  // fire a PUT that would 401 against the mocked session.
+  await page.route('**/api/users/me/timezone', (route) =>
+    route.fulfill(json({ timezone: 'UTC', stored: true })),
+  );
   // Quick Stats tab fetches /performance; the route-under-test mock (registered
   // later by the performance specs) overrides this benign empty default.
   await page.route(/\/api\/performance(\?.*)?$/, (route) =>
