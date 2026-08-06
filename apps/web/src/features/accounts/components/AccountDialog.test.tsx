@@ -385,6 +385,24 @@ describe('AccountDialog — default risk %', () => {
   });
 });
 
+// This dialog is one of the two places both timezones are visible to the same
+// user (user-onboarding R2.8); the settings control is the other, and disclaims
+// this one in return.
+describe('AccountDialog — telling the two timezones apart', () => {
+  it('names the boundary this field governs and disclaims the reporting zone', () => {
+    renderPersistentDialog(true, null);
+
+    // A bare "Timezone" label invites exactly the wrong conclusion: that
+    // setting it has set the zone the P&L is bucketed into.
+    expect(screen.getByLabelText('Trading-day timezone')).toBeTruthy();
+    expect(screen.queryByLabelText('Timezone')).toBeNull();
+
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(/re-entered the same day/i);
+    expect(text).toMatch(/not your reporting timezone/i);
+  });
+});
+
 // The re-seed on open covers every field, not just the risk rule. Currency and
 // timezone carry hardcoded fallbacks ('USD' / 'America/New_York'), so a dialog
 // that failed to re-seed would display those over the account's stored values
@@ -411,7 +429,7 @@ describe('AccountDialog — re-seeding on open', () => {
     });
 
     expect(fieldValue('Currency')).toBe('GBP');
-    expect(fieldValue('Timezone')).toBe('Europe/London');
+    expect(fieldValue('Trading-day timezone')).toBe('Europe/London');
     expect(fieldValue('Brokerage')).toBe(BROKERAGE_A);
 
     // The corruption itself: an untouched save must not write the create
@@ -450,7 +468,7 @@ describe('AccountDialog — re-seeding on open', () => {
     rerender({ open: true, account: second });
 
     expect(fieldValue('Currency')).toBe('JPY');
-    expect(fieldValue('Timezone')).toBe('Asia/Tokyo');
+    expect(fieldValue('Trading-day timezone')).toBe('Asia/Tokyo');
     expect(fieldValue('Brokerage')).toBe(BROKERAGE_B);
     expect(fieldValue('Name')).toBe('Prop Firm');
     expect(fieldValue('Default risk %')).toBe('2.00');

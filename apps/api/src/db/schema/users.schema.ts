@@ -21,6 +21,18 @@ export const users = pgTable(
     // existing rows as verified, D10). Registration always writes the value explicitly.
     emailVerified: boolean('email_verified').notNull().default(true),
     displayCurrency: varchar('display_currency', { length: 3 }),
+    // The user's REPORTING timezone (user-onboarding R2): the zone P&L is bucketed
+    // into by day, week and month. It is not a display format — nothing renders a
+    // timestamp in it. NOT the same thing as accounts.timezone,
+    // which is the account's *trading-day boundary* and defaults to America/New_York
+    // because that is where NYSE, NASDAQ and NYSE Arca run. This one is seeded from
+    // the browser at registration and follows the person, not the market. Neither is
+    // derived from the other (R2.7).
+    // Nullable with no backfill: NULL marks a pre-migration row and is resolved at
+    // read time by resolveTimezone (R2.5). No CHECK constraint enumerating zones —
+    // validity is decided by resolveTimezone, and a hardcoded list would reject
+    // legitimate Etc/* zones.
+    timezone: varchar('timezone', { length: 64 }),
     taxJurisdiction: varchar('tax_jurisdiction', { length: 8 }),
     theme: varchar('theme', { length: 8 }).notNull().default('system'),
     // Which account figure the position-sizing calculator's buying-power cap is

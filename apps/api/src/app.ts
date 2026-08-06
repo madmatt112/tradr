@@ -14,7 +14,7 @@ import { advisorRouter } from '@/features/advisor/advisor.route';
 import { ListModelsCache } from '@/features/advisor/providers/list-models-cache';
 import { initProviderRegistry } from '@/features/advisor/providers/registry';
 import { applyBuiltinPersonaOverrides, runDecryptCanary } from '@/features/advisor/startup';
-import auth from '@/features/auth/auth.route';
+import auth, { userPreferencesRouter } from '@/features/auth/auth.route';
 import passwordResetRouter from '@/features/auth/password-reset.route';
 import verificationRouter from '@/features/auth/verification.route';
 import { billingRouter, billingWebhookRouter } from '@/features/billing/billing.route';
@@ -104,6 +104,9 @@ app.route('/api/symbols', symbolsRouter);
 app.route('/api', calculatorPreferencesRouter);
 app.route('/api', accountingRouter);
 app.route('/api', expensesRouter);
+// Same bare-/api reason as the three above: it owns the absolute
+// /api/users/me/timezone path, which cannot be declared on the /api/auth router.
+app.route('/api', userPreferencesRouter);
 
 // Error handler
 app.onError(errorHandler);

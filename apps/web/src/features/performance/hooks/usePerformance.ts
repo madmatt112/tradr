@@ -171,13 +171,24 @@ export function handlePerformanceQueryError(
   queryClient.invalidateQueries({ queryKey: ['performance'] });
 }
 
-export function usePerformance(params: PerformanceQueryInput) {
+/**
+ * `params` is `null` while the caller is still waiting on a value it must not
+ * guess — today that is the user's stored reporting timezone
+ * (user-onboarding R2.4, `useUserTimezone`). A `null` disables the query
+ * outright rather than firing one bucketed by a zone the user never chose, and
+ * it means there is no placeholder tz that could leak into a request.
+ */
+export function usePerformance(params: PerformanceQueryInput | null) {
   const queryClient = useQueryClient();
   const queryKey = ['performance', 'detail', params] as const;
 
   return useQuery<PerformanceResponse>({
     queryKey,
+    enabled: params !== null,
     queryFn: async ({ signal }) => {
+      // `enabled` already guarantees this; the guard narrows the type locally
+      // rather than asserting non-null.
+      if (params === null) throw new Error('performance query ran without params');
       // If the session has already seen INVALID_TIMEZONE, omit `tz` from
       // subsequent requests so the server falls back to its default.
       const omitTz = readInvalidTzSeen();

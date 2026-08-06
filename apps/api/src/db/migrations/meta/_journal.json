@@ -183,6 +183,13 @@
       "when": 1785962349981,
       "tag": "0025_account_default_risk_percent",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1785986843966,
+      "tag": "0026_user_reporting_timezone",
+      "breakpoints": true
     }
   ]
 }

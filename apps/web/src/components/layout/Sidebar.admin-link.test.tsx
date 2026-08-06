@@ -31,6 +31,12 @@ vi.mock('@/components/layout/ThemeToggle', () => ({
   ThemeToggle: () => null,
 }));
 
+// The stored reporting timezone (user-onboarding R2.4) is a useQuery; stub it
+// so the sidebar mounts standalone and the Performance item is navigable.
+vi.mock('@/hooks/useUserTimezone', () => ({
+  useUserTimezone: () => 'America/New_York',
+}));
+
 // The Sidebar's changelog badge query also needs a QueryClient; stub the
 // module covering BOTH consumed exports (a hook-only factory would TypeError).
 vi.mock('@/features/changelog/hooks/useChangelog', () => ({

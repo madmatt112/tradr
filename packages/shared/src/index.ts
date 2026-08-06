@@ -260,6 +260,8 @@ export type {
   ChangelogReleasesResponse,
   MarkChangelogViewedResponse,
 } from './schemas/changelog';
+export { ReportingTimezoneField, UserTimezoneSchema } from './schemas/user';
+export type { UserTimezoneInput } from './schemas/user';
 export type { CanonicalPart, CanonicalMessage, ProviderModel } from './lib/advisor/types';
 export { uuidv5, uuidv5Batch, WIDGET_DEFAULT_NAMESPACE } from './utils/uuidv5';
 export { DEFAULT_WIDGETS, BODY_LIMIT_BYTES } from './constants/dashboard-defaults';
