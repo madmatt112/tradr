@@ -1,0 +1,1 @@
+ALTER TABLE "accounts" ADD COLUMN "default_risk_percent" numeric(5, 2);

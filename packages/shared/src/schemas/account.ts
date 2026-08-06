@@ -46,6 +46,33 @@ const timezone = z
     { message: 'Must be a valid IANA timezone name' },
   );
 
+// Default risk percentage (user-onboarding R1): the share of the account
+// balance risked per trade, seeding the calculator's `riskPercent` input.
+// Bounded to the accounts.default_risk_percent numeric(5,2) column (≤3 integer
+// digits, ≤2 fractional) AND to the 0–100 range the calculator's own
+// `riskPercent` already uses (`positiveDecimal(100)`, schemas/calculator.ts).
+// That module's helper is deliberately not reused: it bounds magnitude only
+// and would accept `3.14159`, which the numeric(5,2) column would silently
+// round. The whitespace rejection mirrors `startingBalance` above — Number("
+// 3 ") passes a bounds check but new Decimal("  3  ") throws server-side.
+//
+// Unlike startingBalance this IS editable after creation (it appears in
+// UpdateAccountSchema): it seeds a form field and rewrites no history.
+//
+// Strictly positive. Zero would mean "risk nothing on every trade", which is
+// not a rule but the absence of one — and absence is already expressed by
+// omitting the field entirely.
+const defaultRiskPercent = z.string().refine(
+  (v) => {
+    if (v.length === 0) return false;
+    if (v !== v.trim()) return false;
+    if (!/^\d{1,3}(\.\d{1,2})?$/.test(v)) return false;
+    const n = Number(v);
+    return n > 0 && n <= 100;
+  },
+  { message: 'Must be a percentage above 0 and up to 100, with at most 2 decimal places' },
+);
+
 export const CreateAccountSchema = z.object({
   name: z.string().min(1).max(100).trim(),
   currency: z.enum(CURRENCY_CODES as [string, ...string[]]),
@@ -56,6 +83,9 @@ export const CreateAccountSchema = z.object({
   startingBalance: startingBalance.optional(),
   // Optional — omitted falls back to the column default 'America/New_York'.
   timezone: timezone.optional(),
+  // Optional — omitted means no rule is set, which preserves the calculator's
+  // pre-existing behaviour exactly (empty field, user-supplied per calculation).
+  defaultRiskPercent: defaultRiskPercent.optional(),
 });
 
 export const UpdateAccountSchema = z.object({
@@ -63,6 +93,11 @@ export const UpdateAccountSchema = z.object({
   currency: z.enum(CURRENCY_CODES as [string, ...string[]]).optional(),
   brokerageId: z.string().uuid().nullable().optional(),
   timezone: timezone.optional(),
+  // Nullable AND optional, and the two mean different things: omitted leaves
+  // the stored value untouched (standard PATCH semantics), while an explicit
+  // null clears the rule back to unset. Without the null case a user who set a
+  // percentage could never remove it.
+  defaultRiskPercent: defaultRiskPercent.nullable().optional(),
 });
 
 export const AccountSchema = z.object({
@@ -79,6 +114,10 @@ export const AccountSchema = z.object({
   // ships derived account balances. Kept optional so existing callers/tests
   // that construct accounts without a balance continue to parse.
   balance: z.string().optional(),
+  // Null when no rule is set. `.optional()` as well as `.nullable()` for the
+  // same reason as `balance` above — existing callers and test fixtures build
+  // accounts without this field and must keep parsing.
+  defaultRiskPercent: z.string().nullable().optional(),
   // The two halves of `balance` (ledger-balances Req 10), same optionality
   // rationale. `cash` is the deployable figure; `positionValue` is the cost
   // basis of open positions and is NEGATIVE for shorts, where the unexited size

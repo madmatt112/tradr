@@ -83,6 +83,16 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *                   `Etc/UTC`). Defines the account's trading day. Omitted
  *                   defaults to `America/New_York`; an unknown zone is a 400.
  *                 example: America/New_York
+ *               defaultRiskPercent:
+ *                 type: string
+ *                 description: >
+ *                   Share of the account balance risked per trade, as a decimal
+ *                   string above 0 and up to 100 with at most 2 decimal places.
+ *                   Seeds the position-size calculator. Omitted means no rule is
+ *                   set, which leaves the calculator's field empty as before.
+ *                   Unlike `PUT /api/accounts/{id}`, an explicit `null` is a 400
+ *                   here — there is no rule to clear on create.
+ *                 example: '1.00'
  *     responses:
  *       201: { description: The created account. }
  *       400: { description: Validation error. }
@@ -143,7 +153,8 @@ accounts.put('/writable', validate('json', SetWritableAccountSchema), async (c) 
  *     description: >
  *       Authed. All fields optional. `startingBalance` is deliberately absent —
  *       it is creation-only. `timezone` IS editable: it changes only subsequent
- *       trading-day evaluations and rewrites no history.
+ *       trading-day evaluations and rewrites no history, and `defaultRiskPercent`
+ *       is editable for the same reason.
  *     tags: [Accounts]
  *     parameters:
  *       - in: path
@@ -164,6 +175,15 @@ accounts.put('/writable', validate('json', SetWritableAccountSchema), async (c) 
  *                 type: string
  *                 description: IANA zone name (canonical spelling). Unknown zone is a 400.
  *                 example: America/New_York
+ *               defaultRiskPercent:
+ *                 type: string
+ *                 nullable: true
+ *                 description: >
+ *                   Share of the account balance risked per trade (decimal string
+ *                   above 0, up to 100, at most 2 decimal places). Omitting the
+ *                   key leaves the stored value untouched; sending an explicit
+ *                   `null` clears the rule back to unset.
+ *                 example: '1.00'
  *     responses:
  *       200: { description: The updated account. }
  *       400: { description: Validation error (includes an unknown IANA timezone). }

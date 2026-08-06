@@ -451,6 +451,134 @@ describe('accounts', () => {
     expect([200, 400]).toContain(res.status);
   });
 
+  // 15b. Default risk percentage (user-onboarding R1.1/R1.5). Editable after
+  // creation, unlike startingBalance — it rewrites no history.
+  it('creates an account with a defaultRiskPercent and returns it on read', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Risk Rule Account',
+      currency: 'USD',
+      defaultRiskPercent: '1.5',
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // numeric(5,2) normalises the stored decimal string to two places.
+    expect(body.defaultRiskPercent).toBe('1.50');
+
+    const getRes = await authedRequest('GET', `/api/accounts/${body.id}`, cookie);
+    expect(getRes.status).toBe(200);
+    expect((await getRes.json()).defaultRiskPercent).toBe('1.50');
+
+    const listRes = await authedRequest('GET', '/api/accounts', cookie);
+    const list = await listRes.json();
+    expect(list[0].defaultRiskPercent).toBe('1.50');
+  });
+
+  it.each([
+    ['zero', '0'],
+    ['negative', '-1'],
+    ['above 100', '101'],
+    ['too many decimals', '3.141'],
+    ['untrimmed', ' 1.5 '],
+  ])('returns 400 for %s default risk percent', async (_label, defaultRiskPercent) => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Bad Risk Rule',
+      currency: 'USD',
+      defaultRiskPercent,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // The update path bounds the field through a DIFFERENT schema object
+  // (UpdateAccountSchema, which is additionally nullable), so route-level
+  // rejection has to be pinned separately from create's — and a rejected
+  // update must leave the stored rule exactly as it was.
+  it.each([
+    ['zero', '0'],
+    ['negative', '-1'],
+    ['above 100', '101'],
+    ['too many decimals', '3.141'],
+    ['untrimmed', ' 1.5 '],
+  ])('returns 400 for %s default risk percent on update', async (_label, defaultRiskPercent) => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Bad Risk Rule Update',
+      currency: 'USD',
+      defaultRiskPercent: '1',
+    });
+    const account = await createRes.json();
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      defaultRiskPercent,
+    });
+    expect(res.status).toBe(400);
+
+    const getRes = await authedRequest('GET', `/api/accounts/${account.id}`, cookie);
+    expect((await getRes.json()).defaultRiskPercent).toBe('1.00');
+  });
+
+  it('leaves defaultRiskPercent null when omitted on create', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie, 'No Risk Rule');
+    expect(account.defaultRiskPercent).toBeNull();
+  });
+
+  it('updates defaultRiskPercent', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie, 'Risk Rule Edit');
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      defaultRiskPercent: '2.25',
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).defaultRiskPercent).toBe('2.25');
+  });
+
+  // Omitted key === "leave it alone" (standard PATCH semantics). This is the
+  // case a too-narrow `updateAccount` type would silently break in the other
+  // direction, so it is pinned alongside the explicit-null clear below.
+  it('leaves a stored defaultRiskPercent untouched when the update omits it', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Untouched Risk Rule',
+      currency: 'USD',
+      defaultRiskPercent: '3',
+    });
+    const account = await createRes.json();
+    expect(account.defaultRiskPercent).toBe('3.00');
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      name: 'Untouched Risk Rule Renamed',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.name).toBe('Untouched Risk Rule Renamed');
+    expect(body.defaultRiskPercent).toBe('3.00');
+  });
+
+  // Explicit null is a real value, not an omission — without it a user who set
+  // a percentage could never remove it.
+  it('clears defaultRiskPercent when the update sends an explicit null', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Cleared Risk Rule',
+      currency: 'USD',
+      defaultRiskPercent: '5',
+    });
+    const account = await createRes.json();
+    expect(account.defaultRiskPercent).toBe('5.00');
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      defaultRiskPercent: null,
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).defaultRiskPercent).toBeNull();
+
+    const getRes = await authedRequest('GET', `/api/accounts/${account.id}`, cookie);
+    expect((await getRes.json()).defaultRiskPercent).toBeNull();
+  });
+
   // 16. Position-count endpoint
   it('returns position count for an account', async () => {
     const { cookie } = await registerAndGetCookie();
