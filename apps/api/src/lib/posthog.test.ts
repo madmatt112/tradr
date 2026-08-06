@@ -5,7 +5,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // module-level singleton per test) still sees the same stubbed deps.
 const h = vi.hoisted(() => {
   const capture = vi.fn();
-  const identify = vi.fn();
+  // Mirrors posthog-node's real identify(): it destructures
+  // `{ $set, $set_once, $anon_distinct_id, ...rest }` and DISCARDS `rest`, so any
+  // other top-level property never reaches PostHog. A permissive mock hid exactly
+  // this — a top-level `environment` looked delivered in tests and was dropped in
+  // production. The mock records what the SDK would actually send.
+  const identifySent: Array<{ distinctId: string; properties: Record<string, unknown> }> = [];
+  const identifyImpl = (msg: { distinctId: string; properties?: Record<string, unknown> }) => {
+    const { $set, $set_once, $anon_distinct_id, ...rest } = msg.properties ?? {};
+    identifySent.push({
+      distinctId: msg.distinctId,
+      properties: {
+        // `$set || rest` is the SDK's own fallback: `rest` is used ONLY when no
+        // $set was given, and is otherwise discarded entirely.
+        $set: $set ?? rest,
+        $set_once: $set_once ?? {},
+        $anon_distinct_id: $anon_distinct_id ?? undefined,
+      },
+    });
+  };
+  const identify = vi.fn(identifyImpl);
   const captureException = vi.fn();
   const shutdown = vi.fn(() => Promise.resolve());
   const PostHogCtor = vi.fn(() => ({ capture, identify, captureException, shutdown }));
@@ -20,6 +39,8 @@ const h = vi.hoisted(() => {
   return {
     capture,
     identify,
+    identifyImpl,
+    identifySent,
     captureException,
     shutdown,
     PostHogCtor,
@@ -44,6 +65,11 @@ async function load() {
 beforeEach(() => {
   vi.clearAllMocks();
   h.config.POSTHOG_ENVIRONMENT = undefined;
+  h.identifySent.length = 0;
+  // clearAllMocks() clears CALLS but keeps any mockImplementation a previous test
+  // installed — the throw-path test would otherwise leave identify throwing for
+  // the rest of the file, silently emptying identifySent.
+  h.identify.mockImplementation(h.identifyImpl);
 });
 
 describe('initPostHog', () => {
@@ -165,7 +191,7 @@ describe('identifyServerUser', () => {
     expect(h.identify).toHaveBeenCalledTimes(1);
     expect(h.identify).toHaveBeenCalledWith({
       distinctId: 'user-uuid-1',
-      properties: { $geoip_disable: true, $set: { email_verified: true } },
+      properties: { $set: { email_verified: true } },
     });
   });
 
@@ -286,11 +312,7 @@ describe('POSTHOG_ENVIRONMENT stamp', () => {
 
     expect(h.identify).toHaveBeenCalledWith({
       distinctId: 'user-1',
-      properties: {
-        $geoip_disable: true,
-        environment: 'staging',
-        $set: { email_verified: true, environment: 'staging' },
-      },
+      properties: { $set: { email_verified: true, environment: 'staging' } },
     });
   });
 
@@ -339,7 +361,7 @@ describe('$geoip_disable (server-side geo suppression)', () => {
     expect(props.$geoip_disable).toBe(true);
   });
 
-  it('is set on the $identify EVENT, and never leaks into the person $set bag', async () => {
+  it('never leaks the ingestion directive into the person $set bag', async () => {
     h.config.POSTHOG_ENVIRONMENT = 'staging';
     h.isPostHogConfigured.mockReturnValue(true);
     const { initPostHog, identifyServerUser } = await load();
@@ -347,16 +369,12 @@ describe('$geoip_disable (server-side geo suppression)', () => {
     initPostHog();
     identifyServerUser('user-1', { email_verified: true });
 
-    const { properties } = h.identify.mock.calls[0][0] as {
-      properties: Record<string, unknown> & { $set: Record<string, unknown> };
-    };
-    expect(properties.$geoip_disable).toBe(true);
-    // An ingestion directive is not a user attribute — it must not become a
-    // person property.
-    expect(properties.$set).not.toHaveProperty('$geoip_disable');
+    // An ingestion directive is not a user attribute.
+    const sent = h.identifySent[0];
+    expect(sent.properties.$set).not.toHaveProperty('$geoip_disable');
   });
 
-  it('labels the $identify EVENT, not just the person profile', async () => {
+  it('labels the person profile; the $identify event is unlabelled by SDK design', async () => {
     h.config.POSTHOG_ENVIRONMENT = 'staging';
     h.isPostHogConfigured.mockReturnValue(true);
     const { initPostHog, identifyServerUser } = await load();
@@ -364,13 +382,16 @@ describe('$geoip_disable (server-side geo suppression)', () => {
     initPostHog();
     identifyServerUser('user-1', { email_verified: true });
 
-    const { properties } = h.identify.mock.calls[0][0] as {
-      properties: Record<string, unknown> & { $set: Record<string, unknown> };
-    };
-    // The defect: event-level filtering on `environment` dropped every $identify
-    // because the label existed only under $set.
-    expect(properties.environment).toBe('staging');
-    expect(properties.$set.environment).toBe('staging');
+    // Asserted against what posthog-node would ACTUALLY transmit: identify()
+    // discards every top-level property except $set / $set_once /
+    // $anon_distinct_id. An earlier version spread the label at the top level and
+    // a permissive mock reported success while production events stayed
+    // unlabelled — hence identifySent, which models the real stripping.
+    const sent = h.identifySent[0];
+    const set = sent.properties.$set as Record<string, unknown>;
+    expect(set.environment).toBe('staging');
+    // The event itself carries no label. Filter $identify by PERSON property.
+    expect(sent.properties).not.toHaveProperty('environment');
   });
 });
 

@@ -25,36 +25,24 @@ type PostHog = (typeof import('posthog-js'))['default'];
 // by captureClientEvent to no-op when PostHog is absent/uninitialized.
 let posthog: PostHog | undefined;
 
-// The router, captured at init time, so scrubEvent (a single-arg before_send
-// hook) can resolve the masked route pattern for the current location.
-let activeRouter: AnyRouter | undefined;
-
 /**
- * The masked URL for the current location: the matched route's PATTERN id
- * (e.g. `/_auth/positions/$positionId`), origin-prefixed. Reads the last entry
- * of router.state.matches — its `routeId`, which in @tanstack/react-router is
- * the route PATTERN, not the resolved path — so no resolved id, query string, or
- * referrer is ever sent. Guarded for empty matches (the router's first match
- * resolves asynchronously): returns undefined so the caller skips the pageview.
+ * Whether the router has resolved a route for the current location. Reads the
+ * last entry of router.state.matches, which resolves asynchronously — so this is
+ * false for the brief window before the first match lands, and the caller skips
+ * the entry pageview rather than emitting one for a location the router has not
+ * settled on yet.
  */
-export function maskedUrl(router: AnyRouter): string | undefined {
+export function hasResolvedRoute(router: AnyRouter): boolean {
   const { matches } = router.state;
-  const routeId = matches[matches.length - 1]?.routeId;
-  if (!routeId) return undefined;
-  return window.location.origin + routeId;
+  return !!matches[matches.length - 1]?.routeId;
 }
 
-// PostHog auto-properties that can carry a resolved id, query string, or
-// referrer (REQ-3.4/8.2). scrubEvent replaces them with the masked route pattern
-// (or, absent a router, strips the query/fragment as a privacy floor).
-const MASK_URL_KEYS = [
-  '$current_url',
-  '$pathname',
-  '$referrer',
-  '$host',
-  '$initial_referrer',
-  'title',
-] as const;
+// Referrer properties are still DROPPED. Resolved in-app URLs are sent (see
+// scrubEvent), but a referrer can carry an EXTERNAL origin and its query string
+// — a different exposure from our own paths, and nothing in web analytics'
+// installation health needs it. Dropping keeps third-party navigation history
+// out of the payload.
+const DROP_REFERRER_KEYS = ['$referrer', '$initial_referrer'] as const;
 
 // Exception-autocapture ($exception) properties that carry the error message and
 // stack frames — the highest-entropy client payload, able to embed an
@@ -75,14 +63,23 @@ interface PostHogCaptureLike {
 }
 
 /**
- * before_send hook (REQ-8.5/3.4): the value-level capture-boundary guard over
- * PostHog's own auto-properties. Replaces URL/title properties with the masked
- * route pattern (no resolved id, no query string, no referrer). When no route has
- * resolved yet (no active match), it **drops** the property rather than emit the
- * resolved path — the route pattern is the only URL value ever sent. Sets
- * `$geoip_disable` to suppress server-side geo enrichment (REQ-3.4c/8.2) and
- * removes any `$geoip_*` already present. Also redacts exception-autocapture
- * payloads (message + stack) via scrubDeep before send (EXCEPTION_VALUE_KEYS).
+ * before_send hook: the value-level capture-boundary guard over PostHog's own
+ * auto-properties.
+ *
+ * URL properties ($current_url, $pathname, $host, title) are sent AS-IS — the
+ * SDK's natural values. They were previously overwritten with the matched route
+ * PATTERN, which put a full URL into every one of them; $host and $pathname
+ * expect a hostname and a path respectively, so web analytics could not read the
+ * installation. Sending resolved URLs means in-app record ids (e.g. a position
+ * id in /positions/:id) DO reach PostHog — a deliberate reversal of the original
+ * masking, taken to make web analytics usable. See .env.example's privacy note.
+ *
+ * Referrers are still dropped (DROP_REFERRER_KEYS): an external referrer is a
+ * different exposure from our own paths. Sets `$geoip_disable` to suppress
+ * server-side geo enrichment and removes any `$geoip_*` already present. Also
+ * redacts exception-autocapture payloads (message + stack) via scrubDeep
+ * (EXCEPTION_VALUE_KEYS) — REQ-8.5, unchanged.
+ *
  * ALWAYS returns the (mutated) event; returning `null` would drop the event,
  * which is never the intent here.
  */
@@ -90,11 +87,8 @@ export function scrubEvent<T extends PostHogCaptureLike>(event: T | null): T | n
   if (!event || !event.properties) return event;
   const props = event.properties as Record<string, unknown>;
 
-  const masked = activeRouter ? maskedUrl(activeRouter) : undefined;
-  for (const key of MASK_URL_KEYS) {
-    if (typeof props[key] !== 'string') continue;
-    if (masked) props[key] = masked;
-    else delete props[key]; // no resolved route ⇒ drop rather than leak the path
+  for (const key of DROP_REFERRER_KEYS) {
+    delete props[key];
   }
 
   // Suppress server-side geo enrichment. `$geoip_disable` is the property the
@@ -134,23 +128,25 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
   const cfg = getTelemetryConfig();
   if (!cfg.posthogPublicKey) return;
 
-  activeRouter = router;
   const ph = (await import('posthog-js')).default;
   ph.init(cfg.posthogPublicKey, {
     api_host: cfg.posthogPublicHost ?? DEFAULT_API_HOST,
     autocapture: false, // REQ-3.4a — no DOM text/input metadata
-    // Automatic pageview capture stays OFF; we emit masked pageviews manually on
-    // each route resolve below so the route PATTERN is sent, never the raw URL.
+    // Automatic pageview capture stays OFF; we emit one per router route-resolve
+    // below. The SDK populates $current_url / $pathname / $host from
+    // window.location at capture time, and before_send no longer overwrites them.
     capture_pageview: false,
+    // Deliberately off. PostHog's web-analytics installation check flags this as
+    // making bounce rate and session duration inaccurate — an accepted cost, not
+    // an oversight. Flip to true if those two metrics start mattering.
     capture_pageleave: false,
     disable_session_recording: true, // REQ-3.4b — never record the trading UI
     persistence: 'memory', // REQ-3.7 — cookieless/no-localStorage distinct_id
     disable_surveys: true,
-    // Web vitals ($web_vitals) — performance timings only, no DOM or input data,
-    // and its URL properties are masked to the route pattern by before_send like
-    // every other event. Stated explicitly because it defaults ON: it is the one
-    // autocapture-family surface deliberately kept, so an unset field cannot be
-    // mistaken for an oversight. Set to false to turn it off.
+    // Web vitals ($web_vitals) — performance timings only, no DOM or input data.
+    // Stated explicitly because it defaults ON: it is the one autocapture-family
+    // surface deliberately kept, so an unset field cannot be mistaken for an
+    // oversight. Set to false to turn it off.
     capture_performance: { web_vitals: true, network_timing: false },
     advanced_disable_toolbar_metrics: true,
     before_send: scrubEvent,
@@ -159,9 +155,9 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
 
   // Stamp the deployment label ('production', 'staging') onto EVERY event as a
   // super property — including the ones we never call capture() for ourselves:
-  // autocaptured $exception and the masked $pageview below. register() runs
-  // before before_send, so scrubEvent sees the property and passes it through
-  // untouched (it only rewrites the URL/geoip/exception keys). Skipped when the
+  // autocaptured $exception and $web_vitals. register() runs before before_send,
+  // so scrubEvent sees the property and passes it through untouched (it only
+  // touches the referrer/geoip/exception keys). Skipped when the
   // deploy did not set posthogPublicEnvironment — the self-host default, where
   // there is one deployment and nothing to tell apart. Super properties live in
   // the memory-only persistence store (REQ-3.7), so this stays cookieless.
@@ -182,16 +178,17 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
     capture_console_errors: false,
   });
 
-  // Masked pageview on every client-side navigation. before_send (scrubEvent)
-  // replaces $current_url with the route PATTERN — no resolved id, query string,
-  // or referrer — and persistence is memory-only, so pageviews stay cookieless.
+  // One pageview per client-side navigation. The SDK reads window.location at
+  // capture time, so each carries the resolved URL, path, and host that web
+  // analytics needs. Referrers are still dropped in before_send, and persistence
+  // is memory-only, so pageviews stay cookieless.
   router.subscribe('onResolved', () => ph.capture('$pageview'));
   // Capture the entry pageview if the initial route already resolved during the
   // async import above (its first onResolved may have fired before we
   // subscribed). Guarded on resolved matches, so it never double-counts: when
   // the route has not resolved yet this is skipped and the first onResolved emits
   // the entry pageview instead.
-  if (maskedUrl(router)) ph.capture('$pageview');
+  if (hasResolvedRoute(router)) ph.capture('$pageview');
 }
 
 // ---------------------------------------------------------------------------

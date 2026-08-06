@@ -168,14 +168,17 @@ describe('initPostHogClient', () => {
 });
 
 describe('scrubEvent', () => {
-  it('with no active route: drops url/referrer/title, disables geoip, drops $geoip_*', async () => {
+  it('drops referrers, disables geoip, and passes URL properties through untouched', async () => {
     const { scrubEvent } = await import('./posthog');
     const event = {
       event: 'position_create_dialog_opened',
       properties: {
-        $current_url: 'https://app.tradr.io/positions/abc123?token=supersecret',
+        $current_url: 'https://app.tradr.io/positions/abc123',
+        $pathname: '/positions/abc123',
+        $host: 'app.tradr.io',
+        title: 'Position abc123',
         $referrer: 'https://google.com/search?q=tradr',
-        title: 'Position abc123?x=1',
+        $initial_referrer: 'https://google.com/search?q=tradr',
         $ip: '203.0.113.7',
         $geoip_city_name: 'London',
         $geoip_country_code: 'GB',
@@ -194,30 +197,35 @@ describe('scrubEvent', () => {
     expect((out!.properties as Record<string, unknown>).$geoip_disable).toBe(true);
     expect(out!.properties.$geoip_city_name).toBeUndefined();
     expect(out!.properties.$geoip_country_code).toBeUndefined();
-    // No resolved route ⇒ URL/referrer/title are DROPPED, never the resolved path.
-    expect(out!.properties.$current_url).toBeUndefined();
+
+    // URL properties keep their natural SHAPES. Overwriting all of them with one
+    // masked URL is what broke web analytics: $host and $pathname expect a
+    // hostname and a path, and both were receiving a full URL.
+    expect(out!.properties.$current_url).toBe('https://app.tradr.io/positions/abc123');
+    expect(out!.properties.$pathname).toBe('/positions/abc123');
+    expect(out!.properties.$host).toBe('app.tradr.io');
+    expect(out!.properties.title).toBe('Position abc123');
+
+    // Referrers are still dropped — an external origin is a different exposure
+    // from our own paths.
     expect(out!.properties.$referrer).toBeUndefined();
-    expect(out!.properties.title).toBeUndefined();
+    expect(out!.properties.$initial_referrer).toBeUndefined();
     expect(out!.properties.keep).toBe('me');
   });
 
-  it('with an active route: replaces url/referrer/title with the masked route PATTERN', async () => {
-    window.__TRADR_CONFIG__ = { posthogPublicKey: 'phc_test' };
-    const { initPostHogClient, scrubEvent } = await import('./posthog');
-    await initPostHogClient(makeStubRouter([{ routeId: PATTERN }]));
-    const expected = window.location.origin + PATTERN;
+  it('drops referrers even when no route has resolved', async () => {
+    const { scrubEvent } = await import('./posthog');
 
     const out = scrubEvent({
       properties: {
-        $current_url: 'https://app.tradr.io/positions/abc123?token=supersecret',
         $referrer: 'https://google.com/search?q=tradr',
-      },
+        $current_url: 'https://app.tradr.io/login',
+      } as Record<string, unknown>,
     });
 
-    expect(out!.properties.$current_url).toBe(expected);
-    expect(out!.properties.$referrer).toBe(expected);
-    expect(String(out!.properties.$current_url)).not.toContain('abc123');
-    expect(String(out!.properties.$current_url)).not.toContain('?');
+    expect(out!.properties!.$referrer).toBeUndefined();
+    // The URL still goes through — it no longer depends on router state at all.
+    expect(out!.properties!.$current_url).toBe('https://app.tradr.io/login');
   });
 
   it('redacts exception-autocapture payloads (message + nested stack) but keeps type/frames', async () => {

@@ -56,9 +56,14 @@ function environmentProperties(): { environment: string } | undefined {
  * `$geoip_disable` suppresses server-side geo enrichment. The only address
  * PostHog sees on a backend event is the container's egress IP, so enrichment
  * would place every user at the host region — a wrong answer, not a missing one.
- * posthog-node does NOT set this itself (posthog-python does), so it is set here
- * on every exit. It is an ingestion directive, not a user attribute, which is why
- * it belongs on the event and never in the person `$set` bag below.
+ *
+ * Ingestion already applies this to server-SDK events on its own (verified: every
+ * posthog-node event carried it well before this code existed). Setting it here is
+ * belt-and-braces against that default changing, not a fix for a gap — an earlier
+ * comment claimed posthog-node omitted it, which was wrong.
+ *
+ * It is an ingestion directive, not a user attribute, which is why it belongs on
+ * the event and never in the person `$set` bag below.
  */
 function outboundEventProperties(): Record<string, unknown> {
   return { $geoip_disable: true, ...environmentProperties() };
@@ -113,14 +118,16 @@ export function identifyServerUser(
 ): void {
   if (!client) return;
   try {
-    // The label goes in BOTH places, deliberately: `$set` puts it on the person
-    // profile, while the top-level bag puts it on the `$identify` EVENT. Without
-    // the latter, filtering events by `environment` silently drops every
-    // `$identify` — the person property does not label the event that carried it.
-    client.identify({
-      distinctId,
-      properties: { ...outboundEventProperties(), $set: withEnvironment(properties) },
-    });
+    // ONLY `$set` — the label lands on the person profile, not on the `$identify`
+    // event. That is a posthog-node limitation, not a choice: identify() destructures
+    // `{ $set, $set_once, $anon_distinct_id, ...rest }` and DISCARDS `rest`, so any
+    // top-level property here is silently dropped before send. An earlier version
+    // spread the label at the top level too; it never reached PostHog.
+    //
+    // Consequence: `$identify` events carry no `environment`, so filter them by the
+    // PERSON property instead. Every other event (including user_logged_in, emitted
+    // alongside this one) is labelled at the event level.
+    client.identify({ distinctId, properties: { $set: withEnvironment(properties) } });
   } catch (err) {
     logTelemetryFailureOnce('posthog', err);
   }
