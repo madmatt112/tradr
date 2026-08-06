@@ -197,6 +197,13 @@
       "when": 1786041305065,
       "tag": "0027_user_onboarding_preference",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1786054566343,
+      "tag": "0028_onboarding_backfill_existing_users",
+      "breakpoints": true
     }
   ]
 }

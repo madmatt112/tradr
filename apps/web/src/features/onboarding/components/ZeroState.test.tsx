@@ -1,0 +1,357 @@
+// @vitest-environment jsdom
+//
+// `useOnboarding` is faked wholesale — the hook has 22 tests of its own and
+// ActivationChecklist has 24, so this file is only about what the ZERO-STATE
+// does: the three forward actions, R3.3's copy, and the R3.2 guarantee that
+// neither fork leaves the user with less than they started with.
+//
+// ActivationChecklist is deliberately NOT mocked. R3.2 is a claim about the
+// composed screen ("declining guidance leaves the checklist and a docs link in
+// place"), and a stubbed checklist would let that claim pass while the real one
+// rendered nothing. The single `useOnboarding` mock reaches both components,
+// since both import it from the same path.
+//
+// AccountDialog IS mocked, to a marker that respects `open`. It pulls in
+// brokerages, tier state and the API client, none of which this screen's
+// behaviour depends on — what matters here is only that the primary action
+// opens it. (AccountList.test.tsx stubs it the same way.)
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { OnboardingState, OnboardingStatus } from '@tradr/shared';
+
+import { DOCS_BASE_URL, docsUrl } from '@/lib/docs';
+
+import { useOnboarding, type UseOnboardingResult } from '../hooks/useOnboarding';
+import { deriveChecklist } from '../lib/derive-checklist';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock('../hooks/useOnboarding', () => ({ useOnboarding: vi.fn() }));
+
+vi.mock('@/features/accounts/components/AccountDialog', () => ({
+  AccountDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="account-dialog" /> : null,
+}));
+
+import { ZeroState } from './ZeroState';
+
+const mockUseOnboarding = vi.mocked(useOnboarding);
+
+function preference(status: OnboardingStatus): OnboardingState {
+  return { status, coachMarksSeen: [] };
+}
+
+/** A fresh user: no accounts, no positions, the calculator untouched. */
+function freshChecklist() {
+  return deriveChecklist({
+    accountCount: 0,
+    positionsEverCreatedCount: 0,
+    closedPositionCount: 0,
+  });
+}
+
+function useHook(over: Partial<UseOnboardingResult> = {}): UseOnboardingResult {
+  const value: UseOnboardingResult = {
+    checklist: freshChecklist(),
+    preference: preference('pending'),
+    isLoading: false,
+    isError: false,
+    isSaving: false,
+    setStatus: vi.fn(),
+    dismiss: vi.fn(),
+    markCoachMarkSeen: vi.fn(),
+    ...over,
+  };
+  mockUseOnboarding.mockReturnValue(value);
+  return value;
+}
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
+  it('renders all three, and the sample-data option alongside the real one', () => {
+    useHook();
+    render(<ZeroState />);
+
+    expect(screen.getByRole('button', { name: 'Create my first account' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Walk me through it' })).toBeTruthy();
+    // R9.1: alongside, never instead of — the real account action is still the
+    // one that comes first and the one that carries the weight.
+    expect(screen.getByRole('button', { name: 'Add sample data' })).toBeTruthy();
+  });
+
+  it('opens the account dialog from the primary action', async () => {
+    useHook();
+    render(<ZeroState />);
+
+    expect(screen.queryByTestId('account-dialog')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Create my first account' }));
+
+    expect(screen.getByTestId('account-dialog')).toBeTruthy();
+  });
+
+  it('records the guided opt-in as `active` (R5.2)', async () => {
+    const hook = useHook();
+    render(<ZeroState />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Walk me through it' }));
+
+    expect(hook.setStatus).toHaveBeenCalledTimes(1);
+    expect(hook.setStatus).toHaveBeenCalledWith('active');
+  });
+
+  it('does not re-record the opt-in while the write is in flight', () => {
+    useHook({ isSaving: true });
+    render(<ZeroState />);
+
+    expect(
+      screen.getByRole('button', { name: 'Walk me through it' }).hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
+  it('offers sample data as a disabled control with the reason stated, never a silent no-op', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const sample = screen.getByTestId('zero-state-sample-data');
+    expect(sample.hasAttribute('disabled')).toBe(true);
+    // The explanation is real markup the button points at, not a comment.
+    const noteId = sample.getAttribute('aria-describedby');
+    expect(noteId).toBeTruthy();
+    expect(document.getElementById(noteId!)?.textContent).toBe('Sample data is not available yet.');
+  });
+
+  it('says so plainly when guidance is not wired yet, rather than appearing to do nothing', async () => {
+    useHook();
+    render(<ZeroState />);
+
+    expect(screen.queryByTestId('zero-state-guidance-note')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Walk me through it' }));
+
+    // TASK 24: replace this with an assertion that the walkthrough started.
+    expect(screen.getByTestId('zero-state-guidance-note').textContent).toContain('not built yet');
+  });
+});
+
+describe('ZeroState — what the screen says (R3.3)', () => {
+  it('names the brokerage account as the prerequisite for everything else', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const text = screen.getByTestId('onboarding-zero-state').textContent ?? '';
+    expect(text).toContain('Start with a brokerage account');
+    expect(text).toContain('booked against one');
+  });
+
+  it('states that Tradr accounts mirror real ones but are not connected to them', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const statement = screen.getByTestId('zero-state-not-connected').textContent ?? '';
+    expect(statement).toContain('mirrors a real brokerage account');
+    expect(statement).toContain('not connected to your broker');
+  });
+
+  it('states that Tradr never places or executes trades', () => {
+    useHook();
+    render(<ZeroState />);
+
+    expect(screen.getByTestId('zero-state-not-connected').textContent).toContain(
+      'never places or executes trades',
+    );
+  });
+});
+
+describe('ZeroState — neither fork is a dead end (R3.2)', () => {
+  it('leaves the checklist and the docs link in place after declining guidance', async () => {
+    useHook();
+    render(<ZeroState />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Walk me through it' }));
+
+    // Both survive the choice, and so does the action that actually unblocks
+    // the product — nothing on this screen is spent by taking a fork.
+    expect(screen.getByTestId('activation-checklist')).toBeTruthy();
+    expect(document.querySelectorAll('[data-checklist-item]').length).toBe(4);
+    expect(screen.getByTestId('zero-state-docs-link')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Create my first account' })).toBeTruthy();
+  });
+
+  it('leaves the checklist and the docs link in place on the unguided path', async () => {
+    useHook();
+    render(<ZeroState />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create my first account' }));
+
+    expect(screen.getByTestId('activation-checklist')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-docs-link')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Walk me through it' })).toBeTruthy();
+  });
+
+  it('keeps the docs link when the checklist itself has been dismissed', () => {
+    // A dismissed checklist collapses to its own reopen row; the docs link is a
+    // sibling of the checklist, not a child, so it cannot go with it.
+    useHook({ checklist: null, preference: preference('skipped') });
+    render(<ZeroState />);
+
+    expect(screen.getByTestId('zero-state-docs-link')).toBeTruthy();
+    expect(screen.getByTestId('activation-checklist-reopen')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Create my first account' })).toBeTruthy();
+  });
+
+  it('links to the docs through docsUrl(), with the host written down nowhere here', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const link = screen.getByTestId('zero-state-docs-link');
+    expect(link.getAttribute('href')).toBe(docsUrl('gettingStarted'));
+    expect(link.getAttribute('href')?.startsWith(DOCS_BASE_URL)).toBe(true);
+    // Mid-task reader: a new tab rather than losing the page they were on.
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noreferrer');
+  });
+});
+
+describe('ZeroState — design-system gates', () => {
+  it('carries exactly one primary (amber) action, and it is the account', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const primaries = [...document.querySelectorAll('button[data-variant="default"]')];
+    expect(primaries.length).toBe(1);
+    expect(primaries[0]?.getAttribute('data-testid')).toBe('zero-state-create-account');
+
+    // Everything else, including the checklist's own controls, stays quiet.
+    for (const button of document.querySelectorAll('button')) {
+      if (button === primaries[0]) continue;
+      expect(['outline', 'ghost']).toContain(button.getAttribute('data-variant'));
+    }
+  });
+
+  it('does not spend a second amber on the docs link', () => {
+    // ImportPage and the sidebar colour their docs links `text-primary`; those
+    // surfaces have no amber button competing with them and this one does.
+    useHook();
+    render(<ZeroState />);
+
+    expect(screen.getByTestId('zero-state-docs-link').className).not.toContain('text-primary');
+  });
+
+  it('puts cursor-pointer on every button and on the link', () => {
+    useHook();
+    render(<ZeroState />);
+
+    for (const button of document.querySelectorAll('button')) {
+      expect(button.className).toContain('cursor-pointer');
+    }
+    expect(screen.getByTestId('zero-state-docs-link').className).toContain('cursor-pointer');
+  });
+
+  it('uses semantic roles only — no financial-semantic tokens, no hardcoded colours', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const markup = screen.getByTestId('onboarding-zero-state').outerHTML;
+    // gain/loss/flat mean money direction. Nothing on a welcome screen does.
+    expect(markup).not.toMatch(/\b(text|bg|fill|stroke|border)-(gain|loss|flat)\b/);
+    expect(markup).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(markup).not.toMatch(/\b(text|bg)-(green|red|amber|emerald|rose|yellow)-\d{2,3}\b/);
+  });
+
+  it('holds its transitions still under prefers-reduced-motion', () => {
+    useHook();
+    render(<ZeroState />);
+
+    // The hover/focus transition on the three action buttons is the only motion
+    // this screen has, and it is the only thing that has to stand still.
+    for (const testid of [
+      'zero-state-create-account',
+      'zero-state-walkthrough',
+      'zero-state-sample-data',
+    ]) {
+      expect(screen.getByTestId(testid).className).toContain('motion-reduce:transition-none');
+    }
+  });
+
+  it('is fully operable from the keyboard', async () => {
+    const hook = useHook();
+    render(<ZeroState />);
+
+    await userEvent.tab();
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('zero-state-create-account');
+
+    await userEvent.tab();
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('zero-state-walkthrough');
+
+    // The disabled sample-data control is skipped rather than trapping a tab.
+    await userEvent.tab();
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Dismiss checklist');
+
+    await userEvent.tab();
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('zero-state-docs-link');
+
+    // Both fork actions activate from the keyboard, with both keys.
+    await userEvent.tab({ shift: true });
+    await userEvent.tab({ shift: true });
+    await userEvent.keyboard('{Enter}');
+    expect(hook.setStatus).toHaveBeenCalledWith('active');
+
+    await userEvent.tab({ shift: true });
+    await userEvent.keyboard(' ');
+    expect(screen.getByTestId('account-dialog')).toBeTruthy();
+  });
+});
+
+describe('ZeroState — mobile widths (R3.7)', () => {
+  it('renders every part of the screen at a 320px viewport', () => {
+    window.innerWidth = 320;
+    useHook();
+    render(<ZeroState />);
+
+    // jsdom does not lay out, so this pins the CONTENT contract: nothing is
+    // hidden or dropped at the narrowest width the app supports.
+    expect(screen.getByTestId('onboarding-zero-state')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-not-connected')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-create-account')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-walkthrough')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-sample-data')).toBeTruthy();
+    expect(screen.getByTestId('activation-checklist')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-docs-link')).toBeTruthy();
+  });
+
+  it('stacks the actions full-width below `sm` and only then puts them in a row', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const row = screen.getByTestId('zero-state-create-account').parentElement;
+    expect(row?.className).toContain('flex-col');
+    expect(row?.className).toContain('sm:flex-row');
+
+    for (const testid of [
+      'zero-state-create-account',
+      'zero-state-walkthrough',
+      'zero-state-sample-data',
+    ]) {
+      const className = screen.getByTestId(testid).className;
+      expect(className).toContain('w-full');
+      expect(className).toContain('sm:w-auto');
+    }
+  });
+
+  it('sets no fixed or minimum width anywhere, so nothing can overflow a narrow viewport', () => {
+    useHook();
+    render(<ZeroState />);
+
+    const root = screen.getByTestId('onboarding-zero-state');
+    expect(root.className).toContain('w-full');
+    // A max is fine — it only bites on wide screens. A fixed or minimum width
+    // is what forces a horizontal scrollbar on a phone.
+    expect(root.outerHTML).not.toMatch(/\bmin-w-\[/);
+    expect(root.outerHTML).not.toMatch(/\bw-\[\d/);
+  });
+});
