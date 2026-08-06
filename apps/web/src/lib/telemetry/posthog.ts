@@ -44,6 +44,22 @@ export function hasResolvedRoute(router: AnyRouter): boolean {
 // out of the payload.
 const DROP_REFERRER_KEYS = ['$referrer', '$initial_referrer'] as const;
 
+// URL properties posthog-js builds from `window.location.href`, which INCLUDES
+// the `#fragment`. The fragment must be stripped before send: the password-reset
+// and email-verification links deliberately carry their token there
+// (`/reset-password#token=<hex>`, D6/REQ-3.9) precisely so it never leaves the
+// browser, and sending the raw href would hand that token to the vendor. Query
+// strings are kept — no route puts a secret in one (REQ-3.9) and they carry real
+// analytics signal. Fragments carry none.
+const FRAGMENT_BEARING_KEYS = ['$current_url', '$initial_current_url'] as const;
+
+/** The URL with any `#fragment` removed. Returns non-strings untouched. */
+function stripFragment(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const hash = value.indexOf('#');
+  return hash === -1 ? value : value.slice(0, hash);
+}
+
 // Exception-autocapture ($exception) properties that carry the error message and
 // stack frames — the highest-entropy client payload, able to embed an
 // email/secret/token from a thrown value. scrubEvent runs each through scrubDeep
@@ -66,8 +82,10 @@ interface PostHogCaptureLike {
  * before_send hook: the value-level capture-boundary guard over PostHog's own
  * auto-properties.
  *
- * URL properties ($current_url, $pathname, $host, title) are sent AS-IS — the
- * SDK's natural values. They were previously overwritten with the matched route
+ * URL properties ($current_url, $pathname, $host, title) are sent with the SDK's
+ * natural values, MINUS any `#fragment` (see FRAGMENT_BEARING_KEYS — that is
+ * where the emailed reset/verification tokens live). They were previously
+ * overwritten with the matched route
  * PATTERN, which put a full URL into every one of them; $host and $pathname
  * expect a hostname and a path respectively, so web analytics could not read the
  * installation. Sending resolved URLs means in-app record ids (e.g. a position
@@ -89,6 +107,12 @@ export function scrubEvent<T extends PostHogCaptureLike>(event: T | null): T | n
 
   for (const key of DROP_REFERRER_KEYS) {
     delete props[key];
+  }
+
+  // Strip the `#fragment` from URL properties — this is what keeps the emailed
+  // reset/verification token out of the payload (see FRAGMENT_BEARING_KEYS).
+  for (const key of FRAGMENT_BEARING_KEYS) {
+    if (key in props) props[key] = stripFragment(props[key]);
   }
 
   // Suppress server-side geo enrichment. `$geoip_disable` is the property the
