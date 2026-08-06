@@ -13,6 +13,7 @@ import {
 } from '@/features/performance/utils/derivePresetRange';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { useNow } from '@/hooks/useNow';
+import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 function openNotional(positions: PositionListItem[], displayCurrency: string): number {
   return positions
@@ -61,26 +62,40 @@ export function QuickStatsTab() {
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
   const now = useNow(60_000);
-  const browserTz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  // The user's STORED reporting timezone (user-onboarding R2.4), `undefined`
+  // until that query settles. `derivePresetRange` resolves calendar boundaries
+  // through `Intl`, so it cannot run before the zone is known.
+  const timezone = useUserTimezone();
   const range = useMemo(
-    () => derivePresetRange('all-time', DEFAULT_CURRENCY_HISTORY_RANGE, now, browserTz, 1),
-    [now, browserTz],
+    () =>
+      timezone
+        ? derivePresetRange('all-time', DEFAULT_CURRENCY_HISTORY_RANGE, now, timezone, 1)
+        : null,
+    [now, timezone],
   );
 
-  const performanceQuery = usePerformance({
-    granularity: range.granularity,
-    start: range.start,
-    end: range.end,
-    tz: browserTz,
-    ...(displayCurrency ? { currency: displayCurrency } : {}),
-  });
+  const performanceQuery = usePerformance(
+    timezone && range
+      ? {
+          granularity: range.granularity,
+          start: range.start,
+          end: range.end,
+          tz: timezone,
+          ...(displayCurrency ? { currency: displayCurrency } : {}),
+        }
+      : null,
+  );
   const positionsQuery = usePositions({ status: 'open' });
 
   const currencyEntry = displayCurrency
     ? performanceQuery.data?.currencies.find((c) => c.code === displayCurrency)
     : undefined;
 
+  // `timezone === undefined` joins the predicate for the same reason
+  // `displayCurrency === null` already does: the performance query is disabled
+  // until it lands, and a disabled query reports `isLoading: false`.
   const isLoading =
+    timezone === undefined ||
     performanceQuery.isLoading ||
     positionsQuery.isLoading ||
     isDisplayCurrencyLoading ||

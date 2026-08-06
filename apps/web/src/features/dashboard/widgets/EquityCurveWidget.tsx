@@ -9,15 +9,7 @@ import {
   DEFAULT_CURRENCY_HISTORY_RANGE,
   derivePresetRange,
 } from '@/features/performance/utils/derivePresetRange';
-
-/** Resolve the browser's IANA timezone, falling back to UTC. */
-function resolveBrowserTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
+import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 /**
  * EquityCurveWidget — dashboard widget rendering the cumulative net P&L
@@ -25,9 +17,12 @@ function resolveBrowserTimezone(): string {
  *
  * Data flow mirrors `StatsSummaryWidget` (Task 37):
  *   1. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
- *   2. Compute {start, end} via `derivePresetRange('all-time', ...)`. On first
- *      render we use `DEFAULT_CURRENCY_HISTORY_RANGE` (§B) + browser tz.
- *   3. Fetch via `usePerformance({ granularity: 'month', ... })`.
+ *   2. Compute {start, end} via `derivePresetRange('all-time', ...)` anchored at
+ *      the user's stored reporting timezone (`useUserTimezone`,
+ *      user-onboarding R2.4 — NOT the browser's zone). On first render we use
+ *      `DEFAULT_CURRENCY_HISTORY_RANGE` (§B).
+ *   3. Fetch via `usePerformance({ granularity: 'month', ... })`, passing `null`
+ *      until the stored zone lands so nothing is bucketed by a guess.
  *   4. Pick the currency entry via `response.currencies.find(c => c.code === displayCurrency)`
  *      (§A — array form, NOT record indexing) and read `.equityCurve`.
  */
@@ -35,24 +30,32 @@ function EquityCurveWidget() {
   const { data: displayCurrencyData } = useDisplayCurrencyQuery();
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
-  const browserTz = resolveBrowserTimezone();
+  const timezone = useUserTimezone();
   const defaultWeekStart = 1 as const;
 
-  const bootstrapRange = derivePresetRange(
-    'all-time',
-    DEFAULT_CURRENCY_HISTORY_RANGE,
-    new Date(),
-    browserTz,
-    defaultWeekStart,
-  );
+  // `derivePresetRange` resolves calendar boundaries through `Intl`, so it
+  // cannot run before the stored zone is known.
+  const bootstrapRange = timezone
+    ? derivePresetRange(
+        'all-time',
+        DEFAULT_CURRENCY_HISTORY_RANGE,
+        new Date(),
+        timezone,
+        defaultWeekStart,
+      )
+    : null;
 
-  const performanceQuery = usePerformance({
-    granularity: 'month',
-    start: bootstrapRange.start,
-    end: bootstrapRange.end,
-    tz: browserTz,
-    ...(displayCurrency ? { currency: displayCurrency } : {}),
-  });
+  const performanceQuery = usePerformance(
+    timezone && bootstrapRange
+      ? {
+          granularity: 'month',
+          start: bootstrapRange.start,
+          end: bootstrapRange.end,
+          tz: timezone,
+          ...(displayCurrency ? { currency: displayCurrency } : {}),
+        }
+      : null,
+  );
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
 
@@ -62,7 +65,10 @@ function EquityCurveWidget() {
       ? (response?.currencies.find((c) => c.code === displayCurrency) ?? null)
       : null;
 
-  if (isLoading) {
+  // A disabled query reports `isLoading: false`, so the wait for the stored
+  // zone has to be spelled out here — otherwise the widget would drop through
+  // to its empty state before the first fetch.
+  if (timezone === undefined || isLoading) {
     return <Skeleton className="h-[320px] w-full" />;
   }
 

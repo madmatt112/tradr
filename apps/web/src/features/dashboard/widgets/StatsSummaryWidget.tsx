@@ -12,15 +12,7 @@ import {
   derivePresetRange,
 } from '@/features/performance/utils/derivePresetRange';
 import { formatProfitFactor } from '@/features/performance/utils/formatPerformance';
-
-/** Resolve the browser's IANA timezone, falling back to UTC. */
-function resolveBrowserTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
+import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 interface StatTile {
   label: string;
@@ -33,10 +25,13 @@ interface StatTile {
  *
  * Data flow:
  *   1. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
- *   2. Compute {start, end} via `derivePresetRange('all-time', historyRange, ...)`.
+ *   2. Compute {start, end} via `derivePresetRange('all-time', historyRange, ...)`
+ *      anchored at the user's stored reporting timezone (`useUserTimezone`,
+ *      user-onboarding R2.4 — NOT the browser's zone).
  *      On first render `historyRange = DEFAULT_CURRENCY_HISTORY_RANGE` (§B);
  *      once the response lands we use the currency entry's `historyRange`.
- *   3. Fetch via `usePerformance({ granularity: 'year', start, end, tz, currency })`.
+ *   3. Fetch via `usePerformance({ granularity: 'year', start, end, tz, currency })`,
+ *      passing `null` until the stored zone lands so nothing is bucketed by a guess.
  *   4. Pick the currency entry via `response.currencies.find(c => c.code === displayCurrency)`
  *      (§A — array form, NOT record indexing) and read `.stats`.
  */
@@ -44,29 +39,37 @@ function StatsSummaryWidget() {
   const { data: displayCurrencyData } = useDisplayCurrencyQuery();
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
-  // Browser-resolved tz/week-start are the bootstrap values; once a response
-  // lands we prefer its `resolvedTimezone` / `resolvedWeekStartDay`.
-  const browserTz = resolveBrowserTimezone();
+  // The user's STORED reporting timezone (user-onboarding R2.4) — `undefined`
+  // until that query settles. Week-start is the bootstrap value; once a
+  // response lands we prefer its `resolvedWeekStartDay`.
+  const timezone = useUserTimezone();
   const defaultWeekStart = 1 as const;
 
   // -------- First-render bootstrap ----------
-  // We don't yet have a response, so we can't read historyRange or resolvedTz
-  // from it. Use DEFAULT_CURRENCY_HISTORY_RANGE + browser tz.
-  const bootstrapRange = derivePresetRange(
-    'all-time',
-    DEFAULT_CURRENCY_HISTORY_RANGE,
-    new Date(),
-    browserTz,
-    defaultWeekStart,
-  );
+  // We don't yet have a response, so we can't read historyRange from it. Use
+  // DEFAULT_CURRENCY_HISTORY_RANGE. `derivePresetRange` resolves calendar
+  // boundaries through `Intl`, so it cannot run before the zone is known.
+  const bootstrapRange = timezone
+    ? derivePresetRange(
+        'all-time',
+        DEFAULT_CURRENCY_HISTORY_RANGE,
+        new Date(),
+        timezone,
+        defaultWeekStart,
+      )
+    : null;
 
-  const performanceQuery = usePerformance({
-    granularity: 'year',
-    start: bootstrapRange.start,
-    end: bootstrapRange.end,
-    tz: browserTz,
-    ...(displayCurrency ? { currency: displayCurrency } : {}),
-  });
+  const performanceQuery = usePerformance(
+    timezone && bootstrapRange
+      ? {
+          granularity: 'year',
+          start: bootstrapRange.start,
+          end: bootstrapRange.end,
+          tz: timezone,
+          ...(displayCurrency ? { currency: displayCurrency } : {}),
+        }
+      : null,
+  );
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
 
@@ -76,7 +79,10 @@ function StatsSummaryWidget() {
       ? (response?.currencies.find((c) => c.code === displayCurrency) ?? null)
       : null;
 
-  if (isLoading) {
+  // A disabled query reports `isLoading: false`, so the wait for the stored
+  // zone has to be spelled out here — otherwise the widget would drop through
+  // to its empty state and flash "Close a position…" before the first fetch.
+  if (timezone === undefined || isLoading) {
     return (
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {Array.from({ length: 5 }).map((_, idx) => (

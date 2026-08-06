@@ -87,6 +87,38 @@ let resendResponse: () => Response;
 
 let fetchSpy: MockInstance | null = null;
 
+// ---- Browser-zone stub ------------------------------------------------------
+// register.tsx is the ONE place still allowed to detect the browser zone (R2.2).
+// Only the ZERO-ARG call is that detection; calls carrying arguments are
+// delegated to the real implementation, because the shared
+// ReportingTimezoneField validator decides validity with
+// `new Intl.DateTimeFormat('en-US', { timeZone })`.
+const RealDateTimeFormat = Intl.DateTimeFormat;
+let intlSpy: MockInstance | null = null;
+
+function installIntlStub(resolvedOptions: () => { timeZone: string | undefined }) {
+  const impl = (...args: unknown[]) =>
+    args.length > 0 ? Reflect.construct(RealDateTimeFormat, args) : { resolvedOptions };
+  intlSpy = vi
+    .spyOn(Intl, 'DateTimeFormat')
+    .mockImplementation(impl as unknown as typeof Intl.DateTimeFormat);
+}
+
+function stubBrowserZone(zone: string | undefined) {
+  installIntlStub(() => ({ timeZone: zone }));
+}
+
+function stubBrowserZoneThrows() {
+  installIntlStub(() => {
+    throw new Error('Intl unavailable in this runtime');
+  });
+}
+
+function registerBody(): Record<string, unknown> {
+  const call = fetchSpy!.mock.calls.find((args) => String(args[0]).includes('/auth/register'));
+  return JSON.parse(String((call![1] as RequestInit).body)) as Record<string, unknown>;
+}
+
 beforeEach(() => {
   meUser = null;
   registered = { id: 'u1', email: 'new@user.dev', isAdmin: false, emailVerified: false };
@@ -108,6 +140,8 @@ afterEach(() => {
   cleanup();
   fetchSpy?.mockRestore();
   fetchSpy = null;
+  intlSpy?.mockRestore();
+  intlSpy = null;
 });
 
 async function fillAndSubmit() {
@@ -226,5 +260,45 @@ describe('register route', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Too many requests — try again later.');
     });
+  });
+
+  // ---- Reporting-timezone seeding (R2.2) ------------------------------------
+
+  it('case 5: sends the browser-detected reporting timezone in the registration payload', async () => {
+    stubBrowserZone('Europe/London');
+    await registerToCheckYourEmail();
+
+    expect(registerBody()).toEqual({
+      email: 'new@user.dev',
+      password: 'password-123',
+      timezone: 'Europe/London',
+    });
+  });
+
+  it('case 6: OMITS the key when detection yields nothing — never sends timezone: null, which RegisterSchema rejects', async () => {
+    stubBrowserZone(undefined);
+    await registerToCheckYourEmail();
+
+    const body = registerBody();
+    expect('timezone' in body).toBe(false);
+    expect(body).toEqual({ email: 'new@user.dev', password: 'password-123' });
+  });
+
+  it('case 7: registration still succeeds when detection throws', async () => {
+    stubBrowserZoneThrows();
+    await registerToCheckYourEmail();
+
+    expect('timezone' in registerBody()).toBe(false);
+  });
+
+  it('case 8: a zone the server would reject is dropped, not sent — a bad guess must not block signing up', async () => {
+    // The Unicode-extension bypass resolveTimezone refuses; the shared
+    // validator catches it client-side, so the signup goes through without it
+    // rather than 400ing on a value the user never typed.
+    stubBrowserZone('America/New_York-u-ca-japanese');
+    await registerToCheckYourEmail();
+
+    expect('timezone' in registerBody()).toBe(false);
+    expect(screen.getByText('Check your email')).toBeTruthy();
   });
 });

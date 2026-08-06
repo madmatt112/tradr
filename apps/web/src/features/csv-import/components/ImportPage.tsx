@@ -28,10 +28,6 @@ function previewErrorMessage(err: unknown): string {
   return e.error?.message ?? e.message ?? 'Preview failed. Please try again.';
 }
 
-function browserTimezone(): string {
-  return (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
-}
-
 const initialMapper = (): ColumnMapperValue => ({
   presetId: null,
   rowShape: 'execution',
@@ -118,12 +114,10 @@ export function ImportPage() {
     preview.mutate({ file, request });
   }
 
-  // Default the timezone to the browser zone on first mount as a hint, while
-  // keeping UTC available; REQ-7.4 wants UTC default for correction, so we keep
-  // UTC unless the user changes it. (Browser tz is offered in the selector.)
-  useEffect(() => {
-    void browserTimezone();
-  }, []);
+  // NOTE: the import timezone stays UTC by default (csv-import REQ-7.4) — it
+  // describes the CSV's own timestamps, not the user's reporting zone
+  // (user-onboarding R2.4), so it is deliberately NOT seeded from
+  // `useUserTimezone`. The mapper's selector is where it gets corrected.
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">

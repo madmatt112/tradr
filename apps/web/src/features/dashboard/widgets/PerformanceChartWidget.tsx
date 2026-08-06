@@ -15,17 +15,9 @@ import {
   derivePresetRange,
   type PerformancePreset,
 } from '@/features/performance/utils/derivePresetRange';
+import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 import { widgetRegistry } from './registry';
-
-/** Resolve the browser's IANA timezone, falling back to UTC. */
-function resolveBrowserTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
 
 const DEFAULT_TIMEFRAME: PerformancePreset = 'monthly';
 
@@ -43,10 +35,13 @@ export interface PerformanceChartWidgetProps {
  *      On failure render with `defaultConfig` AND emit a fix-up via `onUpdateConfig`
  *      (§K — the fix-up flows through the debounced layout state; NO separate PUT).
  *   2. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
- *   3. Compute {granularity, start, end} via `derivePresetRange(config.timeframe, ...)`.
+ *   3. Compute {granularity, start, end} via `derivePresetRange(config.timeframe, ...)`
+ *      anchored at the user's stored reporting timezone (`useUserTimezone`,
+ *      user-onboarding R2.4 — NOT the browser's zone).
  *      The historyRange comes from the previous response's `currencyData.historyRange`
  *      (§B — first render bootstraps with `DEFAULT_CURRENCY_HISTORY_RANGE`).
- *   4. Fetch via `usePerformance`.
+ *   4. Fetch via `usePerformance`, passing `null` until the stored zone lands so
+ *      nothing is bucketed by a guess.
  *   5. Pick the currency entry via `response.currencies.find(c => c.code === displayCurrency)`
  *      (§A — array form, NOT record indexing) and read `.series`.
  */
@@ -74,28 +69,36 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
   const { data: displayCurrencyData } = useDisplayCurrencyQuery();
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
-  const browserTz = resolveBrowserTimezone();
+  const timezone = useUserTimezone();
   const defaultWeekStart = 1 as const;
 
   // Derive the query window. On first render we have no response, so the
   // historyRange falls back to DEFAULT_CURRENCY_HISTORY_RANGE (§B). Once the
   // response lands we re-derive with the currency's real historyRange and
-  // resolved tz/week-start (Design §10.4 cycle-prevention note).
-  const performanceQueryBootstrap = derivePresetRange(
-    config.timeframe,
-    DEFAULT_CURRENCY_HISTORY_RANGE,
-    new Date(),
-    browserTz,
-    defaultWeekStart,
-  );
+  // resolved week-start (Design §10.4 cycle-prevention note).
+  // `derivePresetRange` resolves calendar boundaries through `Intl`, so it
+  // cannot run before the stored zone is known.
+  const performanceQueryBootstrap = timezone
+    ? derivePresetRange(
+        config.timeframe,
+        DEFAULT_CURRENCY_HISTORY_RANGE,
+        new Date(),
+        timezone,
+        defaultWeekStart,
+      )
+    : null;
 
-  const performanceQuery = usePerformance({
-    granularity: performanceQueryBootstrap.granularity,
-    start: performanceQueryBootstrap.start,
-    end: performanceQueryBootstrap.end,
-    tz: browserTz,
-    ...(displayCurrency ? { currency: displayCurrency } : {}),
-  });
+  const performanceQuery = usePerformance(
+    timezone && performanceQueryBootstrap
+      ? {
+          granularity: performanceQueryBootstrap.granularity,
+          start: performanceQueryBootstrap.start,
+          end: performanceQueryBootstrap.end,
+          tz: timezone,
+          ...(displayCurrency ? { currency: displayCurrency } : {}),
+        }
+      : null,
+  );
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
 
@@ -109,7 +112,10 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
     onUpdateConfig({ timeframe: next });
   });
 
-  if (isLoading) {
+  // A disabled query reports `isLoading: false`, so the wait for the stored
+  // zone has to be spelled out here — otherwise the widget would drop through
+  // to its empty state before the first fetch.
+  if (timezone === undefined || isLoading) {
     return <Skeleton className="h-[320px] w-full" />;
   }
 
