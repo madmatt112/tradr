@@ -154,6 +154,17 @@ const CAD_ACCOUNT = { id: 'acc-cad', name: 'Maple Margin', currency: 'CAD', bala
 // A selected account whose balance is not yet derived (REQ-3.5) — no `balance`.
 const NO_BALANCE_ACCOUNT = { id: 'acc-nobal', name: 'Fresh', currency: 'USD' };
 
+// An account carrying its own risk rule (user-onboarding R1.2). The value is the
+// numeric(5,2)-NORMALISED string the API returns — a stored 1.5 comes back
+// '1.50' — so the prefill assertions expect that form, not what a user typed.
+const RULED_ACCOUNT = {
+  id: 'acc-ruled',
+  name: 'By The Book',
+  currency: 'USD',
+  balance: '50000',
+  defaultRiskPercent: '1.50',
+};
+
 // ---- Harness ----------------------------------------------------------------
 
 /** Same Intl call the Numeric primitive uses, so assertions match regardless of locale. */
@@ -266,6 +277,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 // -----------------------------------------------------------------------------
@@ -858,5 +870,117 @@ describe('CalculatorForm — dollar basis account sourcing', () => {
     // Not the percent-basis reassurance — there is no risk percentage here.
     expect(note.textContent).toMatch(/dollar risk is unchanged/i);
     expect(note.textContent).not.toMatch(/percent of the balance/i);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Account default risk percentage (user-onboarding R1.2/R1.3/R1.4)
+//
+// RULED_ACCOUNT: $50,000 balance, a 1.50% rule. Entry $50 / stop $48 is $2 of
+// per-share risk, so the rule alone gives a $750 budget → 375 shares, and an
+// override to 2% gives $1,000 → 500 shares. Both fund comfortably inside the
+// $50,000 cap, so the cap never confounds the prefill assertions.
+// -----------------------------------------------------------------------------
+
+describe('CalculatorForm — account default risk prefill', () => {
+  it('prefills the risk percent from the account rule and sizes against it (R1.2)', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [RULED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    // Neither the balance NOR the percent is typed — both come from the account.
+    fireEvent.change(selectByOptionValue(RULED_ACCOUNT.id), {
+      target: { value: RULED_ACCOUNT.id },
+    });
+
+    expect(input('Balance').value).toBe('50000');
+    // The numeric(5,2)-normalised form, not the '1.5' someone typed into the dialog.
+    expect(input('Risk percent').value).toBe('1.50');
+
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    expect(screen.getAllByText(fmtMoney(750)).length).toBeGreaterThan(0);
+    expect(screen.getByText('375')).toBeTruthy();
+  });
+
+  it('leaves the risk percent cleared for an account with no rule (R1.4)', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+
+    expect(input('Balance').value).toBe('50000');
+    expect(input('Risk percent').value).toBe('');
+  });
+
+  it('does not disturb a typed risk percent when the account has no rule (R1.4)', async () => {
+    // Every account predating the column has no rule, so this is the path every
+    // existing user is on: selecting an account must behave exactly as it did.
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    fill('Risk percent', '2');
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+
+    expect(input('Risk percent').value).toBe('2');
+  });
+
+  it('re-seeds the risk percent alongside the balance on a switch back to percent', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [RULED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Dollar');
+
+    // Selected on the dollar basis, where the account contributes only the cap —
+    // no balance and no percent go on the form there.
+    fireEvent.change(selectByOptionValue(RULED_ACCOUNT.id), {
+      target: { value: RULED_ACCOUNT.id },
+    });
+    await switchBasis(user, 'Percent');
+
+    expect(input('Balance').value).toBe('50000');
+    expect(input('Risk percent').value).toBe('1.50');
+  });
+
+  it('overriding the prefilled percent changes only this calculation and issues NO request (R1.3)', async () => {
+    // The load-bearing assertion of R1.3: the prefill is a READ path. Every API
+    // call in the app goes through lib/api's single `fetch`, so a stubbed global
+    // fetch catches a write-back however it were wired.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const user = userEvent.setup();
+    setAccounts({ data: [RULED_ACCOUNT] });
+    await mount();
+    await switchBasis(user, 'Percent');
+
+    fill('Entry price', '50');
+    fill('Stop loss', '48');
+    fireEvent.change(selectByOptionValue(RULED_ACCOUNT.id), {
+      target: { value: RULED_ACCOUNT.id },
+    });
+    expect(input('Risk percent').value).toBe('1.50');
+
+    // Override the rule for this one calculation.
+    fireEvent.change(input('Risk percent'), { target: { value: '2' } });
+    fireEvent.blur(input('Risk percent'));
+
+    // Applied to THIS calculation: $1,000 of budget → 500 shares, not the 375 the
+    // account's own 1.50% rule would have sized.
+    await screen.findByText('Derived Dollar Risk', undefined, { timeout: 2000 });
+    expect(screen.getAllByText(fmtMoney(1000)).length).toBeGreaterThan(0);
+    expect(screen.getByText('500')).toBeTruthy();
+    expect(screen.queryByText('375')).toBeNull();
+
+    // …and NOT written back. No request of any kind left the form, and the
+    // account's stored rule is untouched.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(RULED_ACCOUNT.defaultRiskPercent).toBe('1.50');
   });
 });

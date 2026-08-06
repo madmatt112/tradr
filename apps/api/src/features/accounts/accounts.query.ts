@@ -110,6 +110,9 @@ export function findAccountsByUser(db: Database | Transaction, userId: string) {
       timezone: accounts.timezone,
       brokerageId: accounts.brokerageId,
       brokerageName: brokerages.name,
+      // NULL means no rule set — the calculator then behaves exactly as it did
+      // before this column existed (user-onboarding R1.4).
+      defaultRiskPercent: accounts.defaultRiskPercent,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -133,6 +136,8 @@ export function findAccountById(db: Database | Transaction, id: string, userId: 
       timezone: accounts.timezone,
       brokerageId: accounts.brokerageId,
       brokerageName: brokerages.name,
+      // NULL means no rule set (user-onboarding R1.4) — see findAccountsByUser.
+      defaultRiskPercent: accounts.defaultRiskPercent,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -156,16 +161,31 @@ export function insertAccount(
     brokerageId?: string | null;
     startingBalance?: string;
     timezone?: string;
+    defaultRiskPercent?: string | null;
   },
 ) {
   return tx.insert(accounts).values(data).returning();
 }
 
+// `defaultRiskPercent` distinguishes absent from null and BOTH cases are
+// reachable from UpdateAccountSchema: an omitted key never reaches `.set()`
+// (Zod `.optional()` drops it, and Drizzle skips undefined values anyway), so
+// the stored value is untouched; an explicit `null` is a real value and clears
+// the rule back to unset. `brokerageId` above relies on the identical
+// mechanism. Widening this Partial is load-bearing — the field is spread into
+// `.set()` untyped, so leaving it out silently drops every update with no type
+// error.
 export function updateAccount(
   tx: Transaction,
   id: string,
   userId: string,
-  data: Partial<{ name: string; currency: string; brokerageId: string | null; timezone: string }>,
+  data: Partial<{
+    name: string;
+    currency: string;
+    brokerageId: string | null;
+    timezone: string;
+    defaultRiskPercent: string | null;
+  }>,
 ) {
   return tx
     .update(accounts)

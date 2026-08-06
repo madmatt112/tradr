@@ -66,16 +66,40 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
   const systemBrokerages = brokerages?.filter((b) => b.isSystem) ?? [];
   const userBrokerages = brokerages?.filter((b) => !b.isSystem) ?? [];
 
+  const formValues = (): CreateAccountInput => ({
+    name: account?.name ?? '',
+    currency: account?.currency ?? 'USD',
+    brokerageId: account?.brokerageId ?? null,
+    startingBalance: undefined,
+    timezone: account?.timezone ?? DEFAULT_ACCOUNT_TIMEZONE,
+    // The column is numeric(5,2), so the API hands back a normalised decimal
+    // string ('1.5' stored comes back as '1.50'). Null means no rule is set,
+    // which the form expresses as an empty field.
+    defaultRiskPercent: account?.defaultRiskPercent ?? undefined,
+  });
+
   const form = useForm<CreateAccountInput>({
     resolver: zodResolver(CreateAccountSchema),
-    defaultValues: {
-      name: account?.name ?? '',
-      currency: account?.currency ?? 'USD',
-      brokerageId: account?.brokerageId ?? null,
-      startingBalance: undefined,
-      timezone: account?.timezone ?? DEFAULT_ACCOUNT_TIMEZONE,
-    },
+    defaultValues: formValues(),
   });
+
+  // `useForm` reads defaultValues once, but AccountList keeps a single dialog
+  // mounted and swaps `account` to switch between create and edit — so the
+  // fields must be re-seeded each time it opens, or edit shows the previous
+  // occupant's values. Load-bearing for the risk rule specifically: an
+  // unseeded (blank) field submits as null and would silently clear a stored
+  // rule whenever the user edited anything else.
+  //
+  // The dependency list is deliberately narrow: it keys on the account *id*,
+  // never the `account` object or `form`. A background accounts refetch hands
+  // back a new object identity for the same account, so depending on either
+  // would re-run the reset mid-edit and discard whatever the user had typed.
+  // Widening these deps reintroduces that hazard — nothing lints it, since no
+  // react-hooks plugin is registered in eslint.config.js.
+  const accountId = account?.id;
+  useEffect(() => {
+    if (open) form.reset(formValues());
+  }, [open, accountId]);
 
   const selectedBrokerageId = form.watch('brokerageId');
   const selectedCurrency = form.watch('currency');
@@ -97,7 +121,14 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
     };
 
     if (isEdit) {
-      await updateAccount.mutateAsync({ id: account!.id, data: submitData });
+      await updateAccount.mutateAsync({
+        id: account!.id,
+        // An emptied risk field must actually clear a rule that was set, and
+        // on update only an explicit null does that — an omitted key leaves
+        // the stored value untouched. The form's `undefined` therefore becomes
+        // `null` here. Harmless when no rule existed: null overwrites null.
+        data: { ...submitData, defaultRiskPercent: submitData.defaultRiskPercent ?? null },
+      });
       // Invalidate positions if brokerage changed
       if ((submitData.brokerageId ?? null) !== (account?.brokerageId ?? null)) {
         queryClient.invalidateQueries({ queryKey: ['positions'] });
@@ -244,6 +275,33 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
                 )}
               </div>
             )}
+            {/* Default risk percentage (user-onboarding R1.1/R1.6). Shown on
+                create AND edit — unlike starting balance it rewrites no
+                history, it only seeds the position-size calculator. */}
+            <div className="space-y-2">
+              <Label htmlFor="defaultRiskPercent">Default risk %</Label>
+              <Input
+                id="defaultRiskPercent"
+                inputMode="decimal"
+                placeholder="3"
+                {...form.register('defaultRiskPercent', {
+                  // Empty field means "no rule set" — the schema only accepts a
+                  // decimal string or undefined, never ''.
+                  setValueAs: (v: unknown) =>
+                    typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined,
+                })}
+              />
+              <p className="text-sm text-muted-foreground">
+                The share of this account&apos;s balance you risk on a single trade — it prefills
+                the position-size calculator, and you can override it on any one calculation. If you
+                don&apos;t have a rule of your own yet, 3% is a conservative starting point.
+              </p>
+              {form.formState.errors.defaultRiskPercent && (
+                <p className="text-sm text-destructive">
+                  {form.formState.errors.defaultRiskPercent.message}
+                </p>
+              )}
+            </div>
             <div className="space-y-2">
               <Label htmlFor="brokerage">Brokerage</Label>
               <Select
