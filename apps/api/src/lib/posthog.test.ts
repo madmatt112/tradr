@@ -96,7 +96,7 @@ describe('captureServerEvent', () => {
     expect(h.capture).toHaveBeenCalledWith({
       distinctId: 'user-uuid-1',
       event: 'position_created',
-      properties: { assetType: 'stock' },
+      properties: { assetType: 'stock', $geoip_disable: true },
     });
   });
 
@@ -110,7 +110,7 @@ describe('captureServerEvent', () => {
     expect(h.capture).toHaveBeenCalledWith({
       distinctId: 'user-2',
       event: 'advisor_conversation_started',
-      properties: {},
+      properties: { $geoip_disable: true },
     });
   });
 
@@ -165,7 +165,7 @@ describe('identifyServerUser', () => {
     expect(h.identify).toHaveBeenCalledTimes(1);
     expect(h.identify).toHaveBeenCalledWith({
       distinctId: 'user-uuid-1',
-      properties: { $set: { email_verified: true } },
+      properties: { $geoip_disable: true, $set: { email_verified: true } },
     });
   });
 
@@ -257,7 +257,7 @@ describe('POSTHOG_ENVIRONMENT stamp', () => {
     expect(h.capture).toHaveBeenCalledWith({
       distinctId: 'user-1',
       event: 'position_created',
-      properties: { assetType: 'stock', environment: 'staging' },
+      properties: { assetType: 'stock', environment: 'staging', $geoip_disable: true },
     });
   });
 
@@ -286,7 +286,11 @@ describe('POSTHOG_ENVIRONMENT stamp', () => {
 
     expect(h.identify).toHaveBeenCalledWith({
       distinctId: 'user-1',
-      properties: { $set: { email_verified: true, environment: 'staging' } },
+      properties: {
+        $geoip_disable: true,
+        environment: 'staging',
+        $set: { email_verified: true, environment: 'staging' },
+      },
     });
   });
 
@@ -298,17 +302,75 @@ describe('POSTHOG_ENVIRONMENT stamp', () => {
     initPostHog();
     captureServerException(new Error('boom'), 'user-1');
 
-    expect(h.captureException.mock.calls[0][2]).toEqual({ environment: 'staging' });
+    expect(h.captureException.mock.calls[0][2]).toEqual({
+      environment: 'staging',
+      $geoip_disable: true,
+    });
   });
 
-  it('unset: passes undefined additional properties to captureException', async () => {
+  it('unset: captureException still carries $geoip_disable, with no environment', async () => {
     h.isPostHogConfigured.mockReturnValue(true);
     const { initPostHog, captureServerException } = await load();
 
     initPostHog();
     captureServerException(new Error('boom'), 'user-1');
 
-    expect(h.captureException.mock.calls[0][2]).toBeUndefined();
+    expect(h.captureException.mock.calls[0][2]).toEqual({ $geoip_disable: true });
+  });
+});
+
+// Regression cover for two defects found by inspecting live ingested data rather
+// than by any unit test: backend events were being geo-enriched from the
+// container's egress IP, and `$identify` events carried no `environment` because
+// the label was only ever written into the person `$set` bag.
+describe('$geoip_disable (server-side geo suppression)', () => {
+  it.each([
+    ['unconfigured environment', undefined],
+    ['configured environment', 'staging'],
+  ])('is set on captured events — %s', async (_label, environment) => {
+    h.config.POSTHOG_ENVIRONMENT = environment;
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, captureServerEvent } = await load();
+
+    initPostHog();
+    captureServerEvent('position_created', { distinctId: 'user-1' });
+
+    const props = h.capture.mock.calls[0][0].properties as Record<string, unknown>;
+    expect(props.$geoip_disable).toBe(true);
+  });
+
+  it('is set on the $identify EVENT, and never leaks into the person $set bag', async () => {
+    h.config.POSTHOG_ENVIRONMENT = 'staging';
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, identifyServerUser } = await load();
+
+    initPostHog();
+    identifyServerUser('user-1', { email_verified: true });
+
+    const { properties } = h.identify.mock.calls[0][0] as {
+      properties: Record<string, unknown> & { $set: Record<string, unknown> };
+    };
+    expect(properties.$geoip_disable).toBe(true);
+    // An ingestion directive is not a user attribute — it must not become a
+    // person property.
+    expect(properties.$set).not.toHaveProperty('$geoip_disable');
+  });
+
+  it('labels the $identify EVENT, not just the person profile', async () => {
+    h.config.POSTHOG_ENVIRONMENT = 'staging';
+    h.isPostHogConfigured.mockReturnValue(true);
+    const { initPostHog, identifyServerUser } = await load();
+
+    initPostHog();
+    identifyServerUser('user-1', { email_verified: true });
+
+    const { properties } = h.identify.mock.calls[0][0] as {
+      properties: Record<string, unknown> & { $set: Record<string, unknown> };
+    };
+    // The defect: event-level filtering on `environment` dropped every $identify
+    // because the label existed only under $set.
+    expect(properties.environment).toBe('staging');
+    expect(properties.$set.environment).toBe('staging');
   });
 });
 

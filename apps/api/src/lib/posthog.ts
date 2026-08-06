@@ -51,10 +51,24 @@ function environmentProperties(): { environment: string } | undefined {
 }
 
 /**
- * Merge the deployment label into an outbound property bag. Spread LAST on
- * purpose: a caller's own `environment` property is overwritten, so the label is
- * always the deploy's, never a caller's. Returns the input untouched when
- * unconfigured — no empty-object churn on the self-host path.
+ * EVENT-level properties every backend capture carries.
+ *
+ * `$geoip_disable` suppresses server-side geo enrichment. The only address
+ * PostHog sees on a backend event is the container's egress IP, so enrichment
+ * would place every user at the host region — a wrong answer, not a missing one.
+ * posthog-node does NOT set this itself (posthog-python does), so it is set here
+ * on every exit. It is an ingestion directive, not a user attribute, which is why
+ * it belongs on the event and never in the person `$set` bag below.
+ */
+function outboundEventProperties(): Record<string, unknown> {
+  return { $geoip_disable: true, ...environmentProperties() };
+}
+
+/**
+ * Merge the deployment label into a property bag. Spread LAST on purpose: a
+ * caller's own `environment` property is overwritten, so the label is always the
+ * deploy's, never a caller's. Returns the input untouched when unconfigured — no
+ * empty-object churn on the self-host path.
  */
 function withEnvironment(properties: Record<string, unknown>): Record<string, unknown> {
   const stamp = environmentProperties();
@@ -78,7 +92,10 @@ export function captureServerEvent(
     client.capture({
       distinctId: opts.distinctId,
       event,
-      properties: withEnvironment(scrubDeep(opts.properties ?? {}) as Record<string, unknown>),
+      properties: {
+        ...(scrubDeep(opts.properties ?? {}) as Record<string, unknown>),
+        ...outboundEventProperties(),
+      },
     });
   } catch (err) {
     logTelemetryFailureOnce('posthog', err);
@@ -96,7 +113,14 @@ export function identifyServerUser(
 ): void {
   if (!client) return;
   try {
-    client.identify({ distinctId, properties: { $set: withEnvironment(properties) } });
+    // The label goes in BOTH places, deliberately: `$set` puts it on the person
+    // profile, while the top-level bag puts it on the `$identify` EVENT. Without
+    // the latter, filtering events by `environment` silently drops every
+    // `$identify` — the person property does not label the event that carried it.
+    client.identify({
+      distinctId,
+      properties: { ...outboundEventProperties(), $set: withEnvironment(properties) },
+    });
   } catch (err) {
     logTelemetryFailureOnce('posthog', err);
   }
@@ -130,7 +154,7 @@ function redactError(err: unknown): unknown {
 export function captureServerException(err: unknown, distinctId?: string): void {
   if (!client) return;
   try {
-    client.captureException(redactError(err), distinctId, environmentProperties());
+    client.captureException(redactError(err), distinctId, outboundEventProperties());
   } catch (captureErr) {
     logTelemetryFailureOnce('posthog', captureErr);
   }
