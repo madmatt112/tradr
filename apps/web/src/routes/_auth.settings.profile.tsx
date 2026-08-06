@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
 
+import { ReportingTimezoneSelect } from '@/components/ReportingTimezoneSelect';
 import { DisplayCurrencySelect } from '@/features/accounting/components/DisplayCurrencySelect';
 import { ExchangeRatesPage } from '@/features/accounting/components/ExchangeRatesPage';
 import { BuyingPowerBasisSelect } from '@/features/calculator/components/BuyingPowerBasisSelect';
@@ -17,6 +18,9 @@ function SettingsProfile() {
     <div className="space-y-8">
       <DisplayCurrencySelect />
       <BuyingPowerBasisSelect />
+      {/* Reporting timezone (user-onboarding R2.6) — viewable and changeable
+          here whether or not the user ever saw onboarding. */}
+      <ReportingTimezoneSelect />
       <ExchangeRatesPage initialBase={base} initialQuote={quote} />
     </div>
   );

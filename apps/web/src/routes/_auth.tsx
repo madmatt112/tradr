@@ -5,10 +5,16 @@ import { DrawerToggleRefProvider } from '@/components/layout/DrawerToggleRefCont
 import { Sidebar } from '@/components/layout/Sidebar';
 import { SideDrawer } from '@/components/layout/SideDrawer';
 import { useAuth } from '@/hooks/useAuth';
+import { useReportingTimezoneBackfill } from '@/hooks/useUserTimezone';
 import { EventBusBridge } from '@/stores/EventBusBridge';
 
 function AuthLayout() {
   const { isLoading, isAuthenticated } = useAuth();
+  // One-time seeding of a pre-migration reporting timezone (user-onboarding
+  // R2.5). Here because this is the one component every authenticated view
+  // mounts under, and exactly once. It returns nothing and gates nothing — the
+  // early returns below run whether or not it has anything to do.
+  useReportingTimezoneBackfill();
 
   if (isLoading) {
     return (

@@ -228,9 +228,15 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
                 edit — unlike starting balance this stays editable, since it
                 only affects subsequent trading-day evaluations. The option
                 list is the runtime's own IANA set (shared with the server-side
-                validator), so anything picked here always validates. */}
+                validator), so anything picked here always validates.
+
+                The label names the boundary it governs, and the helper text
+                disclaims the reporting timezone, because this dialog is one of
+                the two places both zones are visible to the same user
+                (user-onboarding R2.8) — the other being the settings control
+                that disclaims this one in return. */}
             <div className="space-y-2">
-              <Label htmlFor="timezone">Timezone</Label>
+              <Label htmlFor="timezone">Trading-day timezone</Label>
               <Select
                 value={form.watch('timezone') ?? DEFAULT_ACCOUNT_TIMEZONE}
                 onValueChange={(val) => form.setValue('timezone', val)}
@@ -248,7 +254,8 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
               </Select>
               <p className="text-sm text-muted-foreground">
                 Defines the trading day for this account — used to decide whether a position can be
-                re-entered the same day.
+                re-entered the same day. It is not your reporting timezone, which buckets your
+                P&amp;L and is set in settings.
               </p>
               {form.formState.errors.timezone && (
                 <p className="text-sm text-destructive">{form.formState.errors.timezone.message}</p>

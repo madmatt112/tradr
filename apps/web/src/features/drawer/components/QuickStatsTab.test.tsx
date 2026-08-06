@@ -32,6 +32,13 @@ vi.mock('@/hooks/useNow', () => ({
   useNow: vi.fn(() => new Date('2026-05-27T12:00:00.000Z')),
 }));
 
+// The user's stored reporting timezone (user-onboarding R2.4) — the zone this
+// tab buckets by. `undefined` reproduces the in-flight window.
+const timezoneState = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock('@/hooks/useUserTimezone', () => ({
+  useUserTimezone: () => timezoneState.value,
+}));
+
 import { QuickStatsTab } from './QuickStatsTab';
 
 // ---------------------------------------------------------------------------
@@ -123,6 +130,7 @@ beforeEach(() => {
   vi.mocked(usePositions).mockReset();
   vi.mocked(useNow).mockReset();
   vi.mocked(useNow).mockReturnValue(new Date('2026-05-27T12:00:00.000Z'));
+  timezoneState.value = 'America/New_York';
 });
 
 afterEach(() => {
@@ -363,6 +371,58 @@ describe('QuickStatsTab', () => {
     expect(container.querySelector('[data-testid="quick-stats-avg-win-value"]')).toBeNull();
     expect(container.querySelector('[data-testid="quick-stats-avg-loss-value"]')).toBeNull();
     expect(container.querySelector('[data-testid="quick-stats-open-notional-value"]')).toBeNull();
+    unmount(container, root);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// user-onboarding R2.4 — bucket by the STORED reporting timezone.
+// ---------------------------------------------------------------------------
+
+describe('QuickStatsTab — reporting timezone', () => {
+  it('sends the stored zone as `tz`, not the browser zone', () => {
+    timezoneState.value = 'Asia/Tokyo';
+    mockUSDDisplayCurrency();
+    vi.mocked(usePerformance).mockReturnValue({
+      data: makePerformanceData([]),
+      isLoading: false,
+      error: null,
+    } as unknown as PerformanceResult);
+    vi.mocked(usePositions).mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<QuickStatsTab />);
+    expect(vi.mocked(usePerformance).mock.calls[0]?.[0]).toMatchObject({
+      tz: 'Asia/Tokyo',
+      granularity: 'month',
+      currency: 'USD',
+    });
+    unmount(container, root);
+  });
+
+  it('passes null (query disabled) and shows skeletons while the zone is in flight', () => {
+    timezoneState.value = undefined;
+    mockUSDDisplayCurrency();
+    vi.mocked(usePerformance).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    } as unknown as PerformanceResult);
+    vi.mocked(usePositions).mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<QuickStatsTab />);
+    // No request may be issued against a zone the user never chose.
+    expect(vi.mocked(usePerformance).mock.calls[0]?.[0]).toBeNull();
+    // …and the tab must not fall through to values while it waits.
+    expect(container.querySelector('[data-testid="quick-stats-win-rate-skeleton"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="quick-stats-win-rate-value"]')).toBeNull();
     unmount(container, root);
   });
 });

@@ -16,21 +16,25 @@ import { Button } from '@/components/ui/button';
 import { hasNewReleases, useChangelogReleases } from '@/features/changelog/hooks/useChangelog';
 import { derivePresetRange } from '@/features/performance/utils/derivePresetRange';
 import { useAuth } from '@/hooks/useAuth';
+import { useUserTimezone } from '@/hooks/useUserTimezone';
 import { docsUrl } from '@/lib/docs';
 import { cn } from '@/lib/utils';
 
 // Default search params for the Performance route. The route's
 // `validateSearch` requires `granularity`, `start`, and `end`; the sidebar
 // is the entry point so it has to seed sensible defaults. We use the
-// `monthly` preset (12m window) anchored at the user's browser timezone.
-function buildPerformanceDefaults(): {
+// `monthly` preset (12m window) anchored at the user's STORED reporting
+// timezone (user-onboarding R2.4).
+//
+// `tz` is a parameter rather than something this function derives: it comes
+// from `useUserTimezone()`, and a hook cannot be read from module scope. The
+// caller reads it inside the component and passes it down.
+function buildPerformanceDefaults(tz: string): {
   granularity: 'day' | 'week' | 'month' | 'year';
   start: string;
   end: string;
   tz: string;
 } {
-  const tz =
-    (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
   const range = derivePresetRange(
     'monthly',
     { earliestClosedAt: null, mostRecentClosedAt: null, totalClosedPositions: 0 },
@@ -43,8 +47,19 @@ function buildPerformanceDefaults(): {
 
 const COLLAPSED_KEY = 'sidebar-collapsed';
 
+const PERFORMANCE_NAV_CLASS = cn(
+  'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
+  '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
+);
+
 export function Sidebar() {
   const { user, logout } = useAuth();
+  // The stored reporting timezone anchors the Performance route's default
+  // window. `undefined` until the preference query settles — and unlike the
+  // widgets there is no query here to disable, only a destination to seed, so
+  // the item is inert until there is a correct destination. Linking with the
+  // browser's zone (or a client-side 'UTC') is the defect R2.4 removes.
+  const timezone = useUserTimezone();
   // Badge data: error/loading mean no `data`, so the badge is simply absent
   // (REQ-5(a)(5)) — the hook's `retry: false` keeps failures quiet.
   const changelogReleases = useChangelogReleases();
@@ -130,17 +145,32 @@ export function Sidebar() {
           <span>∑</span>
           {!collapsed && <span>Calculator</span>}
         </Link>
-        <Link
-          to="/performance"
-          search={buildPerformanceDefaults}
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
-        >
-          <LineChart className="h-4 w-4" aria-hidden="true" />
-          {!collapsed && <span>Performance</span>}
-        </Link>
+        {timezone ? (
+          <Link
+            to="/performance"
+            search={() => buildPerformanceDefaults(timezone)}
+            className={PERFORMANCE_NAV_CLASS}
+          >
+            <LineChart className="h-4 w-4" aria-hidden="true" />
+            {!collapsed && <span>Performance</span>}
+          </Link>
+        ) : (
+          // `role` and `tabIndex` are what make the inert state perceivable:
+          // `aria-disabled` on a bare <span> is announced to nobody, and
+          // without a tab stop a keyboard user skips the item entirely and
+          // never learns it is there. Focusable-but-disabled (rather than
+          // removed from the tab order) is the pattern that keeps the nav's
+          // tab sequence stable across the in-flight window.
+          <span
+            role="link"
+            aria-disabled="true"
+            tabIndex={0}
+            className={cn(PERFORMANCE_NAV_CLASS, 'pointer-events-none opacity-50')}
+          >
+            <LineChart className="h-4 w-4" aria-hidden="true" />
+            {!collapsed && <span>Performance</span>}
+          </span>
+        )}
         <Link
           to="/options"
           className={cn(
