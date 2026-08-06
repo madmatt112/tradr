@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { setCookie, getCookie } from 'hono/cookie';
 
-import { UserTimezoneSchema } from '@tradr/shared';
+import { OnboardingPatchSchema, UserTimezoneSchema } from '@tradr/shared';
 import { RegisterSchema, LoginSchema } from '@tradr/shared/schemas/auth';
 
 import { db } from '@/db';
@@ -20,6 +20,8 @@ import {
   logoutUser,
   getReportingTimezone,
   setReportingTimezone,
+  getOnboardingState,
+  patchOnboardingState,
 } from './auth.service';
 
 type AuthEnv = {
@@ -356,5 +358,110 @@ userPreferencesRouter.put('/users/me/timezone', validate('json', UserTimezoneSch
   // construction here: the write just put this value on the row.
   return c.json({ timezone, stored: true }, 200);
 });
+
+// ---------------------------------------------------------------------------
+// Onboarding preference
+//
+// The second preference on this router (see the block above for why the router
+// exists). PATCH rather than PUT because the semantics are partial-merge: a
+// client sets a status, appends one coach mark, or records the first calculator
+// use, without knowing or resending the rest of the state. A PUT would make
+// every caller responsible for round-tripping keys it may not understand.
+// ---------------------------------------------------------------------------
+
+/**
+ * @swagger
+ * /api/users/me/onboarding:
+ *   get:
+ *     summary: Get the onboarding preference.
+ *     description: >
+ *       Authed. Whether the user has started, skipped or finished the guided
+ *       walkthrough, when they first used the calculator, and which contextual
+ *       coach marks they have already dismissed. Preference only — this does not
+ *       report checklist progress, which is derived from the user's accounts and
+ *       positions and so cannot disagree with their real data. Never null: a
+ *       user who has expressed no preference reads as `pending` with an empty
+ *       coach-mark list.
+ *     tags: [Auth]
+ *     responses:
+ *       200:
+ *         description: The resolved onboarding preference.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   enum: [pending, active, skipped, done]
+ *                   description: >
+ *                     `pending` not started, `active` running, `skipped`
+ *                     dismissed (recoverable — set it back to start again),
+ *                     `done` completed.
+ *                   example: pending
+ *                 calculatorFirstUsedAt:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Absent until the calculator has been used.
+ *                 coachMarksSeen:
+ *                   type: array
+ *                   items: { type: string }
+ *                   description: Surface keys already dismissed, as a set.
+ *                   example: []
+ *       401: { description: Authentication required. }
+ */
+userPreferencesRouter.get('/users/me/onboarding', async (c) => {
+  const userId = c.get('userId');
+  return c.json(await getOnboardingState(userId), 200);
+});
+
+/**
+ * @swagger
+ * /api/users/me/onboarding:
+ *   patch:
+ *     summary: Update part of the onboarding preference.
+ *     description: >
+ *       Authed. Partial: send only what changes. The server merges the named
+ *       fields into the stored preference, so omitting a field leaves it as it
+ *       was — a body carrying only `status` does not clear the coach marks.
+ *       `coachMarkSeen` appends one key to the seen set and is idempotent;
+ *       sending the same key again is not an error and does not duplicate it.
+ *       At least one field is required.
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             minProperties: 1
+ *             additionalProperties: false
+ *             properties:
+ *               status: { type: string, enum: [pending, active, skipped, done] }
+ *               calculatorFirstUsedAt:
+ *                 type: string
+ *                 format: date-time
+ *                 description: When the calculator was first used.
+ *               coachMarkSeen:
+ *                 type: string
+ *                 maxLength: 64
+ *                 description: >
+ *                   One surface key to add to the seen set — singular, because
+ *                   the whole set is never sent. Ignored once the set holds 64
+ *                   keys.
+ *                 example: partial-close
+ *     responses:
+ *       200: { description: The merged onboarding preference, in the same shape as the GET. }
+ *       400: { description: Unknown field, empty body, or an invalid status or timestamp. }
+ *       401: { description: Authentication required. }
+ */
+userPreferencesRouter.patch(
+  '/users/me/onboarding',
+  validate('json', OnboardingPatchSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    return c.json(await patchOnboardingState(userId, c.req.valid('json')), 200);
+  },
+);
 
 export default auth;

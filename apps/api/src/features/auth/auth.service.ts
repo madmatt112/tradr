@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 
 import bcrypt from 'bcrypt';
 
-import { DEFAULT_REPORTING_TIMEZONE } from '@tradr/shared';
+import { DEFAULT_REPORTING_TIMEZONE, OnboardingStateSchema } from '@tradr/shared';
+import type { OnboardingPatch, OnboardingState } from '@tradr/shared';
 
 import { db } from '@/db';
 import { isEmailConfigured } from '@/lib/config';
@@ -21,6 +22,8 @@ import {
   deleteOldestSession,
   selectUserTimezone,
   updateUserTimezone,
+  selectUserOnboarding,
+  updateUserOnboarding,
 } from './auth.query';
 import { issueEmailToken, VERIFY_TOKEN_TTL_MS } from './email-tokens.service';
 
@@ -176,4 +179,38 @@ export async function getReportingTimezone(
 /** Persist the reporting timezone. Zone validity is the route's Zod duty. */
 export async function setReportingTimezone(userId: string, timezone: string): Promise<void> {
   await updateUserTimezone(db, userId, timezone);
+}
+
+/**
+ * The user's onboarding PREFERENCE (user-onboarding R4.6) — walkthrough status,
+ * the first-calculator-use timestamp and the coach marks already seen. Never
+ * checklist item completion: that is derived from the user's real data (R4.2).
+ *
+ * The raw column is `{}` for anyone who has never expressed a preference,
+ * including every row that predates it, so the resolution is
+ * `OnboardingStateSchema`'s defaulting and nothing else. No `?? 'pending'`
+ * fallbacks here — a second copy of the defaults would drift from the schema's.
+ * `?? {}` covers only the missing-row case of a deleted user racing a request
+ * (the `getReportingTimezone` precedent).
+ *
+ * Side-effect-free, and must stay so: the SameSite=Lax cookie posture makes any
+ * side-effecting GET a CSRF vector.
+ */
+export async function getOnboardingState(userId: string): Promise<OnboardingState> {
+  const stored = await selectUserOnboarding(db, userId);
+  return OnboardingStateSchema.parse(stored ?? {});
+}
+
+/**
+ * Apply a partial onboarding preference and return the resulting state. The
+ * merge itself happens in SQL — see `updateUserOnboarding` for why a
+ * read-modify-write here would destroy keys written by a newer deployment and
+ * lose concurrent appends.
+ */
+export async function patchOnboardingState(
+  userId: string,
+  patch: OnboardingPatch,
+): Promise<OnboardingState> {
+  const updated = await updateUserOnboarding(db, userId, patch);
+  return OnboardingStateSchema.parse(updated ?? {});
 }
