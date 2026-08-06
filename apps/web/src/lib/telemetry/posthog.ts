@@ -79,9 +79,8 @@ interface PostHogCaptureLike {
  * PostHog's own auto-properties. Replaces URL/title properties with the masked
  * route pattern (no resolved id, no query string, no referrer). When no route has
  * resolved yet (no active match), it **drops** the property rather than emit the
- * resolved path — the route pattern is the only URL value ever sent. Sets `$ip` to
- * `null` — the documented signal that tells PostHog ingestion to skip server-side
- * geoip enrichment, which merely deleting `$ip` would not (REQ-3.4c/8.2) — and
+ * resolved path — the route pattern is the only URL value ever sent. Sets
+ * `$geoip_disable` to suppress server-side geo enrichment (REQ-3.4c/8.2) and
  * removes any `$geoip_*` already present. Also redacts exception-autocapture
  * payloads (message + stack) via scrubDeep before send (EXCEPTION_VALUE_KEYS).
  * ALWAYS returns the (mutated) event; returning `null` would drop the event,
@@ -98,12 +97,21 @@ export function scrubEvent<T extends PostHogCaptureLike>(event: T | null): T | n
     else delete props[key]; // no resolved route ⇒ drop rather than leak the path
   }
 
-  // Suppress server-side geoip: signal skip via $ip=null and strip any derived
-  // geoip properties already on the event.
-  props.$ip = null;
+  // Suppress server-side geo enrichment. `$geoip_disable` is the property the
+  // ingestion pipeline actually honours; setting `$ip = null` does NOT stop it
+  // (verified against live data — events still arrived carrying $geoip_city_name).
+  // `$ip = null` is kept only to state the payload's intent: it does not remove
+  // the stored IP either, because PostHog takes that from the connection, not the
+  // body. Discarding the stored IP is a PROJECT-LEVEL setting ("Discard client IP
+  // data") and cannot be done from the SDK — see .env.example's operator note.
+  // Order matters: strip any derived $geoip_* FIRST, then set the directive —
+  // `$geoip_disable` itself matches the `$geoip_` prefix, so setting it before
+  // the strip loop would delete it again.
   for (const key of Object.keys(props)) {
     if (key.startsWith('$geoip_')) delete props[key];
   }
+  props.$geoip_disable = true;
+  props.$ip = null;
 
   // Redact exception-autocapture payloads: run the message + structured stack
   // frames through scrubDeep so an email/secret embedded in a thrown value never
@@ -138,6 +146,12 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
     disable_session_recording: true, // REQ-3.4b — never record the trading UI
     persistence: 'memory', // REQ-3.7 — cookieless/no-localStorage distinct_id
     disable_surveys: true,
+    // Web vitals ($web_vitals) — performance timings only, no DOM or input data,
+    // and its URL properties are masked to the route pattern by before_send like
+    // every other event. Stated explicitly because it defaults ON: it is the one
+    // autocapture-family surface deliberately kept, so an unset field cannot be
+    // mistaken for an oversight. Set to false to turn it off.
+    capture_performance: { web_vitals: true, network_timing: false },
     advanced_disable_toolbar_metrics: true,
     before_send: scrubEvent,
   });

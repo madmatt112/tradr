@@ -90,6 +90,19 @@ describe('initPostHogClient', () => {
     expect(opts.disable_surveys).toBe(true);
     expect(opts.advanced_disable_toolbar_metrics).toBe(true);
     expect(typeof opts.before_send).toBe('function');
+    // Web vitals is the one autocapture-family surface deliberately kept on;
+    // network timing stays off. Pinned so the choice stays explicit rather than
+    // reverting to the SDK default by omission.
+    expect(opts.capture_performance).toEqual({ web_vitals: true, network_timing: false });
+  });
+
+  it('an event with no prior geoip properties still gets the disable directive', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({ properties: { keep: 'me' } as Record<string, unknown> });
+
+    expect(out!.properties!.$geoip_disable).toBe(true);
+    expect(out!.properties!.keep).toBe('me');
   });
 
   it('enables exception autocapture for unhandled errors + rejections, console errors off', async () => {
@@ -155,7 +168,7 @@ describe('initPostHogClient', () => {
 });
 
 describe('scrubEvent', () => {
-  it('with no active route: drops url/referrer/title, sets $ip=null, drops $geoip_*', async () => {
+  it('with no active route: drops url/referrer/title, disables geoip, drops $geoip_*', async () => {
     const { scrubEvent } = await import('./posthog');
     const event = {
       event: 'position_create_dialog_opened',
@@ -175,6 +188,10 @@ describe('scrubEvent', () => {
     // before_send never returns null when given a real event (would drop it).
     expect(out).toBe(event);
     expect(out!.properties.$ip).toBeNull();
+    // The directive the ingestion pipeline actually honours. It shares the
+    // `$geoip_` prefix with the properties stripped below, so this also pins the
+    // ordering: strip first, then set — the reverse deletes it again.
+    expect((out!.properties as Record<string, unknown>).$geoip_disable).toBe(true);
     expect(out!.properties.$geoip_city_name).toBeUndefined();
     expect(out!.properties.$geoip_country_code).toBeUndefined();
     // No resolved route ⇒ URL/referrer/title are DROPPED, never the resolved path.
