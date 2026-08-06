@@ -1727,6 +1727,12 @@
                     "maxLength": 72,
                     "minLength": 8,
                     "type": "string"
+                  },
+                  "timezone": {
+                    "description": "Optional IANA zone the client detected in the browser, stored as the user's reporting timezone. Omit it and the account is created with the default, `UTC`; it is changeable afterwards via `PUT /api/users/me/timezone`. Unrelated to an account's trading-day timezone.\n",
+                    "example": "Europe/London",
+                    "maxLength": 64,
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -4365,6 +4371,80 @@
         "summary": "Set the tax jurisdiction.",
         "tags": [
           "Expenses"
+        ]
+      }
+    },
+    "/api/users/me/timezone": {
+      "get": {
+        "description": "Authed. The IANA zone the user's P&L is bucketed into by day, week and month. It does not affect how individual timestamps are displayed. `timezone` is never null: accounts created before the preference existed store nothing and read as the default `UTC`, with `stored` false to say so. This is not an account's trading-day timezone — that one defaults to US Eastern because that is where the US equity venues run, and setting either leaves the other untouched.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "stored": {
+                      "description": "True when `timezone` is the value held on the user's row. False when the column is unset — a row predating the preference — and the server default is being substituted; a client may then seed the column once from the zone it detects, which is what that user was already bucketing by.\n",
+                      "example": true,
+                      "type": "boolean"
+                    },
+                    "timezone": {
+                      "example": "Europe/London",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The resolved reporting timezone, and whether it is the user's own."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Get the reporting timezone.",
+        "tags": [
+          "Auth"
+        ]
+      },
+      "put": {
+        "description": "Authed. Changes which calendar day each trade is counted in for daily, weekly and monthly figures. It rewrites no stored timestamp — every fill keeps the instant it happened — it does not change how timestamps are displayed, and it does not touch any account's trading-day timezone.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "timezone": {
+                    "description": "An IANA zone name, such as `Europe/London` or `UTC`.",
+                    "example": "Europe/London",
+                    "maxLength": 64,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "timezone"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored reporting timezone."
+          },
+          "400": {
+            "description": "Not a valid IANA timezone name."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Set the reporting timezone.",
+        "tags": [
+          "Auth"
         ]
       }
     }

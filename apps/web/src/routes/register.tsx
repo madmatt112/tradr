@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/hooks/useAuth';
 import { useResendVerification } from '@/hooks/useResendVerification';
 import { api } from '@/lib/api';
+import { detectBrowserTimezone } from '@/lib/browserTimezone';
 
 const RegisterFormSchema = RegisterSchema.extend({
   confirmPassword: z.string(),
@@ -101,9 +102,13 @@ function RegisterPage() {
   const onSubmit = async (data: RegisterFormInput) => {
     setApiError('');
     try {
+      const detectedTimezone = detectBrowserTimezone();
       const response = await api.post<{ user: User }>('/auth/register', {
         email: data.email,
         password: data.password,
+        // Spread, not `timezone: detectedTimezone ?? null` — see
+        // detectBrowserTimezone: the key must be absent, not null.
+        ...(detectedTimezone ? { timezone: detectedTimezone } : {}),
       });
       if (response.user.emailVerified) {
         // Email not configured on this instance — today's flow, unchanged.

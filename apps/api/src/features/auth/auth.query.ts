@@ -8,9 +8,14 @@ type DB = Database | Transaction;
 // `emailVerified` is OPTIONAL (MN-3): registration passes it explicitly
 // (Component 7); callers that omit it (db/seed/demo.ts, any future path)
 // inherit the DB default `true` — drizzle emits SQL DEFAULT for undefined.
+//
+// `timezone` is likewise optional. The column has no DB default, so omitting it
+// stores NULL — indistinguishable from a pre-migration row, which then resolves
+// through `getReportingTimezone` (user-onboarding R2.5). Registration always
+// passes a value (browser-detected or the default, R2.3).
 export function insertUser(
   db: DB,
-  data: { email: string; passwordHash: string; emailVerified?: boolean },
+  data: { email: string; passwordHash: string; emailVerified?: boolean; timezone?: string },
 ) {
   return db
     .insert(users)
@@ -18,9 +23,29 @@ export function insertUser(
       email: data.email,
       passwordHash: data.passwordHash,
       emailVerified: data.emailVerified,
+      timezone: data.timezone,
     })
     .returning()
     .then((rows) => rows[0]);
+}
+
+/**
+ * Raw read of the user's reporting timezone. Returns the column verbatim —
+ * `null` for a pre-migration row, `undefined` for no such user. Resolving
+ * either to a usable zone is `getReportingTimezone`'s job, not this one's.
+ */
+export function selectUserTimezone(db: DB, userId: string) {
+  return db
+    .select({ timezone: users.timezone })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+    .then((rows) => rows[0]?.timezone);
+}
+
+/** Persist the reporting timezone. Zone validity is the route's Zod duty. */
+export function updateUserTimezone(db: DB, userId: string, timezone: string) {
+  return db.update(users).set({ timezone, updatedAt: new Date() }).where(eq(users.id, userId));
 }
 
 export function selectUserByEmail(db: DB, email: string) {

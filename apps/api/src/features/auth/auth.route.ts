@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { setCookie, getCookie } from 'hono/cookie';
 
+import { UserTimezoneSchema } from '@tradr/shared';
 import { RegisterSchema, LoginSchema } from '@tradr/shared/schemas/auth';
 
 import { db } from '@/db';
@@ -13,7 +14,20 @@ import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 import { createRateLimiter } from '@/middleware/rate-limit.middleware';
 
-import { registerUser, loginUser, logoutUser } from './auth.service';
+import {
+  registerUser,
+  loginUser,
+  logoutUser,
+  getReportingTimezone,
+  setReportingTimezone,
+} from './auth.service';
+
+type AuthEnv = {
+  Variables: {
+    userId: string;
+    isAdmin: boolean;
+  };
+};
 
 const auth = new Hono();
 
@@ -40,6 +54,16 @@ const auth = new Hono();
  *             properties:
  *               email: { type: string, format: email }
  *               password: { type: string, minLength: 8, maxLength: 72 }
+ *               timezone:
+ *                 type: string
+ *                 maxLength: 64
+ *                 description: >
+ *                   Optional IANA zone the client detected in the browser, stored
+ *                   as the user's reporting timezone. Omit it and the account is
+ *                   created with the default, `UTC`; it is changeable afterwards
+ *                   via `PUT /api/users/me/timezone`. Unrelated to an account's
+ *                   trading-day timezone.
+ *                 example: Europe/London
  *     responses:
  *       201:
  *         description: The new user. The `session` cookie is set.
@@ -67,8 +91,10 @@ auth.post(
   createRateLimiter({ name: 'register', max: 5, windowMs: 15 * 60 * 1000, fallbackMax: 3 }),
   validate('json', RegisterSchema),
   async (c) => {
-    const { email, password } = c.req.valid('json');
-    const { user, token } = await registerUser(email, password);
+    // `timezone` is optional and absent for every scripted or e2e registration
+    // that predates it; registerUser substitutes the default (R2.3).
+    const { email, password, timezone } = c.req.valid('json');
+    const { user, token } = await registerUser(email, password, timezone);
 
     setCookie(c, 'session', token, sessionCookieOptions());
 
@@ -230,6 +256,105 @@ auth.get('/me', authMiddleware, async (c) => {
     { id: userId, email: result[0].email, isAdmin, emailVerified: result[0].emailVerified },
     200,
   );
+});
+
+// ---------------------------------------------------------------------------
+// User reporting timezone
+//
+// A stored per-user preference, so it follows the established
+// `/api/users/me/<preference>` convention rather than inventing another one —
+// as with `/users/me/buying-power-basis` (calculator), `/users/me/display-currency`
+// (accounting) and `/users/me/tax-jurisdiction` (expenses).
+//
+// It gets its OWN router because that path is absolute: `auth` is mounted at
+// `/api/auth`, so a `/users/me/...` path declared on it would resolve to
+// `/api/auth/users/me/...`. Mounted bare at `/api` in app.ts. It lives in the
+// auth slice because the auth slice is the one that owns the `users` row —
+// `registerUser` seeds this very column — and a whole feature slice for one
+// scalar preference would be the invention the convention exists to avoid.
+// ---------------------------------------------------------------------------
+
+export const userPreferencesRouter = new Hono<AuthEnv>();
+
+userPreferencesRouter.use(authMiddleware);
+
+/**
+ * @swagger
+ * /api/users/me/timezone:
+ *   get:
+ *     summary: Get the reporting timezone.
+ *     description: >
+ *       Authed. The IANA zone the user's P&L is bucketed into by day, week and
+ *       month. It does not affect how individual timestamps are displayed.
+ *       `timezone` is never null: accounts created before the preference
+ *       existed store nothing and read as the default `UTC`, with `stored`
+ *       false to say so. This is not an account's trading-day timezone — that
+ *       one defaults to US Eastern because that is where the US equity venues
+ *       run, and setting either leaves the other untouched.
+ *     tags: [Auth]
+ *     responses:
+ *       200:
+ *         description: The resolved reporting timezone, and whether it is the user's own.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 timezone: { type: string, example: Europe/London }
+ *                 stored:
+ *                   type: boolean
+ *                   description: >
+ *                     True when `timezone` is the value held on the user's row.
+ *                     False when the column is unset — a row predating the
+ *                     preference — and the server default is being substituted;
+ *                     a client may then seed the column once from the zone it
+ *                     detects, which is what that user was already bucketing by.
+ *                   example: true
+ *       401: { description: Authentication required. }
+ */
+userPreferencesRouter.get('/users/me/timezone', async (c) => {
+  const userId = c.get('userId');
+  const { timezone, stored } = await getReportingTimezone(userId);
+  return c.json({ timezone, stored }, 200);
+});
+
+/**
+ * @swagger
+ * /api/users/me/timezone:
+ *   put:
+ *     summary: Set the reporting timezone.
+ *     description: >
+ *       Authed. Changes which calendar day each trade is counted in for daily,
+ *       weekly and monthly figures. It rewrites no stored timestamp — every
+ *       fill keeps the instant it happened — it does not change how timestamps
+ *       are displayed, and it does not touch any account's trading-day
+ *       timezone.
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [timezone]
+ *             properties:
+ *               timezone:
+ *                 type: string
+ *                 maxLength: 64
+ *                 description: An IANA zone name, such as `Europe/London` or `UTC`.
+ *                 example: Europe/London
+ *     responses:
+ *       200: { description: The stored reporting timezone. }
+ *       400: { description: Not a valid IANA timezone name. }
+ *       401: { description: Authentication required. }
+ */
+userPreferencesRouter.put('/users/me/timezone', validate('json', UserTimezoneSchema), async (c) => {
+  const userId = c.get('userId');
+  const { timezone } = c.req.valid('json');
+  await setReportingTimezone(userId, timezone);
+  // Same shape as the GET, so one client type covers both. `stored` is true by
+  // construction here: the write just put this value on the row.
+  return c.json({ timezone, stored: true }, 200);
 });
 
 export default auth;
