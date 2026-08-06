@@ -213,6 +213,38 @@ describe('scrubEvent', () => {
     expect(out!.properties.keep).toBe('me');
   });
 
+  // /reset-password and /verify-email carry their emailed token in the URL
+  // FRAGMENT (D6/REQ-3.9) specifically so it never leaves the browser. posthog-js
+  // builds $current_url from window.location.href, which includes the fragment,
+  // so sending the raw href would hand the token straight to the vendor.
+  it.each([
+    ['reset-password', 'https://app.tradr.io/reset-password#token=deadbeefcafe1234'],
+    ['verify-email', 'https://app.tradr.io/verify-email#token=deadbeefcafe1234'],
+  ])('strips the #token fragment from $current_url — %s', async (_route, href) => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({ properties: { $current_url: href } as Record<string, unknown> });
+
+    const sent = String(out!.properties!.$current_url);
+    expect(sent).not.toContain('deadbeefcafe1234');
+    expect(sent).not.toContain('#');
+    expect(sent).toBe(href.split('#')[0]);
+  });
+
+  it('leaves a fragmentless URL — including its query string — intact', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({
+      properties: {
+        $current_url: 'https://app.tradr.io/login?expired=%22true%22',
+      } as Record<string, unknown>,
+    });
+
+    // Query strings carry real analytics signal and no route puts a secret in
+    // one (REQ-3.9), so they are deliberately kept.
+    expect(out!.properties!.$current_url).toBe('https://app.tradr.io/login?expired=%22true%22');
+  });
+
   it('drops referrers even when no route has resolved', async () => {
     const { scrubEvent } = await import('./posthog');
 
