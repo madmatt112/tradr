@@ -4303,6 +4303,111 @@
         ]
       }
     },
+    "/api/users/me/onboarding": {
+      "get": {
+        "description": "Authed. Whether the user has started, skipped or finished the guided walkthrough, when they first used the calculator, and which contextual coach marks they have already dismissed. Preference only — this does not report checklist progress, which is derived from the user's accounts and positions and so cannot disagree with their real data. Never null: a user who has expressed no preference reads as `pending` with an empty coach-mark list.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "calculatorFirstUsedAt": {
+                      "description": "Absent until the calculator has been used.",
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "coachMarksSeen": {
+                      "description": "Surface keys already dismissed, as a set.",
+                      "example": [],
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "description": "`pending` not started, `active` running, `skipped` dismissed (recoverable — set it back to start again), `done` completed.\n",
+                      "enum": [
+                        "pending",
+                        "active",
+                        "skipped",
+                        "done"
+                      ],
+                      "example": "pending",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The resolved onboarding preference."
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Get the onboarding preference.",
+        "tags": [
+          "Auth"
+        ]
+      },
+      "patch": {
+        "description": "Authed. Partial: send only what changes. The server merges the named fields into the stored preference, so omitting a field leaves it as it was — a body carrying only `status` does not clear the coach marks. `coachMarkSeen` appends one key to the seen set and is idempotent; sending the same key again is not an error and does not duplicate it. At least one field is required.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "calculatorFirstUsedAt": {
+                    "description": "When the calculator was first used.",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "coachMarkSeen": {
+                    "description": "One surface key to add to the seen set — singular, because the whole set is never sent. Ignored once the set holds 64 keys.\n",
+                    "example": "partial-close",
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "skipped",
+                      "done"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The merged onboarding preference",
+            "in the same shape as the GET.": null
+          },
+          "400": {
+            "description": "Unknown field",
+            "empty body": null,
+            "or an invalid status or timestamp.": null
+          },
+          "401": {
+            "description": "Authentication required."
+          }
+        },
+        "summary": "Update part of the onboarding preference.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/api/users/me/tax-jurisdiction": {
       "get": {
         "description": "Authed. Selects which loss rules the tax summary applies. `null` means the user has not chosen one.\n",

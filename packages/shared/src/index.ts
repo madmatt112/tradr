@@ -262,6 +262,19 @@ export type {
 } from './schemas/changelog';
 export { ReportingTimezoneField, UserTimezoneSchema } from './schemas/user';
 export type { UserTimezoneInput } from './schemas/user';
+export {
+  OnboardingStatusSchema,
+  OnboardingStateSchema,
+  OnboardingPatchSchema,
+  COACH_MARK_KEY_MAX_LENGTH,
+  MAX_COACH_MARKS_SEEN,
+} from './schemas/onboarding';
+export type {
+  OnboardingStatus,
+  OnboardingState,
+  StoredOnboardingState,
+  OnboardingPatch,
+} from './schemas/onboarding';
 export type { CanonicalPart, CanonicalMessage, ProviderModel } from './lib/advisor/types';
 export { uuidv5, uuidv5Batch, WIDGET_DEFAULT_NAMESPACE } from './utils/uuidv5';
 export { DEFAULT_WIDGETS, BODY_LIMIT_BYTES } from './constants/dashboard-defaults';

@@ -8,7 +8,10 @@ import {
   timestamp,
   index,
   check,
+  jsonb,
 } from 'drizzle-orm/pg-core';
+
+import type { StoredOnboardingState } from '@tradr/shared';
 
 export const users = pgTable(
   'users',
@@ -53,6 +56,24 @@ export const users = pgTable(
     // (the advisor_default_persona_id precedent above).
     writableAccountId: uuid('writable_account_id'),
     changelogViewedAt: timestamp('changelog_viewed_at', { withTimezone: true }),
+    // Onboarding PREFERENCE (user-onboarding R4.6): walkthrough status, the
+    // first-calculator-use timestamp, and the set of coach marks already seen.
+    // PREFERENCE ONLY — checklist item completion is DERIVED from the user's
+    // real data (account/position/closed-position counts) and is never stored
+    // here (R4.2). calculatorFirstUsedAt is the single named exception, and it
+    // is a timestamp recording a fact, not a per-item completion flag: the
+    // calculator writes nothing else, so item 2 has no other data trace.
+    // One jsonb column rather than three scalars because coachMarksSeen is a
+    // growing set that would otherwise need its own table for a UI preference
+    // — the dashboard_layouts.widgets precedent.
+    // NOT NULL DEFAULT '{}' so PostgreSQL's fast default makes every existing
+    // row valid with no backfill; '{}' parses to sensible defaults via
+    // OnboardingStateSchema. $type is the STORED shape (all keys optional),
+    // because '{}' is not a valid resolved OnboardingState — see onboarding.ts.
+    onboarding: jsonb('onboarding')
+      .notNull()
+      .$type<StoredOnboardingState>()
+      .default(sql`'{}'::jsonb`),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

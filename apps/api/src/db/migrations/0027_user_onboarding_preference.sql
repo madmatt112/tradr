@@ -1,0 +1,24 @@
+-- Onboarding PREFERENCE state (user-onboarding R4.5, R4.6, R4.7, R7.2):
+-- walkthrough status, the first-calculator-use timestamp, and the set of coach
+-- marks already seen. See users.schema.ts and
+-- packages/shared/src/schemas/onboarding.ts.
+--
+-- PREFERENCE ONLY. Per-item checklist completion is DERIVED from the user's
+-- real data (account count, position count, closed-position count) and is never
+-- stored here (R4.2), so it cannot disagree with reality or need repair.
+-- calculator_first_used_at is the single named exception and is a timestamp
+-- recording a fact, not a completion flag — the calculator writes nothing else,
+-- so checklist item 2 has no other data trace.
+--
+-- One jsonb column rather than three scalar columns because coachMarksSeen is a
+-- growing SET of surface keys; as columns it would eventually need its own
+-- table for what is a UI preference. Follows the dashboard_layouts.widgets
+-- precedent.
+--
+-- NOT NULL DEFAULT '{}' with NO backfill: PostgreSQL's fast default makes every
+-- existing row valid without rewriting the table, and '{}' parses to sensible
+-- defaults (status 'pending', coachMarksSeen []) because every field in
+-- OnboardingStateSchema is optional-with-a-default. Contrast users.timezone in
+-- 0026, which is nullable precisely so NULL can mean "predates the column" —
+-- here there is nothing to signal, only a preference nobody has expressed yet.
+ALTER TABLE "users" ADD COLUMN "onboarding" jsonb DEFAULT '{}'::jsonb NOT NULL;
