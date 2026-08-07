@@ -138,7 +138,11 @@ export function PositionDetailView({ positionId }: Props) {
             <Tooltip>
               <TooltipTrigger asChild>
                 <span>
+                  {/* `data-tour` is the walkthrough's anchor (user-onboarding
+                      R6.8/R6.9) — the tour steps are data and cannot match on
+                      markup structure. Behaviourally inert. */}
                   <Button
+                    data-tour="position-open"
                     className="cursor-pointer"
                     onClick={() => openPosition.mutate({})}
                     disabled={openPosition.isPending || !canOpen}
@@ -155,6 +159,7 @@ export function PositionDetailView({ positionId }: Props) {
               <TooltipTrigger asChild>
                 <span>
                   <Button
+                    data-tour="position-close"
                     className="cursor-pointer"
                     onClick={() => closePosition.mutate({})}
                     disabled={closePosition.isPending || !canClose}
@@ -338,6 +343,7 @@ export function PositionDetailView({ positionId }: Props) {
           {!isClosed && (
             <Button
               variant="outline"
+              data-tour="position-add-fill"
               className="cursor-pointer"
               onClick={() => setFillDialogOpen(true)}
             >

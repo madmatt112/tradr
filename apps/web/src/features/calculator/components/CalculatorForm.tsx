@@ -313,8 +313,12 @@ export function CalculatorForm() {
   // balance to size against; in the dollar basis it supplies only the cap figure
   // and the display currency, because a dollar risk is typed directly and a
   // `balance` set here would be a second, contradictory risk basis.
+  // `data-tour` on this block and on the risk block below are the walkthrough's
+  // anchors (user-onboarding R6.7). Neither the account picker nor the risk
+  // basis exposes a stable id of its own — the picker's trigger is rebuilt per
+  // query state — and the steps are data, so they cannot match on structure.
   const accountPicker = (
-    <div className="space-y-2 pt-2">
+    <div className="space-y-2 pt-2" data-tour="calculator-account">
       <Label>Account</Label>
       {accountsQuery.isLoading ? (
         <Select disabled>
@@ -514,7 +518,7 @@ export function CalculatorForm() {
           )}
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2" data-tour="calculator-risk">
           <Label>Risk</Label>
           <Tabs value={riskBasis} onValueChange={handleRiskBasisChange}>
             <TabsList>

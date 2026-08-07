@@ -360,7 +360,16 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
               >
                 Cancel
               </Button>
-              <Button type="submit" className="cursor-pointer" disabled={isPending}>
+              {/* `data-tour` is the walkthrough's anchor (user-onboarding R6.1)
+                  and nothing else — the tour steps are data in
+                  features/onboarding/lib/steps and must not have to match on
+                  markup structure to find this button. */}
+              <Button
+                type="submit"
+                data-tour="account-submit"
+                className="cursor-pointer"
+                disabled={isPending}
+              >
                 {isPending ? 'Saving...' : isEdit ? 'Save' : 'Create'}
               </Button>
             </div>

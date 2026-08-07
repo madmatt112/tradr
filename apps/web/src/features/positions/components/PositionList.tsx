@@ -60,7 +60,14 @@ export function PositionList() {
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Positions</h1>
         {hasAccounts ? (
-          <Button className="cursor-pointer" onClick={() => handleDialogOpenChange(true)}>
+          // `data-tour` is the walkthrough's anchor (user-onboarding R6.8).
+          // Only on the enabled branch: a tour that reached this step has an
+          // account, and highlighting a disabled button would be a dead end.
+          <Button
+            data-tour="position-new"
+            className="cursor-pointer"
+            onClick={() => handleDialogOpenChange(true)}
+          >
             New Position
           </Button>
         ) : (

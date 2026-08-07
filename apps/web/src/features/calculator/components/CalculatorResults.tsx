@@ -76,7 +76,14 @@ export function CalculatorResults({
   const hasAdjustedRR = result !== null && result.adjustedRiskRewardRatio !== undefined;
 
   return (
-    <div aria-live="polite" aria-atomic="true" className="min-h-[28rem] space-y-4">
+    // `data-tour` is the walkthrough's anchor for the output panel
+    // (user-onboarding R6.7) and carries no behaviour.
+    <div
+      aria-live="polite"
+      aria-atomic="true"
+      data-tour="calculator-results"
+      className="min-h-[28rem] space-y-4"
+    >
       {currency !== 'USD' && (
         <p className="text-sm text-muted-foreground">
           Balance is in {currency}; figures shown in {currency}, no conversion applied.
