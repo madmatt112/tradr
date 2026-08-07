@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 import { asc, eq, inArray } from 'drizzle-orm';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -18,6 +18,7 @@ import {
   unregisterFillHook,
   unregisterReverseHook,
 } from '@/features/positions/positions.service';
+import { config } from '@/lib/config';
 
 // The whole point of the seeder is that realized P&L is DERIVED by these hooks
 // rather than written by the seeder, so the production hooks are installed for
@@ -655,5 +656,110 @@ describe('the private demo marker is invisible to the client and safe from it', 
 
     expect(await readDemoMarker(userId)).toEqual({ accountId, latchedDisplayCurrency: true });
     expect((await getOnboarding(cookie)).status).toBe('pending');
+  });
+});
+
+/**
+ * The creation half of mutual exclusion. The seeding half already refuses to
+ * add sample data to a user who has an account; this is the same rule from the
+ * other side, and between them there is no supported state in which sample and
+ * real data coexist.
+ *
+ * It matters more than a tidy invariant. Every aggregate the app renders scopes
+ * by currency and never by account, so the alternative to refusing here is a
+ * per-account filter on each of them — and the moment one is missed, invented
+ * trades are in the user's own numbers with nothing on screen to say so.
+ */
+describe('POST /api/accounts while the sample account exists', () => {
+  const gatingBefore = config.FEATURE_GATING;
+  afterEach(() => {
+    config.FEATURE_GATING = gatingBefore;
+  });
+
+  it('refuses with a code the client can act on, and creates nothing', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    await seedDemo(cookie, userId);
+
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(409);
+    // The code, not the sentence: the client branches on this to offer removing
+    // the sample data and retrying, and a plain conflict would leave it with
+    // nothing to distinguish this from a duplicate name.
+    expect((await res.json()).error.code).toBe('DEMO_ACCOUNT_EXISTS');
+
+    const rows = await db.select().from(accountsTable).where(eq(accountsTable.userId, userId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].isDemo).toBe(true);
+  });
+
+  it('tells a gated Free user to remove the sample data rather than to upgrade', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    config.FEATURE_GATING = true;
+
+    // The sample account occupies the Free plan's single slot, so this user is
+    // at the cap purely by having accepted the offer of sample data. Checked in
+    // the other order they would be sold an upgrade to escape it.
+    await seedDemo(cookie, userId);
+
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe('DEMO_ACCOUNT_EXISTS');
+  });
+
+  it('still enforces the plan cap for a gated Free user whose account is a real one', async () => {
+    const { cookie } = await registerAndGetCookie();
+    config.FEATURE_GATING = true;
+
+    const first = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'First Account',
+      currency: 'USD',
+    });
+    expect(first.status).toBe(201);
+
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Second Account',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.code).toBe('TIER_LIMIT_ACCOUNTS');
+  });
+
+  it('refuses with nothing configured, as a self-hosted deployment runs', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    config.FEATURE_GATING = false;
+    await seedDemo(cookie, userId);
+
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe('DEMO_ACCOUNT_EXISTS');
+  });
+
+  it('creates normally once the sample data has been removed', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    config.FEATURE_GATING = true;
+    const { accountId } = await seedDemo(cookie, userId);
+
+    expect(
+      (await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=demo`, cookie)).status,
+    ).toBe(204);
+
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'CAD',
+    });
+    expect(res.status).toBe(201);
+
+    const rows = await db.select().from(accountsTable).where(eq(accountsTable.userId, userId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].isDemo).toBe(false);
   });
 });

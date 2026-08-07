@@ -229,6 +229,25 @@ export async function selectOwnedAccountDemoFlag(
 }
 
 /**
+ * Does this user hold the sample account? Existence only — the creation guard
+ * needs to know whether sample data is present, not which account carries it.
+ *
+ * Reads the stored flag, like every other decision that turns on it. Backed by
+ * `accounts_user_id_idx`, and stopped at the first row.
+ */
+export async function userHasDemoAccount(
+  db: Database | Transaction,
+  userId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql<number>`1` })
+    .from(accounts)
+    .where(and(eq(accounts.userId, userId), eq(accounts.isDemo, true)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
  * Every ledger row booked against an account. Runs before the account itself is
  * deleted: that reference is restricted, so a row left here stops the delete
  * rather than being orphaned by it.

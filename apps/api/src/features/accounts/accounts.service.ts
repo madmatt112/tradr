@@ -29,6 +29,7 @@ import {
   countAccountsByUser,
   selectOwnedAccountDemoFlag,
   setWritableAccountId,
+  userHasDemoAccount,
 } from './accounts.query';
 
 export async function listAccounts(db: Database, userId: string) {
@@ -59,6 +60,31 @@ export async function createAccount(
   gate: { isAdmin: boolean },
 ) {
   return withTransaction(db, async (tx) => {
+    // Sample data and real accounts are mutually exclusive, and this is that
+    // rule's creation half — the seeding half lives with the seeder. It is the
+    // whole of what keeps invented figures out of real ones: the dashboard
+    // widgets, the equity curve and the performance pages scope by currency and
+    // pass no account filter at all, so a sample account sitting alongside a
+    // real one would blend its trades into the user's own totals with nothing
+    // to separate them again. That is why the answer here is a refusal rather
+    // than a filter added to each of those queries.
+    //
+    // It carries its own code so the client can offer to remove the sample data
+    // and retry, instead of reporting a bare conflict the user cannot act on.
+    //
+    // Deliberately ahead of the plan cap below, and the order is the point. The
+    // sample account occupies an account slot, so a Free user who accepted the
+    // offer of sample data is already at the cap; checked the other way round
+    // they would be told to upgrade to escape data they were invited to try,
+    // and the offer to remove it would never be reached.
+    if (await userHasDemoAccount(tx, userId)) {
+      throw new AppError(
+        409,
+        'DEMO_ACCOUNT_EXISTS',
+        'Remove the sample data before creating an account.',
+      );
+    }
+
     // L1 creation cap (plan-tiers D9, REQ-6.1). Admin / gating-off pass
     // through with zero behaviour change ({ enforced: false } does no DB
     // read). Indexed count(*); the concurrent-overshoot posture is accepted

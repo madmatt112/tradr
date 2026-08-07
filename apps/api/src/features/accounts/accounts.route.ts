@@ -71,6 +71,14 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *       enabled and the user is a non-admin Free user at the account cap, the create is
  *       refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass
  *       through unchanged.
+ *
+ *
+ *       While the sample account exists the create is refused with `409
+ *       DEMO_ACCOUNT_EXISTS` instead: sample and real data are mutually exclusive, because
+ *       every aggregate scopes by currency and not by account. That check runs BEFORE the
+ *       plan cap, so a Free user holding sample data is told to remove it rather than to
+ *       upgrade — the sample account occupies their one slot. Remove it with
+ *       `DELETE /api/accounts/{id}?cascade=demo` and retry.
  *     tags: [Accounts]
  *     requestBody:
  *       required: true
@@ -105,7 +113,7 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *       201: { description: The created account. }
  *       400: { description: Validation error. }
  *       403: { description: TIER_LIMIT_ACCOUNTS (account cap reached on the current plan) or FORBIDDEN (cross-user brokerage). }
- *       409: { description: Duplicate account name. }
+ *       409: { description: DEMO_ACCOUNT_EXISTS (sample data present — remove it and retry) or CONFLICT (duplicate account name). }
  */
 accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
   const userId = c.get('userId');
