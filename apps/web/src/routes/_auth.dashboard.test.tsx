@@ -752,3 +752,70 @@ describe('_auth.dashboard route — the checklist slot reserves its height', () 
     expect(screen.queryByText('Log a position')).toBeNull();
   });
 });
+
+// ---- The widget coach mark (user-onboarding R7.1, R7.5) ---------------------
+//
+// The mark rides with the populated branch's header and MUST NOT reach the two
+// branches that return before it. That is a property of the route's branch
+// ORDER, which is exactly the kind of thing an edit elsewhere in this file
+// moves by accident, so it is pinned here rather than left to be read off the
+// source.
+//
+// The zero-state is the case that matters. That screen exists to get one thing
+// done — the user's first account — and a popover about arranging widgets,
+// painted over it, competes with the single action `ZeroState` is built around
+// while describing a grid the user cannot see. The empty branch renders neither
+// the cards nor the Reset layout button the copy names, which is the same
+// mistake in a quieter form.
+//
+// The component is left REAL in this file (only its write hook is faked, see
+// the mock block at the top) precisely so these cases are about the route.
+
+describe('_auth.dashboard route — the widget coach mark', () => {
+  const populated = {
+    widgets: sixDefaultWidgets,
+    theme: 'light',
+    updatedAt: '2026-05-01T00:00:00.000Z',
+  };
+  const emptyLayout = { widgets: [], theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' };
+  const oneAccount = [{ id: 'acct-1' }];
+
+  it('R7.1: appears beside the header on the populated branch', () => {
+    layoutMockValue = baseLayout({ data: populated });
+    setOnboarding('pending');
+    accountsMock = { data: oneAccount, isLoading: false, isError: false };
+    const { container } = renderRoute();
+
+    expect(screen.getByTestId('coach-mark-dashboard-widgets')).toBeTruthy();
+    // Anchored in the header row, not floating somewhere else on the page: the
+    // mark points at the widget controls it describes.
+    const anchor = container.querySelector('[data-slot="coach-mark-anchor"]');
+    expect(anchor).not.toBeNull();
+    expect(anchor!.parentElement!.querySelector('[data-slot="dashboard-header"]')).not.toBeNull();
+  });
+
+  it('stays off the zero-state, which has one thing to say and is entitled to say it', () => {
+    // Same populated layout as above — only the account count differs, so a
+    // pass here is about the branch that wins and nothing else.
+    layoutMockValue = baseLayout({ data: populated });
+    setOnboarding('pending');
+    accountsMock = { data: [], isLoading: false, isError: false };
+    const { container } = renderRoute();
+
+    expect(screen.getByTestId('onboarding-zero-state')).toBeTruthy();
+    expect(screen.queryByTestId('coach-mark-dashboard-widgets')).toBeNull();
+    // Absent, not merely empty: the branch returns before the mark is mounted.
+    expect(container.querySelector('[data-slot="coach-mark-anchor"]')).toBeNull();
+  });
+
+  it('stays off the empty-layout branch, which renders none of the controls it names', () => {
+    layoutMockValue = baseLayout({ data: emptyLayout });
+    setOnboarding('pending');
+    accountsMock = { data: oneAccount, isLoading: false, isError: false };
+    const { container } = renderRoute();
+
+    expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
+    expect(screen.queryByTestId('coach-mark-dashboard-widgets')).toBeNull();
+    expect(container.querySelector('[data-slot="coach-mark-anchor"]')).toBeNull();
+  });
+});

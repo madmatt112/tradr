@@ -192,6 +192,11 @@ describe('CoachMark', () => {
       </>,
     );
 
+    // THE MARK IS UP FIRST, and this assertion is what stops the rest of the
+    // case being vacuous: a mark that never rendered blocks nothing either, so
+    // every assertion below would pass just as happily against no mark at all.
+    expect(mark('position-partials')).not.toBeNull();
+
     // Radix only makes the rest of the page inert when the popover is modal.
     // Asserting the body directly is the concrete form of "non-blocking": a
     // modal popover sets this to 'none'.
