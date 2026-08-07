@@ -93,8 +93,11 @@ afterEach(() => {
   // earlier test would re-render on the reset below — outside `act`, and
   // attributed to whichever test came next.
   cleanup();
-  resetSession();
+  // Bus before session, in that order: `__resetWalkthroughForTests` re-arms the
+  // module's import-time `auth:logout` listener, and clearing the bus after
+  // would take it straight back off again.
   eventBus.__resetForTests();
+  resetSession();
   vi.clearAllMocks();
 });
 
@@ -378,10 +381,84 @@ describe('useWalkthrough — action signals', () => {
     expect(gatedTargets()).toEqual(['[data-tour="account-submit"]']);
   });
 
+  // The test above pins the targets that survive the override, so it stays green
+  // when a NEW action step is authored without a signal — the new step is simply
+  // absent from the lists it compares. This one is the guard for that: the
+  // override is a general rule, and the set of steps it silently downgrades is
+  // enumerated here by name. A fifth turns this red, which is the whole point.
+  it('downgrades exactly these four gated steps, and no others (R5.5)', () => {
+    const downgraded = allSteps
+      .filter((s) => s.advanceOnAction)
+      .map((s) => s.target ?? '(centred)')
+      .filter((target) => !(target in ACTION_SIGNALS))
+      .sort();
+
+    expect(downgraded).toEqual(
+      [
+        // Opens the account dialog.
+        '[data-testid="zero-state-create-account"]',
+        // Chooses the Percent risk basis.
+        '[data-tour="calculator-risk"]',
+        // Picks the account to size against.
+        '[data-tour="calculator-account"]',
+        // Opens the new-position dialog.
+        '[data-tour="position-new"]',
+      ].sort(),
+    );
+  });
+
   it('does not otherwise alter the authored steps', async () => {
     await start('close');
     expect(currentTargets()).toEqual(WALKTHROUGH_STEPS.close.map((s) => s.target));
     expect(started?.steps.map((s) => s.title)).toEqual(WALKTHROUGH_STEPS.close.map((s) => s.title));
+  });
+});
+
+// --- logout ------------------------------------------------------------------
+
+describe('useWalkthrough — logging out ends the session', () => {
+  it('drops the session and stops the tour', async () => {
+    const result = await start('account');
+    await waitFor(() => expect(result.current.isRunning).toBe(true));
+
+    await act(async () => {
+      eventBus.publish('auth:logout', {});
+    });
+
+    // The overlay goes with it — clearing the store alone would leave driver.js
+    // painting over the login screen.
+    expect(engine.stop).toHaveBeenCalled();
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.itemId).toBeNull();
+    expect(result.current.currentStep).toBeNull();
+    expect(result.current.stepIndex).toBe(-1);
+  });
+
+  it('stops listening for the events that were advancing it', async () => {
+    await start('position');
+    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+
+    await act(async () => {
+      eventBus.publish('auth:logout', {});
+    });
+    act(() => {
+      // The next user creating a position must not advance the last one's tour.
+      eventBus.publish('positions:cache-invalidate', { reason: 'created' });
+    });
+
+    expect(engine.advance).not.toHaveBeenCalled();
+  });
+
+  it('clears an unavailable runtime with no tour running (R5.8)', () => {
+    act(() => {
+      useWalkthroughStore.setState({ isUnavailable: true });
+    });
+
+    act(() => {
+      eventBus.publish('auth:logout', {});
+    });
+
+    expect(useWalkthroughStore.getState().isUnavailable).toBe(false);
   });
 });
 

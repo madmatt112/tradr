@@ -1,4 +1,8 @@
-export const EVENT_NAMES = ['positions:cache-invalidate', 'accounts:cache-invalidate'] as const;
+export const EVENT_NAMES = [
+  'positions:cache-invalidate',
+  'accounts:cache-invalidate',
+  'auth:logout',
+] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 export type PositionChangeReason =
   | 'created'
@@ -19,4 +23,9 @@ export type AccountChangeReason = 'created';
 export interface EventPayloads {
   'positions:cache-invalidate': { reason: PositionChangeReason; positionId?: string };
   'accounts:cache-invalidate': { reason: AccountChangeReason };
+  // Published by `useAuth` as the session ends, so module-scoped state that
+  // belongs to the departing user can be dropped without `useAuth` importing
+  // the features that own it. No payload: "the session is over" is the whole
+  // message.
+  'auth:logout': Record<string, never>;
 }

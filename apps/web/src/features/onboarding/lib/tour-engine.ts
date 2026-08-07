@@ -59,6 +59,20 @@ export interface TourStep {
    * Has no effect on the LAST step, where the button is "Done" — finishing is
    * not advancing, and trapping the user behind an action they may have already
    * taken would leave no way out but Escape.
+   *
+   * READ THIS BEFORE BELIEVING THE STEP DATA. The flag carries two meanings, and
+   * only one of them is this one. It also declares "the next step's target is
+   * created by this step's action", which is what `steps.test.ts` reads to
+   * require a `waitForMs` on that next step — so a step keeps the flag even when
+   * its action publishes nothing we can observe. Because a gated step ignores
+   * "Next", such a step would strand the user, so `useWalkthrough` downgrades it
+   * at runtime: any step whose target is absent from `ACTION_SIGNALS` there is
+   * handed to the engine with the flag off and advances on "Next" like any
+   * other. Four are, today — `[data-testid="zero-state-create-account"]`,
+   * `[data-tour="calculator-risk"]`, `[data-tour="calculator-account"]` and
+   * `[data-tour="position-new"]` — because each asks for a pure UI gesture that
+   * changes no server data. `hooks/useWalkthrough.ts` owns both the mapping and
+   * the downgrade, and a test there fails if a fifth step joins them unnoticed.
    */
   advanceOnAction?: boolean;
 }

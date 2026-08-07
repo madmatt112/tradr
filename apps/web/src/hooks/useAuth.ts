@@ -5,6 +5,7 @@ import type { User } from '@tradr/shared';
 
 import { api, setIsLoggingOut } from '@/lib/api';
 import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
+import { eventBus } from '@/stores/event-bus.store';
 
 export function useAuth() {
   const queryClient = useQueryClient();
@@ -37,6 +38,13 @@ export function useAuth() {
         /* swallow */
       }
       queryClient.clear();
+      // Clearing the query cache only drops SERVER state. Module-scoped client
+      // state outlives it — the guided walkthrough keeps its session, and its
+      // driver.js overlay, next to the module rather than in a component — and
+      // the next user to log in on this tab would inherit it. Announcing the
+      // logout lets each owner tear its own down; a direct import from here
+      // into the onboarding feature would couple auth to it and invite a cycle.
+      eventBus.publish('auth:logout', {});
       router.navigate({ to: '/login' });
     },
   });

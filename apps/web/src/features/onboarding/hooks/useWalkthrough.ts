@@ -128,6 +128,34 @@ function endSession(): void {
 }
 
 /**
+ * Logging out ends the walkthrough, overlay and all.
+ *
+ * The session is module-scoped for the reason at the top of this file, which
+ * means `queryClient.clear()` in `useAuth` does not touch it: without this the
+ * next user to log in on the same tab would inherit the last one's tour. We
+ * listen for `auth:logout` on the event bus rather than exporting something for
+ * `useAuth` to call, so auth keeps knowing nothing about onboarding.
+ *
+ * Subscribed at MODULE scope, not from the hook: a walkthrough deliberately
+ * outlives the component that started it, so the teardown has to outlive it too
+ * — and a stale `isUnavailable` belongs to the departing session even when no
+ * tour is running. The bus stores handlers in a `Set`, so re-arming is a no-op.
+ */
+function teardownOnLogout(): void {
+  // The engine is only reachable once its chunk has loaded, and a tour can only
+  // be running if it has. `endSession()` covers the case where it never did.
+  if (enginePromise) void enginePromise.then(([engine]) => engine.stop()).catch(() => {});
+  endSession();
+  useWalkthroughStore.setState({ ...IDLE, isUnavailable: false });
+}
+
+function armLogoutTeardown(): void {
+  eventBus.subscribe('auth:logout', teardownOnLogout);
+}
+
+armLogoutTeardown();
+
+/**
  * Load the tour runtime and the step content, together and lazily.
  *
  * R5.8 / Principle 4: a rejection here is an ordinary outcome, not an
@@ -345,4 +373,7 @@ export function __resetWalkthroughForTests(): void {
   endSession();
   enginePromise = null;
   useWalkthroughStore.setState({ ...IDLE, isUnavailable: false });
+  // Restore the module's import-time state in full: a test that clears the
+  // event bus has taken the logout listener with it.
+  armLogoutTeardown();
 }
