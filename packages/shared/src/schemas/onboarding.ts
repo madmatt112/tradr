@@ -19,6 +19,12 @@ import { z } from 'zod';
 // `coachMarksSeen` is a growing SET of surface keys; as columns it would
 // eventually need its own table for what is a UI preference. Follows the
 // `dashboard_layouts.widgets` precedent.
+//
+// The column carries one key this schema deliberately does not describe: the
+// server's private `demo` marker, written by the sample-account seeder and read
+// by its teardown (see the accounts slice). It is not a preference and is not
+// the client's business, so it is stripped on the way out by the rule below
+// rather than published. Do not "tidy it up" into this object.
 
 export const OnboardingStatusSchema = z.enum(['pending', 'active', 'skipped', 'done']);
 

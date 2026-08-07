@@ -33,6 +33,13 @@ accounts.use(authMiddleware);
 
 const ParamSchema = z.object({ id: z.string().uuid() });
 
+// The delete query. `cascade=demo` asks for the sample-data teardown; whether it
+// happens is decided by the account's stored flag, not by this. Spelled as a
+// named value rather than a boolean so that a client guessing at `?cascade=true`
+// means nothing at all, and so the parameter reads as the one thing it can ask
+// for rather than as a general-purpose switch.
+const DeleteQuerySchema = z.object({ cascade: z.literal('demo').optional() });
+
 accounts.get('/', async (c) => {
   const userId = c.get('userId');
   const rows = await listAccounts(db, userId);
@@ -238,12 +245,60 @@ accounts.put(
   },
 );
 
-accounts.delete('/:id', validate('param', ParamSchema), async (c) => {
-  const userId = c.get('userId');
-  const { id } = c.req.valid('param');
-  await removeAccount(db, id, userId);
-  captureServerEvent('account_deleted', { distinctId: userId });
-  return c.body(null, 204);
-});
+/**
+ * @swagger
+ * /api/accounts/{id}:
+ *   delete:
+ *     summary: Delete an account.
+ *     description: >
+ *       Authed. Refused with `409` when the account holds positions — deleting one would
+ *       take its trading history with it.
+ *
+ *
+ *       `?cascade=demo` asks instead for the sample-account teardown: the account and every
+ *       position, fill and ledger entry booked against it, removed together in one
+ *       transaction, leaving nothing orphaned behind. It is a request and not an
+ *       authorisation — the server decides from the account's own stored sample-data flag,
+ *       so the same call against a real account holding positions is refused with `409`
+ *       exactly as it is without the parameter. Nothing a client sends can reach the flag.
+ *
+ *
+ *       Teardown is idempotent: repeating it against a sample account that has already been
+ *       removed answers `204`, so two tabs pressing the same button settle on the same
+ *       state. That applies only to the caller's own former sample account; every other
+ *       unknown id is a `404`, as is any account belonging to another user.
+ *     tags: [Accounts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: cascade
+ *         required: false
+ *         schema: { type: string, enum: [demo] }
+ *         description: >
+ *           `demo` requests the sample-account teardown. Any other value is a `400`.
+ *     responses:
+ *       204: { description: Deleted, or already torn down. }
+ *       400: { description: Validation error (a non-uuid id, or an unrecognised cascade value). }
+ *       404: { description: Account not found (or not owned by the user). }
+ *       409: { description: The account has positions and no cascade applies. }
+ */
+accounts.delete(
+  '/:id',
+  validate('param', ParamSchema),
+  validate('query', DeleteQuerySchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { id } = c.req.valid('param');
+    const { cascade } = c.req.valid('query');
+    const deleted = await removeAccount(db, id, userId, { cascade: cascade === 'demo' });
+    // Not on the idempotent repeat: that call deleted nothing, and an event
+    // saying otherwise would count one teardown twice.
+    if (deleted) captureServerEvent('account_deleted', { distinctId: userId });
+    return c.body(null, 204);
+  },
+);
 
 export default accounts;

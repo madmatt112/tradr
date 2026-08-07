@@ -17,6 +17,7 @@ function isPgError(err: unknown): err is PgError {
   return typeof err === 'object' && err !== null && 'code' in err;
 }
 
+import { teardownDemoAccount, wasDemoAccount } from './accounts.demo';
 import {
   findAccountsByUser,
   findAccountById,
@@ -26,6 +27,7 @@ import {
   countPositionsByAccount,
   accountHasLedgerEntries,
   countAccountsByUser,
+  selectOwnedAccountDemoFlag,
   setWritableAccountId,
 } from './accounts.query';
 
@@ -178,10 +180,49 @@ export async function setWritableAccount(db: Database, userId: string, accountId
   return { writableAccountId: accountId };
 }
 
-export async function removeAccount(db: Database, id: string, userId: string) {
+/**
+ * Delete an account.
+ *
+ * There are two paths through here, and which one runs is decided by the stored
+ * row, never by the request. `cascade` is the caller ASKING for the sample-data
+ * teardown — the one-click removal of an account together with every position,
+ * fill and ledger row booked against it — and asking is not permission. The
+ * account's own demo flag, read from the database on the line below, is the
+ * permission. The two are separate on purpose: a cascade asked for on a real
+ * account simply falls through to the ordinary path and meets the same guard it
+ * always has, and deleting the request from this function, or inverting it,
+ * would not change that. Nothing a client can send reaches the flag.
+ *
+ * Ownership is unchanged and orthogonal: an account belonging to somebody else
+ * is not found, exactly as before, so no request shape can make it a deletion or
+ * even an existence check.
+ *
+ * Returns whether anything was actually deleted, which is false only on the
+ * idempotent repeat below.
+ */
+export async function removeAccount(
+  db: Database,
+  id: string,
+  userId: string,
+  options: { cascade?: boolean } = {},
+): Promise<boolean> {
   return withTransaction(db, async (tx) => {
-    const existing = await findAccountById(tx, id, userId);
-    if (existing.length === 0) throw new NotFoundError('Account', id);
+    const existing = await selectOwnedAccountDemoFlag(tx, id, userId);
+
+    if (!existing) {
+      // Tearing down sample data that is already gone is the state the caller
+      // asked for, so it succeeds — two tabs racing on the same button settle on
+      // the same answer instead of one of them showing an error. Limited to an
+      // id the user's own marker names; every other id, another user's included,
+      // is the 404 it has always been.
+      if (options.cascade && (await wasDemoAccount(tx, userId, id))) return false;
+      throw new NotFoundError('Account', id);
+    }
+
+    if (existing.isDemo && options.cascade) {
+      await teardownDemoAccount(tx, userId, id);
+      return true;
+    }
 
     const [{ count }] = await countPositionsByAccount(tx, id);
     if (count > 0) {
@@ -189,5 +230,6 @@ export async function removeAccount(db: Database, id: string, userId: string) {
     }
 
     await deleteAccount(tx, id, userId);
+    return true;
   });
 }

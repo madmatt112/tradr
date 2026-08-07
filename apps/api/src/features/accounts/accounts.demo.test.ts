@@ -287,4 +287,258 @@ describe('POST /api/accounts/demo', () => {
     });
     expect(res.status).toBe(401);
   });
+
+  it('keeps the sample trades in a window that still looks current', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
+
+    const { fills: seededFills } = await readSeededData(userId);
+    const newest = seededFills.reduce((max, f) => (f.filledAt > max ? f.filledAt : max), '');
+    const ageInDays = (Date.now() - Date.parse(newest)) / 86_400_000;
+
+    // The fixture's dates are absolute, which is exactly what makes the
+    // documentation screenshots and the end-to-end assertions stable — and also
+    // what makes the window age. A comment asking a future maintainer to move
+    // the dates forward is not a mechanism; this is. When it fails, move them
+    // forward in the fixture and regenerate the screenshots in the same change.
+    expect(ageInDays).toBeLessThan(365);
+    // Not ahead of the clock either: a sample account whose newest trade has not
+    // happened yet reads as broken in the other direction.
+    expect(ageInDays).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * What is still booked against an account, counted directly rather than through
+ * any of the code under test.
+ *
+ * `positionIds` has to be captured before the teardown, because a fill reaches
+ * its account only through its position — once the positions are gone, a fill
+ * that outlived them would be invisible to every query that starts from the
+ * account, which is precisely the orphan worth looking for.
+ */
+async function countRemaining(accountId: string, positionIds: string[]) {
+  const accountRows = await db.select().from(accountsTable).where(eq(accountsTable.id, accountId));
+  const positionRows = await db.select().from(positions).where(eq(positions.accountId, accountId));
+  const fillRows = positionIds.length
+    ? await db.select().from(fills).where(inArray(fills.positionId, positionIds))
+    : [];
+  const ledgerRows = await db
+    .select()
+    .from(ledgerEntries)
+    .where(eq(ledgerEntries.accountId, accountId));
+
+  return {
+    accounts: accountRows.length,
+    positions: positionRows.length,
+    fills: fillRows.length,
+    ledger: ledgerRows.length,
+  };
+}
+
+async function readDisplayCurrency(userId: string) {
+  const [row] = await db.select().from(users).where(eq(users.id, userId));
+  return row.displayCurrency;
+}
+
+async function seedDemo(cookie: string, userId: string) {
+  const res = await authedRequest('POST', '/api/accounts/demo', cookie);
+  expect(res.status).toBe(201);
+  const account = (await res.json()) as { id: string };
+  const positionIds = (await db.select().from(positions).where(eq(positions.userId, userId))).map(
+    (p) => p.id,
+  );
+  return { accountId: account.id, positionIds };
+}
+
+describe('DELETE /api/accounts/:id?cascade=demo', () => {
+  it('removes the sample account and everything booked against it', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId, positionIds } = await seedDemo(cookie, userId);
+
+    expect(await countRemaining(accountId, positionIds)).toEqual({
+      accounts: 1,
+      positions: 14,
+      fills: 24,
+      ledger: 10,
+    });
+
+    const res = await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=demo`, cookie);
+    expect(res.status).toBe(204);
+
+    expect(await countRemaining(accountId, positionIds)).toEqual({
+      accounts: 0,
+      positions: 0,
+      fills: 0,
+      ledger: 0,
+    });
+
+    const list = await authedRequest('GET', '/api/accounts', cookie);
+    expect(await list.json()).toEqual([]);
+  });
+
+  it('clears the display currency the seed set, so a later real account sets its own', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId } = await seedDemo(cookie, userId);
+    expect(await readDisplayCurrency(userId)).toBe('USD');
+
+    expect(
+      (await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=demo`, cookie)).status,
+    ).toBe(204);
+    expect(await readDisplayCurrency(userId)).toBeNull();
+
+    // Which is the point of clearing it: the materialization only ever fires on
+    // a user who has none, so a value left behind by disposable data would have
+    // made this account report in the wrong currency for good.
+    const created = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'CAD',
+    });
+    expect(created.status).toBe(201);
+    expect(await readDisplayCurrency(userId)).toBe('CAD');
+  });
+
+  it('leaves a display currency the user set themselves', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+
+    // A real account materializes USD, then goes away — so by the time the
+    // sample account is seeded the column is already set and the seed's own
+    // first-writer-wins update does nothing. The value is the user's, not the
+    // sample data's, and teardown must be able to tell the difference.
+    const created = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'USD',
+    });
+    expect(created.status).toBe(201);
+    const real = (await created.json()) as { id: string };
+    expect((await authedRequest('DELETE', `/api/accounts/${real.id}`, cookie)).status).toBe(204);
+    expect(await readDisplayCurrency(userId)).toBe('USD');
+
+    const { accountId } = await seedDemo(cookie, userId);
+    expect(
+      (await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=demo`, cookie)).status,
+    ).toBe(204);
+
+    expect(await readDisplayCurrency(userId)).toBe('USD');
+  });
+
+  it('still refuses a real account holding positions', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+
+    const created = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Real Account',
+      currency: 'USD',
+    });
+    expect(created.status).toBe(201);
+    const account = (await created.json()) as { id: string };
+
+    // performance-charts §8.2 audit: status='open' is CHECK-safe.
+    // eslint-disable-next-line no-restricted-syntax
+    await db.insert(positions).values({
+      userId,
+      accountId: account.id,
+      symbol: 'TSLA',
+      side: 'short',
+      assetType: 'equity',
+      status: 'open',
+    });
+
+    // Asking for the teardown does not grant it. The account's stored flag is
+    // what decides, and this account's says no, so the request meets the same
+    // guard it would have met without the parameter.
+    const res = await authedRequest('DELETE', `/api/accounts/${account.id}?cascade=demo`, cookie);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.message).toBe('Cannot delete account while it has positions');
+
+    const rows = await db.select().from(accountsTable).where(eq(accountsTable.id, account.id));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("refuses another user's sample account and leaves it intact", async () => {
+    const owner = await registerAndGetCookie();
+    const other = await registerAndGetCookie();
+    const { accountId, positionIds } = await seedDemo(owner.cookie, owner.userId);
+
+    const res = await authedRequest(
+      'DELETE',
+      `/api/accounts/${accountId}?cascade=demo`,
+      other.cookie,
+    );
+    expect(res.status).toBe(404);
+
+    expect(await countRemaining(accountId, positionIds)).toEqual({
+      accounts: 1,
+      positions: 14,
+      fills: 24,
+      ledger: 10,
+    });
+  });
+
+  it("refuses another user's real account", async () => {
+    const owner = await registerAndGetCookie();
+    const other = await registerAndGetCookie();
+
+    const created = await authedRequest('POST', '/api/accounts', owner.cookie, {
+      name: 'Real Account',
+      currency: 'USD',
+    });
+    expect(created.status).toBe(201);
+    const account = (await created.json()) as { id: string };
+
+    const res = await authedRequest(
+      'DELETE',
+      `/api/accounts/${account.id}?cascade=demo`,
+      other.cookie,
+    );
+    expect(res.status).toBe(404);
+
+    expect(
+      await db.select().from(accountsTable).where(eq(accountsTable.id, account.id)),
+    ).toHaveLength(1);
+  });
+
+  it('succeeds silently when the sample account is already gone', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId } = await seedDemo(cookie, userId);
+
+    const path = `/api/accounts/${accountId}?cascade=demo`;
+    expect((await authedRequest('DELETE', path, cookie)).status).toBe(204);
+    expect((await authedRequest('DELETE', path, cookie)).status).toBe(204);
+  });
+
+  it("404s an id that was never the user's, even asking for the teardown", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest(
+      'DELETE',
+      `/api/accounts/${crypto.randomUUID()}?cascade=demo`,
+      cookie,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('refuses the sample account when the teardown is not asked for', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId, positionIds } = await seedDemo(cookie, userId);
+
+    const res = await authedRequest('DELETE', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(409);
+    expect((await countRemaining(accountId, positionIds)).accounts).toBe(1);
+  });
+
+  it('rejects an unrecognised cascade value', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId, positionIds } = await seedDemo(cookie, userId);
+
+    const res = await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=true`, cookie);
+    expect(res.status).toBe(400);
+    expect((await countRemaining(accountId, positionIds)).accounts).toBe(1);
+  });
+
+  it('requires authentication', async () => {
+    const res = await app.request(`/api/accounts/${crypto.randomUUID()}?cascade=demo`, {
+      method: 'DELETE',
+      headers: { 'X-Forwarded-For': uniqueIp() },
+    });
+    expect(res.status).toBe(401);
+  });
 });

@@ -1,6 +1,6 @@
 import { and, eq, isNull } from 'drizzle-orm';
 
-import type { Database } from '@/db';
+import type { Database, Transaction } from '@/db';
 import { users } from '@/db/schema';
 import {
   addFillTx,
@@ -11,7 +11,17 @@ import {
 import { ConflictError } from '@/lib/errors';
 import { withTransaction } from '@/lib/transaction';
 
-import { countAccountsByUser, findAccountById, insertAccount } from './accounts.query';
+import {
+  clearDisplayCurrency,
+  countAccountsByUser,
+  deleteAccount,
+  deleteLedgerEntriesByAccount,
+  deletePositionsByAccount,
+  findAccountById,
+  insertAccount,
+  selectDemoMarker,
+  setDemoMarker,
+} from './accounts.query';
 
 /**
  * Sample-data seeding for a user who wants to see a populated product before
@@ -278,10 +288,21 @@ export async function seedDemoAccount(db: Database, userId: string) {
     // Same first-writer-wins materialization real account creation performs, so
     // the sample account reports in a currency instead of leaving the totals
     // that need one blank. Only fires when the user has never had an account.
-    await tx
+    const latched = await tx
       .update(users)
       .set({ displayCurrency: DEMO_CURRENCY })
-      .where(and(eq(users.id, userId), isNull(users.displayCurrency)));
+      .where(and(eq(users.id, userId), isNull(users.displayCurrency)))
+      .returning({ id: users.id });
+
+    // Whether that fired has to be written down now. It is the one thing about
+    // this seed that outlives the data: nothing else in the app ever writes the
+    // column again, so afterwards a currency the sample data set is
+    // indistinguishable from one the user's own first account set — and only
+    // the first of those is teardown's to undo.
+    await setDemoMarker(tx, userId, {
+      accountId: row.id,
+      latchedDisplayCurrency: latched.length > 0,
+    });
 
     for (const trade of DEMO_TRADES) {
       const position = await createPositionTx(tx, userId, {
@@ -321,4 +342,63 @@ export async function seedDemoAccount(db: Database, userId: string) {
     const joined = await findAccountById(tx, row.id, userId);
     return joined[0];
   });
+}
+
+/**
+ * Remove the sample account and everything booked against it — the inverse of
+ * the seed above.
+ *
+ * NO CHECKING HAPPENS HERE. The caller has already established that the account
+ * belongs to this user and that its stored flag marks it as sample data, and
+ * this function deletes unconditionally on the strength of that. It must never
+ * be reached any other way.
+ *
+ * Order is dictated by the references: ledger rows and positions both hold a
+ * restricted reference to the account, so they go first, and a position's fills
+ * follow it automatically because that one cascades. Nothing can be quietly
+ * missed — a surviving row would stop the account delete and take the whole
+ * transaction down with it rather than being left dangling.
+ *
+ * Positions are deleted directly rather than through the position service,
+ * which would post reversal entries into a ledger that is about to cease to
+ * exist. Real trading history is corrected by reversal because it is a record;
+ * sample data is not a record of anything, and leaves no trace instead.
+ */
+export async function teardownDemoAccount(tx: Transaction, userId: string, accountId: string) {
+  await deleteLedgerEntriesByAccount(tx, accountId);
+  await deletePositionsByAccount(tx, accountId);
+  await deleteAccount(tx, accountId, userId);
+
+  const marker = await selectDemoMarker(tx, userId);
+
+  // The seed sets a display currency for a user who has none, so the sample
+  // figures have something to report in. Left behind, that is a permanent
+  // preference change made by disposable data: nothing else writes the column,
+  // so a real account created afterwards in another currency would go on
+  // reporting in the sample one for good. Undone only when the seed is what set
+  // it — and only with nothing of the user's own left to report on, since
+  // clearing it out from under a real account would leave that account's cross
+  // -currency totals blank with no way to restore them.
+  if (marker?.latchedDisplayCurrency && (await countAccountsByUser(tx, userId)) === 0) {
+    await clearDisplayCurrency(tx, userId);
+  }
+
+  // The id stays behind deliberately: it is what lets a second teardown of the
+  // same account be a success rather than a 404, without that answer ever being
+  // available for an id that was never this user's.
+  await setDemoMarker(tx, userId, { accountId });
+}
+
+/**
+ * Was this account the user's sample account? Answered from the marker alone,
+ * which survives the row, so a teardown arriving after the account is already
+ * gone can be told apart from one naming an id the user never had.
+ */
+export async function wasDemoAccount(
+  tx: Transaction,
+  userId: string,
+  accountId: string,
+): Promise<boolean> {
+  const marker = await selectDemoMarker(tx, userId);
+  return marker?.accountId === accountId;
 }
