@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // CI bundle-size gates (Task 47, design §W-r3 + Req 9.4).
 //
-// Enforces five things against the post-build artifact:
+// Enforces six things against the post-build artifact:
 //
 //   1. Total bundle gate (unchanged from pre-Task-47): the largest emitted
 //      JS chunk must be <= 500 KB gzipped.
@@ -16,6 +16,9 @@
 //   5. Entry-chunk PostHog markers (observability spec, REQ-9.2): the
 //      posthog-js SDK must never land in the entry chunk — it is loaded via a
 //      dynamic import (Task 12) so it stays in a separate async chunk.
+//   6. Entry-chunk driver.js markers (user-onboarding spec, REQ-5.7/11.3): the
+//      guided-walkthrough tour runtime must never land in the entry chunk — it
+//      is reached only through the dynamic import in useWalkthrough.
 //
 // Chunk identification is done via Vite's build manifest
 // (`apps/web/dist/.vite/manifest.json`), keyed by source path — hashed
@@ -138,9 +141,7 @@ for (const [source, maxBytes] of Object.entries(budgets.widgets)) {
   }
   console.log(`widget ${source}: ${entry.file} = ${gz} bytes (limit: ${maxBytes})`);
   if (gz > maxBytes) {
-    violations.push(
-      `widget chunk exceeds budget: ${source} = ${gz} bytes > ${maxBytes}`,
-    );
+    violations.push(`widget chunk exceeds budget: ${source} = ${gz} bytes > ${maxBytes}`);
   }
 }
 
@@ -219,6 +220,67 @@ for (const chunk of entryChunks) {
   }
   console.log(
     `entry chunk ${chunk.file}: no posthog-js markers (${posthogMarkers.length} checked)`,
+  );
+}
+
+// ---- 6. Entry-chunk driver.js markers (user-onboarding spec, REQ-5.7 / REQ-11.3) ----
+//
+// The guided-walkthrough runtime (driver.js + the tour stylesheet it pulls in)
+// must only ever load via its own async chunk: `useWalkthrough` reaches
+// `features/onboarding/lib/tour-engine.ts` — the sole module that imports
+// driver.js — through a dynamic import, and nothing else may import it at all.
+// Every returning user loads the dashboard and no returning user is being
+// guided, so a static edge would charge all of them for a tour none of them
+// runs.
+//
+// This needs its own gate because nothing else catches it. Gate #1
+// (largest-chunk <= 500 KB) would happily pass a ~25 KB library riding inside
+// the entry chunk, and gate #2 (dashboardEntry, the 30 KB budget that names
+// this exact property) is warn-only AND skipped — `src/routes/_auth.dashboard.tsx`
+// is not lazy-split, so it has no chunk of its own in the manifest and rides
+// the main entry. An unchecked gate is an unmet gate.
+//
+// Like gates #4 and #5, this is a content-marker scan: the Vite manifest carries
+// no per-chunk module identity. The markers are driver.js's own DOM class and id
+// literals — they are strings the library writes into the document, so they
+// survive minification, unlike module paths and identifiers. Each was verified
+// against a real minified build: present in the tour chunk when the engine is
+// imported, absent from the entry chunk otherwise, and emitted by nothing else
+// in the dependency graph. (`tour.css` also contains them, but a stylesheet is a
+// separate asset and never part of a JS chunk.)
+const driverMarkers = [
+  'driver-popover', // popover root class
+  'driver-active-element', // highlighted-element class
+  'driver-dummy-element', // id of the placeholder used for centred steps
+];
+
+// The entry STYLESHEET is scanned alongside the entry chunk, and it is not
+// belt-and-braces. `tour-engine.ts` carries the tour's only `import './tour.css'`
+// and that stylesheet `@import`s the vendor CSS, so a static edge leaks the
+// styles even in builds where Rollup manages to tree-shake the JS back out —
+// verified: a static import whose exports go unused emitted no driver.js into
+// any chunk but still merged the whole tour stylesheet into the entry CSS. A
+// gate that only read the JS would have called that clean.
+for (const chunk of entryChunks) {
+  const assets = [chunk.file, ...(chunk.css ?? [])];
+  for (const asset of assets) {
+    const src = readFileSync(resolve(distDir, asset), 'utf8');
+    for (const marker of driverMarkers) {
+      if (src.includes(marker)) {
+        fail(
+          `entry asset ${asset} contains driver.js marker "${marker}" — ` +
+            `the walkthrough tour runtime must not land in the entry chunk (REQ-5.7, REQ-11.3). ` +
+            `Fix: keep features/onboarding/lib/tour-engine.ts behind the dynamic import in ` +
+            `features/onboarding/hooks/useWalkthrough.ts so Vite emits it as a separate async ` +
+            `chunk — never a static import from an eagerly-loaded module, never an import of ` +
+            `driver.js from anywhere but tour-engine.ts, and never an import of tour.css from ` +
+            `anywhere but tour-engine.ts.`,
+        );
+      }
+    }
+  }
+  console.log(
+    `entry chunk ${chunk.file} (+${assets.length - 1} stylesheet(s)): no driver.js markers (${driverMarkers.length} checked)`,
   );
 }
 

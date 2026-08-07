@@ -10,6 +10,7 @@ import type {
 
 import { billingKeys } from '@/features/billing/useWalletBalance';
 import { api } from '@/lib/api';
+import { eventBus } from '@/stores/event-bus.store';
 
 function getErrorMessage(err: unknown, fallback: string): string {
   if (typeof err === 'object' && err !== null && 'error' in err) {
@@ -50,6 +51,12 @@ export function useCreateAccount() {
       // writableAccountId} live on the tier key; server enforcement is always
       // fresh via the lazy resolver.
       queryClient.invalidateQueries({ queryKey: billingKeys.tier() });
+      // Cross-feature announcement, not a cache concern: the invalidations above
+      // already cover this feature's own reads. The onboarding walkthrough's
+      // "Create the account" step advances on the account actually existing
+      // rather than on a "Next" click (user-onboarding R5.5), and this is that
+      // event.
+      eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
       toast.success('Account created');
     },
     onError: (err: unknown) => {

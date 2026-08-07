@@ -1,0 +1,348 @@
+// useWalkthrough — the guided walkthrough's whole behaviour (R5).
+//
+// It composes three things that were built separately and deliberately know
+// nothing about each other: `lib/tour-engine.ts` (mechanics), `lib/steps/`
+// (content), and `useOnboarding` (the user's real data). Everything below is
+// the glue, and each rule it enforces is a requirement.
+//
+// THE RUNTIME IS LOADED DYNAMICALLY, AND THAT IS THE POINT (R5.7, R11.3). Both
+// `lib/tour-engine` and `lib/steps` are reached ONLY through `import()` inside
+// `run()` below — never a top-level import. `tour-engine` is the sole module
+// that pulls in `driver.js` and `tour.css`, so a static edge from here would put
+// the whole tour runtime into the dashboard route's initial chunk, which every
+// returning user pays for and no returning user uses. Type-only imports are
+// fine: they erase. This property is now enforced, not merely intended —
+// `apps/web/scripts/check-bundle-size.mjs` fails the build if a driver.js marker
+// appears in the entry chunk.
+//
+// THE SESSION IS MODULE-SCOPED, NOT COMPONENT-SCOPED (R5.6). A walkthrough
+// crosses routes: the position set starts on `/positions` and finishes on
+// `/positions/$positionId`, and the close set ends up back on `/dashboard`. The
+// component that started it (`ZeroState`, on the dashboard) unmounts on the
+// first of those navigations. If `isRunning`, the current step and the event
+// subscription lived in component state they would all die there, mid-tour,
+// while driver.js — whose own state is module-scoped — carried on painting an
+// overlay nothing was driving. So the session lives in a store next to the
+// engine's own module state, and the hook is a thin binding onto it. It is also
+// what lets a component on a completely different route ask `isRunning` (the
+// coach marks are suppressed while a walkthrough runs, R7.6).
+//
+// NOTHING AUTO-STARTS (R5.2). Mounting this hook has no effect whatsoever;
+// `start()` is a user action, called from the zero-state's "Walk me through it"
+// and the checklist's per-item buttons. There is no effect that reads the stored
+// status and begins a tour, and there must never be one.
+//
+// RESUME IS JUST `start()` WITH NO ARGUMENT (R5.6). After a reload there is no
+// step index to restore because none was ever stored — `nextIncompleteItem()`
+// re-derives the set from the checklist, which is itself derived from the user's
+// accounts and positions (R4.2). A user who reloads after creating their account
+// resumes at the calculator set because their data says the account step is
+// done, not because we wrote that down. Storing an index would be a second
+// source of truth that could disagree with the first, and the first is the one
+// that is right.
+//
+// EXITING DISCARDS NOTHING (R5.3), and it is structural rather than careful:
+// this module never writes onboarding state at all. The opt-in record
+// (`status: 'active'`) is the caller's, written when the user chooses to be
+// guided; completion is derived. So there is nothing an exit — by the close
+// button, Escape, an unresolvable target or a failed chunk load — could roll
+// back. The checklist after a walkthrough is the same checklist as before it,
+// plus whatever the user actually did.
+
+import { useNavigate } from '@tanstack/react-router';
+import { useCallback } from 'react';
+import { create } from 'zustand';
+
+import { eventBus } from '@/stores/event-bus.store';
+import type { EventName } from '@/stores/events.types';
+
+import type { ChecklistItemId, Checklist } from '../lib/derive-checklist';
+import type { WalkthroughStep } from '../lib/steps';
+
+import { useOnboarding } from './useOnboarding';
+
+type TourEngineModule = typeof import('../lib/tour-engine');
+type StepsModule = typeof import('../lib/steps');
+
+/**
+ * The real event that completes an action step, keyed by the step's target
+ * selector (R5.5).
+ *
+ * KEYED BY TARGET, NOT BY INDEX, on purpose. The selectors are the step data's
+ * own stable identity — `steps.test.ts` already fails if one is renamed or stops
+ * matching anything the app renders — whereas an index would silently point at
+ * the wrong step the first time a set gains a paragraph. `[data-tour=
+ * "position-add-fill"]` appears in two sets and means the same thing in both,
+ * which is exactly the behaviour keying by target gives for free.
+ *
+ * A step marked `advanceOnAction` whose action is NOT in here is handled by
+ * `withObservableActionsOnly()` below — see the note there.
+ */
+export const ACTION_SIGNALS: Readonly<Record<string, { event: EventName; reason: string }>> = {
+  '[data-tour="account-submit"]': { event: 'accounts:cache-invalidate', reason: 'created' },
+  '#symbol': { event: 'positions:cache-invalidate', reason: 'created' },
+  '[data-tour="position-add-fill"]': { event: 'positions:cache-invalidate', reason: 'fill-added' },
+  '[data-tour="position-open"]': { event: 'positions:cache-invalidate', reason: 'opened' },
+  '[data-tour="position-close"]': { event: 'positions:cache-invalidate', reason: 'closed' },
+};
+
+interface WalkthroughStoreState {
+  isRunning: boolean;
+  /** The runtime failed to load and this session gave up on it (R5.8). */
+  isUnavailable: boolean;
+  /** Which checklist item's set is running, or `null`. */
+  itemId: ChecklistItemId | null;
+  currentStep: WalkthroughStep | null;
+  stepIndex: number;
+}
+
+const IDLE: Omit<WalkthroughStoreState, 'isUnavailable'> = {
+  isRunning: false,
+  itemId: null,
+  currentStep: null,
+  stepIndex: -1,
+};
+
+/**
+ * Session state, module-scoped for the reason given at the top of the file.
+ * Exported for tests only — components go through `useWalkthrough()`.
+ */
+export const useWalkthroughStore = create<WalkthroughStoreState>(() => ({
+  ...IDLE,
+  isUnavailable: false,
+}));
+
+// The rest of the session: the steps being driven and the event subscriptions
+// driving them. Plain module variables rather than store fields — nothing
+// renders from them, and putting them in the store would re-render every
+// consumer for a change no consumer can see.
+let activeSteps: WalkthroughStep[] = [];
+let unsubscribers: (() => void)[] = [];
+let enginePromise: Promise<[TourEngineModule, StepsModule]> | null = null;
+
+function endSession(): void {
+  for (const off of unsubscribers) off();
+  unsubscribers = [];
+  activeSteps = [];
+  useWalkthroughStore.setState(IDLE);
+}
+
+/**
+ * Load the tour runtime and the step content, together and lazily.
+ *
+ * R5.8 / Principle 4: a rejection here is an ordinary outcome, not an
+ * exception. The chunk can 404 after a deploy, be blocked, or simply be
+ * unreachable offline. We mark the walkthrough unavailable, leave the stored
+ * onboarding status ALONE — the user has not skipped anything and must not be
+ * recorded as having done so — and return `null`. The zero-state and checklist
+ * are untouched by all of this and keep working, which is the whole point: the
+ * unguided path is the fallback, and it is the same path everyone else uses.
+ *
+ * The promise is cached on success and dropped on failure, so a later retry
+ * genuinely retries rather than re-awaiting the rejection.
+ */
+async function loadRuntime(): Promise<[TourEngineModule, StepsModule] | null> {
+  try {
+    enginePromise ??= Promise.all([import('../lib/tour-engine'), import('../lib/steps')]);
+    return await enginePromise;
+  } catch (err) {
+    enginePromise = null;
+    console.error('[onboarding] the guided walkthrough could not be loaded', err);
+    useWalkthroughStore.setState({ ...IDLE, isUnavailable: true });
+    return null;
+  }
+}
+
+/**
+ * Subscribe to the events that advance this session's action steps.
+ *
+ * The current step decides: an event only advances the tour when the step on
+ * screen is an action step AND the event is the one that step's action produces.
+ * Every other event on the bus — a position updated elsewhere, a fill deleted —
+ * passes through without touching the tour.
+ */
+function bindAdvance(engine: TourEngineModule): void {
+  const advanceOn = (event: EventName) => (payload: { reason: string }) => {
+    const step = useWalkthroughStore.getState().currentStep;
+    if (!step?.advanceOnAction || step.target === undefined) return;
+    const signal = ACTION_SIGNALS[step.target];
+    if (signal?.event !== event || signal.reason !== payload.reason) return;
+    engine.advance();
+  };
+
+  unsubscribers = [
+    eventBus.subscribe('positions:cache-invalidate', advanceOn('positions:cache-invalidate')),
+    eventBus.subscribe('accounts:cache-invalidate', advanceOn('accounts:cache-invalidate')),
+  ];
+}
+
+/**
+ * Hand the engine the steps it should gate on an action, and only those.
+ *
+ * A step marked `advanceOnAction` does not advance on "Next" — the engine
+ * suppresses it — so a step whose action produces no event we can observe would
+ * strand the user with a live tour and no way forward but Escape. Four of the
+ * authored action steps are like that: their "action" is a pure UI gesture
+ * (opening the account dialog, opening the new-position dialog, choosing the
+ * Percent risk basis, picking an account in the calculator) which changes no
+ * server data and publishes nothing.
+ *
+ * For those, the flag is turned off and "Next" advances normally. The highlighted
+ * control stays interactive either way (`disableActiveInteraction: false`), so
+ * the user still performs the gesture; they just also press Next afterwards, and
+ * the following step's `waitForMs` covers a dialog that is still opening. That
+ * is a narrower reading of R5.5 than those four steps were authored for, and it
+ * is the honest one until a gesture has an event to advance on — being asked to
+ * press Next is a worse tour, but a tour that cannot be advanced at all is a
+ * broken one.
+ */
+function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] {
+  return steps.map((step) => {
+    if (!step.advanceOnAction) return step;
+    if (step.target !== undefined && step.target in ACTION_SIGNALS) return step;
+    return { ...step, advanceOnAction: false };
+  });
+}
+
+/** The first item the user has not done — the set to run, and the resume point (R5.6). */
+export function nextIncompleteItem(
+  checklist: Checklist | null | undefined,
+): ChecklistItemId | null {
+  return checklist?.items.find((item) => !item.done)?.id ?? null;
+}
+
+type NavigateFn = (opts: { to: string; params?: Record<string, string> }) => unknown;
+
+/**
+ * Put the user on the screen the set starts on, before the tour starts, so the
+ * first step's `waitForMs` covers the route mounting rather than a navigation
+ * that has not been asked for yet.
+ *
+ * A parameterised route (`/positions/$positionId`) needs values only the caller
+ * has — the id of the position the user just created — so it navigates only when
+ * they were supplied. Without them we start where the user already is, which is
+ * right when they got here from that very position's page and degrades to a
+ * clean `target-missing` exit when they did not.
+ */
+function navigateToStart(
+  step: WalkthroughStep,
+  params: Record<string, string> | undefined,
+  navigate: NavigateFn,
+): void {
+  const needed = step.routeParams ?? [];
+  if (needed.some((name) => params?.[name] === undefined)) return;
+  navigate(needed.length > 0 ? { to: step.route, params } : { to: step.route });
+}
+
+async function run(
+  itemId: ChecklistItemId,
+  params: Record<string, string> | undefined,
+  navigate: NavigateFn,
+): Promise<void> {
+  const runtime = await loadRuntime();
+  if (!runtime) return;
+  const [engine, steps] = runtime;
+
+  const set = steps.WALKTHROUGH_STEPS[itemId];
+  if (!set || set.length === 0) return;
+
+  // Any session already running ends HERE, before anything new is set up.
+  // `startTour` ends the previous tour itself, but it does so from inside the
+  // new start — and the old session's `onExit` would then run `endSession()`
+  // over the session we had just built, unsubscribing it. Ending first means
+  // that teardown lands on the old session, which is whose it is.
+  engine.stop();
+  endSession();
+
+  activeSteps = withObservableActionsOnly(set);
+  bindAdvance(engine);
+  navigateToStart(activeSteps[0], params, navigate);
+
+  useWalkthroughStore.setState({
+    isRunning: true,
+    isUnavailable: false,
+    itemId,
+    currentStep: null,
+    stepIndex: -1,
+  });
+
+  engine.startTour(activeSteps, {
+    onStepChange: (index) => {
+      useWalkthroughStore.setState({ stepIndex: index, currentStep: activeSteps[index] ?? null });
+    },
+    // Every ending arrives here — completed, dismissed, or a target that never
+    // appeared — and all three do the same thing, because none of them has any
+    // work to undo (R5.3).
+    onExit: () => {
+      endSession();
+    },
+  });
+}
+
+export interface UseWalkthroughResult {
+  /**
+   * Start a walkthrough. With no argument it runs the set for the first
+   * incomplete checklist item, which is both "start me at the beginning" and
+   * "resume where I was" (R5.6) — the two are the same question asked of the
+   * same data. `params` supplies the values a parameterised route needs.
+   *
+   * Never throws, and never rejects: a runtime that will not load leaves
+   * `isUnavailable` true and everything else exactly as it was (R5.8).
+   */
+  start: (itemId?: ChecklistItemId, params?: Record<string, string>) => void;
+  /** End the running walkthrough. A no-op when none is running. */
+  stop: () => void;
+  isRunning: boolean;
+  /** The tour runtime failed to load; offer the unguided path instead (R5.8). */
+  isUnavailable: boolean;
+  /** Which set is running, or `null`. */
+  itemId: ChecklistItemId | null;
+  currentStep: WalkthroughStep | null;
+  /** Zero-based index into the running set; `-1` between steps and when idle. */
+  stepIndex: number;
+}
+
+export function useWalkthrough(): UseWalkthroughResult {
+  const navigate = useNavigate();
+  const { checklist } = useOnboarding();
+  const state = useWalkthroughStore();
+
+  const start = useCallback(
+    (itemId?: ChecklistItemId, params?: Record<string, string>) => {
+      const target = itemId ?? nextIncompleteItem(checklist);
+      // Nothing to guide: the checklist has not loaded, this user has none, or
+      // every item is already done. Silence is right — there is no failure here
+      // to report.
+      if (!target) return;
+      void run(target, params, navigate as NavigateFn);
+    },
+    [checklist, navigate],
+  );
+
+  const stop = useCallback(() => {
+    // The engine is only reachable once it has loaded, and it can only be
+    // running if it has. `endSession()` covers the case where it never did.
+    if (!enginePromise) {
+      endSession();
+      return;
+    }
+    void enginePromise.then(([engine]) => engine.stop()).catch(() => endSession());
+  }, []);
+
+  return {
+    start,
+    stop,
+    isRunning: state.isRunning,
+    isUnavailable: state.isUnavailable,
+    itemId: state.itemId,
+    currentStep: state.currentStep,
+    stepIndex: state.stepIndex,
+  };
+}
+
+/** Test seam: drop the module-scoped session and the cached runtime import. */
+export function __resetWalkthroughForTests(): void {
+  endSession();
+  enginePromise = null;
+  useWalkthroughStore.setState({ ...IDLE, isUnavailable: false });
+}
