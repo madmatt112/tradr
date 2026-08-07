@@ -309,6 +309,18 @@ test.describe('visual-design parity smoke', () => {
   test.beforeAll(async ({ request }) => {
     await ensureStackOrSkip(request);
     user = await registerUser(request, 'main');
+    // The dashboard shows the onboarding zero-state INSTEAD of the widget grid
+    // while the user has no accounts. Neither case below is about that screen —
+    // one asserts token resolution on the populated dashboard, the other the
+    // money-direction encoding across its figures — so the account is seeded
+    // with the user rather than inside the second case, where it used to live.
+    // `register` set the session cookie on `request`, so this POST is already
+    // authenticated as the user just created.
+    const accountRes = await request.post('/api/accounts', {
+      data: { name: 'USD Account', currency: 'USD' },
+    });
+    expect(accountRes.status(), 'POST /accounts').toBe(201);
+    accountId = ((await accountRes.json()) as { id: string }).id;
   });
 
   test.beforeEach(async ({ page }) => {
@@ -339,14 +351,9 @@ test.describe('visual-design parity smoke', () => {
   }) => {
     await loginViaUi(page, user.email);
 
-    // Seed one real account so the mocked positions reference a real id (the
-    // mocks own the figure shapes; the account just exists for completeness).
-    const accountRes = await page.request.post('/api/accounts', {
-      data: { name: 'USD Account', currency: 'USD' },
-    });
-    expect(accountRes.status(), 'POST /accounts').toBe(201);
-    accountId = ((await accountRes.json()) as { id: string }).id;
-
+    // The account is seeded in `beforeAll` (the mocks own the figure shapes; the
+    // real account is what keeps the user past the onboarding zero-state and
+    // gives the mocked positions a real id to reference).
     await mockFigureData(page, { accountId, userId: user.userId });
     // Run the encoding checks in DARK so both themes are exercised (toggle test
     // covers light; this covers the dark-theme figure rendering).

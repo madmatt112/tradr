@@ -43,7 +43,16 @@ export function handleCreatePositionError(
   showToast(msg || 'Failed to create position');
 }
 
-export function usePositions(filters?: { status?: string; accountId?: string }) {
+/**
+ * `GET /positions` has no LIMIT and returns every enriched row, so it is the
+ * most expensive list the app fetches. `options.enabled` lets a caller that may
+ * not need it at all skip the request entirely; omitted, it fetches as before.
+ * A disabled query reports `data: undefined`, `isLoading: false`, `isError: false`.
+ */
+export function usePositions(
+  filters?: { status?: string; accountId?: string },
+  options?: { enabled?: boolean },
+) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.accountId) params.set('accountId', filters.accountId);
@@ -52,6 +61,7 @@ export function usePositions(filters?: { status?: string; accountId?: string }) 
   return useQuery<PositionListItem[]>({
     queryKey: ['positions', 'list', filters],
     queryFn: () => api.get<PositionListItem[]>(`/positions${query ? `?${query}` : ''}`),
+    enabled: options?.enabled,
   });
 }
 

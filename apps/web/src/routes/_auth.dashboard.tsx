@@ -11,11 +11,15 @@ import {
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { DashboardGrid } from '@/features/dashboard/components/DashboardGrid';
 import { DashboardHeader } from '@/features/dashboard/components/DashboardHeader';
 import { GRID_COLUMNS } from '@/features/dashboard/grid.constants';
 import { useDashboardLayout } from '@/features/dashboard/hooks/useDashboardLayout';
 import { findFirstSlot } from '@/features/dashboard/layout';
+import { ActivationChecklist } from '@/features/onboarding/components/ActivationChecklist';
+import { ZeroState } from '@/features/onboarding/components/ZeroState';
+import { useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
 import { useAuth } from '@/hooks/useAuth';
 
 /**
@@ -75,11 +79,89 @@ function ReadOnlyDefaultLayout(): ReactElement {
   );
 }
 
+/**
+ * The checklist's mount slot on the populated and empty-layout branches.
+ *
+ * WHY A SLOT AND NOT A BARE MOUNT. `ActivationChecklist` paints a four-row card
+ * skeleton while its derived reads are in flight, and the skeleton is SHORTER
+ * than the card that replaces it — so on the primary screen the widget grid
+ * dropped by the difference, once per load, for every user still mid-onboarding.
+ * The design system forbids exactly that ("no layout jump between loading →
+ * empty → loaded", visual-design R4.4). The checklist itself is correct and is
+ * left alone; the geometry is the mount site's problem, and this is the mount
+ * site.
+ *
+ * THE RESERVATION IS DRIVEN BY WHAT ACTUALLY RENDERED, via `:has()` on the
+ * skeleton's own test id, rather than by re-deciding here which users get a
+ * checklist. That matters twice over: nothing in this file restates the
+ * component's rules (a second copy of them is a second thing to get wrong), and
+ * the space is reserved ONLY while the skeleton is on screen — not for a retired
+ * user who renders nothing, and not for the beat between the last item being
+ * ticked and `status: 'done'` landing, where a status-driven reservation would
+ * leave an empty box behind.
+ *
+ * 238px is the settled card's outer height, and it is arithmetic, not a guess:
+ * 1px border + 16px (`py-4`) + 44px header (16px `text-base leading-none` title
+ * + 8px `gap-2` + 20px `text-sm` description) + 16px (`gap-4`) + 144px content
+ * (4 items × `min-h-9`) + 16px + 1px. The skeleton comes to 210px by the same
+ * sum, hence the 28px it was short by. If the card's rows, padding or header
+ * change, this number changes with them — `_auth.dashboard.test.tsx` pins it so
+ * the pair cannot drift silently.
+ *
+ * `empty:hidden` is not cosmetic. The checklist renders nothing at all for a
+ * `done` user — the majority — and a wrapper that stayed in the flow would count
+ * as a child of the surrounding `space-y-*`, adding a permanent gap of dead
+ * space between the header and the grid that was not there before.
+ */
+function ChecklistSlot(): ReactElement {
+  return (
+    <div
+      data-slot="activation-checklist-slot"
+      className="empty:hidden has-data-[testid=activation-checklist-loading]:min-h-[238px]"
+    >
+      <ActivationChecklist />
+    </div>
+  );
+}
+
 function DashboardPage(): ReactElement {
   const { user } = useAuth();
   const userId = user?.id ?? '';
   const layout = useDashboardLayout();
   const { data, isLoading, isError, refetch, flushPending, scheduleLayoutWrite } = layout;
+
+  // ===========================================================================
+  // THE ZERO-STATE GATE (Req 3.1, 3.4, 3.6).
+  //
+  // A user with no accounts gets a screen that tells them what to do instead of
+  // six widgets that are each individually empty for a different reason.
+  //
+  // TWO READS, NOT THREE. `useOnboardingQuery` is the CHEAP preference read; the
+  // full `useOnboarding` hook additionally pulls the whole unfiltered positions
+  // list down to count it, and this route has no use for a checklist — only for
+  // the stored status. The accounts list is the one the dashboard already needs:
+  // `account-balances` is one of the six default widgets and calls `useAccounts`
+  // itself, so hoisting the same `['accounts', 'list']` query up here shares one
+  // request with it rather than adding a second (Performance NFR).
+  //
+  // `enabled: !onboardingRetired` is TRUE on the first render, because the
+  // status is unknown until the preference read lands. That is deliberate: the
+  // accounts fetch goes out in parallel with the preference and the layout
+  // reads rather than waiting a round trip behind one of them. Once the status
+  // comes back `done` the observer switches off — and by then the response has
+  // usually already landed in the cache, where the balances widget picks it up
+  // for free. Nothing here is a new blocking request on first paint.
+  // ===========================================================================
+  const onboardingQuery = useOnboardingQuery();
+  const preference = onboardingQuery.data;
+  // `done` ONLY. `skipped` is an R4.5 dismissal of the CHECKLIST, not of
+  // onboarding: a skipped user with no accounts still has nothing to look at,
+  // and the zero-state is where `ActivationChecklist` — hence the product's only
+  // "Reopen setup checklist" control — is mounted. Retiring on `skipped` would
+  // delete that control from the product and make dismissal unrecoverable.
+  const onboardingRetired = preference?.status === 'done';
+  const accountsQuery = useAccounts({ enabled: !onboardingRetired });
+  const accounts = accountsQuery.data;
 
   // beforeunload: flush any pending debounced PUT (Req 1.9).
   useEffect(() => {
@@ -229,10 +311,74 @@ function DashboardPage(): ReactElement {
     );
   }
 
+  // Zero state — takes precedence over the empty layout below (Req 3.5), and
+  // sits behind isLoading/isError so neither of those branches changes.
+  //
+  // NO FLASH IN EITHER DIRECTION, which is the whole reason this is three
+  // conditions and not one. Deciding early would be wrong both ways: `accounts`
+  // is `undefined` before it lands, so `accounts?.length === 0` would show the
+  // zero-state to every established user for a beat; and falling through while
+  // the status is unknown would show the widget grid to a brand-new user for a
+  // beat. So the route stays on the skeleton it is ALREADY showing until both
+  // reads have answered, and only then picks a side. Same component as the
+  // isLoading branch, so the wait is invisible — the screen does not change
+  // twice.
+  //
+  // A FAILED READ FALLS THROUGH rather than parking on the skeleton forever.
+  // Onboarding is presentation over data the dashboard owns anyway; if we cannot
+  // tell whether this user is new, the right answer is the dashboard they asked
+  // for, not a spinner.
+  if (!onboardingQuery.isError && !accountsQuery.isError && !onboardingRetired) {
+    if (preference === undefined || accounts === undefined) {
+      return <DashboardSkeleton />;
+    }
+    // Req 3.4 needs nothing extra: `useCreateAccount` invalidates ['accounts'],
+    // this observer refetches, and the next render falls through to the grid.
+    if (accounts.length === 0) {
+      return <ZeroState />;
+    }
+  }
+
+  // ===========================================================================
+  // THE CHECKLIST'S HOME ON EVERY OTHER PATH (R4.5, R4.7).
+  //
+  // `ZeroState` composes `ActivationChecklist` itself, so the zero-state branch
+  // above needs nothing — and must not double-mount it. But the zero-state is
+  // the ONLY screen the checklist had, and a user leaves it the instant they
+  // create their first account. That is precisely when items 2-4 (size a trade,
+  // log a position, close it) become the outstanding work, when the "Reopen
+  // setup checklist" row R4.5 depends on would otherwise be unreachable, and
+  // when R4.7's retirement — which is what finally switches `useOnboarding`'s
+  // two expensive gated reads off for good — would never get a chance to fire.
+  // So both remaining branches mount it.
+  //
+  // UNCONDITIONALLY, and that is safe because the component answers for every
+  // state itself: nothing for a retired (`done`) user, nothing while the stored
+  // status is still unknown, the quiet reopen row for a `skipped` user, and the
+  // card otherwise. Nothing here may restate those rules — a second copy of them
+  // is a second thing to get wrong.
+  //
+  // NO LAYOUT JUMP, and it takes all three of these. `ActivationChecklist`
+  // occupies no space while `preference` is `undefined`, so it cannot appear and
+  // then vanish on an established user; this route never even reaches these
+  // branches with an unknown status unless a read failed, because the gate above
+  // holds the skeleton until the preference lands; and `ChecklistSlot` reserves
+  // the settled card's height for the one transition the first two do not cover,
+  // the skeleton → card swap a mid-onboarding user still sees. Mount through the
+  // slot, never `ActivationChecklist` directly.
+  //
+  // NO SECOND PRIMARY ACTION. The checklist carries no amber of its own by
+  // design, so the one primary each of these views is allowed stays where it is
+  // — "Use the default layout" below, and nothing on the populated dashboard.
+  // `onStartStep` is deliberately NOT passed: the walkthrough is Phase E, and a
+  // per-item "Start" button with nothing behind it is a dead control.
+  // ===========================================================================
+
   // Empty
   if (widgets.length === 0) {
     return (
       <div className="space-y-6">
+        <ChecklistSlot />
         <EmptyState
           title="Your dashboard is empty"
           description="Add widgets to get started, or load the default layout."
@@ -279,6 +425,9 @@ function DashboardPage(): ReactElement {
         }}
         resetBusy={defaultBusy}
       />
+      {/* Above the grid, below the page heading and its actions — see the note
+          on the empty branch. */}
+      <ChecklistSlot />
       <DashboardGrid
         widgets={widgets}
         onRemove={handleRemove}

@@ -12,7 +12,7 @@
 // sort, so it follows the migration order Drizzle itself uses.
 //
 // Usage: node scripts/gen-db-schema.mjs
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -62,10 +62,19 @@ const GROUPS = [
 function latestSnapshot() {
   const journal = JSON.parse(readFileSync(join(META, '_journal.json'), 'utf8'));
   const entries = [...journal.entries].sort((a, b) => a.when - b.when);
-  const last = entries[entries.length - 1];
-  if (!last) throw new Error('gen-db-schema: the migration journal is empty');
-  const idx = String(last.idx).padStart(4, '0');
-  return { file: join(META, `${idx}_snapshot.json`), tag: last.tag, count: entries.length };
+  if (entries.length === 0) throw new Error('gen-db-schema: the migration journal is empty');
+  // Walk BACK to the newest entry that actually has a snapshot. Not every
+  // migration does: a data-only one (0021's dashboard row-unit rescale, 0028's
+  // onboarding backfill) is hand-authored, changes no DDL, and Drizzle Kit — the
+  // only thing that writes snapshots — was never involved. Such a migration
+  // leaves the schema exactly as the previous snapshot describes it, so that
+  // snapshot is the correct source; taking the last journal entry unconditionally
+  // just crashed on a missing file the moment a data migration shipped last.
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const file = join(META, `${String(entries[i].idx).padStart(4, '0')}_snapshot.json`);
+    if (existsSync(file)) return { file, tag: entries[i].tag, count: entries.length };
+  }
+  throw new Error('gen-db-schema: no migration in the journal has a snapshot');
 }
 
 /**
@@ -131,7 +140,7 @@ out.push(`    Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Gene
 out.push('');
 out.push(`Tradr's schema is **${tables.length} tables**, created by **${count} migrations** that run`);
 out.push('automatically when the api boots. This page is generated from the Drizzle snapshot');
-out.push(`for the latest migration (\`${tag}\`), so it describes the schema the migrations`);
+out.push(`for the latest schema-changing migration (\`${tag}\`), so it describes the schema the migrations`);
 out.push('actually produce.');
 out.push('');
 out.push('You do not need any of this to run Tradr. It is here for writing queries against');

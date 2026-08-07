@@ -26,10 +26,16 @@ export function getAccountErrorCode(err: unknown): string | undefined {
   return (err as { error?: { code?: string } }).error?.code;
 }
 
-export function useAccounts() {
+/**
+ * `options.enabled` lets a caller that may not need the list at all skip the
+ * request entirely; omitted, it fetches as before. A disabled query reports
+ * `data: undefined`, `isLoading: false` and `isError: false`.
+ */
+export function useAccounts(options?: { enabled?: boolean }) {
   return useQuery<Account[]>({
     queryKey: ['accounts', 'list'],
     queryFn: () => api.get<Account[]>('/accounts'),
+    enabled: options?.enabled,
   });
 }
 
