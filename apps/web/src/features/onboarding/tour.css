@@ -1,0 +1,291 @@
+/* Guided-walkthrough surface (R5.9, R11.2, R11.3).
+   ---------------------------------------------------------------------------
+   driver.js ships an unthemed stylesheet: a flat white popover with #2d2d2d
+   text, a #0006 shadow, a #fff arrow and a hardcoded black overlay wash. All
+   of it reads as broken against one theme or the other. This is the same
+   problem gridstack has, solved the same way index.css solves it — re-point
+   every visible property at the semantic tokens and leave the geometry alone.
+
+   WHERE THIS FILE IS IMPORTED FROM. The lazy-loaded tour engine, and nothing
+   else — never index.css. index.css is in the initial payload, so importing
+   it there would drag driver.js's CSS into the dashboard route's first paint
+   and burn budget on the users who are not being guided, which is every
+   returning user (R5.7 / R11.3). Importing it from the engine module means
+   Vite emits it as an async CSS asset fetched alongside the engine chunk.
+
+   The vendor stylesheet is pulled in here rather than by the engine so the
+   cascade order is a property of this file: vendor first, overrides second.
+   Same-specificity selectors are used throughout, so source order is what
+   decides — do not move this @import below the rules.
+
+   HOW DARK MODE RESOLVES WITHOUT A `dark:` UTILITY. index.css declares every
+   `--color-*` on :root through a plain `@theme` block and RE-DECLARES the
+   same names under `.dark`. Custom-property substitution is lazy, so a
+   `var(--color-popover)` written in plain CSS resolves against whichever
+   declaration is in scope for the element. driver.js appends its popover and
+   overlay to <body> — a descendant of the <html class="dark"> that
+   next-themes toggles — so one set of rules covers both themes. This does NOT
+   go through `@custom-variant dark (&:where(.dark, .dark *))`: that only
+   rewrites Tailwind `dark:` utilities, and this file carries no Tailwind
+   directives (no `@import "tailwindcss"`, so no `@apply` and no `dark:` are
+   available here). The one rule that needs an explicit `.dark` selector is the
+   overlay wash, which is deliberately heavier in dark — see below.
+
+   ONE DEPENDENCY ON THE TAILWIND SOURCE SCAN. Tailwind v4 tree-shakes @theme:
+   it only emits the `--*` declarations something references. Every `--color-*`
+   and `--radius-*` used here is already emitted because app utilities use
+   them, but `--text-body`/`--text-caption` (and their `--line-height` pairs)
+   are NOT — they reach :root only because Tailwind's source scan reads this
+   file and sees them. Verified in a real build: the entry stylesheet gains
+   exactly those four declarations, +0.03 KB gzipped, and no rules. If this
+   file is ever moved outside the scanned source tree or excluded with
+   `@source not`, those two tokens go missing and the popover silently falls
+   back to driver.js's px type. Nothing else here is at risk.
+
+   NO EXTERNAL ORIGIN (R11.2). driver.js is MIT with zero dependencies; its
+   stylesheet contains no url() and its runtime fetches nothing. Every value
+   below is a token reference or a plain length, so this file adds no
+   cross-origin asset either.
+
+   CONTRAST (R5.9), measured per theme with the same OKLCH gamut-mapping and
+   WCAG ratio math scripts/check-contrast.mjs uses — its exports are importable,
+   so these are the numbers CI would compute, not eyeballed ones. Format:
+   light / dark.
+
+     text, ≥4.5    popover-foreground on popover            18.81 / 14.84
+                   muted-foreground on popover (desc,        7.44 /  6.24
+                   progress, resting close-btn)
+                   foreground on popover (close-btn hover)  18.81 / 14.84
+                   foreground on background (btn label)     18.81 / 17.28
+     non-text, ≥3  focus on popover                          3.58 /  6.35
+                   focus on background (stage cut-out)       3.58 /  7.39
+                   focus on card (stage cut-out)             3.48 /  6.89
+                   border on the button's own fill           3.36 /  3.23
+                   muted-foreground border on hover          7.44 /  7.27
+                   popover EDGE against the wash             3.98 /  3.44
+
+   The popover edge is carried by a different channel in each theme — the
+   surface in light (white against a 50% wash), the border in dark (the
+   surface is a near-black on a near-black wash, 1.24:1, while the border
+   reaches 3.44:1). Either carrier alone satisfies 1.4.11; demanding both
+   would demand a treatment that only reads in one theme.
+
+   One figure sits under 3 and is left alone deliberately: `border` against
+   `popover` is 3.36 light / 2.78 dark. That is the pairing every shipped
+   Card, PopoverContent, DropdownMenu and Select already renders
+   (ui/popover.tsx: `rounded-md border bg-popover`) — a property of the
+   palette, not of this file. 1.4.11 does not bind here because every control
+   in the popover is identified by its own text label at 13:1 or better, and
+   giving the tour a heavier border than the rest of the app to chase a
+   non-requirement is exactly the divergence this file exists to avoid. */
+
+@import 'driver.js/dist/driver.css';
+
+/* --- Overlay ---------------------------------------------------------------
+   driver.js paints the wash as an inline `style.fill` / `style.opacity` on the
+   SVG path from its overlayColor/overlayOpacity options, so a stylesheet can
+   only reach it with !important. Doing it here rather than through those
+   options is deliberate: the wash then follows the theme by itself instead of
+   the engine having to read the theme and re-render on every toggle.
+
+   The values match the app's existing modal scrim (`bg-black/50
+   dark:bg-black/80` in ui/dialog.tsx, ui/alert-dialog.tsx and
+   layout/SideDrawer.tsx) — a dimming wash is neutral ink in both themes, and
+   this is the one already shipped. Written as rgb()/alpha, not a hex. */
+.driver-overlay path {
+  fill: rgb(0 0 0) !important;
+  opacity: 0.5 !important;
+}
+
+.dark .driver-overlay path {
+  opacity: 0.8 !important;
+}
+
+/* --- Highlighted element ---------------------------------------------------
+   The stage cut-out is the only thing driver.js gives the highlighted control,
+   which is a brightness channel alone. Add the shape channel with the
+   dedicated focus-indicator role — NOT the amber brand accent, which stays
+   reserved for the primary action (design-system → Color). --color-focus
+   clears the ≥3:1 non-text floor against background, card and popover in both
+   themes, asserted by scripts/check-contrast.mjs.
+
+   The offset sits inside driver.js's 10px stagePadding so the ring lands on
+   the undimmed cut-out, and the radius matches its 5px stageRadius. */
+.driver-active .driver-active-element {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* --- Popover surface -------------------------------------------------------
+   The elevated-surface role, the same pairing ui/popover.tsx uses
+   (bg-popover / text-popover-foreground / border / rounded-md). The shadow is
+   the value `shadow-md` compiles to app-wide — Tailwind v4 inlines it rather
+   than emitting a --shadow-md custom property, so it cannot be referenced as a
+   token; it is reproduced here in rgb()/alpha form rather than as #0000001a.
+   Padding moves onto the 4px spacing grid (driver.js ships 15px). */
+.driver-popover {
+  background-color: var(--color-popover);
+  color: var(--color-popover-foreground);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -2px rgb(0 0 0 / 0.1);
+  padding: 1rem;
+  font-family: var(--font-sans);
+}
+
+.driver-popover-title {
+  color: var(--color-popover-foreground);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  font-weight: 600;
+}
+
+.driver-popover-description {
+  color: var(--color-muted-foreground);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+}
+
+.driver-popover-title[style*='block'] + .driver-popover-description {
+  margin-top: 0.25rem;
+}
+
+.driver-popover-footer {
+  margin-top: 1rem;
+  gap: 0.5rem;
+}
+
+/* The non-motion carrier of step state ("2 of 4"), so it is text, not a dot
+   row. Tabular figures via the numeric/data font role keep the counter from
+   reflowing as the digits change. */
+.driver-popover-progress-text {
+  color: var(--color-muted-foreground);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+}
+
+/* --- Popover controls ------------------------------------------------------
+   ONE neutral treatment for every footer button. Amber is the primary action
+   and the walkthrough does not get to spend it (design-system → Color;
+   design.md: "Amber remains reserved for the primary action"), and no
+   substitute primacy channel is invented in its place — "← Previous" and
+   "Next →" are distinguished by their labels and their order, which is what
+   driver.js already lays out.
+
+   That is a deliberate reversal of the obvious "filled next, outlined prev".
+   The neutral ramp collapses on this surface: `secondary`, `accent` and
+   `muted` are the SAME value as each other in both themes, so a filled-vs-
+   outlined pair measures 1.09:1 (light) / 1.29:1 (dark) apart. It would have
+   looked like hierarchy in the stylesheet and been invisible on screen, and
+   the hover it implies (`secondary` → `accent`) is a literal no-op.
+
+   The treatment is `Button variant="outline"`'s (`border` + `background`
+   fill), which is the app's shipped bordered-neutral control. A `secondary`
+   fill was the other candidate — it is at least slightly offset from the
+   popover surface in both themes, where `background` is identical to
+   `popover` in light — but it drops the border-against-its-own-fill
+   separation to 2.51:1 in dark (vs 3.23:1 for `background`). On a button
+   whose outline is the only thing drawing it, weakening the outline to
+   strengthen the fill is the wrong trade. */
+.driver-popover-footer-btn {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.625rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* Hover rides the BORDER, not the fill, for the same reason: it is the only
+   channel with room to move here (`border` → `muted-foreground` is 3.36 → 7.44
+   against the popover in light, 2.78 → 6.24 in dark).
+
+   `:focus` is on this rule, not only `:hover`, because driver.js pairs the two
+   in a (0,2,0) selector — `.driver-popover-footer-btn:hover,
+   .driver-popover-footer-btn:focus { background-color: #f7f7f7 }` — which
+   OUTRANKS the (0,1,0) base rule above. Restating the fill and the label
+   colour here is what stops a hovered or focused button flipping to a near-
+   white fill under a near-white label in dark. Same reason the close button
+   below repeats its colour on `:focus`: driver.js drives it to #2d2d2d there,
+   which is invisible on a dark popover. */
+.driver-popover-footer-btn:hover,
+.driver-popover-footer-btn:focus {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  border-color: var(--color-muted-foreground);
+}
+
+.driver-popover-close-btn {
+  color: var(--color-muted-foreground);
+  cursor: pointer;
+}
+
+.driver-popover-close-btn:hover,
+.driver-popover-close-btn:focus {
+  color: var(--color-foreground);
+}
+
+/* One visible focus treatment for every control in the popover, on the
+   focus-indicator role. driver.js's own rules colour :focus the same as
+   :hover, which leaves keyboard users with no indicator at all on the button
+   they are actually on. */
+.driver-popover-footer-btn:focus-visible,
+.driver-popover-close-btn:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* --- Arrow -----------------------------------------------------------------
+   driver.js paints the arrow as a 5px border box, hides three sides with
+   transparent and leaves the fourth showing #fff. Neutralise all four first,
+   then re-colour only the visible side per direction — setting the
+   `border-color` shorthand after driver.js's per-side rules would repaint the
+   three transparent sides and produce a solid square. */
+.driver-popover-arrow {
+  border-color: transparent;
+}
+
+.driver-popover-arrow-side-left {
+  border-left-color: var(--color-popover);
+}
+
+.driver-popover-arrow-side-right {
+  border-right-color: var(--color-popover);
+}
+
+.driver-popover-arrow-side-top {
+  border-top-color: var(--color-popover);
+}
+
+.driver-popover-arrow-side-bottom {
+  border-bottom-color: var(--color-popover);
+}
+
+/* --- Reduced motion (R5.9) -------------------------------------------------
+   The engine also passes driver.js `animate: false` under this media query, so
+   the fade never gets scheduled in the first place. This block is the belt to
+   that braces: it holds even if the engine is constructed before the query is
+   read, and it covers the close-button colour transition, which is driver.js's
+   own CSS and has no option behind it. index.css carries a global
+   reduced-motion reset as well, but this file must not depend on that — it is
+   loaded on its own and is the only stylesheet that knows these selectors.
+   Nothing here is the sole carrier of information: the step text and the
+   progress counter say everything the fade does. */
+@media (prefers-reduced-motion: reduce) {
+  .driver-fade .driver-overlay,
+  .driver-fade .driver-popover {
+    animation: none;
+  }
+
+  .driver-popover-close-btn {
+    transition: none;
+  }
+}
