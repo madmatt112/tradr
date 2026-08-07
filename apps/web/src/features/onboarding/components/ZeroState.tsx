@@ -64,6 +64,19 @@
 // than useless — that value is the checklist's OWN dismissal (R4.5), and
 // spending it on "I would rather click around myself" would take the checklist
 // away from a user who never asked to lose it.
+//
+// "WALK ME THROUGH IT" IS BLOCKED RATHER THAN QUEUED WHEN THERE IS NO STEP TO
+// RUN. `start()` returns silently when the checklist names no outstanding item —
+// which is the truth for a whole round trip while the positions read is in
+// flight, and permanently for a user who dismissed the checklist (R4.5). Two
+// answers were available and only one of them is honest at the moment of the
+// click: remembering the click and firing when the checklist lands would put a
+// walkthrough on screen seconds after the user pressed a button that appeared to
+// do nothing, and it would need exactly the auto-start effect R5.2 exists to
+// forbid. So the control states its own condition instead — `aria-disabled` with
+// the reason next to it, and no status write — and becomes live the instant
+// there is a step behind it. `guidanceGap()` below is the single place that
+// decides, so the button, its description and the click guard can never disagree.
 
 import { useState } from 'react';
 
@@ -74,17 +87,49 @@ import { docsUrl } from '@/lib/docs';
 
 import { useOnboarding } from '../hooks/useOnboarding';
 import { useWalkthrough } from '../hooks/useWalkthrough';
-import type { ChecklistItemId } from '../lib/derive-checklist';
+import type { Checklist, ChecklistItemId } from '../lib/derive-checklist';
 
 import { ActivationChecklist } from './ActivationChecklist';
 
+/** The note both the guidance paragraph and the button's description point at. */
+const GUIDANCE_NOTE_ID = 'zero-state-guidance-note';
+
+/**
+ * Why the guided fork cannot run right now, in the user's words — or `null` when
+ * it can. This is the one condition; everything else on the screen reads it.
+ *
+ * The three cases are the three ways `useWalkthrough().start()` has nothing to
+ * do, and they are genuinely different situations, so they get different
+ * sentences rather than one that is vague enough to cover all of them.
+ * `allComplete` is READ, never recomputed, for the same reason `ActivationChecklist`
+ * reads it: the rule lives in `deriveChecklist` and nowhere else.
+ */
+function guidanceGap(
+  isUnavailable: boolean,
+  checklist: Checklist | null | undefined,
+): string | null {
+  if (isUnavailable) {
+    return 'The guided walkthrough could not be loaded. Nothing is lost — the setup checklist below lists the same four steps, and the getting-started guide covers them in full.';
+  }
+  if (checklist === undefined) {
+    return 'The guided walkthrough is waiting for your setup checklist to load. It will be ready in a moment.';
+  }
+  if (checklist === null || checklist.allComplete) {
+    return 'The guided walkthrough follows the setup checklist, and no step is outstanding. Reopen the checklist below to be guided.';
+  }
+  return null;
+}
+
 export function ZeroState() {
-  const { setStatus, isSaving } = useOnboarding();
+  const { setStatus, isSaving, checklist } = useOnboarding();
   const { start, isUnavailable } = useWalkthrough();
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
 
+  const guidanceNote = guidanceGap(isUnavailable, checklist);
+  const guidedBlocked = guidanceNote !== null;
+
   /**
-   * Both ways into the walkthrough, and they are the same two lines.
+   * Both ways into the walkthrough, and they are the same three lines.
    *
    * The status write is the OPT-IN RECORD R5.2 asks for — "this user asked to be
    * guided" — and it belongs here rather than in `useWalkthrough` because the
@@ -92,6 +137,21 @@ export function ZeroState() {
    * unable to discard anything (R5.3). Choosing an item off the checklist is the
    * same choice made about one step instead of four, so it records the same
    * thing.
+   *
+   * THE WRITE COMES FIRST, BEFORE THE LAZY CHUNK HAS HAD A CHANCE TO FAIL, and
+   * that is deliberate rather than an oversight. What is being recorded is the
+   * user's CHOICE, which they have already made by the time the import is even
+   * requested; whether the runtime then arrives is not something the choice was
+   * conditional on. R5.8's "leave the stored status alone" is a rule about never
+   * recording a REFUSAL the user did not make — `skipped` is the value that would
+   * cost them the checklist (R4.5) — and `active` is not one: it starts nothing
+   * on a later login (the hook has no auto-start at all), it keeps the checklist
+   * reads enabled exactly as `pending` does, and it is the same value a
+   * successful tour would have written. Deferring it until the chunk resolved
+   * would mean either awaiting a hook call documented to return `void` and never
+   * reject, or an effect watching `isUnavailable` — a second piece of tour
+   * lifecycle living outside `useWalkthrough`, to record something that is
+   * already true. `ZeroState.test.tsx` pins this ordering so it stays a decision.
    *
    * With no id, `start()` runs the first item the checklist says is outstanding,
    * which is simultaneously "begin" and "resume" (R5.6) — the zero-state has no
@@ -103,6 +163,10 @@ export function ZeroState() {
    * appears; the checklist stays exactly as it was either way.
    */
   const beginGuided = (itemId?: ChecklistItemId) => {
+    // The guard, not just the styling: an `aria-disabled` control is still
+    // clickable and still activates on Enter, which is the whole reason it stays
+    // in the tab order. Nothing is written on a click that cannot start a tour.
+    if (guidedBlocked) return;
     setStatus('active');
     start(itemId);
   };
@@ -142,11 +206,22 @@ export function ZeroState() {
             >
               Create my first account
             </Button>
+            {/* `aria-disabled`, NEVER the `disabled` attribute, whenever the
+                reason is one the user can do something about. `disabled` takes
+                the control out of the tab order, so a keyboard user never meets
+                it and never learns the guided path exists — the same
+                focusable-but-inert pattern the sidebar's in-flight Performance
+                link uses. `disabled` IS still right for `isSaving`, which is a
+                sub-second window with nothing to explain and no choice to lose.
+                Either way the reason is real markup the control points at, the
+                way the sample-data option does. */}
             <Button
               variant="outline"
               data-testid="zero-state-walkthrough"
-              className="w-full cursor-pointer motion-reduce:transition-none sm:w-auto"
+              className="w-full cursor-pointer motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
               disabled={isSaving}
+              aria-disabled={guidedBlocked || undefined}
+              aria-describedby={guidedBlocked ? GUIDANCE_NOTE_ID : undefined}
               // Wrapped, not passed by reference: `beginGuided` takes an
               // optional item id and a click handler is called with an event.
               onClick={() => beginGuided()}
@@ -173,21 +248,25 @@ export function ZeroState() {
             </Button>
           </div>
 
-          {/* R5.8 / Principle 4. The tour runtime is a lazy chunk, so it can 404
-              after a deploy, be blocked, or simply be unreachable offline.
-              `useWalkthrough` swallows that and leaves the stored status alone —
-              the user has not skipped anything — which leaves this screen with a
-              button that appears to do nothing. So say what happened, and point
-              at the two things that still work. Every other part of the screen,
-              the primary action included, is untouched by this state. */}
-          {isUnavailable && (
+          {/* R5.8 / Principle 4, and the two quieter cases alongside it. The tour
+              runtime is a lazy chunk, so it can 404 after a deploy, be blocked, or
+              simply be unreachable offline; `useWalkthrough` swallows that and
+              leaves the stored status alone — the user has not skipped anything —
+              which would otherwise leave this screen with a button that appears to
+              do nothing. The checklist still loading, and the checklist having been
+              dismissed, leave the same button in the same state for different
+              reasons, so all three say which one it is here rather than being
+              flattened into one vague sentence. `role="status"` because this
+              appears and disappears under the user, and every other part of the
+              screen — the primary action included — is untouched by any of it. */}
+          {guidanceNote !== null && (
             <p
+              id={GUIDANCE_NOTE_ID}
               role="status"
               data-testid="zero-state-guidance-note"
               className="text-sm text-muted-foreground"
             >
-              The guided walkthrough could not be loaded. Nothing is lost — the setup checklist
-              below lists the same four steps, and the getting-started guide covers them in full.
+              {guidanceNote}
             </p>
           )}
 

@@ -125,6 +125,19 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
     expect(screen.getByTestId('account-dialog')).toBeTruthy();
   });
 
+  it('starts nothing at all on mount — the walkthrough is only ever asked for (R5.2)', () => {
+    const tour = useTour();
+    const hook = useHook();
+    render(<ZeroState />);
+
+    // This is one of the two call sites in the product that can start a tour, so
+    // opt-in is only structural for as long as MOUNTING this screen does nothing.
+    // An effect added here — "resume the active user", "guide the brand-new one" —
+    // would break this and nothing else would notice.
+    expect(tour.start).not.toHaveBeenCalled();
+    expect(hook.setStatus).not.toHaveBeenCalled();
+  });
+
   it('records the guided opt-in as `active` (R5.2)', async () => {
     const hook = useHook();
     render(<ZeroState />);
@@ -133,6 +146,28 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
 
     expect(hook.setStatus).toHaveBeenCalledTimes(1);
     expect(hook.setStatus).toHaveBeenCalledWith('active');
+  });
+
+  it('records the opt-in before handing off, and never records a refusal', async () => {
+    const tour = useTour();
+    const hook = useHook();
+    render(<ZeroState />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Walk me through it' }));
+
+    // PINNED ORDER, not incidental. The write lands before `start()` gets the
+    // chance to fail on its lazy chunk, because what is recorded is the user's
+    // CHOICE — made in full by the time the import is requested — not the
+    // chunk's fate. R5.8's "leave the status alone" forbids recording a REFUSAL
+    // the user never made; `active` is not one, and `skipped` is the value that
+    // would cost them the checklist (R4.5). Reordering this to write only on
+    // success would need tour lifecycle outside `useWalkthrough`, so it is a
+    // decision, and this is what says so.
+    const optInAt = vi.mocked(hook.setStatus).mock.invocationCallOrder[0] ?? 0;
+    const handOffAt = vi.mocked(tour.start).mock.invocationCallOrder[0] ?? 0;
+    expect(optInAt).toBeGreaterThan(0);
+    expect(optInAt).toBeLessThan(handOffAt);
+    expect(vi.mocked(hook.setStatus).mock.calls.flat()).not.toContain('skipped');
   });
 
   it('starts the walkthrough from the guided fork, with no step of its own to name', async () => {
@@ -221,6 +256,64 @@ describe('ZeroState — the checklist starts the walkthrough per item (R4.1, R5.
   });
 });
 
+// `useWalkthrough().start()` returns silently when the checklist names no
+// outstanding item, so a click made in that window used to record `active` and
+// run nothing. These pin the two states in which that is reachable from this
+// screen, and the honest behaviour that replaced it.
+describe('ZeroState — the guided fork with no step behind it', () => {
+  it('does not offer a guided start while the checklist is still in flight', async () => {
+    const tour = useTour();
+    const hook = useHook({ checklist: undefined, isLoading: true });
+    render(<ZeroState />);
+
+    const button = screen.getByRole('button', { name: 'Walk me through it' });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+
+    await userEvent.click(button);
+
+    // Nothing started AND nothing written: an opt-in recorded here would leave
+    // the user `active` with no walkthrough to show for it.
+    expect(tour.start).not.toHaveBeenCalled();
+    expect(hook.setStatus).not.toHaveBeenCalled();
+    expect(screen.getByTestId('zero-state-guidance-note').textContent).toContain(
+      'waiting for your setup checklist',
+    );
+  });
+
+  it('becomes live again the moment the checklist arrives with a step outstanding', async () => {
+    const tour = useTour();
+    const hook = useHook();
+    render(<ZeroState />);
+
+    const button = screen.getByRole('button', { name: 'Walk me through it' });
+    expect(button.hasAttribute('aria-disabled')).toBe(false);
+    expect(button.hasAttribute('aria-describedby')).toBe(false);
+    expect(screen.queryByTestId('zero-state-guidance-note')).toBeNull();
+
+    await userEvent.click(button);
+
+    expect(hook.setStatus).toHaveBeenCalledWith('active');
+    expect(tour.start).toHaveBeenCalledWith(undefined);
+  });
+
+  it('points a dismissed checklist at reopening it rather than starting nothing (R4.5)', async () => {
+    const tour = useTour();
+    const hook = useHook({ checklist: null, preference: preference('skipped') });
+    render(<ZeroState />);
+
+    const button = screen.getByRole('button', { name: 'Walk me through it' });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+
+    await userEvent.click(button);
+
+    expect(tour.start).not.toHaveBeenCalled();
+    expect(hook.setStatus).not.toHaveBeenCalled();
+    // The route out is on screen and named, and it is the checklist's own.
+    expect(screen.getByTestId('zero-state-guidance-note').textContent).toContain('Reopen');
+    expect(screen.getByTestId('activation-checklist-reopen')).toBeTruthy();
+  });
+});
+
 describe('ZeroState — the runtime failed to load (R5.8)', () => {
   it('says what happened rather than leaving a button that does nothing', () => {
     useTour({ isUnavailable: true });
@@ -230,6 +323,35 @@ describe('ZeroState — the runtime failed to load (R5.8)', () => {
     const note = screen.getByTestId('zero-state-guidance-note').textContent ?? '';
     expect(note).toContain('could not be loaded');
     expect(note).toContain('checklist');
+  });
+
+  it('marks the walkthrough action unavailable, keeps it focusable, and links it to the reason', async () => {
+    const tour = useTour({ isUnavailable: true });
+    const hook = useHook();
+    render(<ZeroState />);
+
+    const button = screen.getByRole('button', { name: 'Walk me through it' });
+    // `disabled` would take the control out of the tab order, so a keyboard user
+    // would never meet the option or learn why it is gone. `aria-disabled` says
+    // the same thing and keeps the tab stop.
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+
+    // The same join the sample-data control uses: the explanation is markup the
+    // button points at, not a paragraph that happens to sit nearby.
+    const noteId = button.getAttribute('aria-describedby');
+    expect(noteId).toBeTruthy();
+    expect(document.getElementById(noteId!)?.textContent).toContain('could not be loaded');
+
+    await userEvent.tab();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(button);
+
+    // Focusable and clickable, but inert: an aria-disabled button still fires,
+    // so the handler is what has to hold the line.
+    await userEvent.keyboard('{Enter}');
+    expect(hook.setStatus).not.toHaveBeenCalled();
+    expect(tour.start).not.toHaveBeenCalled();
   });
 
   it('withdraws the per-item actions, and nothing else', () => {
