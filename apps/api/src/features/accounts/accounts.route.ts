@@ -9,6 +9,7 @@ import { captureServerEvent } from '@/lib/posthog';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 
+import { seedDemoAccount } from './accounts.demo';
 import { countPositionsByAccount } from './accounts.query';
 import {
   listAccounts,
@@ -105,6 +106,39 @@ accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
   const data = c.req.valid('json');
   const account = await createAccount(db, userId, data, { isAdmin });
   captureServerEvent('account_created', { distinctId: userId });
+  return c.json(account, 201);
+});
+
+/**
+ * @swagger
+ * /api/accounts/demo:
+ *   post:
+ *     summary: Add sample data.
+ *     description: >
+ *       Authed. Creates one flagged sample account for the current user, seeded with a
+ *       fixed set of trades — closed, open and planned — driven through the normal
+ *       position lifecycle so realized P&L and its ledger entries are derived exactly as
+ *       they are for real trades. The fixture is identical on every run, so support,
+ *       the documentation screenshots and the end-to-end tests all describe the same
+ *       figures.
+ *
+ *
+ *       Refused with `409` when the user already has an account. Sample figures are kept
+ *       out of real ones by keeping sample and real data mutually exclusive, so there is
+ *       no supported state in which both exist. Seeding is all-or-nothing: a failure
+ *       leaves no account behind, and a retry is safe.
+ *
+ *
+ *       Available identically to self-hosted and hosted deployments — it needs no
+ *       optional integration configured.
+ *     tags: [Accounts]
+ *     responses:
+ *       201: { description: The created sample account. }
+ *       409: { description: The user already has an account. }
+ */
+accounts.post('/demo', async (c) => {
+  const userId = c.get('userId');
+  const account = await seedDemoAccount(db, userId);
   return c.json(account, 201);
 });
 

@@ -162,6 +162,11 @@ export function insertAccount(
     startingBalance?: string;
     timezone?: string;
     defaultRiskPercent?: string | null;
+    // Only the sample-data seeder passes this. It is never derived from request
+    // input: the column decides whether an account may be deleted along with
+    // everything booked against it, so a client that could set it could talk
+    // its way past the guard protecting a real account.
+    isDemo?: boolean;
   },
 ) {
   return tx.insert(accounts).values(data).returning();
