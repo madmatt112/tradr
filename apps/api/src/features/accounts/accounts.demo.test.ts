@@ -151,7 +151,11 @@ describe('POST /api/accounts/demo', () => {
 
     const res = await authedRequest('POST', '/api/accounts/demo', cookie);
     expect(res.status).toBe(201);
-    const account = (await res.json()) as { id: string; name: string; isDemo: boolean };
+    // The ordinary account shape, and nothing more: `isDemo` is the server's
+    // own authorisation flag and is not part of any response, so it is asserted
+    // on the stored row below rather than on the wire.
+    const account = (await res.json()) as { id: string; name: string };
+    expect(account.name).toBe('Demo Account');
 
     const accountRows = await db
       .select()
@@ -301,7 +305,20 @@ describe('POST /api/accounts/demo', () => {
     // what makes the window age. A comment asking a future maintainer to move
     // the dates forward is not a mechanism; this is. When it fails, move them
     // forward in the fixture and regenerate the screenshots in the same change.
-    expect(ageInDays).toBeLessThan(365);
+    //
+    // A quarter, not a year. A year is not a warning — it is the point at which
+    // the sample account is already broken: the dashboard's performance widget
+    // defaults to a rolling twelve months, so at 365 days it has nothing left to
+    // draw. 90 days is the last point the window still reads as a live account.
+    // By then the 30-day chart preset has been empty for two months and the
+    // three positions the fixture leaves open have gone a full quarter without a
+    // fill against them, which reads as abandoned rather than current. It is
+    // also a cadence a maintainer can plan a deliberate refresh around, which a
+    // bound that only fires once the demo is past saving is not.
+    //
+    // Move the DATES when this fails. Moving this number instead is the failure
+    // it exists to catch.
+    expect(ageInDays).toBeLessThan(90);
     // Not ahead of the clock either: a sample account whose newest trade has not
     // happened yet reads as broken in the other direction.
     expect(ageInDays).toBeGreaterThan(0);
@@ -540,5 +557,103 @@ describe('DELETE /api/accounts/:id?cascade=demo', () => {
       headers: { 'X-Forwarded-For': uniqueIp() },
     });
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * The marker as STORED, read straight out of the column rather than through
+ * `selectDemoMarker`. What is really in the jsonb is the whole question below,
+ * and going through the slice's own reader would only prove it agrees with
+ * itself.
+ */
+async function readDemoMarker(userId: string) {
+  const [row] = await db
+    .select({ onboarding: users.onboarding })
+    .from(users)
+    .where(eq(users.id, userId));
+  return (row?.onboarding as Record<string, unknown> | undefined)?.demo;
+}
+
+async function getOnboarding(cookie: string) {
+  const res = await authedRequest('GET', '/api/users/me/onboarding', cookie);
+  expect(res.status).toBe(200);
+  return (await res.json()) as Record<string, unknown>;
+}
+
+/**
+ * `users.onboarding -> 'demo'` is bookkeeping the seed shares with its teardown,
+ * and it is deliberately not described by `OnboardingStateSchema`. That leaves
+ * its safety resting entirely on two properties of code that never mentions it:
+ * the state schema STRIPS unknown keys on read, so the marker cannot reach a
+ * client, and `updateUserOnboarding` merges IN SQL naming only its own keys, so
+ * no client PATCH can destroy it.
+ *
+ * Both are one plausible edit away from breaking silently — a `.passthrough()`
+ * added to the schema, or that SQL merge turned into a read-modify-write — and
+ * neither edit would fail anything in the onboarding slice, whose own tests
+ * cover keys it is happy to publish. These are the tests that fail instead: the
+ * marker's presence is asserted on the raw column, and its consequences (the
+ * currency the seed latched, the id that makes a repeat teardown a success) are
+ * asserted through the endpoints that depend on them.
+ */
+describe('the private demo marker is invisible to the client and safe from it', () => {
+  it('never reaches the onboarding response', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId } = await seedDemo(cookie, userId);
+
+    // It really is in the column, so its absence below is the schema stripping
+    // it rather than the seed never having written it.
+    expect(await readDemoMarker(userId)).toEqual({ accountId, latchedDisplayCurrency: true });
+
+    const body = await getOnboarding(cookie);
+    expect(body).toEqual({ status: 'pending', coachMarksSeen: [] });
+    expect('demo' in body).toBe(false);
+    // And the internal account id is not in the payload under any other key
+    // either — it is not the client's to know, whatever it might be nested in.
+    expect(JSON.stringify(body)).not.toContain(accountId);
+  });
+
+  it('survives an ordinary client PATCH, with teardown still able to use it', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId } = await seedDemo(cookie, userId);
+    expect(await readDisplayCurrency(userId)).toBe('USD');
+
+    const patched = await authedRequest('PATCH', '/api/users/me/onboarding', cookie, {
+      status: 'done',
+      coachMarkSeen: 'csv-import',
+    });
+    expect(patched.status).toBe(200);
+    // The merged state on the way back out carries no more than the GET does.
+    expect(await patched.json()).toEqual({ status: 'done', coachMarksSeen: ['csv-import'] });
+
+    // The merge rewrote only the keys the body named. A read-modify-write
+    // through the state schema would have parsed the marker away right here,
+    // and the request would still have answered 200.
+    expect(await readDemoMarker(userId)).toEqual({ accountId, latchedDisplayCurrency: true });
+
+    // Still load-bearing rather than merely present: teardown reads
+    // `latchedDisplayCurrency` off it to decide whether the currency is its to
+    // undo. Lose the marker to a client PATCH and the sample data's currency is
+    // left on the user for good.
+    expect(
+      (await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=demo`, cookie)).status,
+    ).toBe(204);
+    expect(await readDisplayCurrency(userId)).toBeNull();
+  });
+
+  it('rejects a client-supplied demo key rather than storing it', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId } = await seedDemo(cookie, userId);
+
+    // The PATCH body is strict, so naming the server's own key is a 400 — not a
+    // silent drop, and not a partial application of the rest of the body.
+    const res = await authedRequest('PATCH', '/api/users/me/onboarding', cookie, {
+      status: 'done',
+      demo: { accountId: crypto.randomUUID(), latchedDisplayCurrency: false },
+    });
+    expect(res.status).toBe(400);
+
+    expect(await readDemoMarker(userId)).toEqual({ accountId, latchedDisplayCurrency: true });
+    expect((await getOnboarding(cookie)).status).toBe('pending');
   });
 });
