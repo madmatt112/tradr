@@ -236,17 +236,31 @@ export async function selectOwnedAccountDemoFlag(
  * for a sample account, seeding counts accounts. Under READ COMMITTED neither
  * read can see the other transaction's uncommitted account row, so both halves
  * pass and both commit: the user ends up holding sample data alongside a real
- * account. That state has no way out. Nothing filters the sample account out of
- * any aggregate (by design), and teardown will not hand back the display
- * currency seeding latched while a real account survives — so unlike the plan
- * cap's accepted overshoot, which the user repairs by deleting an account, this
- * one is permanent.
+ * account. Nothing filters the sample account out of any aggregate, by design,
+ * so invented trades are then blended into the user's own totals with nothing
+ * left to tell them apart — that half of the damage does not come back. The
+ * display currency the seed latched is the milder half: teardown declines to
+ * return it while a real account survives, but the user can set their own from
+ * the profile settings whenever they like, so it is an annoyance rather than a
+ * trap. The aggregates are what this lock is really protecting.
  *
  * The user row is the natural mutex: it is the one row both paths already
  * touch, one per user, and locking it costs a single indexed read. Raw
- * `FOR UPDATE` idiom per `admin.query.ts`.
+ * row-lock-in-`sql` idiom per `admin.query.ts`.
  *
- * HELD TO COMMIT, deliberately, and the seed's quarter-second is the price.
+ * `FOR NO KEY UPDATE`, and the strength is chosen — do not "tighten" it to
+ * `FOR UPDATE`. Two holders of `FOR NO KEY UPDATE` still conflict, so the two
+ * account-change paths serialize exactly as they would under `FOR UPDATE`, and
+ * that is this lock's entire job. What `FOR UPDATE` adds is a conflict with
+ * `FOR KEY SHARE` — the lock every insert into a table with a foreign key to
+ * `users` takes on that user's row, some two dozen tables, `sessions` among
+ * them. Under `FOR UPDATE` an ordinary login for this user waited out the whole
+ * seed; under `FOR NO KEY UPDATE` it does not wait at all. The mutual exclusion
+ * is not weakened by that: neither strength lets a second account change slip
+ * past.
+ *
+ * HELD TO COMMIT, deliberately, and the seed's quarter-second is the price —
+ * paid by this user's other account changes, and by nothing else.
  * Releasing it any earlier — as a session-level advisory lock could — would
  * close nothing: the competing read is an ordinary SELECT, so it cannot see the
  * account row until the writer commits, whether or not a lock is still held.
@@ -257,7 +271,7 @@ export async function selectOwnedAccountDemoFlag(
  * the whole of the lock ordering: one lock, one row, always first.
  */
 export async function lockUserForAccountChange(tx: Transaction, userId: string): Promise<void> {
-  await tx.execute(sql`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`);
+  await tx.execute(sql`SELECT id FROM users WHERE id = ${userId} FOR NO KEY UPDATE`);
 }
 
 /**

@@ -30,9 +30,13 @@ import { createAccount } from './accounts.service';
  * Under READ COMMITTED a plain read cannot see the other transaction's
  * uncommitted account row, so without serialization both halves pass their own
  * check and both commit: sample trades then sit inside real aggregates, which
- * nothing filters (design C5), and teardown's "no accounts left" guard refuses
- * to give the latched display currency back. There is no way out of that state
- * from the UI, so the two paths take a per-user row lock and serialize.
+ * nothing filters, by design, and nothing afterwards can separate them out
+ * again. So the two paths take a per-user row lock and serialize.
+ *
+ * The lock is `FOR NO KEY UPDATE`: strong enough that the two paths still block
+ * each other, which is what these tests prove, but not so strong that it
+ * conflicts with the `FOR KEY SHARE` an ordinary login takes on the same user
+ * row while writing its session.
  *
  * The project-wide harness (test-setup.ts) re-points `@/db` at a per-test
  * transaction on a single `max: 1` connection, where two "concurrent" calls
@@ -108,9 +112,11 @@ function realAccount(userId: string) {
 }
 
 /**
- * What the user is left holding. `demo + real` is the unrecoverable state: the
- * sample trades are inside the real totals and teardown will not clear the
- * latched display currency while a real account survives.
+ * What the user is left holding. `demo + real` is the state worth failing on:
+ * the sample trades are inside the real totals with nothing left to separate
+ * them again. (Teardown also leaves the latched display currency alone while a
+ * real account survives, but the user can reset that from profile settings, so
+ * it is not the half that matters here.)
  */
 async function accountKinds(userId: string): Promise<string[]> {
   const rows = await dedicatedDb

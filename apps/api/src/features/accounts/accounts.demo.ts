@@ -274,9 +274,11 @@ export async function seedDemoAccount(db: Database, userId: string) {
   return withTransaction(db, async (tx) => {
     // The same lock account creation takes, on the same row, before either
     // reads the account set — this half is worthless alone. Held for the whole
-    // seed, which is deliberate: see `lockUserForAccountChange`. It blocks only
-    // this one user's own account changes, and only for as long as their sample
-    // data takes to build.
+    // seed, which is deliberate: see `lockUserForAccountChange`. What waits on
+    // it is this one user's other account changes, for as long as their sample
+    // data takes to build. Because it is `FOR NO KEY UPDATE` and not
+    // `FOR UPDATE`, their logins and everything else that merely references
+    // their user row are not held up behind it.
     await lockUserForAccountChange(tx, userId);
 
     const accountCount = await countAccountsByUser(tx, userId);
@@ -380,13 +382,14 @@ export async function teardownDemoAccount(tx: Transaction, userId: string, accou
   const marker = await selectDemoMarker(tx, userId);
 
   // The seed sets a display currency for a user who has none, so the sample
-  // figures have something to report in. Left behind, that is a permanent
-  // preference change made by disposable data: nothing else writes the column,
+  // figures have something to report in. Left behind, that is a preference set
+  // by disposable data: nothing else in the app writes the column on its own,
   // so a real account created afterwards in another currency would go on
-  // reporting in the sample one for good. Undone only when the seed is what set
-  // it — and only with nothing of the user's own left to report on, since
-  // clearing it out from under a real account would leave that account's cross
-  // -currency totals blank with no way to restore them.
+  // reporting in the sample one until somebody changed it. Undone here only
+  // when the seed is what set it — and only with nothing of the user's own left
+  // to report on, since clearing it out from under a real account would blank
+  // that account's cross-currency totals for no reason. Either way the user is
+  // not stuck: the profile settings set the display currency directly.
   if (marker?.latchedDisplayCurrency && (await countAccountsByUser(tx, userId)) === 0) {
     await clearDisplayCurrency(tx, userId);
   }
