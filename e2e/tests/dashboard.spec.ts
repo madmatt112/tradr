@@ -61,6 +61,17 @@ async function registerUser(req: APIRequestContext, label: string): Promise<Seed
   });
   expect(res.status(), `register ${email}`).toBe(201);
   const body = (await res.json()) as { user: { id: string } };
+  // The dashboard shows the onboarding zero-state INSTEAD of the widget grid
+  // while a user has no accounts, so a bare registration lands on a screen that
+  // has no widgets on it at all. Every case in this suite is about the grid —
+  // its defaults, the Add Widget popover, drag persistence, the theme toggle —
+  // not about onboarding, so each seeded user gets the one account that puts
+  // them past it. `register` set the session cookie on `req`, so this POST is
+  // already authenticated as the user just created.
+  const accountRes = await req.post('/api/accounts', {
+    data: { name: `${label} account`, currency: 'USD' },
+  });
+  expect(accountRes.status(), `POST /accounts for ${email}`).toBe(201);
   return { email, userId: body.user.id };
 }
 

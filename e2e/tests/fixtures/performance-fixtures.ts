@@ -252,4 +252,19 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route(/\/api\/performance(\?.*)?$/, (route) =>
     route.fulfill(json(NO_ACCOUNTS_RESPONSE)),
   );
+  // The /dashboard route reads the stored onboarding preference before it will
+  // paint anything: it holds its loading skeleton until BOTH this and
+  // /api/accounts have answered, and unmocked this one falls through to the real
+  // API, 401s against the synthetic session and trips the global redirect to
+  // /login described above.
+  //
+  // `done` is the honest answer for these specs' user. Their accounts, ledger
+  // and P&L are seeded through the mocks, so they are an established user, not a
+  // new one — the same state migration 0028 backfills for everyone who predates
+  // the feature. It also keeps the zero-state gate and the activation checklist
+  // out of the way entirely, so the dashboard these specs assert against is the
+  // one they were written for.
+  await page.route('**/api/users/me/onboarding', (route) =>
+    route.fulfill(json({ status: 'done', coachMarksSeen: [] })),
+  );
 }
