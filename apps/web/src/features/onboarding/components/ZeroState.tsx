@@ -47,6 +47,23 @@
 // screen hides them, so there is no state in which declining guidance leaves the
 // user with less than they started with. That is cheaper to keep true than a
 // rule about which branch re-renders what.
+//
+// THIS IS WHERE THE WALKTHROUGH IS REACHED FROM (R5.2). `useWalkthrough` never
+// starts a tour on its own — mounting it does nothing, and no effect there reads
+// the stored status and begins one — so every walkthrough in the product starts
+// at one of the two call sites below: "Walk me through it", and the checklist's
+// per-item "Start". That is what makes opt-in structural rather than a rule
+// someone has to remember, and it is why a new entry point has to be a new
+// deliberate call rather than something a status value can trigger.
+//
+// THE UNGUIDED PATH WRITES NOTHING, ON PURPOSE. "Create my first account" leaves
+// the status on `pending`, and it does not need to record a refusal, because
+// there is nothing for a stored status to auto-start: the restriction "declining
+// guidance must never let the walkthrough start later" is already satisfied by
+// the hook having no auto-start at all. Writing `skipped` here would be worse
+// than useless — that value is the checklist's OWN dismissal (R4.5), and
+// spending it on "I would rather click around myself" would take the checklist
+// away from a user who never asked to lose it.
 
 import { useState } from 'react';
 
@@ -56,44 +73,38 @@ import { AccountDialog } from '@/features/accounts/components/AccountDialog';
 import { docsUrl } from '@/lib/docs';
 
 import { useOnboarding } from '../hooks/useOnboarding';
+import { useWalkthrough } from '../hooks/useWalkthrough';
+import type { ChecklistItemId } from '../lib/derive-checklist';
 
 import { ActivationChecklist } from './ActivationChecklist';
 
 export function ZeroState() {
   const { setStatus, isSaving } = useOnboarding();
+  const { start, isUnavailable } = useWalkthrough();
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
-  const [guidanceUnavailable, setGuidanceUnavailable] = useState(false);
 
-  // ===========================================================================
-  // TASK 24 SEAM — wiring the guided walkthrough.
-  //
-  // The walkthrough engine (`useWalkthrough`, `lib/tour-engine.ts`, the step
-  // sets) is Phase E and does not exist yet. What DOES exist is the opt-in
-  // record: `status: 'active'` is the persisted "this user asked to be guided"
-  // that R5.2 requires before any tour may run, so the fork is not decorative
-  // today — it writes the thing the tour will later read.
-  //
-  // Task 24 changes exactly this function and the note it sets:
-  //   1. call `useWalkthrough()` at the top of the component,
-  //   2. add `start()` after `setStatus('active')` here,
-  //   3. delete `setGuidanceUnavailable(true)` and the block that renders
-  //      `guidanceUnavailable` below — with a tour running the note is a lie,
-  //      and the test that pins it ("says so plainly when guidance is not
-  //      wired") should be replaced by one asserting `start` was called.
-  //   4. pass `onStartStep` through to `<ActivationChecklist>` (the prop is
-  //      already optional there and its per-item buttons appear when supplied).
-  // ZeroState takes no props: task 24's file list is this file and
-  // ActivationChecklist, so threading a handler down from the dashboard route
-  // would drag task 19's file into a change that has no business touching it.
-  //
-  // Until then the fork is honest rather than silent. A button that records a
-  // preference and then appears to do nothing is the same defect as the six
-  // empty widgets this screen exists to fix, so the note says what happened and
-  // points at the checklist, which lists the same four steps in the same order.
-  // ===========================================================================
-  const startWalkthrough = () => {
+  /**
+   * Both ways into the walkthrough, and they are the same two lines.
+   *
+   * The status write is the OPT-IN RECORD R5.2 asks for — "this user asked to be
+   * guided" — and it belongs here rather than in `useWalkthrough` because the
+   * hook writes no onboarding state at all: that is what makes exiting a tour
+   * unable to discard anything (R5.3). Choosing an item off the checklist is the
+   * same choice made about one step instead of four, so it records the same
+   * thing.
+   *
+   * With no id, `start()` runs the first item the checklist says is outstanding,
+   * which is simultaneously "begin" and "resume" (R5.6) — the zero-state has no
+   * step index to hand it and must never acquire one.
+   *
+   * No `params`: the sets that open on `/positions/$positionId` need the id of a
+   * position the user has not created yet. `useWalkthrough` handles that by
+   * starting where the user already is and exiting cleanly if the target never
+   * appears; the checklist stays exactly as it was either way.
+   */
+  const beginGuided = (itemId?: ChecklistItemId) => {
     setStatus('active');
-    setGuidanceUnavailable(true);
+    start(itemId);
   };
 
   return (
@@ -136,7 +147,9 @@ export function ZeroState() {
               data-testid="zero-state-walkthrough"
               className="w-full cursor-pointer motion-reduce:transition-none sm:w-auto"
               disabled={isSaving}
-              onClick={startWalkthrough}
+              // Wrapped, not passed by reference: `beginGuided` takes an
+              // optional item id and a click handler is called with an event.
+              onClick={() => beginGuided()}
             >
               Walk me through it
             </Button>
@@ -160,14 +173,21 @@ export function ZeroState() {
             </Button>
           </div>
 
-          {guidanceUnavailable && (
+          {/* R5.8 / Principle 4. The tour runtime is a lazy chunk, so it can 404
+              after a deploy, be blocked, or simply be unreachable offline.
+              `useWalkthrough` swallows that and leaves the stored status alone —
+              the user has not skipped anything — which leaves this screen with a
+              button that appears to do nothing. So say what happened, and point
+              at the two things that still work. Every other part of the screen,
+              the primary action included, is untouched by this state. */}
+          {isUnavailable && (
             <p
               role="status"
               data-testid="zero-state-guidance-note"
               className="text-sm text-muted-foreground"
             >
-              The guided walkthrough is not built yet. The setup checklist below lists the same four
-              steps — start with the brokerage account.
+              The guided walkthrough could not be loaded. Nothing is lost — the setup checklist
+              below lists the same four steps, and the getting-started guide covers them in full.
             </p>
           )}
 
@@ -179,8 +199,14 @@ export function ZeroState() {
 
       {/* Unconditional, both of them: this is what stops either fork being a
           dead end (R3.2). The checklist reads its own state and handles its own
-          loading, dismissed and retired cases. */}
-      <ActivationChecklist />
+          loading, dismissed and retired cases.
+
+          The handler is WITHDRAWN when the runtime will not load, which is the
+          same judgement the prop's own contract makes: no handler, no per-item
+          buttons, and a "Start" that can only fail is not an affordance. The
+          checklist itself stays, with all four items and their labels — R5.8's
+          "fully functional" is about the list, not the shortcut into it. */}
+      <ActivationChecklist onStartStep={isUnavailable ? undefined : beginGuided} />
 
       <p className="text-sm text-muted-foreground">
         {/* The docs live on their own host, so this is an <a>, not a router

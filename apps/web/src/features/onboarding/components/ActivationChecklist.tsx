@@ -88,8 +88,13 @@ interface ActivationChecklistProps {
    * Optional, and the per-item buttons render ONLY when it is supplied: a
    * "Start" button with nothing behind it is a dead control, and the checklist
    * is useful without one (the items name their own actions, all of which are
-   * reachable from the normal UI — R4.3). The zero-state can therefore mount
-   * this before the walkthrough exists.
+   * reachable from the normal UI — R4.3).
+   *
+   * That optionality is load-bearing now that the walkthrough is wired.
+   * `ZeroState` passes `useWalkthrough().start` here and withdraws it when the
+   * tour runtime fails to load (R5.8), so the shortcut disappears while the
+   * checklist itself carries on unchanged. Any other caller that has no
+   * walkthrough to offer simply omits the prop.
    */
   onStartStep?: (id: ChecklistItemId) => void;
 }
