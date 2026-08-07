@@ -26,7 +26,12 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
   {
     target: '[data-tour="position-add-fill"]',
     route: '/positions/$positionId',
+    routeParams: ['positionId'],
     docs: 'positions',
+    // The set is entered COLD, on a route that has to be navigated to, and
+    // `PositionDetail` renders skeletons until `usePosition` resolves. Without
+    // this the tour exits `target-missing` before the position has loaded.
+    waitForMs: 5000,
     advanceOnAction: true,
     title: 'Record the exit',
     body:
@@ -36,6 +41,7 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
   {
     target: '[data-tour="position-close"]',
     route: '/positions/$positionId',
+    routeParams: ['positionId'],
     docs: 'positions',
     waitForMs: 3000,
     advanceOnAction: true,

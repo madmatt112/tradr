@@ -12,8 +12,13 @@
  * - Risk is a two-tab choice, Dollar or Percent, and Percent is the ONLY basis
  *   in which the account's rule is read: `#balance` and `#riskPercent` are not
  *   rendered at all under the Dollar tab, which is the default. That is why the
- *   risk step comes before the account step and why the risk-percent step waits
- *   for its target rather than assuming it.
+ *   risk step comes before the account step and why the amount step waits for
+ *   its target rather than assuming it.
+ * - THE USER CHOOSES THE BASIS, so the amount step has to survive either
+ *   choice. The step below invites Percent but cannot compel it, and a step
+ *   anchored to `#riskPercent` alone would exit `target-missing` the moment
+ *   someone stayed on Dollar. It anchors to whichever field the chosen basis
+ *   renders — `#riskPercent` or `#dollarRisk` — and names both.
  * - Selecting an account seeds `riskPercent` from `account.defaultRiskPercent`
  *   ONLY when the account carries one (R1.4), and never writes back (R1.3).
  * - An account also supplies the display currency and the buying-power cap, in
@@ -31,6 +36,10 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     target: '#entryPrice',
     route: '/calculator',
     docs: 'gettingStarted',
+    // The set is entered COLD, from the checklist on another route, so the first
+    // step waits for the calculator to mount rather than assuming the
+    // navigation has already landed.
+    waitForMs: 5000,
     title: 'Entry price',
     body:
       'Start with the price you plan to get in at. Nothing here is submitted or saved — the ' +
@@ -43,7 +52,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     title: 'Stop loss',
     body:
       'The price at which you would accept the trade is wrong. The distance from entry to stop ' +
-      'is your risk per unit, and it is what the position size is derived from — a wider stop ' +
+      'is the Per-unit risk, and it is what the position size is derived from — a wider stop ' +
       'buys fewer units for the same money at risk.',
   },
   {
@@ -52,8 +61,8 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     docs: 'gettingStarted',
     title: 'Target price (optional)',
     body:
-      'Optional, as the label says. Add it and you also get the reward per unit and the ' +
-      'risk/reward ratio; leave it out and you still get a size.',
+      'Optional, as the label says. Add it and you also get the Per-unit reward and the ' +
+      'Risk/Reward ratio; leave it out and you still get a size.',
   },
   {
     target: '[data-tour="calculator-risk"]',
@@ -79,15 +88,18 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
       'the account actually has.',
   },
   {
-    target: '#riskPercent',
+    // Whichever field the basis chosen two steps ago renders; exactly one of the
+    // two is on screen at a time, so the selector list resolves unambiguously.
+    target: '#riskPercent, #dollarRisk',
     route: '/calculator',
     docs: 'gettingStarted',
     waitForMs: 3000,
-    title: 'Risk percent',
+    title: 'The amount at risk',
     body:
-      'Prefilled from that account&rsquo;s Default risk %, when it has one. Change it here and ' +
-      'the change applies to this calculation only — the account keeps its rule, so the number ' +
-      'you rely on tomorrow is still the one you chose.',
+      'Under Percent, Risk percent is prefilled from that account&rsquo;s Default risk % when it ' +
+      'has one; under Dollar, Dollar risk is the figure you type. Either way the change applies ' +
+      'to this calculation only — the account keeps its rule, so the number you rely on tomorrow ' +
+      'is still the one you chose.',
   },
   {
     target: '[data-tour="calculator-results"]',
@@ -96,9 +108,9 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     side: 'left',
     title: 'Size, risk and R:R',
     body:
-      'Position Sizing gives you the number of units to trade, the risk per unit, and the actual ' +
-      'dollar risk once the size is rounded down to whole units. With a target, Risk / Reward ' +
-      'adds the reward per unit and the ratio — what the plan pays if it works, per unit of what ' +
-      'it costs if it does not.',
+      'Position Sizing gives you the Position size in whole units, the Per-unit risk, and the ' +
+      'Actual dollar risk once that size is rounded down. With a target, Risk / Reward adds the ' +
+      'Per-unit reward and the Risk/Reward ratio — what the plan pays if it works, per unit of ' +
+      'what it costs if it does not.',
   },
 ];

@@ -309,6 +309,30 @@ describe('CalculatorForm — risk-basis switching (REQ-1.3)', () => {
   });
 });
 
+describe('CalculatorForm — walkthrough anchors (user-onboarding R6.7)', () => {
+  // The walkthrough's steps are DATA and cannot match on markup structure, so
+  // what each `data-tour` attribute wraps is a contract. The risk anchor sat on
+  // the whole block, which put the account picker and both amount fields inside
+  // the "Risk" step's highlight; and the amount step anchored to `#riskPercent`
+  // alone, which the Dollar basis never renders.
+  it('anchors the risk step to the basis tabs alone, and the amount step to whichever field the basis renders', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    const riskAnchor = document.querySelector('[data-tour="calculator-risk"]');
+    expect(riskAnchor).not.toBeNull();
+    expect(riskAnchor!.querySelectorAll('[role="tab"]')).toHaveLength(2);
+    expect(riskAnchor!.querySelector('[data-tour="calculator-account"]')).toBeNull();
+    expect(riskAnchor!.querySelector('#dollarRisk')).toBeNull();
+
+    // Exactly one amount field exists per basis, so the step's selector list
+    // resolves in both — never the `target-missing` that ends the tour.
+    expect(document.querySelector('#riskPercent, #dollarRisk')?.id).toBe('dollarRisk');
+    await switchBasis(user, 'Percent');
+    expect(document.querySelector('#riskPercent, #dollarRisk')?.id).toBe('riskPercent');
+  });
+});
+
 describe('CalculatorForm — account sourcing (REQ-3, REQ-5.2)', () => {
   it('selecting a non-USD account fills the balance, shows the currency note, and switches money to that currency', async () => {
     const user = userEvent.setup();

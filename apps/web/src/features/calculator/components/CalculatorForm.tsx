@@ -313,10 +313,11 @@ export function CalculatorForm() {
   // balance to size against; in the dollar basis it supplies only the cap figure
   // and the display currency, because a dollar risk is typed directly and a
   // `balance` set here would be a second, contradictory risk basis.
-  // `data-tour` on this block and on the risk block below are the walkthrough's
-  // anchors (user-onboarding R6.7). Neither the account picker nor the risk
-  // basis exposes a stable id of its own — the picker's trigger is rebuilt per
-  // query state — and the steps are data, so they cannot match on structure.
+  // `data-tour` on this block and on the risk-basis tabs below are the
+  // walkthrough's anchors (user-onboarding R6.7). Neither the account picker nor
+  // the risk basis exposes a stable id of its own — the picker's trigger is
+  // rebuilt per query state — and the steps are data, so they cannot match on
+  // structure.
   const accountPicker = (
     <div className="space-y-2 pt-2" data-tour="calculator-account">
       <Label>Account</Label>
@@ -518,9 +519,13 @@ export function CalculatorForm() {
           )}
         </div>
 
-        <div className="space-y-2" data-tour="calculator-risk">
+        <div className="space-y-2">
           <Label>Risk</Label>
-          <Tabs value={riskBasis} onValueChange={handleRiskBasisChange}>
+          {/* `data-tour` sits on the BASIS CHOOSER, not on the block: the block
+              also holds the balance/risk fields and the account picker, so the
+              walkthrough's "Risk" step would otherwise highlight three separate
+              controls and point at none of them. */}
+          <Tabs data-tour="calculator-risk" value={riskBasis} onValueChange={handleRiskBasisChange}>
             <TabsList>
               <TabsTrigger value="dollar" className="cursor-pointer">
                 Dollar

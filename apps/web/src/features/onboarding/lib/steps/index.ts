@@ -52,12 +52,28 @@ export interface WalkthroughStepSource extends Omit<TourStep, 'description'> {
    * The in-app route the step's target lives on. Not consumed by the engine —
    * it is what lets the test prove no step anchors to a screen that does not
    * exist, and what `useWalkthrough` navigates to when resuming (R5.6).
+   *
+   * This is the ROUTER'S PATTERN, not a URL: a parameterised route is written
+   * `/positions/$positionId`, which no one can navigate to as it stands.
+   * `routeParams` is what makes it navigable.
    */
   route: string;
+  /**
+   * The `$` segments of `route`, in the order they appear — the contract for
+   * `navigate({ to: step.route, params })`. Omitted when `route` has none, which
+   * is the case that IS navigable as written.
+   *
+   * Only the NAMES can be authored: the values are runtime state (the id of the
+   * position the user just made), and R5.6 re-derives the set from the user's
+   * data rather than storing a step, so `useWalkthrough` holds them, not this
+   * file. The test keeps the names in step with the pattern.
+   */
+  routeParams?: readonly string[];
 }
 
 /** A compiled step: a `TourStep` the engine can drive, plus its provenance. */
-export type WalkthroughStep = TourStep & Pick<WalkthroughStepSource, 'docs' | 'route'>;
+export type WalkthroughStep = TourStep &
+  Pick<WalkthroughStepSource, 'docs' | 'route' | 'routeParams'>;
 
 /**
  * The one place a documentation link is built. External host, so it opens in a

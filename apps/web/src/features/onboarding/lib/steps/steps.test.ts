@@ -71,7 +71,17 @@ const allSteps: [string, WalkthroughStep][] = SET_IDS.flatMap((id) =>
   ]),
 );
 
-/** The markup a step's `target` selector needs to find in the source tree. */
+/**
+ * The markup EVERY alternative of a step's `target` needs to find in the source
+ * tree. A target may be a selector list when the control it describes is
+ * rendered as one of two fields (the calculator's risk basis), and a list is
+ * only as good as its worst branch — so every branch is checked.
+ */
+function anchorsFor(target: string): string[] {
+  return target.split(',').map((one) => anchorFor(one.trim()));
+}
+
+/** The markup a single selector needs to find in the source tree. */
 function anchorFor(target: string): string {
   const id = /^#([A-Za-z][\w-]*)$/.exec(target);
   if (id) return `id="${id[1]}"`;
@@ -121,30 +131,59 @@ describe('walkthrough step definitions', () => {
     expect(found, `no page in apps/docs for ${href}`).toBe(true);
   });
 
-  // R6.11 — no step anchors to a screen that does not exist.
-  it.each(allSteps)('%s runs on a route the router declares', (_name, step) => {
+  // R6.11 — no step anchors to a screen that does not exist. And R5.6 — that
+  // screen has to be one `useWalkthrough` can NAVIGATE to, which membership of
+  // the route tree alone does not establish: `/positions/$positionId` is the
+  // router's PATTERN, and navigating to it verbatim is a 404. A step on a
+  // parameterised route therefore has to name the params a caller must supply,
+  // and a step that names none has to be on a route that needs none.
+  it.each(allSteps)('%s runs on a route a caller can navigate to', (_name, step) => {
     expect(routes.has(step.route), `unknown route ${step.route}`).toBe(true);
+    const needed = Array.from(step.route.matchAll(/\$([A-Za-z]\w*)/g), (m) => m[1]);
+    expect(
+      step.routeParams ?? [],
+      `${step.route} needs ${needed.join(', ') || 'no params'}`,
+    ).toEqual(needed);
   });
 
   // R6.11 — and no step anchors to an element nobody renders.
   it.each(allSteps)('%s targets a selector the app actually renders', (_name, step) => {
     if (step.target === undefined) return; // A centred step is about the screen.
-    const anchor = anchorFor(step.target);
-    expect(webSource.includes(anchor), `no source renders ${anchor} for ${step.target}`).toBe(true);
+    for (const anchor of anchorsFor(step.target)) {
+      expect(webSource.includes(anchor), `no source renders ${anchor} for ${step.target}`).toBe(
+        true,
+      );
+    }
   });
 
-  // R5.4 — a target created by the step before it must be waited for. Omitting
-  // `waitForMs` means "must already be there", and a miss ends the tour.
-  it('waits for any target that a route change or a prior action brings into being', () => {
+  // R5.4 — a target that is not already on screen when its step is reached must
+  // be waited for. Omitting `waitForMs` means "must already be there", and a
+  // miss ends the tour on `target-missing`.
+  //
+  // THE FIRST STEP OF A SET IS INCLUDED, and that is the whole point. It used to
+  // be exempt, on the assumption that a set opens on a screen already rendered.
+  // That assumption is false in the one case that matters: a set is entered
+  // COLD, from the checklist on another route, with the route still mounting and
+  // the queries that render the target still in flight. Two first steps shipped
+  // without a wait behind that exemption — `/positions` renders an untagged
+  // disabled button until `useAccounts` lands, and `PositionDetail` renders
+  // skeletons until `usePosition` does — so entering either set ended the tour
+  // instantly. Anything the previous step did not leave on screen must wait.
+  it('waits for any target that is not already on screen when its step is reached', () => {
     for (const id of SET_IDS) {
       const steps = WALKTHROUGH_STEPS[id];
       steps.forEach((step, index) => {
-        if (index === 0 || step.target === undefined) return;
+        if (step.target === undefined) return;
         const previous = steps[index - 1];
-        const isNew = previous.route !== step.route || previous.advanceOnAction === true;
+        const isNew =
+          previous === undefined ||
+          previous.route !== step.route ||
+          previous.advanceOnAction === true;
         if (!isNew) return;
+        // `?? 0` so a MISSING wait — the failure this exists to catch — reports
+        // the step by name rather than a bare "received undefined".
         expect(
-          step.waitForMs,
+          step.waitForMs ?? 0,
           `${id}[${index}] "${step.title}" must wait for its target`,
         ).toBeGreaterThan(0);
       });
@@ -184,6 +223,7 @@ describe('walkthrough step definitions', () => {
       'advanceOnAction',
       'docs',
       'route',
+      'routeParams',
     ]);
     for (const [name, step] of allSteps) {
       for (const key of Object.keys(step)) {

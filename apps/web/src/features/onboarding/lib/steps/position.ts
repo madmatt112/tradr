@@ -30,6 +30,12 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     target: '[data-tour="position-new"]',
     route: '/positions',
     docs: 'positions',
+    // The set is entered COLD — from the checklist, on another route — so the
+    // first step waits like any other. `PositionList` renders an UNTAGGED
+    // disabled "New Position" until `useAccounts` resolves, and only swaps in
+    // the tagged enabled one once it has: without this the tour exits
+    // `target-missing` on a screen that was about to be ready.
+    waitForMs: 5000,
     advanceOnAction: true,
     title: 'Log the position',
     body:
@@ -50,6 +56,7 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
   {
     target: '[data-tour="position-add-fill"]',
     route: '/positions/$positionId',
+    routeParams: ['positionId'],
     docs: 'positions',
     waitForMs: 5000,
     advanceOnAction: true,
@@ -63,6 +70,7 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
   {
     target: '[data-tour="position-open"]',
     route: '/positions/$positionId',
+    routeParams: ['positionId'],
     docs: 'positions',
     waitForMs: 3000,
     advanceOnAction: true,
@@ -78,6 +86,7 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     // step above needs something after it, or the user would be asked to open
     // the position by a button that ends the tour instead (tour-engine.ts).
     route: '/positions/$positionId',
+    routeParams: ['positionId'],
     docs: 'positions',
     title: 'That is a position logged',
     body:

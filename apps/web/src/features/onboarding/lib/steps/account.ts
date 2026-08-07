@@ -35,6 +35,12 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '[data-testid="zero-state-create-account"]',
     route: '/dashboard',
     docs: 'gettingStarted',
+    // The set is entered COLD, so its first step waits like any other: the
+    // dashboard route holds `DashboardSkeleton` until both the onboarding
+    // preference and the accounts list have answered, and only then mounts
+    // `ZeroState` (`routes/_auth.dashboard.tsx`). Without this the tour would
+    // exit `target-missing` before the screen it is describing exists.
+    waitForMs: 5000,
     advanceOnAction: true,
     title: 'Start with an account',
     body:
