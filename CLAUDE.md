@@ -26,3 +26,18 @@ via the `is*Configured()` predicates and `FEATURE_GATING` in
 `apps/api/src/lib/config.ts`. With nothing configured, the stack runs as a plain
 self-hosted journal — `apps/api/src/app.self-host-parity.test.ts` enforces this.
 Keep that boundary intact: never make a gated capability unconditional.
+
+## graphify (optional, local only)
+
+[graphify](https://github.com/safishamsi/graphify) builds a queryable knowledge graph of the
+repo. Its artifacts live in `graphify-out/` and are **deliberately untracked** — they are large
+and machine-generated. Nothing here depends on them; build your own with `graphify .` if you
+want one.
+
+When `graphify-out/graph.json` exists:
+
+- Prefer `graphify query "<question>"` over a broad grep for codebase questions. Use
+  `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for a single
+  concept — each returns a scoped subgraph rather than the whole report.
+- Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review.
+- Run `graphify update .` after changing code to keep the graph current (AST-only, no API cost).

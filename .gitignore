@@ -57,5 +57,8 @@ Thumbs.db
 
 .codeindex/
 
+# graphify knowledge-graph artifacts (large, machine-generated, rebuilt per commit)
+graphify-out/
+
 # lychee response cache (.github/workflows/link-check.yml)
 .lycheecache
