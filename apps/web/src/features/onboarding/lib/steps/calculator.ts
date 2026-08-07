@@ -52,8 +52,8 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     title: 'Stop loss',
     body:
       'The price at which you would accept the trade is wrong. The distance from entry to stop ' +
-      'is the Per-unit risk, and it is what the position size is derived from — a wider stop ' +
-      'buys fewer units for the same money at risk.',
+      'is what the results call Per-unit risk, and the position size is derived from it — a ' +
+      'wider stop buys fewer units for the same money at risk.',
   },
   {
     target: '#targetPrice',

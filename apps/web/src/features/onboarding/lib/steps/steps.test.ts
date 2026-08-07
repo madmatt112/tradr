@@ -137,7 +137,12 @@ describe('walkthrough step definitions', () => {
   // router's PATTERN, and navigating to it verbatim is a 404. A step on a
   // parameterised route therefore has to name the params a caller must supply,
   // and a step that names none has to be on a route that needs none.
-  it.each(allSteps)('%s runs on a route a caller can navigate to', (_name, step) => {
+  //
+  // This checks the two halves of that CONTRACT — the route is real, and the
+  // param names match the pattern — and no more. It builds no URL: the values
+  // are runtime state, so navigating for real is `useWalkthrough`'s to prove,
+  // and the name below says only what is actually asserted here.
+  it.each(allSteps)('%s names a real route, with a routeParam per $ segment', (_name, step) => {
     expect(routes.has(step.route), `unknown route ${step.route}`).toBe(true);
     const needed = Array.from(step.route.matchAll(/\$([A-Za-z]\w*)/g), (m) => m[1]);
     expect(
@@ -169,25 +174,28 @@ describe('walkthrough step definitions', () => {
   // disabled button until `useAccounts` lands, and `PositionDetail` renders
   // skeletons until `usePosition` does — so entering either set ended the tour
   // instantly. Anything the previous step did not leave on screen must wait.
-  it('waits for any target that is not already on screen when its step is reached', () => {
-    for (const id of SET_IDS) {
-      const steps = WALKTHROUGH_STEPS[id];
-      steps.forEach((step, index) => {
-        if (step.target === undefined) return;
-        const previous = steps[index - 1];
-        const isNew =
-          previous === undefined ||
-          previous.route !== step.route ||
-          previous.advanceOnAction === true;
-        if (!isNew) return;
-        // `?? 0` so a MISSING wait — the failure this exists to catch — reports
-        // the step by name rather than a bare "received undefined".
-        expect(
-          step.waitForMs ?? 0,
-          `${id}[${index}] "${step.title}" must wait for its target`,
-        ).toBeGreaterThan(0);
-      });
-    }
+  //
+  // Derived as a LIST rather than looped over inside one `it`, so every step
+  // that owes a wait is reported on its own: strip two waits and both are named,
+  // where a loop stops at the first. Membership depends on `target`, `route` and
+  // `advanceOnAction` only — never on `waitForMs` — so removing a wait cannot
+  // remove the step from its own test.
+  const stepsThatMustWait: [string, WalkthroughStep][] = SET_IDS.flatMap((id) =>
+    WALKTHROUGH_STEPS[id].flatMap((step, index): [string, WalkthroughStep][] => {
+      if (step.target === undefined) return [];
+      const previous = WALKTHROUGH_STEPS[id][index - 1];
+      const isNew =
+        previous === undefined ||
+        previous.route !== step.route ||
+        previous.advanceOnAction === true;
+      return isNew ? [[`${id}[${index}] "${step.title}"`, step]] : [];
+    }),
+  );
+
+  it.each(stepsThatMustWait)('%s waits for its target', (name, step) => {
+    // `?? 0` so a MISSING wait — the failure this exists to catch — reports
+    // the step by name rather than a bare "received undefined".
+    expect(step.waitForMs ?? 0, `${name} must wait for its target`).toBeGreaterThan(0);
   });
 
   // The library substitutes onDoneClick for onNextClick on the last step, so an
