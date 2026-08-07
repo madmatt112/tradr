@@ -204,6 +204,13 @@
       "when": 1786054566343,
       "tag": "0028_onboarding_backfill_existing_users",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1786136740902,
+      "tag": "0029_account_is_demo",
+      "breakpoints": true
     }
   ]
 }
