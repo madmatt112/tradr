@@ -73,9 +73,15 @@ let onboardingQueryMock: {
   isError: boolean;
 };
 let onboardingMock: UseOnboardingResult;
+// `useOnboardingPatch` is here for the coach mark the populated branch mounts
+// (user-onboarding R7.1): it is the only write path that component has, and an
+// unmocked one would throw for want of a QueryClient. The mark itself is left
+// REAL — whether it appears on this branch and stays off the zero-state and
+// empty ones is a claim about this route, and a stub would let it pass.
 vi.mock('@/features/onboarding/hooks/useOnboarding', () => ({
   useOnboardingQuery: () => onboardingQueryMock,
   useOnboarding: () => onboardingMock,
+  useOnboardingPatch: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 // Same stub AccountList.test.tsx and ZeroState.test.tsx use: it pulls in

@@ -330,6 +330,23 @@ export interface UseWalkthroughResult {
   stepIndex: number;
 }
 
+/**
+ * Just the R7.6 signal: is a walkthrough on screen right now?
+ *
+ * A separate hook rather than `useWalkthrough().isRunning` because the full
+ * hook composes `useOnboarding()` — which pulls the entire unfiltered positions
+ * list down to count it — and the coach marks that ask this question sit on
+ * ordinary working surfaces that have no use for a checklist. Reading one
+ * boolean should not cost a request.
+ *
+ * Synchronous, from the module-scoped store, so a consumer can decide not to
+ * render AT ALL on the same tick. A mark that mounts and then withdraws in an
+ * effect still paints a frame over the highlight the tour is pointing at.
+ */
+export function useIsWalkthroughRunning(): boolean {
+  return useWalkthroughStore((state) => state.isRunning);
+}
+
 export function useWalkthrough(): UseWalkthroughResult {
   const navigate = useNavigate();
   const { checklist } = useOnboarding();

@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { formatCurrency } from '@/lib/format';
 
 import {
@@ -339,7 +340,13 @@ export function PositionDetailView({ positionId }: Props) {
       {/* Fills */}
       <div>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Fills</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold">Fills</h2>
+            {/* R7.5 — a closed position has no Add Fill button, so there is
+                nothing for the mark to introduce; it waits for an open or draft
+                one rather than describing a control that is not on screen. */}
+            <CoachMark surface="position-partials" available={!isClosed} />
+          </div>
           {!isClosed && (
             <Button
               variant="outline"

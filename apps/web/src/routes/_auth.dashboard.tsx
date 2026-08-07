@@ -18,6 +18,7 @@ import { GRID_COLUMNS } from '@/features/dashboard/grid.constants';
 import { useDashboardLayout } from '@/features/dashboard/hooks/useDashboardLayout';
 import { findFirstSlot } from '@/features/dashboard/layout';
 import { ActivationChecklist } from '@/features/onboarding/components/ActivationChecklist';
+import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { ZeroState } from '@/features/onboarding/components/ZeroState';
 import { useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
 import { useAuth } from '@/hooks/useAuth';
@@ -417,14 +418,26 @@ function DashboardPage(): ReactElement {
   const placedTypes = widgets.map((w) => w.type);
   return (
     <div className="space-y-4">
-      <DashboardHeader
-        placedTypes={placedTypes}
-        onAdd={handleAdd}
-        onResetLayout={() => {
-          void handleUseDefaultLayout();
-        }}
-        resetBusy={defaultBusy}
-      />
+      {/* THE COACH MARK RIDES WITH THE HEADER, and only on this branch (R7.1,
+          R7.5). Widget management is what the mark describes — Add Widget, the
+          per-card menu, drag and resize, Reset layout — and all of it is on
+          screen here and only here. The empty branch has no cards to arrange
+          and no Reset layout button, and the zero-state above returns before
+          either. There is no deployment gate to consult: the grid is local
+          layout state persisted per user, configured nowhere. */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1">
+          <DashboardHeader
+            placedTypes={placedTypes}
+            onAdd={handleAdd}
+            onResetLayout={() => {
+              void handleUseDefaultLayout();
+            }}
+            resetBusy={defaultBusy}
+          />
+        </div>
+        <CoachMark surface="dashboard-widgets" />
+      </div>
       {/* Above the grid, below the page heading and its actions — see the note
           on the empty branch. */}
       <ChecklistSlot />

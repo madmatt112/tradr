@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
+import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { docsUrl } from '@/lib/docs';
 
 import { useCsvPreview } from '../hooks/useCsvPreview';
@@ -122,7 +123,20 @@ export function ImportPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">
       <div>
-        <h1 className="text-2xl font-semibold">Import trades from CSV</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold">Import trades from CSV</h1>
+          {/* R7.5 — the coach mark is gated on the SAME figure the disclosure
+              below is: a user whose plan's lifetime CSV imports are all spent
+              cannot import, and `csv-import.service.ts` refuses the commit, so
+              introducing the feature to them would be pointing at a door that
+              is shut. `undefined` while the tier read is in flight counts as
+              unavailable rather than available — better a mark one round trip
+              late than one that appears and is then withdrawn. */}
+          <CoachMark
+            surface="csv-import"
+            available={tierState !== undefined && csvRemaining !== 0}
+          />
+        </div>
         <p className="text-sm text-muted-foreground">
           Imports are additive — they add positions and fills to the target account. Fees come from
           the CSV unless no fees column is mapped.{' '}

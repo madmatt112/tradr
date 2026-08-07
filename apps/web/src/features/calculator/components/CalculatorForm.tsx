@@ -201,7 +201,10 @@ export function CalculatorForm() {
   // FIRE AND FORGET. In an effect, so it is off the calculation's path
   // entirely: the numbers above are already rendered by the time this
   // dispatches, and the mutation is silent, so a failed write shows the user
-  // nothing — checklist item 2 just stays unticked until the next calculation.
+  // nothing. Nor is it retried within this mount — the ref latches BEFORE the
+  // mutation is sent, and the mutation's own retry count is TanStack's default
+  // of 0 — so checklist item 2 stays unticked until the next time this form
+  // mounts.
   useEffect(() => {
     if (!hasResult || calculatorUseRecorded.current) return;
     // Until the preference read lands we cannot tell a first use from a

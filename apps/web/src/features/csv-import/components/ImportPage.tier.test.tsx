@@ -106,6 +106,17 @@ vi.mock('@/lib/telemetry/posthog', () => ({
   captureClientEvent: vi.fn(),
 }));
 
+// A PROBE, not a stub. The coach mark's own behaviour is covered next to it;
+// what belongs HERE is the R7.5 wiring — that this page hands it the same
+// remaining-imports figure the disclosure above is computed from, so a user
+// whose lifetime allowance is spent is not introduced to a feature the commit
+// path will refuse. Rendering only when `available` makes that assertable
+// without a QueryClient.
+vi.mock('@/features/onboarding/components/CoachMark', () => ({
+  CoachMark: ({ surface, available = true }: { surface: string; available?: boolean }) =>
+    available ? <div data-testid={`coach-mark-${surface}`} /> : null,
+}));
+
 import { AccountPicker } from './AccountPicker';
 import { CommitPanel } from './CommitPanel';
 import { ImportPage } from './ImportPage';
@@ -214,6 +225,44 @@ describe('ImportPage — remaining CSV imports before staging', () => {
     tierData.current = tierFixture(null);
     render(<ImportPage />);
     expect(screen.queryByTestId('csv-imports-remaining')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The coach mark is gated on the same figure (user-onboarding R7.5)
+// ---------------------------------------------------------------------------
+
+describe('ImportPage — coach-mark availability', () => {
+  it('offers the mark while imports remain', () => {
+    tierData.current = tierFixture({
+      accountsUsed: 1,
+      writableAccountId: ACCOUNT_A,
+      csvUsed: 1,
+    });
+    render(<ImportPage />);
+    expect(screen.getByTestId('coach-mark-csv-import')).toBeTruthy();
+  });
+
+  it('withholds it once the lifetime allowance is spent', () => {
+    tierData.current = tierFixture({
+      accountsUsed: 1,
+      writableAccountId: ACCOUNT_A,
+      csvUsed: 3,
+    });
+    render(<ImportPage />);
+    expect(screen.queryByTestId('coach-mark-csv-import')).toBeNull();
+  });
+
+  it('offers it on a self-host / gating-off instance, where there is no cap', () => {
+    tierData.current = tierFixture(null);
+    render(<ImportPage />);
+    expect(screen.getByTestId('coach-mark-csv-import')).toBeTruthy();
+  });
+
+  it('withholds it until the tier read lands, rather than showing then retracting', () => {
+    tierData.current = undefined;
+    render(<ImportPage />);
+    expect(screen.queryByTestId('coach-mark-csv-import')).toBeNull();
   });
 });
 
