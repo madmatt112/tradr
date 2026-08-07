@@ -19,6 +19,7 @@ import {
   deletePositionsByAccount,
   findAccountById,
   insertAccount,
+  lockUserForAccountChange,
   selectDemoMarker,
   setDemoMarker,
 } from './accounts.query';
@@ -271,6 +272,13 @@ const DEMO_TRADES: readonly DemoTrade[] = [
  */
 export async function seedDemoAccount(db: Database, userId: string) {
   return withTransaction(db, async (tx) => {
+    // The same lock account creation takes, on the same row, before either
+    // reads the account set — this half is worthless alone. Held for the whole
+    // seed, which is deliberate: see `lockUserForAccountChange`. It blocks only
+    // this one user's own account changes, and only for as long as their sample
+    // data takes to build.
+    await lockUserForAccountChange(tx, userId);
+
     const accountCount = await countAccountsByUser(tx, userId);
     if (accountCount > 0) {
       throw new ConflictError('Sample data can only be added to an empty account list');

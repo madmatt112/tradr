@@ -229,6 +229,38 @@ export async function selectOwnedAccountDemoFlag(
 }
 
 /**
+ * Serialize this user's account-set changes against each other.
+ *
+ * Sample data and real accounts are mutually exclusive, and the rule is
+ * enforced by two halves that each READ what the other WRITES — creation looks
+ * for a sample account, seeding counts accounts. Under READ COMMITTED neither
+ * read can see the other transaction's uncommitted account row, so both halves
+ * pass and both commit: the user ends up holding sample data alongside a real
+ * account. That state has no way out. Nothing filters the sample account out of
+ * any aggregate (by design), and teardown will not hand back the display
+ * currency seeding latched while a real account survives — so unlike the plan
+ * cap's accepted overshoot, which the user repairs by deleting an account, this
+ * one is permanent.
+ *
+ * The user row is the natural mutex: it is the one row both paths already
+ * touch, one per user, and locking it costs a single indexed read. Raw
+ * `FOR UPDATE` idiom per `admin.query.ts`.
+ *
+ * HELD TO COMMIT, deliberately, and the seed's quarter-second is the price.
+ * Releasing it any earlier — as a session-level advisory lock could — would
+ * close nothing: the competing read is an ordinary SELECT, so it cannot see the
+ * account row until the writer commits, whether or not a lock is still held.
+ * Serialization has to span the write and its commit or it is only a narrower
+ * window.
+ *
+ * Both paths take this before reading anything about the other, so it is also
+ * the whole of the lock ordering: one lock, one row, always first.
+ */
+export async function lockUserForAccountChange(tx: Transaction, userId: string): Promise<void> {
+  await tx.execute(sql`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`);
+}
+
+/**
  * Does this user hold the sample account? Existence only — the creation guard
  * needs to know whether sample data is present, not which account carries it.
  *

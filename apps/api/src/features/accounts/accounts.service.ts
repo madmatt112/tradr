@@ -27,6 +27,7 @@ import {
   countPositionsByAccount,
   accountHasLedgerEntries,
   countAccountsByUser,
+  lockUserForAccountChange,
   selectOwnedAccountDemoFlag,
   setWritableAccountId,
   userHasDemoAccount,
@@ -60,6 +61,13 @@ export async function createAccount(
   gate: { isAdmin: boolean },
 ) {
   return withTransaction(db, async (tx) => {
+    // Before reading anything about the user's account set, and for the whole
+    // of this transaction. The seeder takes the same lock on the same row, so
+    // the two cannot both look at a set the other is midway through changing —
+    // see `lockUserForAccountChange` for why an unserialized read of it lets
+    // the refusal below pass while sample data is being created.
+    await lockUserForAccountChange(tx, userId);
+
     // Sample data and real accounts are mutually exclusive, and this is that
     // rule's creation half — the seeding half lives with the seeder. It is the
     // whole of what keeps invented figures out of real ones: the dashboard
