@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
 import {
@@ -35,6 +35,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { useBrokerages } from '@/features/brokerages/hooks/useBrokerages';
 import { useBuyingPowerBasisQuery } from '@/features/calculator/hooks/useBuyingPowerBasis';
+import { useOnboardingPatch, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
 import { OptionsChainViewer } from '@/features/options/components/OptionsChainViewer';
 import type { OptionContract } from '@/features/options/hooks/useOptionsChain';
 import { useStockQuote } from '@/hooks/useStockQuote';
@@ -116,6 +117,28 @@ export function CalculatorForm() {
   const buyingPowerBasisQuery = useBuyingPowerBasisQuery();
   const capBasis = buyingPowerBasisQuery.data?.basis ?? 'cash';
 
+  // THE SINGLE NAMED EXCEPTION TO "checklist completion is derived, never
+  // stored" (user-onboarding R4.2, resolved in design.md §"Requirement 4.2 —
+  // the one exception"). The other three items read the user's real rows; the
+  // calculator is stateless and writes nothing, so "size a trade in the
+  // calculator" has no data trace unless this one timestamp is recorded. It is
+  // a fact about the user ("first used the calculator at T"), not a per-step
+  // flag — it is written once and never reconciled against anything. NOTHING
+  // ELSE about onboarding may be written from this form, and no other checklist
+  // item may acquire a flag like it.
+  const onboardingQuery = useOnboardingQuery();
+  // Silent: this write is not something the user asked for, so its failure has
+  // nothing to tell them. See useOnboardingPatch.
+  const { mutate: patchOnboarding } = useOnboardingPatch({ silent: true });
+  // WRITE-ONCE, AND THE SERVER VALUE ALONE CANNOT ENFORCE IT. The recorded
+  // timestamp only reaches `onboardingQuery.data` once the PATCH has round-
+  // tripped; two calculations inside that window would both read it as absent
+  // and both write. This ref closes on the very render that fires the request,
+  // so it covers the in-flight gap that the server value cannot. It is
+  // deliberately not persisted anywhere — on a later mount the stored timestamp
+  // is the guard, which is what keeps the request from ever repeating.
+  const calculatorUseRecorded = useRef(false);
+
   const values = watch();
   const direction = values.direction;
   const mode = values.mode;
@@ -166,6 +189,28 @@ export function CalculatorForm() {
       error = e instanceof Error ? e.message : 'Calculation error';
     }
   }
+
+  // A SUCCESSFUL CALCULATION IS `result !== null` — a non-throwing
+  // `calculateTrade` behind the gate above. That is the same condition
+  // `CalculatorResults` renders numbers on, and it is the only notion of
+  // success this form has: there is no submit, the form computes on render, and
+  // a throw leaves `result` null with `error` set.
+  const hasResult = result !== null;
+  const onboarding = onboardingQuery.data;
+
+  // FIRE AND FORGET. In an effect, so it is off the calculation's path
+  // entirely: the numbers above are already rendered by the time this
+  // dispatches, and the mutation is silent, so a failed write shows the user
+  // nothing — checklist item 2 just stays unticked until the next calculation.
+  useEffect(() => {
+    if (!hasResult || calculatorUseRecorded.current) return;
+    // Until the preference read lands we cannot tell a first use from a
+    // thousandth, and writing on a guess would move an existing timestamp.
+    // Absent, not null, when unset — test with `undefined`.
+    if (!onboarding || onboarding.calculatorFirstUsedAt !== undefined) return;
+    calculatorUseRecorded.current = true;
+    patchOnboarding({ calculatorFirstUsedAt: new Date().toISOString() });
+  }, [hasResult, onboarding, patchOnboarding]);
 
   // An account-sourced figure ⇒ the account's currency; else USD (D9). No longer
   // gated on the percent basis: the dollar basis can now source an account too,

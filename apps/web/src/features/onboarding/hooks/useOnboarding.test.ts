@@ -2,13 +2,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
+import { toast } from 'sonner';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Account, OnboardingPatch, OnboardingState, PositionListItem } from '@tradr/shared';
 
 import { api } from '@/lib/api';
 
-import { ONBOARDING_QUERY_KEY, useOnboarding } from './useOnboarding';
+import { ONBOARDING_QUERY_KEY, useOnboarding, useOnboardingPatch } from './useOnboarding';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -473,5 +474,41 @@ describe('useOnboarding — no client-side progress', () => {
     // checklist from the user's real data (R4.4). Any cached copy here would be
     // a second source of truth that can only ever disagree with it.
     expect(setItem).not.toHaveBeenCalled();
+  });
+});
+
+// --- the silent write path ---------------------------------------------------
+
+describe('useOnboardingPatch — silent', () => {
+  it('toasts a failure by default, and says nothing at all when silent', async () => {
+    vi.spyOn(api, 'patch').mockRejectedValue(new Error('boom'));
+    const errorToast = vi.mocked(toast.error);
+    errorToast.mockClear();
+
+    // The ordinary write is a direct response to a click, so its failure is
+    // worth saying out loud.
+    const loud = renderHook(() => useOnboardingPatch(), {
+      wrapper: makeWrapper(makeQueryClient()),
+    });
+    await act(async () => {
+      loud.result.current.mutate({ status: 'done' });
+    });
+    await waitFor(() => expect(loud.result.current.isError).toBe(true));
+    expect(errorToast).toHaveBeenCalledTimes(1);
+
+    errorToast.mockClear();
+
+    // The calculator's `calculatorFirstUsedAt` write is fire-and-forget behind
+    // a calculation the user came for, and a toast about a checklist tick they
+    // never asked for is noise. `silent` cannot be passed per-call — TanStack
+    // runs the mutation-level onError whatever `mutate` is handed.
+    const silent = renderHook(() => useOnboardingPatch({ silent: true }), {
+      wrapper: makeWrapper(makeQueryClient()),
+    });
+    await act(async () => {
+      silent.result.current.mutate({ calculatorFirstUsedAt: '2026-08-07T10:00:00.000Z' });
+    });
+    await waitFor(() => expect(silent.result.current.isError).toBe(true));
+    expect(errorToast).not.toHaveBeenCalled();
   });
 });

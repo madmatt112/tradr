@@ -105,8 +105,17 @@ export function useOnboardingQuery() {
  * directly — the UI settles without a round trip. The invalidate that follows
  * is not redundant: the response is only a snapshot of this request, and a
  * concurrent write from another tab can land immediately after it.
+ *
+ * `silent` suppresses the error toast, for the ONE write the user did not ask
+ * for: the calculator recording `calculatorFirstUsedAt` behind a calculation
+ * the user came for. Every other write is a direct response to a click, so its
+ * failure is worth a toast; that one is fire-and-forget, and a toast on a
+ * request the user never initiated is noise about a checklist tick. It cannot
+ * be passed per-call — TanStack runs the mutation-level `onError` regardless of
+ * what `mutate` is handed — so it belongs here.
  */
-export function useOnboardingPatch() {
+export function useOnboardingPatch(options?: { silent?: boolean }) {
+  const silent = options?.silent ?? false;
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (patch: OnboardingPatch) =>
@@ -116,6 +125,7 @@ export function useOnboardingPatch() {
       queryClient.invalidateQueries({ queryKey: ONBOARDING_QUERY_KEY });
     },
     onError: (err: unknown) => {
+      if (silent) return;
       // No success toast: the visible change — the checklist closing, the coach
       // mark going away — is the confirmation. A failure has no such tell.
       toast.error(getErrorMessage(err, 'Failed to save your onboarding preference'));

@@ -39,6 +39,25 @@ vi.mock('@/features/calculator/hooks/useBuyingPowerBasis', () => ({
   useBuyingPowerBasisQuery: () => state.buyingPowerBasis.current,
 }));
 
+// The onboarding preference read + the fire-and-forget write that records
+// `calculatorFirstUsedAt` (user-onboarding R4.2's single named exception).
+// Mocked at the hook boundary so the form's own network assertions elsewhere
+// stay about the form, and so the stored timestamp is settable per test.
+const onboarding = vi.hoisted(() => ({
+  query: { current: { data: undefined } as Record<string, unknown> },
+  patch: vi.fn(),
+  /** The options the form constructed the mutation with, last render. */
+  options: { current: undefined as { silent?: boolean } | undefined },
+}));
+
+vi.mock('@/features/onboarding/hooks/useOnboarding', () => ({
+  useOnboardingQuery: () => onboarding.query.current,
+  useOnboardingPatch: (options?: { silent?: boolean }) => {
+    onboarding.options.current = options;
+    return { mutate: onboarding.patch };
+  },
+}));
+
 // Stub the shadcn Select primitive as a native <select> so options are clickable
 // and onValueChange fires in jsdom (Radix's pointer-capture machinery is
 // browser-only). SelectValue → a placeholder <option> (so the loading/error
@@ -273,6 +292,12 @@ beforeEach(() => {
   setAccounts({ data: [] });
   state.brokerages.current = { data: [], isLoading: false, isError: false };
   state.buyingPowerBasis.current = { data: { basis: 'cash' } };
+  // A landed preference with the timestamp ABSENT — the state every test that
+  // reaches a result would fire the write from, so the write is live in all of
+  // them rather than only where it is the subject.
+  onboarding.query.current = { data: { status: 'pending', coachMarksSeen: [] } };
+  onboarding.patch.mockClear();
+  onboarding.options.current = undefined;
 });
 
 afterEach(() => {
@@ -1002,9 +1027,119 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(screen.getByText('500')).toBeTruthy();
     expect(screen.queryByText('375')).toBeNull();
 
-    // …and NOT written back. No request of any kind left the form, and the
-    // account's stored rule is untouched.
+    // …and NOT written back. Nothing reached the network, and the account's
+    // stored rule is untouched. The one write this form does make — the
+    // onboarding `calculatorFirstUsedAt` timestamp — is mocked at its hook and
+    // is asserted here to carry nothing account-shaped.
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(RULED_ACCOUNT.defaultRiskPercent).toBe('1.50');
+    for (const [body] of onboarding.patch.mock.calls) {
+      expect(Object.keys(body as object)).toEqual(['calculatorFirstUsedAt']);
+    }
+  });
+});
+
+describe('CalculatorForm — first calculator use (user-onboarding R4.2 exception)', () => {
+  const dollarCalc = { 'Entry price': '50', 'Stop loss': '48', 'Dollar risk': '1000' };
+
+  it('records calculatorFirstUsedAt on the first successful calculation, silently', async () => {
+    const user = userEvent.setup();
+    await mount();
+    expect(onboarding.patch).not.toHaveBeenCalled();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).toHaveBeenCalledTimes(1);
+    const [body] = onboarding.patch.mock.calls[0] as [Record<string, string>];
+    // ONLY this key. The other three checklist items are derived from the
+    // user's real rows and must never acquire a flag alongside it.
+    expect(Object.keys(body)).toEqual(['calculatorFirstUsedAt']);
+    expect(new Date(body.calculatorFirstUsedAt).toISOString()).toBe(body.calculatorFirstUsedAt);
+    // Fire-and-forget: a failed write has nothing to tell a user who asked for
+    // a calculation, not for a checklist tick.
+    expect(onboarding.options.current).toEqual({ silent: true });
+  });
+
+  it('writes ONCE across repeated calculations, before the first write has landed', async () => {
+    // THE RACE THE SERVER VALUE CANNOT CLOSE. The recorded timestamp only
+    // reaches the preference read after the PATCH round-trips, so the fixture
+    // here deliberately never gains it — this is the whole in-flight window.
+    // A guard that only read the server value would fire again inside it.
+    const user = userEvent.setup();
+    await mount();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    // Recalculate: a different size, same run of the form.
+    fill('Dollar risk', '1200');
+    fireEvent.blur(input('Dollar risk'));
+    expect(await screen.findByText('600', undefined, { timeout: 2000 })).toBeTruthy();
+
+    // Then knock the form back out of a result and into one again, which is the
+    // ONLY thing that re-runs the recording effect at all — a re-render alone
+    // does not. Emptying the active-basis field closes the completeness gate.
+    fill('Dollar risk', '');
+    fireEvent.blur(input('Dollar risk'));
+    expect(
+      await screen.findByText('Enter trade parameters to see results', undefined, {
+        timeout: 2000,
+      }),
+    ).toBeTruthy();
+
+    fill('Dollar risk', '1000');
+    fireEvent.blur(input('Dollar risk'));
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('issues no request when the timestamp is already recorded', async () => {
+    onboarding.query.current = {
+      data: {
+        status: 'pending',
+        coachMarksSeen: [],
+        calculatorFirstUsedAt: '2026-08-01T10:00:00.000Z',
+      },
+    };
+    const user = userEvent.setup();
+    await mount();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).not.toHaveBeenCalled();
+  });
+
+  it('issues no request while the preference read is still in flight', async () => {
+    // Guessing here would move an existing timestamp: until the read lands we
+    // cannot tell a first use from a thousandth.
+    onboarding.query.current = { data: undefined };
+    const user = userEvent.setup();
+    await mount();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).not.toHaveBeenCalled();
+  });
+
+  it('issues no request for a calculation that never succeeded', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    // Passes the schema, then throws inside calculateTrade — an error on screen
+    // and no result, which is not a use of the calculator to size a trade.
+    await results(user, 'Dollar', {
+      'Entry price': '50',
+      'Stop loss': '50',
+      'Dollar risk': '1000',
+    });
+    expect(
+      await screen.findByText(/Stop loss cannot equal entry price/i, undefined, { timeout: 2000 }),
+    ).toBeTruthy();
+
+    expect(onboarding.patch).not.toHaveBeenCalled();
   });
 });
