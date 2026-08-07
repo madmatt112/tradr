@@ -76,15 +76,16 @@ describe('startTour', () => {
   });
 
   it('shows progress and leaves the highlighted control interactive', () => {
-    const onTargetClick = vi.fn();
-    document.querySelector('#one')?.addEventListener('click', onTargetClick);
-
     startTour(TWO_STEPS);
 
-    // R5.5 — `disableActiveInteraction: false`: the control under the spotlight
-    // still receives the user's click.
-    document.querySelector<HTMLButtonElement>('#one')?.click();
-    expect(onTargetClick).toHaveBeenCalledOnce();
+    // R5.5 — `disableActiveInteraction: false`. driver.js blocks the spotlit
+    // control by tagging it `driver-no-interaction` (a `pointer-events: none`
+    // rule); its absence on the highlighted element is the observable proof the
+    // control is still clickable. Asserting a jsdom `.click()` would not be —
+    // jsdom dispatches regardless of CSS.
+    const highlighted = document.querySelector('#one');
+    expect(highlighted?.classList.contains('driver-active-element')).toBe(true);
+    expect(highlighted?.classList.contains('driver-no-interaction')).toBe(false);
 
     // The non-motion carrier of step state.
     expect(document.querySelector('.driver-popover-progress-text')?.textContent).toBe('1 of 2');
