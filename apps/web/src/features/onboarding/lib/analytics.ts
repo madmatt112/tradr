@@ -31,6 +31,7 @@
 
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 import { eventBus } from '@/stores/event-bus.store';
+import type { AccountChangeReason, PositionChangeReason } from '@/stores/events.types';
 
 import type { Checklist, ChecklistItemId } from './derive-checklist';
 import type { TourExitReason } from './tour-engine';
@@ -87,15 +88,81 @@ export function emitOnboardingEvent(event: OnboardingEvent): void {
 let reportedDone: Set<ChecklistItemId> | null = null;
 
 /**
+ * The items whose completing write this tab actually WATCHED land.
+ *
+ * The baseline below cannot, on its own, tell an item the user completed a
+ * minute ago on another route from one they completed last month: both are
+ * simply `done` in the first checklist the dashboard derives, and the
+ * baseline-only rule throws both away. That silently drops real first-time
+ * completions — for the user who created their account on `/accounts` and only
+ * then opened the dashboard, item 1 never happened as far as the funnel is
+ * concerned, which biases exactly the measurement Requirement 8 exists to
+ * produce.
+ *
+ * THE SERVER CANNOT SETTLE IT, AND DELIBERATELY SO. Per-item completion is
+ * derived, never stored (R4.2) — `packages/shared/src/schemas/onboarding.ts`
+ * says in as many words that adding `accountCreated` or `positionLogged` to the
+ * preference is the bug its comment exists to stop, and the checklist reads
+ * counts rather than timestamps precisely so completion cannot disagree with
+ * reality. So there is no server-side "already complete when this session
+ * began" to prefer, and inventing one would trade a measurement bias for a
+ * second source of truth about the user's own data.
+ *
+ * What there IS, server-confirmed, is the write itself. `accounts:` and
+ * `positions:cache-invalidate` are published only once the server accepted a
+ * mutation — the same signals `useWalkthrough` already trusts to advance an
+ * action step (R5.5). An item named here was completed during this session
+ * whatever the first checklist we happen to see says, so the first observation
+ * reports it instead of swallowing it.
+ *
+ * Nothing seeded can fire through this. The sample-data seeder publishes
+ * `demo-seeded`, never `created`, and `useOnboarding` excludes its rows from
+ * every count (R4.8) — an armed item that never becomes `done` is never
+ * emitted.
+ *
+ * The honest limit: a completion in a tab that reloaded before the checklist
+ * was ever derived leaves no trace, and recovering it would mean writing
+ * progress to the client, which R4.2/R4.4 rule out for the reason that a stored
+ * copy could disagree with the counts.
+ */
+const completedThisSession = new Set<ChecklistItemId>();
+
+/**
+ * Arm a completion the event bus cannot announce.
+ *
+ * Item 2 is the one with no `cache-invalidate` behind it: the calculator is
+ * stateless, so its only data trace is the `calculatorFirstUsedAt` timestamp,
+ * and writing that timestamp IS the event. Called from `useOnboardingPatch`,
+ * for a patch that carried it — which the calculator sends exactly once, when
+ * the stored value is absent.
+ */
+export function armChecklistCompletion(item: ChecklistItemId): void {
+  completedThisSession.add(item);
+}
+
+function armFromAccountChange({ reason }: { reason: AccountChangeReason }): void {
+  if (reason === 'created') completedThisSession.add('account');
+}
+
+function armFromPositionChange({ reason }: { reason: PositionChangeReason }): void {
+  if (reason === 'created') completedThisSession.add('position');
+  else if (reason === 'closed') completedThisSession.add('close');
+}
+
+/**
  * Emit an event for each item that has just BECOME complete, and nothing for the
  * items that already were.
  *
  * Completion is derived from counts rather than stored (R4.2), so "is it done?"
  * is answerable on every render and the naive effect fires forever. The first
- * checklist observed therefore only establishes the baseline: a user who signed
- * up last month and reloads the dashboard has four complete items and has just
+ * checklist observed therefore establishes the baseline: a user who signed up
+ * last month and reloads the dashboard has four complete items and has just
  * completed none of them. From then on, an id present now and absent from the
  * baseline is a real transition.
+ *
+ * The one thing the first checklist does NOT baseline away is an item this
+ * session watched the user complete — see `completedThisSession` above for why
+ * the two cases have to be told apart, and why the bus is what tells them.
  *
  * `null` and `undefined` are not observations. `undefined` is "not known yet"
  * and `null` is "this user has no checklist" (dismissed or retired) — neither is
@@ -114,13 +181,22 @@ export function reportChecklistCompletions(checklist: Checklist | null | undefin
   // Adopt the new baseline BEFORE emitting, so the effect running in the second
   // mounted copy on the same commit finds nothing left to report.
   reportedDone = done;
-  if (baseline === null) return;
+
+  // On the first observation the baseline has no opinion, so the armed set is
+  // the only evidence of a transition. Consumed here: from the next observation
+  // on, the baseline itself tells the same story and reading both could double
+  // an event.
+  const isNew =
+    baseline === null
+      ? (id: ChecklistItemId) => completedThisSession.has(id)
+      : (id: ChecklistItemId) => !baseline.has(id);
 
   for (const id of done) {
-    if (!baseline.has(id)) {
+    if (isNew(id)) {
       emitOnboardingEvent({ name: 'onboarding_checklist_item_completed', item: id });
     }
   }
+  if (baseline === null) completedThisSession.clear();
 }
 
 /**
@@ -136,18 +212,25 @@ export function reportChecklistCompletions(checklist: Checklist | null | undefin
  */
 function forgetBaselineOnLogout(): void {
   reportedDone = null;
+  // The armed set belongs to the departing user too. Left behind, it would let
+  // the NEXT user's first checklist emit their already-done items as fresh
+  // completions — the very attribution bug the baseline reset exists to close.
+  completedThisSession.clear();
 }
 
-function armLogoutReset(): void {
-  // A named handler, not an inline arrow: the bus dedupes by function identity,
-  // so re-arming with a fresh closure would stack a second listener each time.
+function armBusListeners(): void {
+  // Named handlers, not inline arrows: the bus dedupes by function identity, so
+  // re-arming with a fresh closure would stack a second listener each time.
   eventBus.subscribe('auth:logout', forgetBaselineOnLogout);
+  eventBus.subscribe('accounts:cache-invalidate', armFromAccountChange);
+  eventBus.subscribe('positions:cache-invalidate', armFromPositionChange);
 }
 
-armLogoutReset();
+armBusListeners();
 
-/** Test seam: drop the completion baseline and restore the import-time listener. */
+/** Test seam: drop the completion state and restore the import-time listeners. */
 export function __resetOnboardingAnalyticsForTests(): void {
   reportedDone = null;
-  armLogoutReset();
+  completedThisSession.clear();
+  armBusListeners();
 }

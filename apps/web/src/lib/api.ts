@@ -1,3 +1,5 @@
+import { eventBus } from '@/stores/event-bus.store';
+
 declare global {
   interface Window {
     __TRADR_CONFIG__?: {
@@ -49,6 +51,54 @@ export function setIsLoggingOut(value: boolean) {
 let router: any = null;
 let redirecting = false;
 
+// Whether this tab currently holds an authenticated session. `useAuth` is the
+// only thing that knows, so it says so.
+//
+// IT IS WHAT TELLS A SESSION ENDING FROM AN ORDINARY 401. The interception
+// below fires on any 401 that is not an explicit logout, and plenty of those
+// end nothing: a logged-out visitor landing on /login runs the me-query and
+// gets a 401 because there is no session, not because one just stopped. Firing
+// `auth:logout` there would be noise, and — worse — burning the one-shot latch
+// on it is what would leave the REAL expiry that follows with nothing to
+// announce. So the announcement is gated on there having been something to end.
+let hasSession = false;
+
+/**
+ * Record that a session has begun (or ended, on the explicit logout path).
+ *
+ * Starting one also re-arms the one-shot expiry interception. `redirecting`
+ * exists to coalesce the burst of 401s a SINGLE termination produces across
+ * every in-flight request — not to disable the interception for the rest of the
+ * page's life. Without this reset, the logged-out me-query on a fresh /login
+ * load consumes the latch and the session the user then logs into has no expiry
+ * handling at all.
+ */
+export function setHasSession(value: boolean) {
+  hasSession = value;
+  if (value) redirecting = false;
+}
+
+/**
+ * Announce, exactly once, that the session ended without the user asking.
+ *
+ * The query cache is only half of what a session owns; module-scoped client
+ * state is the other half, and it survives `queryClient.clear()`. The guided
+ * walkthrough keeps its session and its driver.js overlay next to its module,
+ * and the onboarding funnel keeps its completion baseline next to its own, so
+ * without this the next user to log in on this tab inherits both — the last
+ * user's tour, and their already-done checklist items replayed as fresh
+ * completions attributed to the wrong person.
+ *
+ * `useAuth` publishes the same event on the explicit logout path and this one
+ * cannot double it: that path sets `isLoggingOut`, so its 401s never reach the
+ * interception, and `hasSession` is cleared here before the event goes out.
+ */
+export function announceSessionExpired(): void {
+  if (!hasSession) return;
+  hasSession = false;
+  eventBus.publish('auth:logout', {});
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function setRouter(r: any) {
   router = r;
@@ -84,6 +134,9 @@ async function request<T>(
 
   if (response.status === 401 && !isLoggingOut && !redirecting) {
     redirecting = true;
+    // Before the navigation, so each owner tears its state down while the page
+    // it belongs to is still on screen.
+    announceSessionExpired();
     if (router) {
       router.navigate({ to: '/login', search: { expired: 'true' }, replace: true });
     } else {

@@ -48,7 +48,17 @@ const engine = {
     handlers.onStepChange?.(0, steps[0]);
   }),
   advance: vi.fn(),
-  stop: vi.fn(),
+  // FAITHFUL TO `lib/tour-engine.stop()`, DELIBERATELY. The real one fires
+  // `onExit` exactly once for the tour it tears down, and no tour at all is a
+  // no-op. A double that merely records the call cannot see an ordering bug
+  // between the teardown and the exit handler that reads the live session — and
+  // that is exactly the bug the logout path had.
+  stop: vi.fn(() => {
+    const session = started;
+    if (!session) return;
+    started = null;
+    session.handlers.onExit?.('dismissed');
+  }),
   isActive: vi.fn(() => started !== null),
 };
 vi.mock('../lib/tour-engine', () => engine);
@@ -463,6 +473,42 @@ describe('useWalkthrough — logging out ends the session', () => {
     });
 
     expect(engine.advance).not.toHaveBeenCalled();
+  });
+
+  // The engine here is the double, but its `stop()` drives `onExit` the way the
+  // real one does, so this exercises the ordering rather than asserting around
+  // it. Tearing the session down before the engine reported `stepIndex: -1` of
+  // a `stepCount: 0` tour — an abandonment at no step, in a walkthrough of
+  // nothing — for every logout mid-tour.
+  it('reports the step the user was actually on when they logged out (R8.1)', async () => {
+    const result = await start('account');
+    await waitFor(() => expect(result.current.isRunning).toBe(true));
+    highlight(2);
+
+    await act(async () => {
+      eventBus.publish('auth:logout', {});
+    });
+
+    expect(eventsNamed('onboarding_walkthrough_abandoned')).toEqual([
+      {
+        item: 'account',
+        stepIndex: 2,
+        stepCount: WALKTHROUGH_STEPS.account.length,
+        reason: 'dismissed',
+      },
+    ]);
+    // And the session is still gone afterwards — the event is read on the way
+    // out, not kept.
+    expect(result.current.stepIndex).toBe(-1);
+    expect(result.current.isRunning).toBe(false);
+  });
+
+  it('reports nothing when the runtime never loaded and no tour was running', async () => {
+    act(() => {
+      eventBus.publish('auth:logout', {});
+    });
+
+    expect(captureClientEvent).not.toHaveBeenCalled();
   });
 
   it('clears an unavailable runtime with no tour running (R5.8)', () => {

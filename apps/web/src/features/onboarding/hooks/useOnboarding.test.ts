@@ -753,6 +753,31 @@ describe('useOnboarding — checklist completion events (R8.2)', () => {
     expect(captureClientEvent).not.toHaveBeenCalled();
   });
 
+  // The first checklist a tab derives is the baseline for the items the user
+  // arrived with — but NOT for one they completed on the way here. The
+  // calculator is the case with no cache-invalidate behind it: it is stateless,
+  // so writing `calculatorFirstUsedAt` is the only evidence item 2 was just
+  // done. Without that signal, sizing a trade on /calculator and only then
+  // opening the dashboard reported nothing at all.
+  it('reports a calculator use that happened before the checklist was first derived', async () => {
+    const qc = makeQueryClient();
+    mockServer({ accounts: [], positions: [], preference: FRESH });
+
+    const patcher = renderHook(() => useOnboardingPatch({ silent: true }), {
+      wrapper: makeWrapper(qc),
+    });
+    await act(async () => {
+      patcher.result.current.mutate({ calculatorFirstUsedAt: '2026-08-07T10:00:00.000Z' });
+    });
+    await waitFor(() => expect(patcher.result.current.isSuccess).toBe(true));
+
+    // Now the dashboard opens for the first time, and item 2 is already done.
+    const { result } = renderThreeCopies(qc);
+    await waitFor(() => expect(result.current[0].checklist?.items[1].done).toBe(true));
+
+    expect(completedItems()).toEqual(['calculator']);
+  });
+
   it('carries the item id and nothing else (R8.5)', async () => {
     const qc = makeQueryClient();
     const move = mockMovableServer({ accounts: [], positions: [] });

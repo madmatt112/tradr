@@ -220,11 +220,13 @@ describe('event payloads carry no trade or monetary data (R8.5)', () => {
 
 describe('reportChecklistCompletions', () => {
   let report: AnalyticsModule['reportChecklistCompletions'];
+  let arm: AnalyticsModule['armChecklistCompletion'];
   let reset: AnalyticsModule['__resetOnboardingAnalyticsForTests'];
 
   beforeEach(async () => {
     const mod = await load({ configured: true });
     report = mod.reportChecklistCompletions;
+    arm = mod.armChecklistCompletion;
     reset = mod.__resetOnboardingAnalyticsForTests;
   });
 
@@ -304,6 +306,92 @@ describe('reportChecklistCompletions', () => {
 
     report(aChecklist('account', 'position', 'close'));
     expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'close' }]]);
+  });
+
+  // --- first-visit completions (R8.2) ---------------------------------------
+  //
+  // "The first checklist is the baseline" is right for the items a user arrived
+  // with and wrong for the ones they finished on the way here. The bus is what
+  // separates them: a cache-invalidate is published only once the server took
+  // the write, so an item it names was completed during THIS session whatever
+  // the first checklist says.
+
+  it('emits an item completed on another route before the dashboard was ever opened', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    // Created the account on /accounts, then opened the dashboard: the FIRST
+    // checklist this tab derives already has item 1 done.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+    report(aChecklist('account'));
+
+    expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'account' }]]);
+  });
+
+  it('still baselines away the items it did not watch the user complete', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    eventBus.publish('positions:cache-invalidate', { reason: 'created' });
+    report(aChecklist('account', 'calculator', 'position'));
+
+    // The account and the calculator predate this session; only the position
+    // was logged in it.
+    expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'position' }]]);
+  });
+
+  it('reports a close that happened before the checklist was first derived', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    eventBus.publish('positions:cache-invalidate', { reason: 'closed' });
+    report(aChecklist('account', 'position', 'close'));
+
+    expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'close' }]]);
+  });
+
+  it('does not repeat an armed completion on the renders that follow', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    eventBus.publish('positions:cache-invalidate', { reason: 'created' });
+    report(aChecklist('position'));
+    captureSpy.mockClear();
+
+    report(aChecklist('position'));
+    report(aChecklist('position'));
+
+    expect(captureSpy).not.toHaveBeenCalled();
+  });
+
+  it('arms nothing on an event that completes no item', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    // Sample data is seeded under its own reason and its rows are excluded from
+    // every count (R4.8), so it can arm nothing and complete nothing.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'demo-seeded' });
+    eventBus.publish('positions:cache-invalidate', { reason: 'updated' });
+    report(aChecklist('account', 'position'));
+
+    expect(captureSpy).not.toHaveBeenCalled();
+  });
+
+  it('emits the calculator item the patch armed by hand', () => {
+    // Item 2 has no cache-invalidate behind it — the calculator is stateless, so
+    // writing `calculatorFirstUsedAt` is the only signal there is.
+    arm('calculator');
+    report(aChecklist('calculator'));
+
+    expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'calculator' }]]);
+  });
+
+  it('drops the armed completions along with the baseline when the session ends', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+    eventBus.publish('auth:logout', {});
+
+    // The next user's account is one they arrived with, not the departing
+    // user's event finding a new owner.
+    report(aChecklist('account'));
+
+    expect(captureSpy).not.toHaveBeenCalled();
   });
 
   it('re-arms the logout listener after the test reset', async () => {

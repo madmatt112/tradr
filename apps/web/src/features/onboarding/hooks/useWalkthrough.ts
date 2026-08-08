@@ -143,9 +143,34 @@ function endSession(): void {
  * tour is running. The bus stores handlers in a `Set`, so re-arming is a no-op.
  */
 function teardownOnLogout(): void {
-  // The engine is only reachable once its chunk has loaded, and a tour can only
-  // be running if it has. `endSession()` covers the case where it never did.
-  if (enginePromise) void enginePromise.then(([engine]) => engine.stop()).catch(() => {});
+  // THE ENGINE GOES DOWN BEFORE THE SESSION DOES, AND THE ORDER IS THE POINT
+  // (R8.1). `engine.stop()` fires `onExit`, and `onExit` builds the abandonment
+  // event out of the LIVE session — the step the user was on, and the size of
+  // the set it was a step of. Clearing the session first would hand the funnel
+  // `stepIndex: -1` in a tour of `stepCount: 0` for every user who ever logs
+  // out mid-walkthrough: "abandoned at no step, of nothing", which is precisely
+  // the measurement Requirement 8 exists to produce.
+  //
+  // A logout IS a place a user stopped, so it is reported rather than
+  // suppressed. It arrives as `dismissed` — the user left — which is what every
+  // other user-initiated exit already reports.
+  //
+  // `onExit` runs `endSession()` itself, so the teardown below is for the tour
+  // that was NOT running: a session whose runtime never loaded, and a stale
+  // `isUnavailable` belonging to the departing user. The engine is only
+  // reachable once its chunk has loaded, and a tour can only be running if it
+  // has, so the deferred branch is also the only one that can have a tour.
+  if (enginePromise) {
+    void enginePromise
+      .then(([engine]) => engine.stop())
+      .catch(() => {})
+      .finally(finishLogoutTeardown);
+    return;
+  }
+  finishLogoutTeardown();
+}
+
+function finishLogoutTeardown(): void {
   endSession();
   useWalkthroughStore.setState({ ...IDLE, isUnavailable: false });
 }

@@ -4,7 +4,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api } from '@/lib/api';
+import { api, setHasSession } from '@/lib/api';
 import { eventBus } from '@/stores/event-bus.store';
 
 import { useAuth } from './useAuth';
@@ -17,6 +17,7 @@ vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate }) }));
 vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn() },
   setIsLoggingOut: vi.fn(),
+  setHasSession: vi.fn(),
 }));
 
 function makeClient() {
@@ -89,5 +90,18 @@ describe('useAuth — logging out announces the end of the session', () => {
     await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
 
     expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  // `lib/api` intercepts 401s but cannot tell one that ended a session from the
+  // one a logged-out visitor's me-query returns. This hook is what tells it, and
+  // it is also what stops the explicit logout below announcing twice.
+  it('tells the api client when a session starts and when it ends', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper: makeWrapper(makeClient()) });
+    await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
+    expect(setHasSession).toHaveBeenCalledWith(true);
+
+    result.current.logout.mutate();
+
+    await waitFor(() => expect(setHasSession).toHaveBeenCalledWith(false));
   });
 });

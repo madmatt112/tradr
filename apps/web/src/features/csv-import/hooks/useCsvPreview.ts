@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 
 import type { CsvPreviewRequest, CsvPreviewResponse } from '@tradr/shared';
 
-import { isLoggingOut, resolveApiUrl, setIsLoggingOut } from '@/lib/api';
+import { announceSessionExpired, isLoggingOut, resolveApiUrl, setIsLoggingOut } from '@/lib/api';
 
 export interface CsvPreviewArgs {
   file: File;
@@ -31,6 +31,12 @@ async function postPreview({ file, request }: CsvPreviewArgs): Promise<CsvPrevie
 
   if (response.status === 401 && !isLoggingOut) {
     setIsLoggingOut(true);
+    // The second path that ends a session, and it has to announce it for the
+    // same reason `lib/api` does: module-scoped state belonging to the departing
+    // user outlives the query cache. A full-document navigation would take it
+    // with it eventually, but the teardown runs now rather than whenever the
+    // browser gets round to committing the navigation.
+    announceSessionExpired();
     window.location.href = '/login?expired=true';
     const err = new Error('Unauthorized') as Error & { status?: number };
     err.status = 401;

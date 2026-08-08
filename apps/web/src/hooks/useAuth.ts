@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
+import { useEffect } from 'react';
 
 import type { User } from '@tradr/shared';
 
-import { api, setIsLoggingOut } from '@/lib/api';
+import { api, setHasSession, setIsLoggingOut } from '@/lib/api';
 import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
@@ -16,6 +17,14 @@ export function useAuth() {
     queryFn: () => api.get<User>('/auth/me'),
     retry: false,
   });
+
+  // `lib/api` intercepts 401s, and it cannot tell one that ENDED a session from
+  // the one a logged-out visitor's me-query returns on the login page. This hook
+  // is the only thing that knows, so it says. Covers logging in too: the login
+  // mutation seeds this very query, so `user` becomes truthy on the same commit.
+  useEffect(() => {
+    if (user) setHasSession(true);
+  }, [user]);
 
   const loginMutation = useMutation({
     mutationFn: (credentials: { email: string; password: string }) =>
@@ -32,6 +41,9 @@ export function useAuth() {
     },
     onSettled: () => {
       setIsLoggingOut(false);
+      // The session is over on this path too, so a later 401 must not be read
+      // as a second one ending — this one already published below.
+      setHasSession(false);
       try {
         localStorage.removeItem(DRAWER_STORAGE_KEY);
       } catch {

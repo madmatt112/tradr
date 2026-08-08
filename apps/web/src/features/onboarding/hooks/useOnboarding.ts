@@ -63,7 +63,7 @@ import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { api } from '@/lib/api';
 
-import { reportChecklistCompletions } from '../lib/analytics';
+import { armChecklistCompletion, reportChecklistCompletions } from '../lib/analytics';
 import { deriveChecklist, type Checklist } from '../lib/derive-checklist';
 
 /** [feature, scope, id] — the same shape as the other /users/me/* preferences. */
@@ -121,7 +121,13 @@ export function useOnboardingPatch(options?: { silent?: boolean }) {
   return useMutation({
     mutationFn: (patch: OnboardingPatch) =>
       api.patch<OnboardingState>('/users/me/onboarding', patch),
-    onSuccess: (state) => {
+    onSuccess: (state, sent) => {
+      // R8.2 — checklist item 2 is the one with no `cache-invalidate` behind it
+      // (the calculator is stateless), so this write is the only signal that it
+      // was just completed. Without it, a user who sizes a trade on /calculator
+      // before ever opening the dashboard has that completion baselined away.
+      // Sent exactly once, when the stored timestamp is absent.
+      if (sent.calculatorFirstUsedAt !== undefined) armChecklistCompletion('calculator');
       queryClient.setQueryData(ONBOARDING_QUERY_KEY, state);
       queryClient.invalidateQueries({ queryKey: ONBOARDING_QUERY_KEY });
     },
