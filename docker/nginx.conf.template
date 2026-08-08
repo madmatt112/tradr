@@ -24,6 +24,20 @@ server {
         add_header Cache-Control "no-store" always;
     }
 
+    # SPA build identity for Prometheus (observability REQ-7.5). Unlike
+    # /config.js, the file is EXTENSIONLESS, so it needs both halves of this
+    # block: without the exact-match location `try_files $uri $uri/ /index.html`
+    # below would swallow it, and without default_type it would be served as
+    # application/octet-stream. Written by 10-runtime-config.sh only when
+    # METRICS_ENABLED=true — when it is absent this exact-match location
+    # declares no try_files and no error_page, so nginx returns its own 404
+    # rather than the SPA shell. No ${...} placeholder here, so
+    # NGINX_ENVSUBST_FILTER (Dockerfile.web) needs no change.
+    location = /metrics {
+        default_type "text/plain; version=0.0.4";
+        add_header Cache-Control "no-store" always;
+    }
+
     # SSE streaming: matches both advisor stream routes
     # (/api/advisor/conversations/<id|new>/messages/stream). [^/]+ matches the
     # conversation :id and the literal `new`. Response buffering is disabled via

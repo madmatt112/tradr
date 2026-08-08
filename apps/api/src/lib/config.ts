@@ -341,6 +341,24 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.string().url().default('https://www.sec.gov/files/company_tickers_exchange.json'),
   ),
+  // ─── Prometheus metrics exposition (REQ-1) ───────────────────────────────
+  // Default OFF — the surface is absent, not broken, when unconfigured. The
+  // SKIP_POST_MIGRATIONS / FEATURE_GATING idiom above — NOT z.coerce.boolean(),
+  // which coerces the STRING 'false' to true and would silently arm metrics on
+  // every instance that followed the documented compose default.
+  METRICS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // NOT presence signals — the SMTP_PORT / SMTP_TLS_MODE reasoning recorded on
+  // assertEmailConfigCoherence below: the production compose gives them value
+  // defaults on every instance, so their presence carries no operator intent.
+  // METRICS_ENABLED alone gates the capability, which is why there is no
+  // coherence assert here — one boolean plus two value-defaulted knobs has no
+  // partial state. A malformed port is already a boot error via z.coerce.number().
+  // 9464 collides with neither PORT (3100), WEB_PORT (8080), nor Fly's internal_port.
+  METRICS_PORT: z.coerce.number().default(9464),
+  METRICS_HOST: z.string().default('0.0.0.0'),
 });
 
 /** Where an operator can look up every variable, its default, and its format. */
@@ -441,6 +459,11 @@ export function isStockQuoteConfigured(): boolean {
 /** True when admin-platform feature gating is enabled (REQ-5.1 — default off). */
 export function isFeatureGatingEnabled(): boolean {
   return config.FEATURE_GATING;
+}
+
+/** True when the Prometheus exposition surface is enabled (REQ-1.1). */
+export function isMetricsConfigured(): boolean {
+  return config.METRICS_ENABLED;
 }
 
 /** Returns the platform API key for a provider, or undefined when unconfigured (REQ-10.3). */

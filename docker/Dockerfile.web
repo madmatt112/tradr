@@ -33,6 +33,16 @@ RUN pnpm --filter @tradr/web build
 # ---------------------------------------------------------------------------
 FROM nginx:1.27-alpine AS runner
 
+# Deployed-version string, BAKED at build time (observability REQ-7.6), mirroring
+# Dockerfile.api:64-65. Read by 10-runtime-config.sh for two things: the SPA's
+# corner version badge (config.js `appVersion`) and the tradr_web_build_info
+# labels in /metrics. Stamped by the release workflow; empty in local builds, so
+# `emit` skips appVersion and config.js is unchanged. Deliberately NOT routed
+# through .env (REQ-7.7) — the `api` service reads that same file via env_file:,
+# where a blank APP_VERSION would OVERRIDE its own baked value.
+ARG APP_VERSION=""
+ENV APP_VERSION=${APP_VERSION}
+
 # Restrict envsubst to the two runtime vars; leaves $host/$uri/$proxy_add_x_forwarded_for intact.
 ENV NGINX_ENVSUBST_FILTER="ADVISOR_NGINX_PROXY_TIMEOUT|MAX_UPLOAD_SIZE|CSV_IMPORT_NGINX_PROXY_TIMEOUT"
 

@@ -554,6 +554,150 @@ jobs:
             exit 1
           fi
 
+      # (k) /metrics is ABSENT by default (observability REQ-7.1, REQ-7.5). The
+      # stack booted from the .env that ./docker/quickstart.sh copied from
+      # .env.example, where METRICS_ENABLED=false — so this is the REAL default
+      # path a self-hoster gets, not a contrived one. 10-runtime-config.sh
+      # therefore wrote no /usr/share/nginx/html/metrics, and Task 6's
+      # `location = /metrics` is an exact-match location with no try_files and
+      # no error_page, so nginx answers with its OWN 404. This step is the only
+      # mechanism that fails when the entrypoint's METRICS_ENABLED gate is
+      # dropped (the file would exist => 200) or when the exact-match location
+      # is deleted (the SPA fallback would swallow the path => 200 + index.html).
+      # `curl -fsS` — the form (b)/(j) use — is deliberately NOT used here: it
+      # exits non-zero on a 404 and would red this step on correct behaviour.
+      - name: Assert /metrics absent by default (k)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/metrics")
+          echo "default /metrics -> $code"
+          if [ "$code" != "404" ]; then
+            echo "expected 404 for /metrics with METRICS_ENABLED=false (got $code)"
+            exit 1
+          fi
+
+      # (l) /metrics is PRESENT and a valid exposition when METRICS_ENABLED=true
+      # (observability REQ-7.1, REQ-7.2, REQ-7.3, REQ-7.5). Recreate ONLY the
+      # `web` container with the flag on: a shell env var wins over .env for
+      # compose interpolation, and web has no `env_file:`, so
+      # ${METRICS_ENABLED:-false} in web.environment is the container's only
+      # source for the flag. The merged spec is re-applied, so the CI overlay's
+      # _probe.inc bind-mount and depends_on survive, and a fresh container start
+      # re-runs /docker-entrypoint.d/*.sh — the code path under test.
+      #
+      # --no-deps IS required (verified against compose v2 / Docker 29): the same
+      # shell var also interpolates into the API's `METRICS_ENABLED:` line, so
+      # the api service spec hashes differently and compose recreates it as a
+      # changed dependency — with or without --force-recreate. That restart is
+      # unwaited and unasserted here, so it would be pure churn (and misleading
+      # noise in the failure log dump). --no-deps pins the blast radius to `web`;
+      # postgres/api/sse-stub are already up from the steps above.
+      #
+      # Neither the base web service nor the CI overlay declares a healthcheck,
+      # so `--wait` would return as soon as the container is merely running and
+      # `ps --format '{{.Health}}'` comes back empty (verified: `<no value>`). We
+      # therefore borrow only the SHAPE of the api health-wait above — retry,
+      # sleep, fail on exhaustion — and poll /config.js, written unconditionally
+      # by the same entrypoint script, for readiness. Polling /config.js rather
+      # than /metrics is deliberate: a genuine METRICS_ENABLED-propagation bug
+      # then reports as "404 instead of 200" below instead of as an opaque
+      # readiness timeout. Every curl in the loop is `|| true`-guarded because
+      # the published port is briefly unbound while the container is replaced —
+      # an unguarded curl exits 7/56 there and `set -e` would kill the step
+      # before it ever retried. This step is what fails when the entrypoint's
+      # exposition writer or the nginx `location = /metrics` block regresses.
+      #
+      # The API's own :9464 listener is deliberately NOT smoke-tested here: it
+      # is covered by the metrics integration tests, and asserting it through
+      # compose would require publishing the metrics port — exactly what
+      # REQ-2.5/REQ-8.4 forbid and what the private-bind posture depends on.
+      - name: Assert /metrics served when METRICS_ENABLED=true (l)
+        run: |
+          METRICS_ENABLED=true docker compose -f docker-compose.yml -f docker-compose.ci.yml \
+            up -d --no-deps --force-recreate web
+
+          ready=""
+          for i in $(seq 1 30); do
+            probe=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/config.js" || true)
+            echo "web readiness attempt $i (/config.js): $probe"
+            if [ "$probe" = "200" ]; then ready=1; break; fi
+            sleep 2
+          done
+          if [ -z "$ready" ]; then
+            echo "web did not come back up after --force-recreate"
+            exit 1
+          fi
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/metrics" || true)
+          echo "enabled /metrics -> $code"
+          if [ "$code" != "200" ]; then
+            echo "expected 200 for /metrics with METRICS_ENABLED=true (got $code)"
+            exit 1
+          fi
+
+          body=$(curl -s "http://localhost:${WEB_PORT}/metrics" || true)
+          echo "$body"
+          echo "$body" | grep -q '^# TYPE tradr_web_build_info gauge$' || {
+            echo "exposition is missing its '# TYPE tradr_web_build_info gauge' line"
+            exit 1
+          }
+          echo "$body" | grep -q '^tradr_web_build_info[{]' || {
+            echo "exposition is missing a tradr_web_build_info{...} sample line"
+            exit 1
+          }
+
+          # Prometheus will not scrape a non-text/plain body, and the file is
+          # EXTENSIONLESS — the location's default_type is the only thing
+          # setting this, so it is worth asserting separately from the body.
+          ctype=$(curl -s -o /dev/null -w '%{content_type}' "http://localhost:${WEB_PORT}/metrics" || true)
+          echo "/metrics content-type: $ctype"
+          case "$ctype" in
+            text/plain*) ;;
+            *) echo "expected a text/plain Content-Type for /metrics (got '$ctype')"; exit 1 ;;
+          esac
+
+      # (m) Flipping METRICS_ENABLED back to false REMOVES an exposition that was
+      # already written (observability REQ-7.9). This is the ONLY assertion that
+      # fails when the entrypoint's unconditional `rm -f` is deleted, and it must
+      # run AFTER (l), against the very container (l) left running with the flag
+      # ON: the html root persists across a `docker compose exec`, so re-running
+      # the entrypoint in place with the flag off has stale state to clean up.
+      #
+      # A fresh-container assertion structurally CANNOT catch this — not (k), and
+      # not any one-shot `docker run` of the web image. A new container starts on a
+      # clean image layer with no /usr/share/nginx/html/metrics, so the
+      # METRICS_ENABLED gate alone already produces the 404 and there is nothing
+      # stale for a missing `rm -f` to leave behind. The regression only surfaces
+      # on a REUSED html root, which is exactly what an operator flipping the flag
+      # off on a persisted volume has (they would otherwise be served the previous
+      # exposition forever).
+      #
+      # `exec -T` addresses the compose service by name, as the other exec steps
+      # above do; `-e` scopes the override to this one exec, leaving the
+      # container's own METRICS_ENABLED=true (and nginx itself) untouched. The
+      # precondition is asserted first so a regression in (l) reports as a broken
+      # precondition rather than silently making the 404 below vacuous. `curl -fsS`
+      # is deliberately NOT used, for (k)'s reason: it exits non-zero on a 404 and
+      # would red this step on correct behaviour.
+      - name: Assert /metrics removed when METRICS_ENABLED flips to false (m)
+        run: |
+          before=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/metrics" || true)
+          echo "before flip /metrics -> $before"
+          if [ "$before" != "200" ]; then
+            echo "precondition failed: (l) should have left /metrics served (got $before)"
+            exit 1
+          fi
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T \
+            -e METRICS_ENABLED=false web /docker-entrypoint.d/10-runtime-config.sh
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/metrics" || true)
+          echo "after flip /metrics -> $code"
+          if [ "$code" != "404" ]; then
+            echo "expected 404 after re-running the entrypoint with METRICS_ENABLED=false (got $code)"
+            echo "the stale exposition survived — the unconditional 'rm -f' is missing"
+            exit 1
+          fi
+
       # Dump container logs on ANY failure above (Req 8.6).
       - name: Dump container logs on failure
         if: failure()

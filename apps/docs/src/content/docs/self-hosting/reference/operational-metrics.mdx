@@ -1,0 +1,512 @@
+---
+title: Operational metrics
+description: The Prometheus metric contract Tradr exposes — every metric name, type, label set, and meaning, how to turn the surface on, and what this feature deliberately does not deliver.
+---
+
+Tradr can expose operational metrics in the Prometheus text format: request
+rate, request latency, database health, Node.js process health, and the deployed
+build version. The surface is off by default. One variable turns it on.
+
+This page is the whole contract. It gives you enough to build a dashboard
+without reading the source.
+
+**This is not the [Metrics glossary](/user-guide/reference/metrics-glossary/).**
+That page defines the _trading_ figures Tradr computes — win rate, expectancy,
+profit factor. This page covers the _operational_ metrics an instance reports
+about itself.
+
+## What this feature does not deliver
+
+Read this first, so you know what you are getting.
+
+Tradr exposes metrics. It does not collect them. This feature ships no
+Prometheus, no Grafana, no agent, and no scrape configuration.
+
+- **Nothing scrapes these metrics.** This repository ships no scrape
+  configuration of any kind — no `prometheus.yml`, no service discovery, no
+  agent, and nothing in `docker-compose.yml` that reads either surface. Arming
+  the surface publishes it; bringing something to read it is your job.
+- **No dashboards ship.** There is no committed Grafana dashboard and no
+  observability overlay for the compose stack.
+- **No alert rules ship.** Collection, dashboarding, and alerting are all out of
+  scope.
+
+You point your own collector at the surface. Everything below tells you what it
+will find there.
+
+## Turn the surface on
+
+Set one variable in `.env`:
+
+```bash
+METRICS_ENABLED=true
+```
+
+Recreate the stack:
+
+```bash
+docker compose up -d
+```
+
+**Expected result:** `GET /metrics` on the api container's metrics port returns
+`200` with a Prometheus exposition.
+
+The variable reaches both the `api` and the `web` service. Only the literal
+values `true` and `false` parse. Any other value is a startup error, not a
+silent default.
+
+Two more variables tune the api listener. Both have working defaults. See
+[Environment variables](/self-hosting/reference/env-vars/) for the full entries.
+
+| Variable          | Default   | Does                                    |
+| ----------------- | --------- | --------------------------------------- |
+| `METRICS_ENABLED` | `false`   | Arms both exposition surfaces.          |
+| `METRICS_PORT`    | `9464`    | Port the api metrics listener binds.    |
+| `METRICS_HOST`    | `0.0.0.0` | Address the api metrics listener binds. |
+
+## The two surfaces
+
+Tradr exposes metrics from two places, and they behave differently.
+
+### The api container
+
+A **second listener**, separate from the application port. It serves exactly one
+route:
+
+```
+GET http://<api-container>:9464/metrics
+```
+
+The content type is `text/plain; version=0.0.4; charset=utf-8`. Every other path
+on that listener returns `404`, and no application route is reachable through
+it. The exposition carries no authentication and appears in no OpenAPI document.
+
+The listener is bound inside the container only. `docker-compose.yml` publishes
+no host port for the `api` service — `web` is the only service with a `ports:`
+mapping. Scrape the api from another container on the same compose network, or
+over 6PN on Fly.
+
+### The web container
+
+A **static file**, not a live endpoint. nginx has no runtime, so the container's
+entrypoint writes `/usr/share/nginx/html/metrics` at container start and nginx
+serves it at `/metrics` with content type `text/plain; version=0.0.4`.
+
+The file is rewritten on every container start, so a stale version cannot
+survive a redeploy. With `METRICS_ENABLED` unset or `false` the entrypoint
+deletes the file and `/metrics` returns nginx's own `404`.
+
+**The web `/metrics` path sits on the published port.** `web` is the only
+publicly reachable service in the compose stack. Arming metrics on the web
+container therefore publishes your exact build identity to anyone who can reach
+the app. That is the whole reason the file is gated rather than always written.
+It contains one metric and nothing else.
+
+## The metric contract
+
+### API metrics
+
+| Metric                                | Type                      | Labels                      | Meaning                                                                                         |
+| ------------------------------------- | ------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `tradr_build_info`                    | gauge                     | `version`, `commit`         | API build identity. Always the constant `1` — the information is in the labels.                 |
+| `tradr_http_requests_total`           | counter                   | `method`, `route`, `status` | HTTP requests handled, by method, matched route pattern, and numeric status.                    |
+| `tradr_http_request_duration_seconds` | histogram                 | `method`                    | Request latency in seconds, measured to response start. No `route` label.                       |
+| `tradr_db_up`                         | gauge                     | —                           | `1` when the scrape-time `SELECT 1` succeeded, `0` when it failed or timed out.                 |
+| `tradr_db_probe_duration_seconds`     | gauge                     | —                           | Duration in seconds of the scrape-time database probe.                                          |
+| `tradr_db_connections`                | gauge                     | `state`                     | Backend connections to the current database by state, from `pg_stat_activity`. Database-global. |
+| `tradr_db_pool_max`                   | gauge                     | —                           | Configured maximum size of this instance's connection pool (`DB_POOL_SIZE`, default `10`).      |
+| `process_*`, `nodejs_*`               | counter, gauge, histogram | various                     | Node.js process and runtime metrics.                                                            |
+
+`tradr_db_probe_duration_seconds` and `tradr_db_pool_max` are gauges by
+decision, not by accident. One probe sample per scrape supports no quantiles, so
+a histogram of it would be misleading.
+
+The `process_*` and `nodejs_*` metrics keep their conventional names rather than
+taking the `tradr_` prefix, so standard community dashboards and alert rules work
+unmodified.
+
+The set is 31 metrics. It covers resident memory, heap size and use, event-loop
+lag (including percentiles), and garbage-collection duration. It also covers CPU
+time, open file descriptors, active handles and requests, process start time, and
+the Node.js version.
+
+### Web metrics
+
+| Metric                 | Type  | Labels              | Meaning                                      |
+| ---------------------- | ----- | ------------------- | -------------------------------------------- |
+| `tradr_web_build_info` | gauge | `version`, `commit` | SPA build identity. Always the constant `1`. |
+
+That is the entire web exposition. Three lines: `# HELP`, `# TYPE`, and one
+sample.
+
+## The labels
+
+### `route` has three classes of value
+
+A dashboard shows all three. Each means something different.
+
+| Class                   | Example                      | Means                                                                                                                                                                         |
+| ----------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A matched route pattern | `/api/positions/:positionId` | An application route handled the request. The label is always the registered pattern, never the raw path — so `/api/positions/abc` and `/api/positions/def` share one series. |
+| A router mount wildcard | `/api/positions/*`           | A per-router middleware answered before route dispatch. Almost always `authMiddleware` returning `401`.                                                                       |
+| `unmatched`             | `unmatched`                  | No route matched, or a _global_ middleware answered before route dispatch.                                                                                                    |
+
+The middle class is the one that surprises people, and it is the highest-volume
+non-`2xx` class in the product. Most feature routers apply authentication as a
+wildcard middleware over the whole router, so an unauthenticated request is
+rejected before it reaches a route pattern and is counted against the router's
+mount path with a trailing `*`. Routers mounted bare at `/api` produce `/api/*`.
+
+Not all of them do. A handful of routes attach authentication per route instead
+— `GET /api/auth/me` among them — and those `401`s carry their own route pattern
+rather than a wildcard. So a wildcard value is the common shape of an
+unauthenticated request, not the only one.
+
+`unmatched` covers two cases that a dashboard cannot tell apart. The first is a
+genuine `404` for a path no route declares. The second is a request that
+split-origin CORS or anti-CSRF rejected before dispatch. That second case arises
+only on a split-origin deployment. With `CORS_ALLOWED_ORIGINS` unset, both
+middleware are pure pass-through.
+
+A route that _matched_ and then returned `404` — `GET /api/positions/:positionId`
+for an id that does not exist — keeps its own pattern. It is not counted as
+`unmatched`.
+
+The set stays bounded. Each mounted router adds at most one wildcard value.
+
+### The other labels
+
+| Label     | On                                                                 | Values                                                                                                                                     |
+| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `method`  | `tradr_http_requests_total`, `tradr_http_request_duration_seconds` | The HTTP method: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`.                                                                                  |
+| `status`  | `tradr_http_requests_total`                                        | The numeric HTTP status code, as a string.                                                                                                 |
+| `state`   | `tradr_db_connections`                                             | `active`, `idle`, `idle_in_transaction`. Exactly three, enumerated explicitly, so a state outside that set adds no series. See below.      |
+| `version` | `tradr_build_info`, `tradr_web_build_info`                         | `APP_VERSION` verbatim, or `unknown`.                                                                                                      |
+| `commit`  | `tradr_build_info`, `tradr_web_build_info`                         | The text after the final `-` in `APP_VERSION`, or `unknown`.                                                                               |
+
+### `state` is not Postgres's spelling
+
+The `state` label values are Tradr's, not `pg_stat_activity`'s. Postgres writes
+the transaction states as words with spaces; the label uses underscores, and the
+mapping is deliberately many-to-one:
+
+| `pg_stat_activity.state`        | `state` label         |
+| ------------------------------- | --------------------- |
+| `active`                        | `active`              |
+| `idle`                          | `idle`                |
+| `idle in transaction`           | `idle_in_transaction` |
+| `idle in transaction (aborted)` | `idle_in_transaction` |
+
+**The aborted variant is folded in, not dropped.** A transaction that has errored
+but not yet rolled back still holds its backend and still pins the oldest
+transaction id, so it saturates the pool exactly as a live one does — and it can
+never do useful work, which makes it the worse half of the signal. Counting it
+separately would add a fourth label value; discarding it would hide the problem.
+
+Every remaining state Postgres can report — `fastpath function call`, `disabled`,
+and a null state — is excluded and contributes no series. That is what keeps the
+set at three regardless of what the database returns.
+
+`tradr_http_request_duration_seconds` carries **no `route` label**, deliberately.
+A per-route histogram costs about 2,730 series against a 2,000-series budget. Per-route
+error rate survives on `tradr_http_requests_total`; per-route latency is the
+sacrifice. Its buckets are explicit, not the library defaults, and reach the long
+tail of this API: `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+60, 300` seconds. CSV import sits behind a 300-second timeout, so the library's
+10-second ceiling would report no latency at all for the slowest path.
+
+Latency is measured to **response start**, when the headers flush, not to
+connection close. For the advisor's streaming responses the two differ by
+minutes, and only response start is meaningful.
+
+## Every scrape is a database probe
+
+`tradr_db_up`, `tradr_db_probe_duration_seconds`, and `tradr_db_connections` are
+sampled on demand. The api opens a transaction, sets a statement timeout, runs
+`SELECT 1`, then queries `pg_stat_activity`. It does this _while answering the
+scrape_, before it serializes the exposition.
+
+**Your scrape interval is therefore a database load knob.** Scraping every 5
+seconds runs that probe every 5 seconds, on top of any health check your platform
+already issues. Choose the interval accordingly.
+
+The probe is bounded on both sides. A server-side `statement_timeout` of 1 second
+caps the two statements that do work. A client-side deadline of 5 seconds caps
+the whole probe. That is half of Prometheus's default 10-second scrape timeout,
+so a hung database reports as down rather than timing the scrape out.
+
+### At most one probe per scrape, not exactly one
+
+A scrape that finds a probe already in flight **joins it** instead of opening a
+second transaction. This bounds the connection pool: however often you scrape, at
+most one connection is ever committed to the probe.
+
+The consequence matters when you read the numbers. Two overlapping scrapes share
+one probe, and the second one publishes values it did not measure. That applies
+to `tradr_db_up`, `tradr_db_probe_duration_seconds`, and `tradr_db_connections`
+alike.
+
+This is also why `tradr_db_probe_duration_seconds` can exceed the 5-second
+ceiling. A joining scrape publishes the duration the _original_ probe measured,
+and that probe started earlier.
+
+`tradr_db_probe_duration_seconds` is also wider than the `SELECT 1` alone. The
+clock starts before the transaction opens, so the value includes the `BEGIN` and
+the `SET LOCAL statement_timeout` that bound the probe.
+
+## Reading `tradr_db_connections`
+
+**The value is database-global, not process-local.** It comes from
+`pg_stat_activity` scoped to the current database, so every api instance reports
+the same counts. Those counts also include the `tradr` CLI, a migration run, and
+any open `psql` session.
+
+A dashboard that **sums** this metric across instances over-counts by the replica
+factor. Compare a single instance against `tradr_db_pool_max` instead. That gauge
+exists because the Postgres driver exposes no pool statistics of its own, so it
+is the only saturation reference available.
+
+## Worked queries
+
+Enough PromQL to build the first panel of a dashboard. Adjust the range vector
+(`[5m]`) to at least four times your scrape interval.
+
+**Request rate**, per second, broken out by route:
+
+```promql
+sum by (route) (rate(tradr_http_requests_total[5m]))
+```
+
+**Error rate** as a fraction of all requests. `status` is a string, so match it
+with a regex rather than a numeric comparison:
+
+```promql
+(sum(rate(tradr_http_requests_total{status=~"5.."}[5m])) or vector(0))
+  / sum(rate(tradr_http_requests_total[5m]))
+```
+
+The `or vector(0)` is not decoration. An instance that has served no `5xx` has no
+series matching the regex, so the numerator is empty and the whole expression
+returns nothing — which reads as a broken panel rather than a healthy one.
+
+**Latency quantile.** A Prometheus histogram is exposed as a set of cumulative
+`_bucket` series carrying an `le` ("less than or equal") label — one per boundary
+listed above, plus `le="+Inf"` — alongside `_sum` and `_count`. You do not query
+those series directly; `histogram_quantile` interpolates across them. The `le`
+label must survive the aggregation, so it belongs in the `by` clause:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le) (rate(tradr_http_request_duration_seconds_bucket[5m]))
+)
+```
+
+Keep `method` as well to get a quantile per verb — `sum by (le, method) (...)`.
+There is no `route` label here, so a per-route quantile is not available; that is
+the documented trade-off above.
+
+**Pool saturation**, the fraction of one instance's pool in use:
+
+```promql
+sum without (state) (tradr_db_connections) / tradr_db_pool_max
+```
+
+`without (state)` is the load-bearing part, and a bare `sum()` breaks this query
+twice over. `sum()` drops *every* label, `job` and `instance` included, so the
+left-hand side has nothing left to match `tradr_db_pool_max` on and the
+expression returns no result at all — not a wrong number, nothing. It would also
+be exactly the across-instance sum the section above warns against, because these
+counts are database-global. `sum without (state)` collapses only the three
+`state` series of a single target and leaves its identity intact, so each
+instance divides by its own pool ceiling.
+
+Prefer `without (state)` to `by (job, instance)`. The two agree on a plain scrape
+config, but the moment you attach an extra target label — `env`, `region`,
+`cluster` — the `by` form drops it from the left-hand side, the match fails
+again, and the panel goes empty.
+
+Alert on the idle-in-transaction series on its own. It is the classic
+pool-exhaustion precursor: connections held open by transactions that are no
+longer doing work.
+
+```promql
+tradr_db_connections{state="idle_in_transaction"}
+```
+
+## When the database is down
+
+The scrape still returns `200`. A database failure never fails a scrape.
+
+Static facts stay published; sampled facts disappear. So a failed probe leaves
+`tradr_db_up 0`, a `tradr_db_probe_duration_seconds` value, and **no**
+`tradr_db_connections` series at all. The series is omitted rather than reported
+stale.
+
+Use `tradr_db_up` to tell the two failure modes apart:
+
+| What you see                                       | Means                           |
+| -------------------------------------------------- | ------------------------------- |
+| No `tradr_db_connections`, `tradr_db_up 0` present | The database is down.           |
+| No `tradr_db_connections`, no `tradr_db_up` either | The instance is not scrapeable. |
+
+If serialization itself fails, the api serves an empty body with `200` and the
+correct content type, and logs at `error`. The target stays up.
+
+## Security
+
+### There is no auth secret, by design
+
+The exposition carries no bearer token and no shared secret. **Network isolation
+is the control.** A token copied into every scrape config is a worse posture than
+a private bind. It lands in more files. It rotates rarely. It grants the same
+access to anyone who reads one of them.
+
+So the rule is short. **Do not publish the metrics port.**
+
+### The bind address
+
+`METRICS_HOST` defaults to `0.0.0.0`. That default is deliberate, not lazy.
+`127.0.0.1` binds the _container's_ own loopback, which is unreachable from a
+Prometheus elsewhere on the compose network, and a Fly scrape arrives over 6PN
+rather than loopback. Binding all interfaces is already private in both
+documented deployments, because nothing publishes the port.
+
+**Residual threat model.** The api metrics listener becomes reachable from
+outside only if you add a `ports:` mapping for the `api` service, or run the
+container with host networking. `METRICS_HOST` exists so an operator in that
+position can narrow the bind to one interface instead of widening the exposure.
+
+The web `/metrics` file is different: it is already on the published port. See
+[The web container](#the-web-container) above.
+
+### What an exposed port would leak
+
+If you publish the port against this guidance, the surface still leaks nothing
+beyond **aggregate operational counters and the build version**.
+
+No metric name, label name, or label value carries user data. There are no email
+addresses, no user or account identifiers, no ticker symbols, no position or
+trade data, no monetary amounts, and no secrets. The `route` label is a
+registered pattern, never a raw path, so it cannot carry an id from a URL.
+
+A stranger learns your request volume by route and status, and your latency
+distribution. They also learn your connection counts, and your memory and
+event-loop health.
+
+They learn **two** versions, and both are the sensitive part. `tradr_build_info`
+carries the Tradr version you run. `nodejs_version_info`, one of the standard
+default metrics, carries the exact **Node.js runtime version** in its `version`
+label — it ships with that default set rather than being something Tradr chose to
+publish, and it is easy to overlook when reasoning about what the surface
+discloses. Between them they tell an attacker which application advisories and
+which runtime advisories apply to you.
+
+The api listener is deliberately **not** smoke-tested in CI, because testing it
+would mean publishing the port. CI covers the web container's `/metrics` in both
+states instead.
+
+## Operational behaviour
+
+### A metrics port conflict does not stop the api
+
+If `METRICS_PORT` is already in use, the api logs at `error` and **keeps serving
+requests**. Tradr does not refuse to boot over an observability port.
+
+The failure is visible where it matters: your collector reports `up == 0` for
+that target. Check the api container's logs for
+`Metrics listener failed; the API continues serving normally`.
+
+The listener also closes with the main server during graceful shutdown.
+
+### Recording never breaks a request
+
+The HTTP middleware records after the response is produced, inside a guard. A
+recording failure costs one sample and logs a warning. It cannot change a status
+code, a body, or a header.
+
+## Getting a real version instead of `unknown`
+
+If you build the images yourself with `docker compose build`, **both**
+`tradr_build_info` and `tradr_web_build_info` report `version="unknown"` and
+`commit="unknown"`.
+
+This is expected, not a bug. Neither `build:` block in the shipped
+`docker-compose.yml` declares an `args:` entry for `APP_VERSION`, so both
+Dockerfiles fall back to their empty `ARG APP_VERSION=""` default.
+
+Drift detection between the api and the SPA is therefore meaningful only on the
+documented GHCR image path. On that path the release workflow bakes the release
+tag into both images. Put both series on one panel and compare their `version`
+labels:
+
+```promql
+tradr_build_info
+tradr_web_build_info
+```
+
+Two different values mean a half-finished deploy. Two `unknown` values mean you
+built the images yourself.
+
+To get a real version from a local build, pass the build argument to both
+services:
+
+```bash
+docker compose build \
+  --build-arg APP_VERSION="v0.5.0-$(git rev-parse --short HEAD)"
+docker compose up -d
+```
+
+**Expected result:** `tradr_build_info` and `tradr_web_build_info` both report
+that string as `version`, and the short sha as `commit`.
+
+The `commit` label is the text after the final `-`, on both halves. A value with
+no `-` gives `commit="unknown"`. A value like `v0.5.0-rc.1` gives
+`commit="rc.1"` on both halves — which is the point: the two must agree, or a
+join reports drift where there is none.
+
+**Do not set `APP_VERSION` in `.env`.** The `api` service reads that file, and a
+blank value there overrides the version baked into the image. That would turn the
+drift metric into a drift source.
+
+## Series budget
+
+A single api instance emits under 2,000 active series. The budget:
+
+| Source                                                               | Series     |
+| -------------------------------------------------------------------- | ---------- |
+| `tradr_http_requests_total` — 195 routes × about 5 observed statuses | ~1,000     |
+| `tradr_http_request_duration_seconds` — 5 methods × 17 series each   | ~85        |
+| `process_*` and `nodejs_*`                                           | ~69        |
+| Database metrics                                                     | 6          |
+| `tradr_build_info`                                                   | 1          |
+| **Total**                                                            | **~1,161** |
+
+The `process_*` and `nodejs_*` row is a measured figure, not an estimate: 69
+series on a freshly armed instance, give or take one or two —
+`nodejs_active_handles` and `nodejs_active_resources` carry a series per live
+handle and resource type, so a container whose stdio are pipes rather than files
+reports slightly more. Read a difference of a series or two against your own
+instance as normal, not as a leak.
+
+It is also the one row that **grows after boot**, by around 40%.
+`nodejs_gc_duration_seconds` contributes nine series per garbage-collection kind,
+and a kind appears only once that collector has actually run. A busy instance
+that has exercised three GC kinds measures about 96.
+
+Even at the top of that range the total stays near 1,200, so the headroom under
+2,000 is real rather than a rounding artefact. The dominant term is the route ×
+status product, and that is what to watch if you add routes.
+
+The web container adds one series.
+
+## Next steps
+
+- [Environment variables](/self-hosting/reference/env-vars/) — the three metrics
+  variables in full, with the rest of the configuration surface.
+- [Install with Docker Compose](/self-hosting/docker-compose/) — where the `api`
+  and `web` services are defined.
+- [Security model](/self-hosting/explanation/security/) — the rest of the
+  exposure surface.
+- [Metrics glossary](/user-guide/reference/metrics-glossary/) — the trading
+  figures, which this page does not cover.

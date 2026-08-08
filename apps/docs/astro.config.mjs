@@ -188,6 +188,10 @@ export default defineConfig({
             },
             { label: 'Put TLS in front of the stack', slug: 'self-hosting/tls-reverse-proxy' },
             { label: 'Environment variables', slug: 'self-hosting/reference/env-vars' },
+            {
+              label: 'Operational metrics (Prometheus)',
+              slug: 'self-hosting/reference/operational-metrics',
+            },
             { label: 'CLI reference (tradr)', slug: 'self-hosting/reference/cli' },
             openAPISidebarGroup,
           ],
