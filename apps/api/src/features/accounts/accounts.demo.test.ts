@@ -324,9 +324,32 @@ describe('POST /api/accounts/demo', () => {
     const { cookie, userId } = await registerAndGetCookie();
     expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
 
-    const { fills: seededFills } = await readSeededData(userId);
-    const newest = seededFills.reduce((max, f) => (f.filledAt > max ? f.filledAt : max), '');
-    const ageInDays = (Date.now() - Date.parse(newest)) / 86_400_000;
+    const { positions: seededPositions } = await readSeededData(userId);
+
+    // THE NEWEST CLOSE, not the newest fill. Every figure the dashboard draws
+    // comes from closed positions — the stats tiles, the equity curve and the
+    // bar chart are all cut from `closed_at` — so an entry fill against a
+    // position that is still open, or against the planned trade that was never
+    // opened, moves nothing on screen. Reading the newest FILL is what let this
+    // guard report a nine-day-old fixture as current while the newest CLOSE was
+    // a month old and the dashboard had nothing to show.
+    const closes = seededPositions
+      .map((p) => p.closedAt)
+      .filter((closedAt): closedAt is string => closedAt !== null);
+    expect(closes.length, 'the fixture still has closed trades to measure').toBeGreaterThan(0);
+    const newestClose = new Date(closes.reduce((max, at) => (at > max ? at : max)));
+
+    // WHOLE CALENDAR MONTHS, not days. Every window the dashboard asks for is
+    // cut on a month boundary — `all-time` anchors its start on the first of
+    // the earliest close's month, and the performance widget's default
+    // `monthly` preset is a rolling twelve of them — so a day count means
+    // something different depending on where in the month it is read. An
+    // 85-day-old close is inside the window on the 30th and outside it on the
+    // 1st; a month count says the same thing on both days.
+    const now = new Date();
+    const monthsBehind =
+      (now.getUTCFullYear() - newestClose.getUTCFullYear()) * 12 +
+      (now.getUTCMonth() - newestClose.getUTCMonth());
 
     // The fixture's dates are absolute, which is exactly what makes the
     // documentation screenshots and the end-to-end assertions stable — and also
@@ -334,22 +357,24 @@ describe('POST /api/accounts/demo', () => {
     // the dates forward is not a mechanism; this is. When it fails, move them
     // forward in the fixture and regenerate the screenshots in the same change.
     //
-    // A quarter, not a year. A year is not a warning — it is the point at which
-    // the sample account is already broken: the dashboard's performance widget
-    // defaults to a rolling twelve months, so at 365 days it has nothing left to
-    // draw. 90 days is the last point the window still reads as a live account.
-    // By then the 30-day chart preset has been empty for two months and the
-    // three positions the fixture leaves open have gone a full quarter without a
-    // fill against them, which reads as abandoned rather than current. It is
-    // also a cadence a maintainer can plan a deliberate refresh around, which a
-    // bound that only fires once the demo is past saving is not.
+    // Three months of slack against a twelve-month cliff. Twelve is not a
+    // warning — it is the point at which the sample account is already broken:
+    // the dashboard's performance widget defaults to a rolling twelve months,
+    // so a close older than that leaves the chart with nothing to plot and the
+    // docs capture's paint gate fails on it. Two months behind is the last
+    // point the account still reads as live: by then the 30-day preset has been
+    // empty for a while and the three positions the fixture leaves open have
+    // gone a quarter without a fill against them, which reads as abandoned. It
+    // is also a cadence a maintainer can plan a deliberate refresh around,
+    // which a bound that only fires once the demo is past saving is not.
     //
     // Move the DATES when this fails. Moving this number instead is the failure
     // it exists to catch.
-    expect(ageInDays).toBeLessThan(90);
+    expect(monthsBehind).toBeLessThanOrEqual(2);
     // Not ahead of the clock either: a sample account whose newest trade has not
     // happened yet reads as broken in the other direction.
-    expect(ageInDays).toBeGreaterThan(0);
+    expect(monthsBehind).toBeGreaterThanOrEqual(0);
+    expect(newestClose.getTime()).toBeLessThan(now.getTime());
   });
 });
 

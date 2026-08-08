@@ -4,11 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import EquityCurveChart from '@/features/performance/components/EquityCurveChart';
 import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
-import { usePerformance } from '@/features/performance/hooks/usePerformance';
-import {
-  DEFAULT_CURRENCY_HISTORY_RANGE,
-  derivePresetRange,
-} from '@/features/performance/utils/derivePresetRange';
+import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 /**
@@ -19,8 +15,11 @@ import { useUserTimezone } from '@/hooks/useUserTimezone';
  *   1. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
  *   2. Compute {start, end} via `derivePresetRange('all-time', ...)` anchored at
  *      the user's stored reporting timezone (`useUserTimezone`,
- *      user-onboarding R2.4 — NOT the browser's zone). On first render we use
- *      `DEFAULT_CURRENCY_HISTORY_RANGE` (§B).
+ *      user-onboarding R2.4 — NOT the browser's zone). The first request
+ *      bootstraps with `DEFAULT_CURRENCY_HISTORY_RANGE` (§B); once the response
+ *      lands, `usePresetPerformance` re-derives the window from the real
+ *      `historyRange`, so "all-time" reaches the account's earliest close
+ *      instead of stopping at the current month.
  *   3. Fetch via `usePerformance({ granularity: 'month', ... })`, passing `null`
  *      until the stored zone lands so nothing is bucketed by a guess.
  *   4. Pick the currency entry via `response.currencies.find(c => c.code === displayCurrency)`
@@ -31,39 +30,15 @@ function EquityCurveWidget() {
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
   const timezone = useUserTimezone();
-  const defaultWeekStart = 1 as const;
 
-  // `derivePresetRange` resolves calendar boundaries through `Intl`, so it
-  // cannot run before the stored zone is known.
-  const bootstrapRange = timezone
-    ? derivePresetRange(
-        'all-time',
-        DEFAULT_CURRENCY_HISTORY_RANGE,
-        new Date(),
-        timezone,
-        defaultWeekStart,
-      )
-    : null;
-
-  const performanceQuery = usePerformance(
-    timezone && bootstrapRange
-      ? {
-          granularity: 'month',
-          start: bootstrapRange.start,
-          end: bootstrapRange.end,
-          tz: timezone,
-          ...(displayCurrency ? { currency: displayCurrency } : {}),
-        }
-      : null,
-  );
+  const { query: performanceQuery, currencyData } = usePresetPerformance({
+    preset: 'all-time',
+    timezone,
+    currency: displayCurrency,
+    granularity: 'month',
+  });
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
-
-  // §A — currencies is an ARRAY: use find(), not record-style indexing.
-  const currencyData =
-    displayCurrency != null
-      ? (response?.currencies.find((c) => c.code === displayCurrency) ?? null)
-      : null;
 
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through

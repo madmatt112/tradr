@@ -8,13 +8,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import PerformanceBarChart from '@/features/performance/components/PerformanceBarChart';
 import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
-import { usePerformance } from '@/features/performance/hooks/usePerformance';
+import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { useTimeframeSelection } from '@/features/performance/hooks/useTimeframeSelection';
-import {
-  DEFAULT_CURRENCY_HISTORY_RANGE,
-  derivePresetRange,
-  type PerformancePreset,
-} from '@/features/performance/utils/derivePresetRange';
+import { type PerformancePreset } from '@/features/performance/utils/derivePresetRange';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 import { widgetRegistry } from './registry';
@@ -70,43 +66,18 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
   const timezone = useUserTimezone();
-  const defaultWeekStart = 1 as const;
 
-  // Derive the query window. On first render we have no response, so the
+  // Derive the query window. The first request has no response to read, so the
   // historyRange falls back to DEFAULT_CURRENCY_HISTORY_RANGE (§B). Once the
-  // response lands we re-derive with the currency's real historyRange and
-  // resolved week-start (Design §10.4 cycle-prevention note).
-  // `derivePresetRange` resolves calendar boundaries through `Intl`, so it
-  // cannot run before the stored zone is known.
-  const performanceQueryBootstrap = timezone
-    ? derivePresetRange(
-        config.timeframe,
-        DEFAULT_CURRENCY_HISTORY_RANGE,
-        new Date(),
-        timezone,
-        defaultWeekStart,
-      )
-    : null;
-
-  const performanceQuery = usePerformance(
-    timezone && performanceQueryBootstrap
-      ? {
-          granularity: performanceQueryBootstrap.granularity,
-          start: performanceQueryBootstrap.start,
-          end: performanceQueryBootstrap.end,
-          tz: timezone,
-          ...(displayCurrency ? { currency: displayCurrency } : {}),
-        }
-      : null,
-  );
+  // response lands `usePresetPerformance` re-derives with the currency's real
+  // historyRange and resolved week-start (Design §10.4 cycle-prevention note).
+  const { query: performanceQuery, currencyData } = usePresetPerformance({
+    preset: config.timeframe,
+    timezone,
+    currency: displayCurrency,
+  });
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
-
-  // §A — currencies is an ARRAY: use find(), not record-style indexing.
-  const currencyData =
-    displayCurrency != null
-      ? (response?.currencies.find((c) => c.code === displayCurrency) ?? null)
-      : null;
 
   const { options, handleChange } = useTimeframeSelection(config.timeframe, (next) => {
     onUpdateConfig({ timeframe: next });
