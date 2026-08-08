@@ -7,9 +7,11 @@
 // set out of `lib/derive-checklist.ts` (the "one function with one input shape"
 // NFR). `allComplete` is read, not recomputed.
 //
-// R4.8 follows for free: item 1 stays incomplete while only demo data is
-// present because the hook excludes demo accounts from the count it derives
-// from. Nothing here knows demo data exists, and nothing here should.
+// R4.8 follows for free: NO item completes on demo data alone, because the hook
+// excludes the sample account and everything booked against it from the counts
+// it derives from — so nothing here strikes an item through, or withdraws its
+// guided-step button, for trades the user never made. Nothing here knows demo
+// data exists, and nothing here should.
 //
 // THE THREE CHECKLIST VALUES ARE THREE DIFFERENT ANSWERS, and this component is
 // the reason the hook bothers to distinguish them:

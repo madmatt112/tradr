@@ -70,9 +70,45 @@ describe('DemoBanner', () => {
     render(<DemoBanner />);
 
     const remove = screen.getByTestId('demo-banner-remove');
-    expect(remove.hasAttribute('disabled')).toBe(true);
     await userEvent.click(remove);
+    // The guard, not the attribute, is what makes it inert: an `aria-disabled`
+    // control is still clickable and still activates on Enter.
     expect(hook.teardown).not.toHaveBeenCalled();
+  });
+
+  it('stays focusable and keeps its focus while the teardown runs, and says why', async () => {
+    // `disabled` is the banned pattern here — it drops the button out of the tab
+    // order mid-action and blurs the focus the user just placed on it, throwing a
+    // keyboard user back to the top of the document by the very click they made.
+    useHook({ isPending: true });
+    render(<DemoBanner />);
+
+    const remove = screen.getByTestId('demo-banner-remove');
+    expect(remove.hasAttribute('disabled')).toBe(false);
+    expect(remove.getAttribute('aria-disabled')).toBe('true');
+
+    remove.focus();
+    expect(document.activeElement).toBe(remove);
+    await userEvent.tab();
+    // Still in the tab order at all — a `disabled` button cannot be tabbed TO,
+    // which is the property this asserts the absence of.
+    remove.focus();
+    expect(document.activeElement).toBe(remove);
+
+    // Inert states state their reason, and the control points at it.
+    const note = screen.getByTestId('demo-banner-removal-note');
+    expect(note.getAttribute('role')).toBe('status');
+    expect(remove.getAttribute('aria-describedby')).toBe(note.id);
+  });
+
+  it('carries no in-flight note and no inert attribute when idle', () => {
+    useHook({ isPending: false });
+    render(<DemoBanner />);
+
+    const remove = screen.getByTestId('demo-banner-remove');
+    expect(remove.hasAttribute('aria-disabled')).toBe(false);
+    expect(remove.hasAttribute('aria-describedby')).toBe(false);
+    expect(screen.queryByTestId('demo-banner-removal-note')).toBeNull();
   });
 
   it('uses the info status role and never the financial-semantic tokens', () => {

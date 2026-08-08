@@ -24,6 +24,9 @@ import { Button } from '@/components/ui/button';
 
 import { useDemoAccount } from '../hooks/useDemoAccount';
 
+/** The stated reason the remove button points at while its teardown is in flight. */
+const REMOVAL_NOTE_ID = 'demo-banner-removal-note';
+
 export function DemoBanner() {
   const { isDemoPresent, teardown, isPending } = useDemoAccount();
 
@@ -49,16 +52,42 @@ export function DemoBanner() {
           Every figure on screen comes from a sample account, not from trades you have recorded.
           Remove it when you are ready to enter your own.
         </AlertDescription>
+        {/* Teardown drops a whole account's worth of positions, fills and ledger
+            rows, so it is long enough to need saying. `role="status"` because it
+            appears and disappears under the user while the rest of the screen
+            carries on — the same arrangement `ZeroState` uses for seeding. */}
+        {isPending && (
+          <p
+            id={REMOVAL_NOTE_ID}
+            role="status"
+            data-testid="demo-banner-removal-note"
+            className="mt-1 text-sm text-muted-foreground"
+          >
+            Removing sample data. The figures on screen clear as soon as it lands.
+          </p>
+        )}
       </div>
+      {/* NO `disabled` ATTRIBUTE ON THIS CONTROL, in flight or otherwise — the
+          rule the comment above cites is a rule about THIS button too. `disabled`
+          drops it out of the tab order mid-action and blurs the focus the user
+          just spent a keystroke placing on it, so a keyboard user is thrown back
+          to the top of the document by the very click they made. The
+          focusable-but-inert `aria-disabled` + stated-reason pattern is what
+          `ZeroState`'s sample-data control and the sidebar's in-flight
+          Performance link both use. */}
       <Button
         variant="outline"
         data-testid="demo-banner-remove"
-        className="w-full shrink-0 cursor-pointer motion-reduce:transition-none sm:w-auto"
-        // A sub-second in-flight window with nothing to explain and no choice to
-        // lose, so the plain attribute is right here — unlike an inert state the
-        // user could act on, which stays focusable and states its reason.
-        disabled={isPending}
-        onClick={() => teardown()}
+        className="w-full shrink-0 cursor-pointer motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
+        aria-disabled={isPending || undefined}
+        aria-describedby={isPending ? REMOVAL_NOTE_ID : undefined}
+        // The guard, not just the styling — an `aria-disabled` control is still
+        // clickable and still activates on Enter, which is the price of leaving
+        // it reachable.
+        onClick={() => {
+          if (isPending) return;
+          teardown();
+        }}
       >
         Remove sample data
       </Button>

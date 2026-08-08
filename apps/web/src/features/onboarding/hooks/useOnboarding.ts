@@ -198,19 +198,37 @@ export function useOnboarding(): UseOnboardingResult {
     if (!preference) return undefined;
     if (!checklistNeeded) return null;
     if (!accounts || !positions) return undefined;
+    // NOTHING THE SEEDER WROTE COMPLETES ANYTHING, and this pair of filters is
+    // the whole of R4.8. Asking to see the product populated is not creating an
+    // account, and it is not logging or closing a trade either: the fixture
+    // seeds ten CLOSED positions, so counting them would tick "Log a position"
+    // and "Close it and see the stats" the instant the user clicked "Add sample
+    // data" — telling them they had recorded trades they never made, striking
+    // the two items through, and taking away the guided-step buttons that would
+    // have taught them how. R4.2 grounds completion in the USER's actual data
+    // and R4.3's "any route" means routes the user takes, not a server-side
+    // fixture.
+    //
+    // Which rows are the demo's is READ FROM THE FLAG, never inferred from "there
+    // is exactly one account" — the same rule `useDemoAccount` follows. Mutual
+    // exclusion (R9.6) is enforced on the server, in another file, for another
+    // reason, and a count that quietly leaned on it would start believing the
+    // wrong thing the moment it moved. Positions carry `accountId`, so the join
+    // is the flag on the account they are booked against and needs no extra
+    // read.
+    //
+    // With item 1 already excluded, `allComplete` cannot become true on seeded
+    // data alone, so the checklist cannot retire itself over trades the user
+    // never made (R4.7). `deriveChecklist` deliberately never learns that sample
+    // data exists, so this caller is the only place that can get it right.
+    const demoAccountIds = new Set(
+      accounts.filter((account) => account.isDemo).map((account) => account.id),
+    );
+    const ownPositions = positions.filter((p) => !demoAccountIds.has(p.accountId));
     return deriveChecklist({
-      // SAMPLE ACCOUNTS DO NOT COUNT, and the filter is the whole of R4.8.
-      // Asking to see the product populated is not creating an account, so item
-      // 1 stays incomplete while sample data is present — otherwise a user who
-      // clicked "add sample data" would watch "Create a brokerage account" tick
-      // itself for something they never did, and the checklist that is supposed
-      // to survive the demo (R4.8) could retire while they still have no
-      // account of their own. `deriveChecklist` deliberately never learns that
-      // sample data exists, so this caller is the only place that can get it
-      // right.
       accountCount: accounts.filter((account) => !account.isDemo).length,
-      positionsEverCreatedCount: positions.length,
-      closedPositionCount: positions.filter((p) => p.status === 'closed').length,
+      positionsEverCreatedCount: ownPositions.length,
+      closedPositionCount: ownPositions.filter((p) => p.status === 'closed').length,
       // Absent until the calculator is first used; the single named exception
       // to "completion is derived", because the calculator writes nothing else.
       calculatorFirstUsedAt: preference.calculatorFirstUsedAt,

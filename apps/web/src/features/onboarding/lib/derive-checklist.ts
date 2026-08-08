@@ -39,7 +39,10 @@ export interface ChecklistInput {
   accountCount: number;
   /**
    * How many positions the user has EVER created — open and closed alike, in
-   * every account. It must NOT be filtered by status. Item 3 asks whether the
+   * every account they created themselves. Demo data is not something the user
+   * logged, so the caller excludes the sample account's rows here too, for the
+   * same reason it excludes the account itself (R4.8). It must NOT be filtered
+   * by status. Item 3 asks whether the
    * user has ever logged a position, and that fact cannot become untrue later:
    * an open-only count would un-tick item 3 the moment the user closed their
    * last position, and a user who had closed everything could never reach
@@ -49,9 +52,10 @@ export interface ChecklistInput {
    */
   positionsEverCreatedCount: number;
   /**
-   * How many of the user's positions are currently closed. This one IS a
-   * status-filtered count; that is exactly what item 4 asks. It stands on its
-   * own — no relationship to `positionsEverCreatedCount` is assumed or checked.
+   * How many of the user's own positions are currently closed — demo rows
+   * excluded by the caller, as above. This one IS a status-filtered count; that
+   * is exactly what item 4 asks. It stands on its own — no relationship to
+   * `positionsEverCreatedCount` is assumed or checked.
    */
   closedPositionCount: number;
   /**

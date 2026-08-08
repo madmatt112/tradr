@@ -25,8 +25,17 @@ const anAccount = { id: 'acct-1', name: 'Main' } as Account;
 /** The seeded sample account. The flag is the only thing that distinguishes it. */
 const aDemoAccount = { id: 'acct-demo', name: 'Sample account', isDemo: true } as Account;
 
-function aPosition(id: string, status: 'draft' | 'open' | 'closed'): PositionListItem {
-  return { id, status } as PositionListItem;
+/**
+ * `accountId` defaults to the user's own account because that is the ordinary
+ * case; the sample account's id is passed explicitly by the R4.8 tests, which
+ * are the only ones the join changes the answer for.
+ */
+function aPosition(
+  id: string,
+  status: 'draft' | 'open' | 'closed',
+  accountId: string = anAccount.id,
+): PositionListItem {
+  return { id, status, accountId } as PositionListItem;
 }
 
 const FRESH: OnboardingState = { status: 'pending', coachMarksSeen: [] };
@@ -180,14 +189,19 @@ describe('useOnboarding — derived checklist', () => {
     expect(result.current.checklist!.allComplete).toBe(true);
   });
 
-  it('leaves item 1 incomplete, and the checklist standing, while only sample data is present (R4.8)', async () => {
-    // Asking to see the product populated is not creating an account. The
-    // sample account brings positions with it, so the later items tick from
-    // data that genuinely exists — but item 1 must not, or the user watches a
-    // step complete itself for something they never did.
+  it('completes NOTHING on sample data, and leaves the checklist standing (R4.8)', async () => {
+    // Asking to see the product populated is not creating an account, and it is
+    // not logging or closing a trade either. The fixture seeds ten CLOSED
+    // positions, so a count that took them at face value would tick items 3 and
+    // 4 the instant the user clicked "Add sample data" — telling them they had
+    // recorded and closed trades they never made, and striking the two items
+    // through so their guided-step buttons disappeared with them.
     mockServer({
       accounts: [aDemoAccount],
-      positions: [aPosition('p1', 'closed'), aPosition('p2', 'open')],
+      positions: [
+        aPosition('d1', 'closed', aDemoAccount.id),
+        aPosition('d2', 'open', aDemoAccount.id),
+      ],
       preference: { ...FRESH, calculatorFirstUsedAt: '2026-08-01T10:00:00.000Z' },
     });
     const { result } = renderHook(() => useOnboarding(), {
@@ -198,27 +212,62 @@ describe('useOnboarding — derived checklist', () => {
 
     // Still a checklist, not `null` — R4.8 keeps it visible through the demo.
     expect(result.current.checklist).not.toBeNull();
+    // Item 2 is the calculator, which the seeder does not touch either way; it
+    // is true here only because this fixture says the user used it themselves.
     expect(doneVector(result.current.checklist!.items)).toEqual([
       ['account', false],
       ['calculator', true],
-      ['position', true],
-      ['close', true],
+      ['position', false],
+      ['close', false],
     ]);
-    // And so it cannot retire (R4.7) while the user still has no account.
+    // And so it cannot retire (R4.7) over trades the user never made.
     expect(result.current.checklist!.allComplete).toBe(false);
   });
 
-  it('counts the user’s own accounts alongside a sample one', async () => {
-    mockServer({ accounts: [aDemoAccount, anAccount], positions: [] });
+  it('cannot reach allComplete on seeded data alone, even with the calculator used', async () => {
+    // The retirement guard stated on its own: every item the fixture could
+    // possibly speak to, plus the one write seeding does not make, still leaves
+    // the checklist un-retired (R4.7).
+    mockServer({
+      accounts: [aDemoAccount],
+      positions: [
+        aPosition('d1', 'closed', aDemoAccount.id),
+        aPosition('d2', 'closed', aDemoAccount.id),
+        aPosition('d3', 'draft', aDemoAccount.id),
+      ],
+      preference: { ...FRESH, calculatorFirstUsedAt: '2026-08-01T10:00:00.000Z' },
+    });
+    const { result } = renderHook(() => useOnboarding(), {
+      wrapper: makeWrapper(makeQueryClient()),
+    });
+
+    await waitFor(() => expect(result.current.checklist).toBeDefined());
+    expect(result.current.checklist!.allComplete).toBe(false);
+  });
+
+  it('counts the user’s own accounts and positions alongside a sample one', async () => {
+    mockServer({
+      accounts: [aDemoAccount, anAccount],
+      positions: [
+        aPosition('d1', 'closed', aDemoAccount.id),
+        aPosition('p1', 'open', anAccount.id),
+      ],
+    });
     const { result } = renderHook(() => useOnboarding(), {
       wrapper: makeWrapper(makeQueryClient()),
     });
 
     await waitFor(() => expect(result.current.checklist).toBeDefined());
 
-    // The filter removes the flagged account and nothing else — it is not a
-    // "no accounts while a demo exists" rule.
-    expect(result.current.checklist!.items[0]).toMatchObject({ id: 'account', done: true });
+    // The filters remove the flagged account and its rows and nothing else —
+    // this is not a "nothing counts while a demo exists" rule.
+    expect(doneVector(result.current.checklist!.items)).toEqual([
+      ['account', true],
+      ['calculator', false],
+      // The user's own open position, not the sample account's closed one.
+      ['position', true],
+      ['close', false],
+    ]);
   });
 
   it('counts drafts and open positions towards "ever created" but only closed ones towards item 4', async () => {

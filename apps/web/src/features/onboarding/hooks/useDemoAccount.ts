@@ -48,8 +48,12 @@ export interface UseDemoAccountResult {
    * for. With no sample data present there is nothing to remove and the
    * callback fires straight away — the caller's next step does not become
    * conditional on which state the user was in.
+   *
+   * `onError` is its mirror, for a caller holding UI open across the request:
+   * the hook's own toast says what went wrong, but a caller that blocked
+   * re-entry until the teardown settled needs to know that it just did.
    */
-  teardown: (options?: { onSuccess?: () => void }) => void;
+  teardown: (options?: { onSuccess?: () => void; onError?: () => void }) => void;
   /** A seed or a teardown is in flight. */
   isPending: boolean;
 }
@@ -93,12 +97,15 @@ export function useDemoAccount(): UseDemoAccountResult {
   const demoAccountId = demoAccount?.id;
   const { mutate: teardownMutate } = teardownMutation;
   const teardown = useCallback(
-    (options?: { onSuccess?: () => void }) => {
+    (options?: { onSuccess?: () => void; onError?: () => void }) => {
       if (!demoAccountId) {
         options?.onSuccess?.();
         return;
       }
-      teardownMutate(demoAccountId, { onSuccess: () => options?.onSuccess?.() });
+      teardownMutate(demoAccountId, {
+        onSuccess: () => options?.onSuccess?.(),
+        onError: () => options?.onError?.(),
+      });
     },
     [demoAccountId, teardownMutate],
   );

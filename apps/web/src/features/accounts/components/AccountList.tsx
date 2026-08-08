@@ -54,8 +54,9 @@ export function AccountList() {
   // the create outright while sample data is present, so without this the user
   // would fill in the whole form and be told no; asking first, once, and
   // clearing the way is the difference between a rule and a wall.
-  const { isDemoPresent, teardown } = useDemoAccount();
+  const { isDemoPresent, teardown, isPending: isTearingDown } = useDemoAccount();
   const [demoConfirmOpen, setDemoConfirmOpen] = useState(false);
+  const [demoTeardownFailed, setDemoTeardownFailed] = useState(false);
 
   function beginCreate(): void {
     setEditAccount(null);
@@ -203,13 +204,35 @@ export function AccountList() {
         account={editAccount}
       />
 
-      {/* R9.6 — confirm once, then tear the sample data down, then open the form.
-          The teardown is what makes the create possible, so it runs first and
-          the dialog opens on its success; if it fails, its own toast says so and
-          no half-started form is left on screen. */}
+      {/* R9.6 — confirm ONCE, then tear the sample data down, then open the form.
+          The teardown is what makes the create possible, so it runs first and the
+          dialog opens on its success.
+
+          THE DIALOG STAYS OPEN UNTIL THE TEARDOWN SETTLES, and that is the whole
+          point of the `preventDefault`. Radix closes an `AlertDialogAction` on
+          activation, so the confirmation used to disappear while the request was
+          still in flight — leaving nothing on screen to say anything was
+          happening, and "New Account" live again underneath it. A second click
+          re-opened this dialog and fired a second teardown: the data survives,
+          because teardown is idempotent server-side, but the user is shown the
+          same destructive confirmation twice for one action, which teaches them
+          the first one did not take. Held open, there is no second entrance.
+
+          A FAILURE IS SAID HERE, not only in the toast the hook raises. The
+          request can reject partway; before this, that left the user with a
+          closed dialog, no form, and a toast they may have missed — the state
+          they started in with no explanation in it. Now the confirmation is
+          still up, says what happened, and the same button is the retry. */}
       <AlertDialog
         open={demoConfirmOpen}
-        onOpenChange={(open) => !open && setDemoConfirmOpen(false)}
+        onOpenChange={(open) => {
+          if (open) return;
+          // Escape, the overlay and Cancel all arrive here. None of them may
+          // close a confirmation whose action is still running.
+          if (isTearingDown) return;
+          setDemoConfirmOpen(false);
+          setDemoTeardownFailed(false);
+        }}
       >
         <AlertDialogContent data-testid="demo-teardown-confirm">
           <AlertDialogHeader>
@@ -220,13 +243,36 @@ export function AccountList() {
               you have no accounts of your own.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {demoTeardownFailed && (
+            <p role="alert" data-testid="demo-teardown-error" className="text-sm text-destructive">
+              The sample data could not be removed, so your account has not been created. Try again.
+            </p>
+          )}
           <AlertDialogFooter>
-            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
-            <AlertDialogAction
+            <AlertDialogCancel
               className="cursor-pointer"
-              onClick={() => teardown({ onSuccess: () => setDialogOpen(true) })}
+              aria-disabled={isTearingDown || undefined}
             >
-              Remove and continue
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="cursor-pointer aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              aria-disabled={isTearingDown || undefined}
+              onClick={(event) => {
+                // Hold the dialog open across the request; Radix would close it.
+                event.preventDefault();
+                if (isTearingDown) return;
+                setDemoTeardownFailed(false);
+                teardown({
+                  onSuccess: () => {
+                    setDemoConfirmOpen(false);
+                    setDialogOpen(true);
+                  },
+                  onError: () => setDemoTeardownFailed(true),
+                });
+              }}
+            >
+              {isTearingDown ? 'Removing…' : 'Remove and continue'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -14,7 +14,7 @@ const { accountsData, tierData, setWritableMutate, demoState, demoTeardown } = v
   accountsData: { current: [] as unknown[] },
   tierData: { current: undefined as unknown },
   setWritableMutate: vi.fn(),
-  demoState: { isDemoPresent: false },
+  demoState: { isDemoPresent: false, isPending: false },
   demoTeardown: vi.fn(),
 }));
 
@@ -43,7 +43,7 @@ vi.mock('@/features/onboarding/hooks/useDemoAccount', () => ({
     demoAccount: undefined,
     seed: vi.fn(),
     teardown: demoTeardown,
-    isPending: false,
+    isPending: demoState.isPending,
   }),
 }));
 
@@ -126,6 +126,7 @@ beforeEach(() => {
   tierData.current = undefined;
   setWritableMutate.mockReset();
   demoState.isDemoPresent = false;
+  demoState.isPending = false;
   demoTeardown.mockReset();
   vi.mocked(captureClientEvent).mockReset();
 });
@@ -269,6 +270,59 @@ describe('AccountList — creating a real account while sample data is present (
     const [options] = demoTeardown.mock.calls[0] as [{ onSuccess: () => void }];
     act(() => options.onSuccess());
     expect(screen.getByTestId('account-dialog')).toBeTruthy();
+  });
+
+  it('holds the confirmation open until the teardown settles, so it cannot be confirmed twice', () => {
+    demoState.isDemoPresent = true;
+    const { rerender } = render(<AccountList />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and continue' }));
+
+    expect(demoTeardown).toHaveBeenCalledTimes(1);
+    // Radix closes an action on activation. That put "New Account" live again
+    // underneath a request that was still running, so a second click re-showed
+    // this same destructive confirmation and fired a second teardown — the data
+    // survives, being idempotent server-side, but the user is asked to confirm
+    // one action twice and learns that the first confirmation did not take.
+    expect(screen.getByTestId('demo-teardown-confirm')).toBeTruthy();
+
+    demoState.isPending = true;
+    rerender(<AccountList />);
+
+    const action = screen.getByRole('button', { name: 'Removing…' });
+    expect(action.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(action);
+    expect(demoTeardown).toHaveBeenCalledTimes(1);
+
+    // Nor can it be escaped out of, which would be the other way back to the
+    // "New Account" button while the teardown is still in flight.
+    fireEvent.keyDown(screen.getByTestId('demo-teardown-confirm'), { key: 'Escape' });
+    expect(screen.getByTestId('demo-teardown-confirm')).toBeTruthy();
+  });
+
+  it('says so and stays open when the teardown fails, rather than stranding the user', () => {
+    demoState.isDemoPresent = true;
+    render(<AccountList />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and continue' }));
+
+    const [options] = demoTeardown.mock.calls[0] as [{ onError: () => void }];
+    act(() => options.onError());
+
+    // A rejection used to leave a closed dialog, no form, and only a toast the
+    // user may have missed — the state they started in with no account of the
+    // click in it.
+    const error = screen.getByTestId('demo-teardown-error');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(screen.getByTestId('demo-teardown-confirm')).toBeTruthy();
+    expect(screen.queryByTestId('account-dialog')).toBeNull();
+
+    // And the same button is the retry, which clears the stale failure.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and continue' }));
+    expect(demoTeardown).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('demo-teardown-error')).toBeNull();
   });
 
   it('leaves everything as it was when the user cancels', () => {
