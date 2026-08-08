@@ -12,7 +12,7 @@
 // which is a visible change to a file whose whole subject is what may be sent.
 //
 // The values are as narrow as the domain allows: `item` is one of the four
-// `ChecklistItemId` literals, `reason` is one of the two non-completing
+// `ChecklistItemId` literals, `reason` is one of the three non-completing
 // `TourExitReason` literals, and the two numbers are an index into a step array
 // and its length. Nothing here is free text, so there is no field a price or a
 // ticker could be spelled into.
@@ -53,9 +53,12 @@ export type OnboardingEvent =
       item: ChecklistItemId;
       stepIndex: number;
       stepCount: number;
-      // `target-missing` is an abandonment the user did not choose (R5.4). It is
-      // carried as a reason rather than a sixth event name so the funnel counts
-      // both kinds of not-finishing together and can still tell them apart.
+      // `target-missing` (R5.4) and `session-ended` are abandonments the user
+      // did not choose; `dismissed` is the one they did. They are carried as a
+      // reason rather than as three more event names so the funnel counts every
+      // kind of not-finishing together and can still tell them apart — which is
+      // the point of the distinction: R8 asks where users stop, and "declined
+      // the walkthrough" is a different answer from "left the app".
       reason: Exclude<TourExitReason, 'completed'>;
     }
   | { name: 'onboarding_checklist_item_completed'; item: ChecklistItemId };
@@ -88,7 +91,8 @@ export function emitOnboardingEvent(event: OnboardingEvent): void {
 let reportedDone: Set<ChecklistItemId> | null = null;
 
 /**
- * The items whose completing write this tab actually WATCHED land.
+ * How much of each item's completion this tab actually WATCHED happen: the net
+ * number of completing writes seen since the session began.
  *
  * The baseline below cannot, on its own, tell an item the user completed a
  * minute ago on another route from one they completed last month: both are
@@ -111,21 +115,48 @@ let reportedDone: Set<ChecklistItemId> | null = null;
  * What there IS, server-confirmed, is the write itself. `accounts:` and
  * `positions:cache-invalidate` are published only once the server accepted a
  * mutation — the same signals `useWalkthrough` already trusts to advance an
- * action step (R5.5). An item named here was completed during this session
- * whatever the first checklist we happen to see says, so the first observation
- * reports it instead of swallowing it.
+ * action step (R5.5).
+ *
+ * A COUNT, NOT A FLAG, AND THAT IS THE WHOLE OF IT. "This tab watched a write
+ * for item X" is not "item X was completed in this session": a user with three
+ * accounts who adds a fourth on `/accounts` before ever opening the dashboard
+ * has watched a `created` land on an item they finished months ago, and a flag
+ * would report it as a fresh completion. What separates the two is arithmetic
+ * the checklist's own inputs already hold: the item is a completion of THIS
+ * session only if the rows behind it are rows this tab watched appear. One
+ * account and one watched `created` is the first account; four accounts and one
+ * watched `created` is a user who arrived with three.
+ *
+ * `reopened` counts DOWN for the same reason it counts down in the checklist:
+ * it takes a position back out of the closed set, so a reopen-and-re-close
+ * leaves the net at zero and reports nothing — which is right, because the
+ * item was already done before either happened.
  *
  * Nothing seeded can fire through this. The sample-data seeder publishes
  * `demo-seeded`, never `created`, and `useOnboarding` excludes its rows from
- * every count (R4.8) — an armed item that never becomes `done` is never
+ * every count (R4.8) — a watched item that never becomes `done` is never
  * emitted.
  *
- * The honest limit: a completion in a tab that reloaded before the checklist
- * was ever derived leaves no trace, and recovering it would mean writing
- * progress to the client, which R4.2/R4.4 rule out for the reason that a stored
- * copy could disagree with the counts.
+ * THE HONEST LIMITS, all of them in the same direction (a real completion goes
+ * unreported; none is invented):
+ *   - a completion in a tab that reloaded before the checklist was ever derived
+ *     leaves no trace, and recovering it would mean writing progress to the
+ *     client, which R4.2/R4.4 rule out because a stored copy could disagree
+ *     with the counts;
+ *   - a CSV import publishes no `positions:cache-invalidate` at all
+ *     (`useCsvCommit` invalidates the queries directly), so positions that
+ *     arrive that way are counted by the checklist and watched by nothing;
+ *   - a delete lowers an item's count without saying what it removed — the
+ *     event carries a reason, not a status — so rows deleted before the first
+ *     observation are not subtracted here.
+ * In each case the count falls short of the item's rows and the first
+ * observation baselines it away, exactly as it did before any of this existed.
  */
-const completedThisSession = new Set<ChecklistItemId>();
+const watchedCompletions = new Map<ChecklistItemId, number>();
+
+function watch(item: ChecklistItemId, delta: number): void {
+  watchedCompletions.set(item, (watchedCompletions.get(item) ?? 0) + delta);
+}
 
 /**
  * Arm a completion the event bus cannot announce.
@@ -134,19 +165,48 @@ const completedThisSession = new Set<ChecklistItemId>();
  * stateless, so its only data trace is the `calculatorFirstUsedAt` timestamp,
  * and writing that timestamp IS the event. Called from `useOnboardingPatch`,
  * for a patch that carried it — which the calculator sends exactly once, when
- * the stored value is absent.
+ * the stored value is absent, so unlike the row-backed items it cannot be a
+ * repeat and has no count to be checked against.
  */
 export function armChecklistCompletion(item: ChecklistItemId): void {
-  completedThisSession.add(item);
+  watch(item, 1);
 }
 
 function armFromAccountChange({ reason }: { reason: AccountChangeReason }): void {
-  if (reason === 'created') completedThisSession.add('account');
+  if (reason === 'created') watch('account', 1);
 }
 
 function armFromPositionChange({ reason }: { reason: PositionChangeReason }): void {
-  if (reason === 'created') completedThisSession.add('position');
-  else if (reason === 'closed') completedThisSession.add('close');
+  if (reason === 'created') watch('position', 1);
+  else if (reason === 'closed') watch('close', 1);
+  else if (reason === 'reopened') watch('close', -1);
+}
+
+/**
+ * A checklist as the user's data made it, and the counts it was made from.
+ *
+ * The two travel together because the first observation needs both and they
+ * must be of the same moment: `checklist` says which items are done, `counts`
+ * says how many of the user's own rows stand behind each of the three that are
+ * row-backed (item 2, the calculator, has no rows — see `armChecklistCompletion`).
+ * `useOnboarding` derives them in one pass, so they cannot be a checklist from
+ * one render and counts from another.
+ */
+export interface ChecklistObservation {
+  checklist: Checklist;
+  counts: Record<Exclude<ChecklistItemId, 'calculator'>, number>;
+}
+
+/**
+ * Whether every row behind `id` is a row this tab watched appear — the test
+ * that separates an item completed during this session from one the user
+ * arrived with. `true` for the calculator on any watched write, because its
+ * one signal is sent once and never repeats.
+ */
+function completedThisSession(id: ChecklistItemId, counts: ChecklistObservation['counts']) {
+  const watched = watchedCompletions.get(id) ?? 0;
+  if (watched <= 0) return false;
+  return id === 'calculator' || watched >= counts[id];
 }
 
 /**
@@ -161,8 +221,9 @@ function armFromPositionChange({ reason }: { reason: PositionChangeReason }): vo
  * baseline is a real transition.
  *
  * The one thing the first checklist does NOT baseline away is an item this
- * session watched the user complete — see `completedThisSession` above for why
- * the two cases have to be told apart, and why the bus is what tells them.
+ * session watched the user complete — see `watchedCompletions` above for why the
+ * two cases have to be told apart, why the bus is what tells them, and why it
+ * takes a count to do it rather than a flag.
  *
  * `null` and `undefined` are not observations. `undefined` is "not known yet"
  * and `null` is "this user has no checklist" (dismissed or retired) — neither is
@@ -173,8 +234,11 @@ function armFromPositionChange({ reason }: { reason: PositionChangeReason }): vo
  * from the counts (R4.8/R9), so adding demo data completes no item and there is
  * no transition here to notice.
  */
-export function reportChecklistCompletions(checklist: Checklist | null | undefined): void {
-  if (!checklist) return;
+export function reportChecklistCompletions(
+  observation: ChecklistObservation | null | undefined,
+): void {
+  if (!observation) return;
+  const { checklist, counts } = observation;
 
   const done = new Set(checklist.items.filter((item) => item.done).map((item) => item.id));
   const baseline = reportedDone;
@@ -182,13 +246,13 @@ export function reportChecklistCompletions(checklist: Checklist | null | undefin
   // mounted copy on the same commit finds nothing left to report.
   reportedDone = done;
 
-  // On the first observation the baseline has no opinion, so the armed set is
-  // the only evidence of a transition. Consumed here: from the next observation
-  // on, the baseline itself tells the same story and reading both could double
-  // an event.
+  // On the first observation the baseline has no opinion, so what this tab
+  // watched is the only evidence of a transition. Consumed here: from the next
+  // observation on, the baseline itself tells the same story and reading both
+  // could double an event.
   const isNew =
     baseline === null
-      ? (id: ChecklistItemId) => completedThisSession.has(id)
+      ? (id: ChecklistItemId) => completedThisSession(id, counts)
       : (id: ChecklistItemId) => !baseline.has(id);
 
   for (const id of done) {
@@ -196,7 +260,7 @@ export function reportChecklistCompletions(checklist: Checklist | null | undefin
       emitOnboardingEvent({ name: 'onboarding_checklist_item_completed', item: id });
     }
   }
-  if (baseline === null) completedThisSession.clear();
+  if (baseline === null) watchedCompletions.clear();
 }
 
 /**
@@ -212,10 +276,10 @@ export function reportChecklistCompletions(checklist: Checklist | null | undefin
  */
 function forgetBaselineOnLogout(): void {
   reportedDone = null;
-  // The armed set belongs to the departing user too. Left behind, it would let
-  // the NEXT user's first checklist emit their already-done items as fresh
-  // completions — the very attribution bug the baseline reset exists to close.
-  completedThisSession.clear();
+  // The watched writes belong to the departing user too. Left behind, they
+  // would let the NEXT user's first checklist emit their already-done items as
+  // fresh completions — the very attribution bug the baseline reset closes.
+  watchedCompletions.clear();
 }
 
 function armBusListeners(): void {
@@ -231,6 +295,6 @@ armBusListeners();
 /** Test seam: drop the completion state and restore the import-time listeners. */
 export function __resetOnboardingAnalyticsForTests(): void {
   reportedDone = null;
-  completedThisSession.clear();
+  watchedCompletions.clear();
   armBusListeners();
 }

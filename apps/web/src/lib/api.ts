@@ -1,3 +1,4 @@
+import { queryClient } from '@/lib/queryClient';
 import { eventBus } from '@/stores/event-bus.store';
 
 declare global {
@@ -49,10 +50,21 @@ export function setIsLoggingOut(value: boolean) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let router: any = null;
+
+/**
+ * One-shot latch over the 401 interception below.
+ *
+ * It coalesces the burst of 401s a SINGLE termination produces across every
+ * in-flight request, and it is also what BOUNDS the redirect: one termination
+ * produces one navigation to /login, whatever 401s afterwards. That second
+ * property is load-bearing — the interception navigates to /login and /login
+ * navigates back to /dashboard while it still believes there is a user, so a
+ * latch that re-arms on the way round is a bounce with nothing to stop it.
+ * Only `markSessionStarted` re-arms it, and only the server can cause that.
+ */
 let redirecting = false;
 
-// Whether this tab currently holds an authenticated session. `useAuth` is the
-// only thing that knows, so it says so.
+// Whether this tab holds a session the SERVER has confirmed.
 //
 // IT IS WHAT TELLS A SESSION ENDING FROM AN ORDINARY 401. The interception
 // below fires on any 401 that is not an explicit logout, and plenty of those
@@ -64,18 +76,38 @@ let redirecting = false;
 let hasSession = false;
 
 /**
- * Record that a session has begun (or ended, on the explicit logout path).
+ * Record that the server has just confirmed an identity for this tab — a 200
+ * from `GET /auth/me` or from `POST /auth/login`, and nothing else.
  *
- * Starting one also re-arms the one-shot expiry interception. `redirecting`
- * exists to coalesce the burst of 401s a SINGLE termination produces across
- * every in-flight request — not to disable the interception for the rest of the
- * page's life. Without this reset, the logged-out me-query on a fresh /login
- * load consumes the latch and the session the user then logs into has no expiry
- * handling at all.
+ * ONLY A NETWORK ANSWER MAY SET THIS, NEVER A RENDER. The first version of it
+ * was driven by a `useAuth` effect over the cached user, and that is precisely
+ * what made it wrong: the effect runs on every fresh mount, and expiry left a
+ * stale-but-truthy user in the query cache for `/login` and `_auth` to remount
+ * on. Each remount re-declared a session that had already ended, so one expiry
+ * published `auth:logout` twice, and the latch above was reset on every pass of
+ * the `/login` ↔ `/dashboard` bounce it exists to bound. A cache can be stale;
+ * a 200 cannot.
+ *
+ * Starting a session re-arms that latch, and must: it coalesces one
+ * termination's burst of 401s rather than disabling the interception for the
+ * rest of the page's life. Without the re-arm the logged-out me-query on a
+ * fresh /login load consumes it and the session the user then logs into has no
+ * expiry handling at all.
  */
-export function setHasSession(value: boolean) {
-  hasSession = value;
-  if (value) redirecting = false;
+export function markSessionStarted(): void {
+  hasSession = true;
+  redirecting = false;
+}
+
+/**
+ * Record that the session ended on the explicit logout path, where `useAuth`
+ * publishes `auth:logout` itself.
+ *
+ * Without it, a 401 from a request that was already in flight when the user
+ * logged out would be read as a second session ending and announced again.
+ */
+export function markSessionEnded(): void {
+  hasSession = false;
 }
 
 /**
@@ -91,11 +123,20 @@ export function setHasSession(value: boolean) {
  *
  * `useAuth` publishes the same event on the explicit logout path and this one
  * cannot double it: that path sets `isLoggingOut`, so its 401s never reach the
- * interception, and `hasSession` is cleared here before the event goes out.
+ * interception, and it calls `markSessionEnded` for the 401s that arrive after
+ * it. `hasSession` is cleared here before the event goes out, so the burst of
+ * 401s one termination produces announces it once between them.
  */
 export function announceSessionExpired(): void {
   if (!hasSession) return;
   hasSession = false;
+  // The server state goes first, exactly as it does on `useAuth`'s logout —
+  // and this is the only place that can do it for an expiry, because nothing
+  // is guaranteed to be mounted here. Left alone, `['auth', 'me']` keeps the
+  // departed user's row: `/login` remounts, reads it as "signed in", and sends
+  // the user back to `/dashboard` over a session that no longer exists. This is
+  // the same client `main.tsx` provides, so it is the same clear.
+  queryClient.clear();
   eventBus.publish('auth:logout', {});
 }
 

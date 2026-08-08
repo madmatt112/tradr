@@ -151,9 +151,12 @@ function teardownOnLogout(): void {
   // out mid-walkthrough: "abandoned at no step, of nothing", which is precisely
   // the measurement Requirement 8 exists to produce.
   //
-  // A logout IS a place a user stopped, so it is reported rather than
-  // suppressed. It arrives as `dismissed` — the user left — which is what every
-  // other user-initiated exit already reports.
+  // A session ending IS a place a user stopped, so it is reported rather than
+  // suppressed — under `session-ended`, its own reason. It used to arrive as
+  // `dismissed`, which also means "the user turned the walkthrough down", and
+  // R8 exists to find where users stop: a funnel that cannot tell someone who
+  // declined the tour from someone whose session went away under them has
+  // blurred the one thing it was built to see.
   //
   // `onExit` runs `endSession()` itself, so the teardown below is for the tour
   // that was NOT running: a session whose runtime never loaded, and a stale
@@ -162,7 +165,7 @@ function teardownOnLogout(): void {
   // has, so the deferred branch is also the only one that can have a tour.
   if (enginePromise) {
     void enginePromise
-      .then(([engine]) => engine.stop())
+      .then(([engine]) => engine.stop('session-ended'))
       .catch(() => {})
       .finally(finishLogoutTeardown);
     return;

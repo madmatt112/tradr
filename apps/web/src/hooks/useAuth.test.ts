@@ -4,7 +4,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api, setHasSession } from '@/lib/api';
+import { api, markSessionEnded, markSessionStarted } from '@/lib/api';
 import { eventBus } from '@/stores/event-bus.store';
 
 import { useAuth } from './useAuth';
@@ -17,7 +17,8 @@ vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate }) }));
 vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn() },
   setIsLoggingOut: vi.fn(),
-  setHasSession: vi.fn(),
+  markSessionStarted: vi.fn(),
+  markSessionEnded: vi.fn(),
 }));
 
 function makeClient() {
@@ -98,10 +99,41 @@ describe('useAuth — logging out announces the end of the session', () => {
   it('tells the api client when a session starts and when it ends', async () => {
     const { result } = renderHook(() => useAuth(), { wrapper: makeWrapper(makeClient()) });
     await waitFor(() => expect(result.current.isAuthenticated).toBe(true));
-    expect(setHasSession).toHaveBeenCalledWith(true);
+    expect(markSessionStarted).toHaveBeenCalledOnce();
 
     result.current.logout.mutate();
 
-    await waitFor(() => expect(setHasSession).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(markSessionEnded).toHaveBeenCalledOnce());
+  });
+
+  // The declaration follows the ANSWER, not the mount. A remount that re-reads
+  // the same cached user is not a second session beginning, and treating it as
+  // one is what published `auth:logout` twice for a single expiry and left the
+  // /login ↔ /dashboard bounce with nothing to terminate it (`lib/api`'s
+  // `markSessionStarted`, and the expiry tests next to this file).
+  it('does not re-declare a session when a remount reads the user from cache', async () => {
+    // `staleTime` only isolates the case: it stops the remount refetching, so
+    // the second mount reads the cached user and nothing else. A refetch that
+    // DID happen would answer 401 on a session that had ended, which declares
+    // nothing either.
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const first = renderHook(() => useAuth(), { wrapper: makeWrapper(qc) });
+    await waitFor(() => expect(first.result.current.isAuthenticated).toBe(true));
+    expect(markSessionStarted).toHaveBeenCalledOnce();
+    first.unmount();
+
+    // /login and _auth both mount `useAuth`, and on this remount the query
+    // answers from the cache — no request, so nothing has been confirmed.
+    vi.mocked(api.get).mockClear();
+    const second = renderHook(() => useAuth(), { wrapper: makeWrapper(qc) });
+    expect(second.result.current.isAuthenticated).toBe(true);
+    expect(api.get).not.toHaveBeenCalled();
+
+    expect(markSessionStarted).toHaveBeenCalledOnce();
   });
 });

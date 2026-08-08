@@ -63,7 +63,11 @@ import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { api } from '@/lib/api';
 
-import { armChecklistCompletion, reportChecklistCompletions } from '../lib/analytics';
+import {
+  armChecklistCompletion,
+  reportChecklistCompletions,
+  type ChecklistObservation,
+} from '../lib/analytics';
 import { deriveChecklist, type Checklist } from '../lib/derive-checklist';
 
 /** [feature, scope, id] — the same shape as the other /users/me/* preferences. */
@@ -197,7 +201,10 @@ export function useOnboarding(): UseOnboardingResult {
   const positions = positionsQuery.data;
   const preference = preferenceQuery.data;
 
-  const checklist = useMemo(() => {
+  // The checklist AND the counts it was derived from, in one pass. R8.2's
+  // first-observation rule needs both, and needs them to be of the same moment
+  // — see `ChecklistObservation`. Everything below reads `checklist` off it.
+  const observation = useMemo<ChecklistObservation | null | undefined>(() => {
     // Order matters. "Not known yet" has to be answered before "not needed":
     // until the preference lands we cannot tell a fresh user from a retired
     // one, and returning `null` there would claim the user has no checklist on
@@ -232,15 +239,27 @@ export function useOnboarding(): UseOnboardingResult {
       accounts.filter((account) => account.isDemo).map((account) => account.id),
     );
     const ownPositions = positions.filter((p) => !demoAccountIds.has(p.accountId));
-    return deriveChecklist({
-      accountCount: accounts.filter((account) => !account.isDemo).length,
-      positionsEverCreatedCount: ownPositions.length,
-      closedPositionCount: ownPositions.filter((p) => p.status === 'closed').length,
-      // Absent until the calculator is first used; the single named exception
-      // to "completion is derived", because the calculator writes nothing else.
-      calculatorFirstUsedAt: preference.calculatorFirstUsedAt,
-    });
+    const counts = {
+      account: accounts.filter((account) => !account.isDemo).length,
+      position: ownPositions.length,
+      close: ownPositions.filter((p) => p.status === 'closed').length,
+    };
+    return {
+      checklist: deriveChecklist({
+        accountCount: counts.account,
+        positionsEverCreatedCount: counts.position,
+        closedPositionCount: counts.close,
+        // Absent until the calculator is first used; the single named exception
+        // to "completion is derived", because the calculator writes nothing else.
+        calculatorFirstUsedAt: preference.calculatorFirstUsedAt,
+      }),
+      counts,
+    };
   }, [accounts, positions, preference, checklistNeeded]);
+
+  // `null` and `undefined` pass straight through: they are the two non-answers
+  // the consumer has to be able to tell apart, and neither has counts.
+  const checklist: Checklist | null | undefined = observation ? observation.checklist : observation;
 
   // R8.2 — one event per item as it BECOMES complete. The transition is worked
   // out in `lib/analytics.ts` against a module-scoped baseline rather than here,
@@ -250,8 +269,8 @@ export function useOnboarding(): UseOnboardingResult {
   // render-time call, and idempotent either way — a second run over the same
   // checklist finds the baseline already moved and emits nothing.
   useEffect(() => {
-    reportChecklistCompletions(checklist);
-  }, [checklist]);
+    reportChecklistCompletions(observation);
+  }, [observation]);
 
   const { mutate } = patch;
   const setStatus = useCallback(

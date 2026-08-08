@@ -2,8 +2,8 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { OnboardingEvent } from './analytics';
-import type { Checklist, ChecklistItemId } from './derive-checklist';
+import type { ChecklistObservation, OnboardingEvent } from './analytics';
+import type { ChecklistItemId } from './derive-checklist';
 
 // THE VENDOR SDK IS THE DOUBLE, NOT THE TELEMETRY MODULE. Stubbing
 // `@/lib/telemetry/posthog` would prove only that this file calls the function
@@ -53,10 +53,30 @@ async function load(options: { configured: boolean }): Promise<AnalyticsModule> 
   return import('./analytics');
 }
 
-function aChecklist(...done: ChecklistItemId[]): Checklist {
+/**
+ * An observation of a checklist with `done` ticked for the ids given, and the
+ * plainest counts that could produce it: exactly one row behind each done item,
+ * none behind the rest. `withCounts` overrides them for the tests about a user
+ * who arrived with more than one.
+ */
+function aChecklist(...done: ChecklistItemId[]): ChecklistObservation {
   const ids: ChecklistItemId[] = ['account', 'calculator', 'position', 'close'];
   const items = ids.map((id) => ({ id, label: id, done: done.includes(id) }));
-  return { items, allComplete: items.every((item) => item.done) };
+  return {
+    checklist: { items, allComplete: items.every((item) => item.done) },
+    counts: {
+      account: done.includes('account') ? 1 : 0,
+      position: done.includes('position') ? 1 : 0,
+      close: done.includes('close') ? 1 : 0,
+    },
+  };
+}
+
+function withCounts(
+  observation: ChecklistObservation,
+  counts: Partial<ChecklistObservation['counts']>,
+): ChecklistObservation {
+  return { ...observation, counts: { ...observation.counts, ...counts } };
 }
 
 /** The captured calls as `[name, properties]` pairs. */
@@ -192,7 +212,7 @@ describe('event payloads carry no trade or monetary data (R8.5)', () => {
         expect(['account', 'calculator', 'position', 'close']).toContain(props.item);
       }
       if ('reason' in props) {
-        expect(['dismissed', 'target-missing']).toContain(props.reason);
+        expect(['dismissed', 'target-missing', 'session-ended']).toContain(props.reason);
       }
       for (const key of ['stepIndex', 'stepCount'] as const) {
         if (key in props) expect(Number.isInteger(props[key])).toBe(true);
@@ -345,6 +365,55 @@ describe('reportChecklistCompletions', () => {
     report(aChecklist('account', 'position', 'close'));
 
     expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'close' }]]);
+  });
+
+  // A watched write is a weaker claim than a completion, and the difference is
+  // the whole of the rule: a user who already had three accounts and adds a
+  // fourth on /accounts has watched a `created` land on an item they finished
+  // months ago. What tells the two apart is whether the rows behind the item
+  // are rows this tab watched appear.
+  it('says nothing for a repeat write on an item the user arrived with', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+    eventBus.publish('positions:cache-invalidate', { reason: 'created' });
+    eventBus.publish('positions:cache-invalidate', { reason: 'closed' });
+
+    // The fourth account, the sixth position, the second close — every one of
+    // the three items was already done when this session began.
+    report(
+      withCounts(aChecklist('account', 'position', 'close'), {
+        account: 4,
+        position: 6,
+        close: 2,
+      }),
+    );
+
+    expect(captureSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports an item whose every row this session put there', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    // Two accounts created back to back on /accounts, starting from none: the
+    // item did complete in this session, on the first of them.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+    report(withCounts(aChecklist('account'), { account: 2 }));
+
+    expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'account' }]]);
+  });
+
+  it('says nothing when a reopen and a re-close leave the closed set as it was', async () => {
+    const { eventBus } = await import('@/stores/event-bus.store');
+
+    // The one closed position the user already had, taken back out of the
+    // closed set and put back into it. Item 4 was done before either write.
+    eventBus.publish('positions:cache-invalidate', { reason: 'reopened' });
+    eventBus.publish('positions:cache-invalidate', { reason: 'closed' });
+    report(aChecklist('account', 'position', 'close'));
+
+    expect(captureSpy).not.toHaveBeenCalled();
   });
 
   it('does not repeat an armed completion on the renders that follow', async () => {

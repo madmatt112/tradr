@@ -257,6 +257,29 @@ describe('reduced motion (R5.9)', () => {
   });
 });
 
+describe('an ending the tour itself cannot see', () => {
+  // The session going away under a running tour. driver.js has no hook for it,
+  // so the tracked reason would call it a dismissal — which is the answer to a
+  // different question (whether the user wanted the walkthrough).
+  it('reports the reason the caller passed instead of the tracked one', () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+
+    stop('session-ended');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('session-ended');
+  });
+
+  it('still reports the tracked reason when the caller names none', () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+  });
+});
+
 describe('idle engine', () => {
   it('advance, stop and isActive are safe with no tour running', () => {
     expect(isActive()).toBe(false);

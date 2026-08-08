@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
-import { useEffect } from 'react';
 
 import type { User } from '@tradr/shared';
 
-import { api, setHasSession, setIsLoggingOut } from '@/lib/api';
+import { api, markSessionEnded, markSessionStarted, setIsLoggingOut } from '@/lib/api';
 import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
@@ -14,22 +13,29 @@ export function useAuth() {
 
   const { data: user, isLoading } = useQuery<User>({
     queryKey: ['auth', 'me'],
-    queryFn: () => api.get<User>('/auth/me'),
+    queryFn: async () => {
+      const me = await api.get<User>('/auth/me');
+      // `lib/api` intercepts 401s, and it cannot tell one that ENDED a session
+      // from the one a logged-out visitor's me-query returns on the login page.
+      // This request is what tells it apart, and the answer to it is the only
+      // honest evidence there is: the server has just named the user, so there
+      // is a session, right now. Declared HERE rather than from an effect over
+      // `user` — an effect fires on every mount, including the ones that read a
+      // cached user belonging to a session that has already ended.
+      markSessionStarted();
+      return me;
+    },
     retry: false,
   });
-
-  // `lib/api` intercepts 401s, and it cannot tell one that ENDED a session from
-  // the one a logged-out visitor's me-query returns on the login page. This hook
-  // is the only thing that knows, so it says. Covers logging in too: the login
-  // mutation seeds this very query, so `user` becomes truthy on the same commit.
-  useEffect(() => {
-    if (user) setHasSession(true);
-  }, [user]);
 
   const loginMutation = useMutation({
     mutationFn: (credentials: { email: string; password: string }) =>
       api.post<{ user: User }>('/auth/login', credentials),
     onSuccess: (data) => {
+      // The other moment the server confirms an identity. Seeding the query
+      // below means its `queryFn` may not run again for this session, so the
+      // session start is declared from the answer that established it.
+      markSessionStarted();
       queryClient.setQueryData(['auth', 'me'], data.user);
     },
   });
@@ -43,7 +49,7 @@ export function useAuth() {
       setIsLoggingOut(false);
       // The session is over on this path too, so a later 401 must not be read
       // as a second one ending — this one already published below.
-      setHasSession(false);
+      markSessionEnded();
       try {
         localStorage.removeItem(DRAWER_STORAGE_KEY);
       } catch {

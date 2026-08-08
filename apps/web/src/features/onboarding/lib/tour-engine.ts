@@ -80,10 +80,21 @@ export interface TourStep {
 export type TourExitReason =
   /** Ran off the end, or "Done" was clicked. */
   | 'completed'
-  /** The user left — close button, overlay click, or Escape (R5.3). */
+  /**
+   * The user turned the walkthrough down where it stood — close button, overlay
+   * click, or Escape (R5.3). It means they did not want the tour, which is why
+   * it does NOT cover a tour that ended because the session did: R8 exists to
+   * find where users stop, and "declined the walkthrough" and "left the app"
+   * are different answers to that question.
+   */
   | 'dismissed'
   /** A step's target never appeared within its `waitForMs` (R5.4). */
-  | 'target-missing';
+  | 'target-missing'
+  /**
+   * The session ended under the tour — a logout, or an expiry — and took it
+   * down with it. Not a judgement on the walkthrough: the user was still in it.
+   */
+  | 'session-ended';
 
 export interface TourHandlers {
   /** Fires as each step is highlighted, before any animation. */
@@ -226,19 +237,26 @@ export function advance(): void {
   instance.moveNext();
 }
 
-/** End the tour and report why, exactly once. A no-op when none is running. */
-export function stop(): void {
+/**
+ * End the tour and report why, exactly once. A no-op when none is running.
+ *
+ * `reason` is for an ending the tour itself cannot see: the caller knows the
+ * session went away under it, and the tracked reason — set by whichever
+ * driver.js hook last fired — would call that a dismissal. Left out, the
+ * tracked reason stands, which is what every in-tour ending wants.
+ */
+export function stop(reason?: TourExitReason): void {
   const running = instance;
   if (!running) return;
 
   const handlers = activeHandlers;
-  const reason = exitReason;
+  const ending = reason ?? exitReason;
   // Drop our state BEFORE tearing driver.js down: `instance` is null from here
   // on, so anything re-entering through a driver.js hook is a no-op rather than
   // a second exit.
   clearState();
   running.destroy();
-  handlers.onExit?.(reason);
+  handlers.onExit?.(ending);
 }
 
 /** Whether a tour is currently running. */

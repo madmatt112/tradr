@@ -6,7 +6,7 @@ import { eventBus } from '@/stores/event-bus.store';
 
 import type { Checklist, ChecklistItemId } from '../lib/derive-checklist';
 import { WALKTHROUGH_STEPS, type WalkthroughStep } from '../lib/steps';
-import type { TourHandlers, TourStep } from '../lib/tour-engine';
+import type { TourExitReason, TourHandlers, TourStep } from '../lib/tour-engine';
 
 import {
   ACTION_SIGNALS,
@@ -49,15 +49,18 @@ const engine = {
   }),
   advance: vi.fn(),
   // FAITHFUL TO `lib/tour-engine.stop()`, DELIBERATELY. The real one fires
-  // `onExit` exactly once for the tour it tears down, and no tour at all is a
-  // no-op. A double that merely records the call cannot see an ordering bug
-  // between the teardown and the exit handler that reads the live session — and
-  // that is exactly the bug the logout path had.
-  stop: vi.fn(() => {
+  // `onExit` exactly once for the tour it tears down, passing the caller's
+  // reason when it was given one and the tracked reason otherwise, and no tour
+  // at all is a no-op. A double that merely records the call cannot see an
+  // ordering bug between the teardown and the exit handler that reads the live
+  // session — and that is exactly the bug the logout path had.
+  stop: vi.fn((reason?: TourExitReason) => {
     const session = started;
     if (!session) return;
     started = null;
-    session.handlers.onExit?.('dismissed');
+    // 'dismissed' stands in for the tracked reason: with no driver.js here, an
+    // ending nobody named is the one the real engine starts every tour with.
+    session.handlers.onExit?.(reason ?? 'dismissed');
   }),
   isActive: vi.fn(() => started !== null),
 };
@@ -480,6 +483,11 @@ describe('useWalkthrough — logging out ends the session', () => {
   // it. Tearing the session down before the engine reported `stepIndex: -1` of
   // a `stepCount: 0` tour — an abandonment at no step, in a walkthrough of
   // nothing — for every logout mid-tour.
+  // The reason is `session-ended`, not `dismissed`. This replaces the version of
+  // this test that pinned `dismissed`, which was the conflation itself: R8 asks
+  // where users stop, and a user whose session went away under them did not
+  // decline the walkthrough. The assertion is otherwise the same one, and
+  // narrower — it now names which of the two it was.
   it('reports the step the user was actually on when they logged out (R8.1)', async () => {
     const result = await start('account');
     await waitFor(() => expect(result.current.isRunning).toBe(true));
@@ -494,13 +502,35 @@ describe('useWalkthrough — logging out ends the session', () => {
         item: 'account',
         stepIndex: 2,
         stepCount: WALKTHROUGH_STEPS.account.length,
-        reason: 'dismissed',
+        reason: 'session-ended',
       },
     ]);
     // And the session is still gone afterwards — the event is read on the way
     // out, not kept.
     expect(result.current.stepIndex).toBe(-1);
     expect(result.current.isRunning).toBe(false);
+  });
+
+  // The other half of the distinction: the reason the session teardown passes
+  // must not become the reason for every ending. Stopping the tour from the UI
+  // names none, so the engine reports the one it was tracking.
+  it('leaves a walkthrough the user turned down reported as dismissed', async () => {
+    const result = await start('account');
+    await waitFor(() => expect(result.current.isRunning).toBe(true));
+    highlight(1);
+
+    await act(async () => {
+      result.current.stop();
+    });
+
+    expect(eventsNamed('onboarding_walkthrough_abandoned')).toEqual([
+      {
+        item: 'account',
+        stepIndex: 1,
+        stepCount: WALKTHROUGH_STEPS.account.length,
+        reason: 'dismissed',
+      },
+    ]);
   });
 
   it('reports nothing when the runtime never loaded and no tour was running', async () => {
