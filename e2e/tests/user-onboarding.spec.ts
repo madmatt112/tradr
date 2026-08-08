@@ -127,6 +127,22 @@ const ACCOUNT_STEP_TITLES = [
 const CREATE_STEP = ACCOUNT_STEP_TITLES.indexOf('Create the account');
 
 /**
+ * The calculator set's seven step titles, in order, from
+ * `features/onboarding/lib/steps/calculator.ts`. It is the only set whose steps
+ * all live on one screen and the only item a user with no accounts can complete,
+ * which is why both the keyboard traversal and the resume scenario use it.
+ */
+const CALCULATOR_STEP_TITLES = [
+  'Entry price',
+  'Stop loss',
+  'Target price (optional)',
+  'Risk',
+  'Account',
+  'The amount at risk',
+  'Size, risk and R:R',
+] as const;
+
+/**
  * Press the walkthrough's entry point once it can actually start one.
  *
  * The control is `aria-disabled` — focusable but inert — until the checklist
@@ -149,28 +165,29 @@ async function advanceTo(page: Page, index: number): Promise<void> {
 }
 
 /**
- * Drive the tour with a key, retrying until the press lands.
+ * ONE PRESS, ONE STEP — pressed once, asserted once, with no retry.
  *
- * driver.js ignores its keyboard controls while a step transition is running,
- * and it swaps the incoming step's title in HALFWAY through that transition —
- * so the first press after a title appears is reliably dropped. Clicking the
- * popover's buttons does not have the problem because Playwright waits for the
- * element to stop moving before it clicks. A dropped press is discarded rather
- * than queued, so pressing again cannot overshoot the step we asked for.
+ * This used to press in a `toPass` loop, and the loop was hiding a real defect:
+ * driver.js drops an arrow press while a step transition is running, which is
+ * for 400ms after the last one and for the whole of the tour's opening
+ * highlight, so the first press per transition never landed. `tour-engine.ts`
+ * now owns the arrow keys itself (`allowKeyboardControl: false`) and routes them
+ * through the same functions the popover's buttons use, so a press is never
+ * swallowed.
+ *
+ * Naming the exact neighbouring title is what makes this an EXACTLY-one-step
+ * assertion rather than an at-least-one-step one: a press that moved two steps
+ * lands somewhere else and fails here just as a dropped press does.
  */
-async function pressUntilTitle(page: Page, key: string, expected: string): Promise<void> {
-  await expect(async () => {
-    await page.keyboard.press(key);
-    await expect(popoverTitle(page)).toHaveText(expected, { timeout: 1_500 });
-  }).toPass({ timeout: 20_000 });
+async function pressToTitle(page: Page, key: string, expected: string): Promise<void> {
+  await page.keyboard.press(key);
+  await expect(popoverTitle(page)).toHaveText(expected);
 }
 
-/** Escape out of the tour, retried for the same reason as `pressUntilTitle`. */
+/** Escape out of the tour — also one press, for the same reason (R5.3). */
 async function escapeTour(page: Page): Promise<void> {
-  await expect(async () => {
-    await page.keyboard.press('Escape');
-    await expect(popover(page)).toHaveCount(0, { timeout: 1_500 });
-  }).toPass({ timeout: 20_000 });
+  await page.keyboard.press('Escape');
+  await expect(popover(page)).toHaveCount(0);
 }
 
 /**
@@ -315,22 +332,62 @@ test.describe('user onboarding', () => {
     // was" and "what the data says is outstanding" are different answers.
     await page.locator('[data-checklist-action="calculator"]').click();
     await expect(page).toHaveURL(/\/calculator/);
-    await expect(popoverTitle(page)).toHaveText('Entry price');
+    await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
+
+    // AND FINISH THAT ITEM BEFORE THE RELOAD, INSIDE THE TOUR. A user at 0 of 4
+    // cannot tell resume apart from a restart: with nothing ticked, "the first
+    // outstanding item" and "the first item" are the same step, so the tour
+    // landing on it proves nothing about where the answer came from. So the
+    // calculator is really used here — the three figures a size needs, typed
+    // into the controls each step highlights. It is the one item completable
+    // without an account, and item 2's only trace is the stored first-use
+    // timestamp the calculation writes.
+    await page.locator('#entryPrice').fill('100');
+    for (const title of CALCULATOR_STEP_TITLES.slice(1)) {
+      await popoverNext(page).click();
+      await expect(popoverTitle(page)).toHaveText(title);
+      if (title === 'Stop loss') await page.locator('#stopLoss').fill('95');
+      if (title === 'The amount at risk') await page.locator('#dollarRisk').fill('50');
+    }
+    // The results appearing IS the successful calculation the write hangs off.
+    // They arrive on the LAST field leaving focus, because the form validates on
+    // blur, which is what the move to the results step does.
+    await expect(
+      page
+        .locator('[data-tour="calculator-results"]')
+        .getByText('Position Sizing', { exact: true }),
+    ).toBeVisible();
 
     await page.reload();
     // Nothing auto-starts, so the reload leaves no tour running at all.
     await expect(page.locator('#entryPrice')).toBeVisible();
     await expect(popover(page)).toHaveCount(0);
 
-    // Re-entering resumes by re-deriving the outstanding item from the user's
-    // data — no step index was ever stored, so it lands on the account set
-    // rather than back in the calculator set the user happened to be in.
+    // The item is ticked off the user's data, and its own shortcut goes with it
+    // — nothing here is a stored per-step flag.
     await page.goto('/dashboard');
+    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
+    await expect(page.locator('[data-checklist-item="calculator"]')).toHaveText(/— completed$/);
+    await expect(page.locator('[data-checklist-action="calculator"]')).toHaveCount(0);
+
+    // Re-entering resumes by re-deriving the outstanding item from the user's
+    // data — no step index was ever stored, so it lands on the account set,
+    // which is what the checklist still says is outstanding. NOT the calculator
+    // set the user was in when they reloaded, and not the one they just
+    // completed.
+    //
+    // THE ACCOUNT SET IS AS FAR AS THIS CAN GO, and the reason is a property of
+    // the product rather than of the test: every way into a walkthrough lives on
+    // the zero-state, the zero-state renders only while the user has no accounts
+    // (R3.4), and having no accounts is exactly what leaves item 1 outstanding.
+    // So the first outstanding item is ALWAYS item 1 wherever the entry point
+    // exists, and resuming onto a later set — the calculator set, after an
+    // account is created — is unreachable from the UI as it stands.
     await startWalkthrough(page);
     await expect(popoverProgress(page)).toHaveText(`1 of ${ACCOUNT_STEP_TITLES.length}`);
 
     await escapeTour(page);
-    await expect(checklistProgress(page)).toHaveText('0 of 4 complete');
+    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
   });
 
   test('the unguided path leaves a usable checklist behind', async ({ page, request }) => {
@@ -436,10 +493,18 @@ test.describe('user onboarding', () => {
     // user opens by activating the highlighted control.
     await tabTo(page, '[data-checklist-action="calculator"]');
     await page.keyboard.press('Enter');
-    await expect(popoverTitle(page)).toHaveText('Entry price');
-    await pressUntilTitle(page, 'ArrowRight', 'Stop loss');
-    await pressUntilTitle(page, 'ArrowRight', 'Target price (optional)');
-    await pressUntilTitle(page, 'ArrowLeft', 'Stop loss');
+    await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
+    // Consecutive presses, each asserted on its own: this is where a dropped
+    // press shows up, because every press after the first follows a transition
+    // that has only just painted the title the one before it produced.
+    await pressToTitle(page, 'ArrowRight', CALCULATOR_STEP_TITLES[1]);
+    await pressToTitle(page, 'ArrowRight', CALCULATOR_STEP_TITLES[2]);
+    await pressToTitle(page, 'ArrowLeft', CALCULATOR_STEP_TITLES[1]);
+    await pressToTitle(page, 'ArrowLeft', CALCULATOR_STEP_TITLES[0]);
+    // The first step is the front of the set, and the key that would run off it
+    // does nothing rather than ending the tour.
+    await page.keyboard.press('ArrowLeft');
+    await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
     await escapeTour(page);
   });
 });

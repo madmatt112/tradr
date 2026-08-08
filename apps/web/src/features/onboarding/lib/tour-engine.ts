@@ -132,10 +132,65 @@ function clearState(): void {
     window.clearTimeout(pendingStopTimer);
     pendingStopTimer = undefined;
   }
+  window.removeEventListener('keyup', handleKeyup);
   instance = null;
   activeSteps = [];
   activeHandlers = {};
   exitReason = 'dismissed';
+}
+
+/** R5.5 — the one step state that decides whether "Next" (or its key) advances. */
+function isGatedStep(index: number): boolean {
+  return activeSteps[index]?.advanceOnAction === true;
+}
+
+/**
+ * THE WALKTHROUGH'S KEYBOARD CONTROLS ARE OURS, NOT DRIVER.JS'S, AND THAT IS A
+ * BUG FIX (R5.9).
+ *
+ * driver.js 1.8.0 guards its own arrow-key handlers on `__transitionCallback`
+ * and drops the press when one is in flight — `return`, not queue. A transition
+ * is in flight for the WHOLE of `duration` (400ms by default), and the incoming
+ * step's title is swapped in halfway through it, so every press within ~400ms of
+ * the last one is silently swallowed, and so is the very first press after the
+ * tour opens, because the opening highlight is a transition too. Measured
+ * against the real stack: two presses 0/150/250/350ms apart move ONE step; at
+ * 450ms both land.
+ *
+ * That is an accessibility defect rather than a nicety, because the pointer path
+ * has no such guard: "Next" advances on every click however fast they come, so a
+ * keyboard user is the only user who loses input, and loses it silently. Escape
+ * is unaffected — driver.js routes it straight to its close handler — but it is
+ * handled here too, because `allowKeyboardControl` is one switch for all three
+ * keys and half-owning them would leave two handlers racing for the arrows.
+ *
+ * Everything below routes through the SAME functions the popover's own buttons
+ * do, so the two paths cannot drift: the gate is `isGatedStep`, advancing is
+ * `advance()`, and exiting is `stop()`. `keyup` rather than `keydown` matches
+ * what driver.js listened for, so holding a key still moves one step rather than
+ * racing through the set. Nothing filters by event target, also as before: the
+ * highlighted control is interactive (`disableActiveInteraction: false`) and a
+ * user typing in it was already moving the tour with the arrow keys.
+ */
+function handleKeyup(event: KeyboardEvent): void {
+  const running = instance;
+  if (!running?.isActive()) return;
+
+  if (event.key === 'Escape') {
+    exitReason = 'dismissed';
+    stop();
+    return;
+  }
+  if (event.key === 'ArrowRight') {
+    if (isGatedStep(running.getActiveIndex() ?? -1)) return;
+    advance();
+    return;
+  }
+  // Never off the front of the set: driver.js's own left-arrow handler stops at
+  // the first step, while `movePrevious()` there tears the tour down.
+  if (event.key === 'ArrowLeft' && running.hasPreviousStep()) {
+    running.movePrevious();
+  }
 }
 
 const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
@@ -160,10 +215,10 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
 };
 
 const handleNextClick: DriverHook = (_element, _driveStep, opts) => {
-  // R5.5 — an action step advances on the action, never on "Next". driver.js
-  // routes both the button and the right-arrow key through here, so suppressing
-  // it once covers both.
-  if (activeSteps[opts.index ?? -1]?.advanceOnAction) return;
+  // R5.5 — an action step advances on the action, never on "Next". The
+  // right-arrow key is suppressed by the same gate in `handleKeyup`, which is
+  // why the test lives in one function rather than in both callers.
+  if (isGatedStep(opts.index ?? -1)) return;
   advance();
 };
 
@@ -207,6 +262,10 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
     animate: !prefersReducedMotion(),
     // R5.3 — escapable in one action, by close button, overlay or Escape.
     allowClose: true,
+    // OFF, so `handleKeyup` above is the only thing driving the tour from the
+    // keyboard. Leaving it on would double-handle every arrow press that landed
+    // outside driver.js's own transition guard, which is most of them.
+    allowKeyboardControl: false,
     // The non-motion carrier of step state.
     showProgress: true,
     // R5.5 — the highlighted control stays usable.
@@ -219,7 +278,10 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
     onDestroyStarted: handleDestroyStarted,
   });
 
+  // After `drive()`, so a tour that failed to start leaves nothing bound.
+  // `clearState()` removes it, which every ending goes through.
   instance.drive();
+  window.addEventListener('keyup', handleKeyup);
 }
 
 /**

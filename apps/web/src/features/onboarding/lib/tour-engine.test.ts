@@ -142,6 +142,72 @@ describe('action steps (R5.5)', () => {
   });
 });
 
+/**
+ * The keyboard is the engine's own, not driver.js's (R5.9).
+ *
+ * driver.js drops an arrow press while a step transition is running, so a
+ * keyboard user lost roughly every other press while a mouse user lost none —
+ * "Next" has no such guard. These pin the behaviour that replaced it. The drop
+ * itself is a timing property of the animation and belongs to the e2e suite;
+ * what is checkable here is that one press moves exactly one step, that the
+ * action gate applies to the key as well as the button, and that the binding
+ * goes away with the tour.
+ */
+describe('keyboard control (R5.9)', () => {
+  function press(key: string): void {
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+  }
+
+  it('advances exactly one step per right-arrow press', () => {
+    const onStepChange = vi.fn();
+    startTour(TWO_STEPS, { onStepChange });
+
+    press('ArrowRight');
+
+    expect(popoverTitle()).toBe('Second');
+    expect(onStepChange).toHaveBeenLastCalledWith(1, TWO_STEPS[1]);
+    expect(onStepChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('goes back on the left arrow, and stays put at the front of the set', () => {
+    startTour(TWO_STEPS);
+    press('ArrowRight');
+    expect(popoverTitle()).toBe('Second');
+
+    press('ArrowLeft');
+    expect(popoverTitle()).toBe('First');
+
+    // Off the front is a no-op, NOT an exit: `movePrevious()` there would tear
+    // the tour down, which is not what the key means.
+    press('ArrowLeft');
+    expect(popoverTitle()).toBe('First');
+    expect(isActive()).toBe(true);
+  });
+
+  it('leaves an action step where it is, exactly as "Next" does (R5.5)', () => {
+    startTour([
+      { target: '#one', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
+      { target: '#two', title: 'Done', description: 'Here it is.' },
+    ]);
+
+    press('ArrowRight');
+
+    expect(popoverTitle()).toBe('Do it');
+  });
+
+  it('stops listening once the tour has ended', () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+    stop();
+
+    press('ArrowRight');
+    press('Escape');
+
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(isActive()).toBe(false);
+  });
+});
+
 describe('exiting (R5.3)', () => {
   it('reports a dismissal from the close button', () => {
     const onExit = vi.fn();
