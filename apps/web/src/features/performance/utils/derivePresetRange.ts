@@ -142,6 +142,34 @@ function localStartOfNextMonth(now: Date, tz: string): Date {
 }
 
 /**
+ * The instant the history-anchored presets (`yearly`, `all-time`) start their
+ * window from, CLAMPED TO `now`.
+ *
+ * `earliestClosedAt` is whatever the user typed into an exit fill, and nothing
+ * stops that being a future date — a mistyped year on a close is the ordinary
+ * way to get one. Anchoring on it directly puts `start` after the window's
+ * `end`, which `buildRange` holds at local start-of-tomorrow, and the backend
+ * rejects `start >= end` outright (`START_NOT_BEFORE_END`, a 400). Every widget
+ * on the window then shows its error state, which is a worse answer than the
+ * one the typo deserves.
+ *
+ * So: history that runs past today does not drag the start with it. An all-time
+ * window means "from the earliest close the window can actually reach, through
+ * the end of today" — the `end` bound already means future closes fall outside
+ * any window the backend will accept, so a start beyond it could only ever
+ * describe an empty range. History dated entirely in the future therefore
+ * anchors exactly where no history anchors: the current month (or year), which
+ * is a window the widgets render normally.
+ */
+function historyAnchor(earliestClosedAt: string | null, nowInstant: Date): Date {
+  if (!earliestClosedAt) return nowInstant;
+  const earliest = new Date(earliestClosedAt);
+  // A malformed timestamp is not something to guess at either.
+  if (Number.isNaN(earliest.getTime())) return nowInstant;
+  return earliest.getTime() > nowInstant.getTime() ? nowInstant : earliest;
+}
+
+/**
  * Serialize a range, clamping `end` so it never exceeds `maxEnd`.
  *
  * The backend `PerformanceQuerySchema` rejects any `end` past local
@@ -200,10 +228,9 @@ export function derivePresetRange(
       const { year: currentYear } = localPartsInTz(nowInstant, resolvedTz);
       // If we have history, anchor the start year on the earliest closed
       // position; otherwise show the current year alone (Jan 1 → next Jan 1).
-      const earliest = currencyHistoryRange.earliestClosedAt;
-      const startYear = earliest
-        ? localPartsInTz(new Date(earliest), resolvedTz).year
-        : currentYear;
+      // `historyAnchor` collapses the two when that close is in the future.
+      const anchor = historyAnchor(currencyHistoryRange.earliestClosedAt, nowInstant);
+      const startYear = localPartsInTz(anchor, resolvedTz).year;
       const start = localStartOfYear(startYear, resolvedTz);
       const end = localStartOfYear(currentYear + 1, resolvedTz);
       return buildRange('year', start, end, maxEnd);
@@ -215,18 +242,13 @@ export function derivePresetRange(
       return buildRange('month', start, end, maxEnd);
     }
     case 'all-time': {
-      const earliest = currencyHistoryRange.earliestClosedAt;
       const end = localStartOfNextMonth(nowInstant, resolvedTz);
-      // No history → start = current-month start (a one-month window). The
-      // empty-state UI takes over either way; we just need a valid range.
-      let start: Date;
-      if (earliest) {
-        const parts = localPartsInTz(new Date(earliest), resolvedTz);
-        start = localStartOfMonth(parts.year, parts.month, resolvedTz);
-      } else {
-        const parts = localPartsInTz(nowInstant, resolvedTz);
-        start = localStartOfMonth(parts.year, parts.month, resolvedTz);
-      }
+      // No history — or history that is entirely in the future — → start =
+      // current-month start (a one-month window). The empty-state UI takes over
+      // either way; we just need a valid range.
+      const anchor = historyAnchor(currencyHistoryRange.earliestClosedAt, nowInstant);
+      const parts = localPartsInTz(anchor, resolvedTz);
+      const start = localStartOfMonth(parts.year, parts.month, resolvedTz);
       return buildRange('month', start, end, maxEnd);
     }
   }

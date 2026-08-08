@@ -183,6 +183,54 @@ describe('derivePresetRange — All-Time', () => {
   });
 });
 
+describe('derivePresetRange — a close dated in the future', () => {
+  // Exit fills carry no future-date guard, so a mistyped year on a close puts
+  // `earliestClosedAt` ahead of the clock. Anchoring `start` on it would put
+  // `start` after `end` (which is held at today+1), and the backend rejects
+  // `start >= end` with a 400 START_NOT_BEFORE_END — every widget on the window
+  // would show its error state. An all-time window stops at the end of today
+  // regardless, so a start beyond that could only describe an empty range.
+  const now = new Date('2026-06-15T12:00:00Z');
+
+  it('all-time: a sole future close anchors on the current month, not on 2027', () => {
+    const history = historyAt('2027-03-04T10:00:00Z');
+    const r = derivePresetRange('all-time', history, now, TZ_UTC, 0);
+    expect(r.start).toBe('2026-06-01T00:00:00.000Z');
+    expect(r.end).toBe('2026-06-16T00:00:00.000Z');
+    expect(new Date(r.start).getTime()).toBeLessThan(new Date(r.end).getTime());
+  });
+
+  it('yearly: same, anchoring on the current year', () => {
+    const history = historyAt('2027-03-04T10:00:00Z');
+    const r = derivePresetRange('yearly', history, now, TZ_UTC, 0);
+    expect(r.start).toBe('2026-01-01T00:00:00.000Z');
+    expect(new Date(r.start).getTime()).toBeLessThan(new Date(r.end).getTime());
+  });
+
+  it('all-time: real past history is NOT truncated by a future close alongside it', () => {
+    // `mostRecentClosedAt` in the future while `earliestClosedAt` is real — the
+    // window must still reach back to the earliest close. The fix clamps the
+    // ANCHOR, not the history.
+    const history = historyAt('2024-04-15T10:00:00Z', '2027-03-04T10:00:00Z');
+    const r = derivePresetRange('all-time', history, now, TZ_UTC, 0);
+    expect(r.start).toBe('2024-04-01T00:00:00.000Z');
+  });
+
+  it.each([TZ_UTC, TZ_NY, TZ_TOKYO])(
+    'keeps start strictly before end for every preset in %s when all history is ahead of the clock',
+    (tz) => {
+      const history = historyAt('2027-03-04T10:00:00Z');
+      for (const preset of ['daily', 'weekly', 'monthly', 'yearly', 'ytd', 'all-time'] as const) {
+        const r = derivePresetRange(preset, history, now, tz, 0);
+        expect(
+          new Date(r.start).getTime(),
+          `${preset} in ${tz} derived start ${r.start} >= end ${r.end}`,
+        ).toBeLessThan(new Date(r.end).getTime());
+      }
+    },
+  );
+});
+
 describe('derivePresetRange — end never exceeds the schema max (today + 1 day)', () => {
   // The backend PerformanceQuerySchema rejects any `end` past local
   // start-of-tomorrow (today + 1 day) with a 400 VALIDATION_ERROR. The `daily`

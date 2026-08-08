@@ -324,15 +324,23 @@ describe('POST /api/accounts/demo', () => {
     const { cookie, userId } = await registerAndGetCookie();
     expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
 
-    const { positions: seededPositions } = await readSeededData(userId);
+    const { positions: seededPositions, fills: seededFills } = await readSeededData(userId);
 
-    // THE NEWEST CLOSE, not the newest fill. Every figure the dashboard draws
+    // THE NEWEST CLOSE, and separately the newest fill. Every figure the dashboard draws
     // comes from closed positions — the stats tiles, the equity curve and the
     // bar chart are all cut from `closed_at` — so an entry fill against a
     // position that is still open, or against the planned trade that was never
-    // opened, moves nothing on screen. Reading the newest FILL is what let this
-    // guard report a nine-day-old fixture as current while the newest CLOSE was
-    // a month old and the dashboard had nothing to show.
+    // opened, moves nothing on screen. Reading ONLY the newest fill is what let
+    // this guard report a nine-day-old fixture as current while the newest CLOSE
+    // was a month old and the dashboard had nothing to show.
+    //
+    // Both bounds are kept, because they protect different things and neither
+    // implies the other. The CLOSE bound is what the dashboard windows need. The
+    // FILL bound is what keeps the rest of the fixture — the three open
+    // positions and the planned trade, which have entry fills and no close at
+    // all — from ageing out of sight behind a close that was refreshed on its
+    // own. A maintainer who moves only the closed trades forward passes the
+    // close bound and still ships a positions list that reads as abandoned.
     const closes = seededPositions
       .map((p) => p.closedAt)
       .filter((closedAt): closedAt is string => closedAt !== null);
@@ -375,6 +383,18 @@ describe('POST /api/accounts/demo', () => {
     // happened yet reads as broken in the other direction.
     expect(monthsBehind).toBeGreaterThanOrEqual(0);
     expect(newestClose.getTime()).toBeLessThan(now.getTime());
+
+    // AND the fill bound, on the same fixture and in the same units. 90 days is
+    // the point at which the three positions the fixture leaves open have gone a
+    // full quarter without anything booked against them, which reads as
+    // abandoned rather than current whatever the closed trades say.
+    expect(seededFills.length, 'the fixture still has fills to measure').toBeGreaterThan(0);
+    const newestFill = new Date(
+      seededFills.map((f) => f.filledAt).reduce((max, at) => (at > max ? at : max)),
+    );
+    const fillAgeInDays = (now.getTime() - newestFill.getTime()) / 86_400_000;
+    expect(fillAgeInDays).toBeLessThan(90);
+    expect(fillAgeInDays).toBeGreaterThan(0);
   });
 });
 

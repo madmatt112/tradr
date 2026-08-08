@@ -89,6 +89,14 @@ export interface PresetPerformanceResult {
  * rather than the window, the second response repeats what the first said and
  * the state update is skipped. Two fetches, then quiescence.
  *
+ * WHAT THE LEARNED VALUE CANNOT DO IS PUSH THE WINDOW PAST TODAY. `historyRange`
+ * is built from dates the user typed into exit fills, which carry no future-date
+ * guard, so `earliestClosedAt` can be ahead of the clock — and a window whose
+ * `start` lands after its `end` is a 400 (`START_NOT_BEFORE_END`) that would put
+ * all three widgets into their error state. `derivePresetRange` clamps the
+ * anchor it takes from history to `now` for exactly that reason; see
+ * `historyAnchor` there for what an all-time window means in that case.
+ *
  * The zone is NOT re-derived from the response (`resolvedTimezone`). Bucketing
  * follows the user's stored reporting timezone and nothing else
  * (user-onboarding R2.4); a `null` params disables the query until it lands so
