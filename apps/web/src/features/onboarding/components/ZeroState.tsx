@@ -85,6 +85,7 @@ import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/
 import { AccountDialog } from '@/features/accounts/components/AccountDialog';
 import { docsUrl } from '@/lib/docs';
 
+import { useDemoAccount } from '../hooks/useDemoAccount';
 import { useOnboarding } from '../hooks/useOnboarding';
 import { useWalkthrough } from '../hooks/useWalkthrough';
 import type { Checklist, ChecklistItemId } from '../lib/derive-checklist';
@@ -93,6 +94,8 @@ import { ActivationChecklist } from './ActivationChecklist';
 
 /** The note both the guidance paragraph and the button's description point at. */
 const GUIDANCE_NOTE_ID = 'zero-state-guidance-note';
+/** The same arrangement for the sample-data control while its seed is in flight. */
+const SAMPLE_DATA_NOTE_ID = 'zero-state-sample-data-note';
 
 /**
  * Why the guided fork cannot run right now, in the user's words — or `null` when
@@ -123,6 +126,7 @@ function guidanceGap(
 export function ZeroState() {
   const { setStatus, isSaving, checklist } = useOnboarding();
   const { start, isUnavailable } = useWalkthrough();
+  const { seed, isPending: isSeeding } = useDemoAccount();
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
 
   const guidanceNote = guidanceGap(isUnavailable, checklist);
@@ -230,19 +234,26 @@ export function ZeroState() {
             </Button>
             {/* R9.1 — sample data is offered ALONGSIDE creating a real account,
                 never instead of it, which is why it sits next to the primary
-                action and does not replace it.
-                TASK 31 SEAM: the seeder (`useDemoAccount`, POST
-                /api/accounts/demo) is Phase G and does not exist. Rather than
-                ship a control that silently does nothing, the option is present
-                and DISABLED with the reason stated next to it. Task 31 drops
-                `disabled`, adds `onClick={seed}`, and removes the note below;
-                the tests pinning both are the ones to update. */}
+                action, takes `outline` rather than the amber, and does not
+                replace anything.
+                NO `disabled` ATTRIBUTE ON THIS CONTROL, in flight or otherwise.
+                It spent a phase disabled while the seeder was unbuilt, and a
+                keyboard user never met it: `disabled` removes a control from the
+                tab order, so the option might as well not have existed for them.
+                The in-flight state uses the same focusable `aria-disabled` +
+                stated-reason pattern as the guided fork above. */}
             <Button
               variant="outline"
               data-testid="zero-state-sample-data"
-              className="w-full cursor-pointer motion-reduce:transition-none sm:w-auto"
-              disabled
-              aria-describedby="zero-state-sample-data-note"
+              className="w-full cursor-pointer motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
+              aria-disabled={isSeeding || undefined}
+              aria-describedby={isSeeding ? SAMPLE_DATA_NOTE_ID : undefined}
+              // The guard, not just the styling — an `aria-disabled` control is
+              // still clickable, which is the price of leaving it reachable.
+              onClick={() => {
+                if (isSeeding) return;
+                seed();
+              }}
             >
               Add sample data
             </Button>
@@ -270,9 +281,20 @@ export function ZeroState() {
             </p>
           )}
 
-          <p id="zero-state-sample-data-note" className="text-xs text-muted-foreground">
-            Sample data is not available yet.
-          </p>
+          {/* Seeding drives a set of trades through the real position
+              lifecycle, so it is long enough to need saying. `role="status"`
+              for the same reason as the guidance note above: it appears and
+              disappears under the user while the rest of the screen carries on. */}
+          {isSeeding && (
+            <p
+              id={SAMPLE_DATA_NOTE_ID}
+              role="status"
+              data-testid="zero-state-sample-data-note"
+              className="text-sm text-muted-foreground"
+            >
+              Adding sample data. Your dashboard fills in as soon as it lands.
+            </p>
+          )}
         </CardContent>
       </Card>
 

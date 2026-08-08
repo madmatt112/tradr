@@ -125,6 +125,11 @@ export const AccountSchema = z.object({
   // moves with the market. `cash + positionValue === balance` always.
   cash: z.string().optional(),
   positionValue: z.string().optional(),
+  // True on the disposable sample account and on nothing else. Server-set and
+  // read-only: it is absent from both CreateAccountSchema and
+  // UpdateAccountSchema, so no request can claim it. `.optional()` for the same
+  // reason as `balance` above — existing fixtures build accounts without it.
+  isDemo: z.boolean().optional(),
 });
 
 export type CreateAccountInput = z.infer<typeof CreateAccountSchema>;

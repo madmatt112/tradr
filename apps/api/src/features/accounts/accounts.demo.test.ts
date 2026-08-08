@@ -152,11 +152,13 @@ describe('POST /api/accounts/demo', () => {
 
     const res = await authedRequest('POST', '/api/accounts/demo', cookie);
     expect(res.status).toBe(201);
-    // The ordinary account shape, and nothing more: `isDemo` is the server's
-    // own authorisation flag and is not part of any response, so it is asserted
-    // on the stored row below rather than on the wire.
-    const account = (await res.json()) as { id: string; name: string };
+    // The ordinary account shape, with the sample-data flag on it. It is
+    // read-only on the way out — the flag is still the server's own
+    // authorisation and no request can set it — but a client cannot label or
+    // offer to remove sample data it has no way of recognising.
+    const account = (await res.json()) as { id: string; name: string; isDemo: boolean };
     expect(account.name).toBe('Demo Account');
+    expect(account.isDemo).toBe(true);
 
     const accountRows = await db
       .select()
@@ -291,6 +293,31 @@ describe('POST /api/accounts/demo', () => {
       headers: { 'X-Forwarded-For': uniqueIp() },
     });
     expect(res.status).toBe(401);
+  });
+
+  it('marks the sample account on the list and the detail read, and real accounts as not', async () => {
+    // Without this the client can only guess which account is the sample one,
+    // and the only guess available — "it is the only account" — is an invariant
+    // enforced somewhere else entirely.
+    const { cookie } = await registerAndGetCookie();
+    expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
+
+    const listRes = await authedRequest('GET', '/api/accounts', cookie);
+    const list = (await listRes.json()) as { id: string; isDemo: boolean }[];
+    expect(list).toHaveLength(1);
+    expect(list[0].isDemo).toBe(true);
+
+    const detailRes = await authedRequest('GET', `/api/accounts/${list[0].id}`, cookie);
+    expect(((await detailRes.json()) as { isDemo: boolean }).isDemo).toBe(true);
+
+    // And a real account reads false rather than absent — the flag answers the
+    // question for every account, not only for the interesting one.
+    const other = await registerAndGetCookie();
+    const created = await authedRequest('POST', '/api/accounts', other.cookie, {
+      name: 'Main',
+      currency: 'USD',
+    });
+    expect(((await created.json()) as { isDemo: boolean }).isDemo).toBe(false);
   });
 
   it('keeps the sample trades in a window that still looks current', async () => {

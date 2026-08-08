@@ -110,7 +110,7 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *                   here — there is no rule to clear on create.
  *                 example: '1.00'
  *     responses:
- *       201: { description: The created account. }
+ *       201: { description: 'The created account, with `isDemo: false`.' }
  *       400: { description: Validation error. }
  *       403: { description: TIER_LIMIT_ACCOUNTS (account cap reached on the current plan) or FORBIDDEN (cross-user brokerage). }
  *       409: { description: DEMO_ACCOUNT_EXISTS (sample data present — remove it and retry) or CONFLICT (duplicate account name). }
@@ -146,9 +146,15 @@ accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
  *
  *       Available identically to self-hosted and hosted deployments — it needs no
  *       optional integration configured.
+ *
+ *
+ *       Every account read — the list, the detail and this response — carries a boolean
+ *       `isDemo`, which is `true` on the sample account and `false` on every real one.
+ *       That is how a client identifies the sample account to label or remove it; it is
+ *       server-set and cannot be sent in on create or update.
  *     tags: [Accounts]
  *     responses:
- *       201: { description: The created sample account. }
+ *       201: { description: 'The created sample account, with `isDemo: true`.' }
  *       409: { description: The user already has an account. }
  */
 accounts.post('/demo', async (c) => {
@@ -234,7 +240,7 @@ accounts.put('/writable', validate('json', SetWritableAccountSchema), async (c) 
  *                   `null` clears the rule back to unset.
  *                 example: '1.00'
  *     responses:
- *       200: { description: The updated account. }
+ *       200: { description: 'The updated account. `isDemo` is server-set and unchanged by this call.' }
  *       400: { description: Validation error (includes an unknown IANA timezone). }
  *       403: { description: FORBIDDEN (cross-user brokerage). }
  *       404: { description: Account not found. }

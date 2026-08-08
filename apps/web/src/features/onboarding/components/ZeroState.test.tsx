@@ -29,6 +29,7 @@ import type { OnboardingState, OnboardingStatus } from '@tradr/shared';
 
 import { DOCS_BASE_URL, docsUrl } from '@/lib/docs';
 
+import { useDemoAccount, type UseDemoAccountResult } from '../hooks/useDemoAccount';
 import { useOnboarding, type UseOnboardingResult } from '../hooks/useOnboarding';
 import { useWalkthrough, type UseWalkthroughResult } from '../hooks/useWalkthrough';
 import { deriveChecklist } from '../lib/derive-checklist';
@@ -37,6 +38,11 @@ import { deriveChecklist } from '../lib/derive-checklist';
 
 vi.mock('../hooks/useOnboarding', () => ({ useOnboarding: vi.fn() }));
 vi.mock('../hooks/useWalkthrough', () => ({ useWalkthrough: vi.fn() }));
+// Faked for the same reason as the other two: it has its own tests, and the
+// real one issues an accounts read and two mutations that would need a
+// QueryClientProvider here. What belongs in THIS file is the wiring — that the
+// control calls `seed` and what it looks like while the seed is in flight.
+vi.mock('../hooks/useDemoAccount', () => ({ useDemoAccount: vi.fn() }));
 
 vi.mock('@/features/accounts/components/AccountDialog', () => ({
   AccountDialog: ({ open }: { open: boolean }) =>
@@ -47,6 +53,7 @@ import { ZeroState } from './ZeroState';
 
 const mockUseOnboarding = vi.mocked(useOnboarding);
 const mockUseWalkthrough = vi.mocked(useWalkthrough);
+const mockUseDemoAccount = vi.mocked(useDemoAccount);
 
 function preference(status: OnboardingStatus): OnboardingState {
   return { status, coachMarksSeen: [] };
@@ -93,9 +100,24 @@ function useTour(over: Partial<UseWalkthroughResult> = {}): UseWalkthroughResult
   return value;
 }
 
+/** Idle by default: no sample data present, nothing in flight. */
+function useDemo(over: Partial<UseDemoAccountResult> = {}): UseDemoAccountResult {
+  const value: UseDemoAccountResult = {
+    isDemoPresent: false,
+    demoAccount: undefined,
+    seed: vi.fn(),
+    teardown: vi.fn(),
+    isPending: false,
+    ...over,
+  };
+  mockUseDemoAccount.mockReturnValue(value);
+  return value;
+}
+
 beforeEach(() => {
   // The idle walkthrough is the backdrop every test but the R5.8 ones want.
   useTour();
+  useDemo();
 });
 
 afterEach(() => {
@@ -193,16 +215,46 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
     ).toBe(true);
   });
 
-  it('offers sample data as a disabled control with the reason stated, never a silent no-op', () => {
+  it('seeds sample data on click, and says nothing about it beforehand', async () => {
     useHook();
+    const demo = useDemo();
+    render(<ZeroState />);
+
+    expect(screen.queryByTestId('zero-state-sample-data-note')).toBeNull();
+    await userEvent.click(screen.getByTestId('zero-state-sample-data'));
+
+    expect(demo.seed).toHaveBeenCalledTimes(1);
+  });
+
+  it('never carries the `disabled` attribute, in flight or otherwise', async () => {
+    // The regression this exists for: while the seeder was unbuilt this control
+    // shipped `disabled`, which takes it out of the tab order — a keyboard user
+    // never met it and never learned the option existed. An inert state uses
+    // `aria-disabled` and stays focusable instead.
+    useHook();
+    useDemo({ isPending: true });
     render(<ZeroState />);
 
     const sample = screen.getByTestId('zero-state-sample-data');
-    expect(sample.hasAttribute('disabled')).toBe(true);
-    // The explanation is real markup the button points at, not a comment.
+    expect(sample.hasAttribute('disabled')).toBe(false);
+    expect(sample.getAttribute('aria-disabled')).toBe('true');
+    sample.focus();
+    expect(document.activeElement).toBe(sample);
+  });
+
+  it('states the in-flight reason in markup the control points at, and seeds only once', async () => {
+    useHook();
+    const demo = useDemo({ isPending: true });
+    render(<ZeroState />);
+
+    const sample = screen.getByTestId('zero-state-sample-data');
     const noteId = sample.getAttribute('aria-describedby');
     expect(noteId).toBeTruthy();
-    expect(document.getElementById(noteId!)?.textContent).toBe('Sample data is not available yet.');
+    expect(document.getElementById(noteId!)?.textContent).toContain('Adding sample data');
+
+    // `aria-disabled` is still clickable — the guard is what makes it inert.
+    await userEvent.click(sample);
+    expect(demo.seed).not.toHaveBeenCalled();
   });
 
   it('says nothing about guidance while the runtime is fine', async () => {
@@ -526,7 +578,14 @@ describe('ZeroState — design-system gates', () => {
     expect(hook.setStatus).toHaveBeenCalledWith('active');
     expect(tour.start).toHaveBeenCalledWith(undefined);
 
-    // The disabled sample-data control is skipped rather than trapping a tab.
+    // The sample-data control is a tab stop like any other — it carries no
+    // `disabled` attribute, so a keyboard user meets the third option instead
+    // of being skipped past it.
+    await userEvent.tab();
+    expect(document.activeElement?.getAttribute('data-testid')).toBe('zero-state-sample-data');
+    await userEvent.keyboard(' ');
+    expect(hook.setStatus).toHaveBeenCalledTimes(1); // still only the walkthrough's write
+
     await userEvent.tab();
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Dismiss checklist');
 

@@ -199,13 +199,16 @@ export function useOnboarding(): UseOnboardingResult {
     if (!checklistNeeded) return null;
     if (!accounts || !positions) return undefined;
     return deriveChecklist({
-      // WHEN THE DEMO-DATA FLAG LANDS (`accounts.is_demo`, added by the demo
-      // seeding work later in this spec), THIS COUNT MUST EXCLUDE FLAGGED
-      // ACCOUNTS. Seeding sample data is not creating an account, so item 1
-      // stays incomplete while only demo data is present (R4.8) — and
-      // deriveChecklist deliberately never learns demo data exists, so this
-      // caller is the only place that can get it right.
-      accountCount: accounts.length,
+      // SAMPLE ACCOUNTS DO NOT COUNT, and the filter is the whole of R4.8.
+      // Asking to see the product populated is not creating an account, so item
+      // 1 stays incomplete while sample data is present — otherwise a user who
+      // clicked "add sample data" would watch "Create a brokerage account" tick
+      // itself for something they never did, and the checklist that is supposed
+      // to survive the demo (R4.8) could retire while they still have no
+      // account of their own. `deriveChecklist` deliberately never learns that
+      // sample data exists, so this caller is the only place that can get it
+      // right.
+      accountCount: accounts.filter((account) => !account.isDemo).length,
       positionsEverCreatedCount: positions.length,
       closedPositionCount: positions.filter((p) => p.status === 'closed').length,
       // Absent until the calculator is first used; the single named exception

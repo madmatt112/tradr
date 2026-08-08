@@ -128,6 +128,54 @@ describe('EventBusBridge', () => {
     unmount();
   });
 
+  it('refreshes every derived surface when sample data is seeded', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    // A whole account's worth of positions, fills and ledger rows appears in
+    // one call, so the dashboard, the lists and performance are all stale at
+    // once — and the seeding hook names none of these keys.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'demo-seeded' });
+
+    expect(invalidatedKeys(spy)).toEqual([
+      ['accounts'],
+      ['positions'],
+      ['dashboard', 'totals'],
+      ['performance'],
+    ]);
+
+    unmount();
+  });
+
+  it('refreshes the same surfaces when sample data is removed', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    eventBus.publish('accounts:cache-invalidate', { reason: 'demo-removed' });
+
+    expect(invalidatedKeys(spy)).toEqual([
+      ['accounts'],
+      ['positions'],
+      ['dashboard', 'totals'],
+      ['performance'],
+    ]);
+
+    unmount();
+  });
+
+  it('invalidates nothing on an account create', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    // `useCreateAccount` invalidates its own queries; this event exists for the
+    // walkthrough's advance-on-action step, not for cache work.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+
+    expect(spy).not.toHaveBeenCalled();
+
+    unmount();
+  });
+
   it('invalidates accounts, dashboard totals, and performance on reason=deleted', () => {
     const { qc, unmount } = mountBridge();
     const spy = vi.spyOn(qc, 'invalidateQueries');

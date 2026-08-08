@@ -33,6 +33,7 @@ import {
 import { writabilityRestricted } from '@/features/billing/tier-usage';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
+import { useDemoAccount } from '@/features/onboarding/hooks/useDemoAccount';
 
 import { useAccounts, useDeleteAccount, useSetWritableAccount } from '../hooks/useAccounts';
 
@@ -46,6 +47,24 @@ export function AccountList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
+
+  // Sample data and real accounts are mutually exclusive (user-onboarding R9.6),
+  // and this is the only place in the app a second account can be started, so
+  // this is where "begins creating a real account" happens. The server refuses
+  // the create outright while sample data is present, so without this the user
+  // would fill in the whole form and be told no; asking first, once, and
+  // clearing the way is the difference between a rule and a wall.
+  const { isDemoPresent, teardown } = useDemoAccount();
+  const [demoConfirmOpen, setDemoConfirmOpen] = useState(false);
+
+  function beginCreate(): void {
+    setEditAccount(null);
+    if (isDemoPresent) {
+      setDemoConfirmOpen(true);
+      return;
+    }
+    setDialogOpen(true);
+  }
 
   // Writability designation (plan-tiers D18/REQ-6.6): badges + the
   // make-writable action appear only while the restriction is active
@@ -74,13 +93,7 @@ export function AccountList() {
     <>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Accounts</h1>
-        <Button
-          className="cursor-pointer"
-          onClick={() => {
-            setEditAccount(null);
-            setDialogOpen(true);
-          }}
-        >
+        <Button className="cursor-pointer" onClick={beginCreate}>
           New Account
         </Button>
       </div>
@@ -189,6 +202,35 @@ export function AccountList() {
         }}
         account={editAccount}
       />
+
+      {/* R9.6 — confirm once, then tear the sample data down, then open the form.
+          The teardown is what makes the create possible, so it runs first and
+          the dialog opens on its success; if it fails, its own toast says so and
+          no half-started form is left on screen. */}
+      <AlertDialog
+        open={demoConfirmOpen}
+        onOpenChange={(open) => !open && setDemoConfirmOpen(false)}
+      >
+        <AlertDialogContent data-testid="demo-teardown-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove the sample data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your own accounts and the sample account cannot both exist, so creating an account
+              removes the sample account and every trade in it. You can add sample data again once
+              you have no accounts of your own.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="cursor-pointer"
+              onClick={() => teardown({ onSuccess: () => setDialogOpen(true) })}
+            >
+              Remove and continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>

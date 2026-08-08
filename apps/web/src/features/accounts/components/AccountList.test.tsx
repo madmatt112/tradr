@@ -3,17 +3,19 @@
 // banner (REQ-6.4/11.6). Badges and the make-writable action appear ONLY while
 // the writability restriction is active (over-cap ∧ free ∧ gated); nothing
 // tier-related renders when gating is off (self-host parity).
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Account, TierState } from '@tradr/shared';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { accountsData, tierData, setWritableMutate } = vi.hoisted(() => ({
+const { accountsData, tierData, setWritableMutate, demoState, demoTeardown } = vi.hoisted(() => ({
   accountsData: { current: [] as unknown[] },
   tierData: { current: undefined as unknown },
   setWritableMutate: vi.fn(),
+  demoState: { isDemoPresent: false },
+  demoTeardown: vi.fn(),
 }));
 
 vi.mock('../hooks/useAccounts', () => ({
@@ -27,8 +29,23 @@ vi.mock('@/features/billing/useTierState', () => ({
 }));
 
 // The create/edit dialog has its own test file (AccountDialog.test.tsx); its
-// hooks would need a QueryClientProvider here otherwise.
-vi.mock('./AccountDialog', () => ({ AccountDialog: () => null }));
+// hooks would need a QueryClientProvider here otherwise. It respects `open` so
+// the demo confirm flow can assert WHEN the form appears.
+vi.mock('./AccountDialog', () => ({
+  AccountDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="account-dialog" /> : null,
+}));
+
+// `useDemoAccount` has its own tests; here it is only the answer that matters.
+vi.mock('@/features/onboarding/hooks/useDemoAccount', () => ({
+  useDemoAccount: () => ({
+    isDemoPresent: demoState.isDemoPresent,
+    demoAccount: undefined,
+    seed: vi.fn(),
+    teardown: demoTeardown,
+    isPending: false,
+  }),
+}));
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({
@@ -108,6 +125,8 @@ beforeEach(() => {
   accountsData.current = ACCOUNTS;
   tierData.current = undefined;
   setWritableMutate.mockReset();
+  demoState.isDemoPresent = false;
+  demoTeardown.mockReset();
   vi.mocked(captureClientEvent).mockReset();
 });
 
@@ -209,6 +228,58 @@ describe('AccountList — L1 cap-edge banner (REQ-6.4/11.6)', () => {
     });
     render(<AccountList />);
     expect(screen.queryByTestId('accounts-cap-banner')).toBeNull();
+  });
+});
+
+describe('AccountList — creating a real account while sample data is present (R9.6)', () => {
+  it('opens the form straight away when there is no sample data', () => {
+    render(<AccountList />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Account' }));
+
+    expect(screen.getByTestId('account-dialog')).toBeTruthy();
+    expect(screen.queryByTestId('demo-teardown-confirm')).toBeNull();
+    expect(demoTeardown).not.toHaveBeenCalled();
+  });
+
+  it('asks first, and does not open the form on the way', () => {
+    demoState.isDemoPresent = true;
+    render(<AccountList />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Account' }));
+
+    // The server refuses the create outright while sample data is present, so
+    // opening the form here would walk the user into a wall.
+    expect(screen.getByTestId('demo-teardown-confirm')).toBeTruthy();
+    expect(screen.queryByTestId('account-dialog')).toBeNull();
+    expect(demoTeardown).not.toHaveBeenCalled();
+  });
+
+  it('tears the sample data down and then opens the form, once', () => {
+    demoState.isDemoPresent = true;
+    render(<AccountList />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and continue' }));
+
+    expect(demoTeardown).toHaveBeenCalledTimes(1);
+    // The form opens on the teardown's success, not before it: a failed
+    // teardown leaves its own toast and no half-started form.
+    expect(screen.queryByTestId('account-dialog')).toBeNull();
+    const [options] = demoTeardown.mock.calls[0] as [{ onSuccess: () => void }];
+    act(() => options.onSuccess());
+    expect(screen.getByTestId('account-dialog')).toBeTruthy();
+  });
+
+  it('leaves everything as it was when the user cancels', () => {
+    demoState.isDemoPresent = true;
+    render(<AccountList />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(demoTeardown).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('account-dialog')).toBeNull();
   });
 });
 

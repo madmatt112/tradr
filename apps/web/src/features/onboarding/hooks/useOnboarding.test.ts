@@ -22,6 +22,8 @@ vi.mock('sonner', () => ({
 // Only the fields the derivation reads matter; the rest of each row is noise
 // here and constructing it in full would hide what the test is actually about.
 const anAccount = { id: 'acct-1', name: 'Main' } as Account;
+/** The seeded sample account. The flag is the only thing that distinguishes it. */
+const aDemoAccount = { id: 'acct-demo', name: 'Sample account', isDemo: true } as Account;
 
 function aPosition(id: string, status: 'draft' | 'open' | 'closed'): PositionListItem {
   return { id, status } as PositionListItem;
@@ -176,6 +178,47 @@ describe('useOnboarding — derived checklist', () => {
       ['close', true],
     ]);
     expect(result.current.checklist!.allComplete).toBe(true);
+  });
+
+  it('leaves item 1 incomplete, and the checklist standing, while only sample data is present (R4.8)', async () => {
+    // Asking to see the product populated is not creating an account. The
+    // sample account brings positions with it, so the later items tick from
+    // data that genuinely exists — but item 1 must not, or the user watches a
+    // step complete itself for something they never did.
+    mockServer({
+      accounts: [aDemoAccount],
+      positions: [aPosition('p1', 'closed'), aPosition('p2', 'open')],
+      preference: { ...FRESH, calculatorFirstUsedAt: '2026-08-01T10:00:00.000Z' },
+    });
+    const { result } = renderHook(() => useOnboarding(), {
+      wrapper: makeWrapper(makeQueryClient()),
+    });
+
+    await waitFor(() => expect(result.current.checklist).toBeDefined());
+
+    // Still a checklist, not `null` — R4.8 keeps it visible through the demo.
+    expect(result.current.checklist).not.toBeNull();
+    expect(doneVector(result.current.checklist!.items)).toEqual([
+      ['account', false],
+      ['calculator', true],
+      ['position', true],
+      ['close', true],
+    ]);
+    // And so it cannot retire (R4.7) while the user still has no account.
+    expect(result.current.checklist!.allComplete).toBe(false);
+  });
+
+  it('counts the user’s own accounts alongside a sample one', async () => {
+    mockServer({ accounts: [aDemoAccount, anAccount], positions: [] });
+    const { result } = renderHook(() => useOnboarding(), {
+      wrapper: makeWrapper(makeQueryClient()),
+    });
+
+    await waitFor(() => expect(result.current.checklist).toBeDefined());
+
+    // The filter removes the flagged account and nothing else — it is not a
+    // "no accounts while a demo exists" rule.
+    expect(result.current.checklist!.items[0]).toMatchObject({ id: 'account', done: true });
   });
 
   it('counts drafts and open positions towards "ever created" but only closed ones towards item 4', async () => {
