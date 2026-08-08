@@ -136,6 +136,15 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-}
       WEB_BASE_URL: ${WEB_BASE_URL:-}
+      # Prometheus metrics exposition (api container). Default OFF. Value
+      # defaults — same no-bare-${VAR:-} rule as FEATURE_GATING above: '' is
+      # present-not-undefined to Zod and would crash-loop METRICS_ENABLED's enum
+      # and METRICS_PORT's z.coerce.number(). Deliberately NO `ports:` mapping
+      # for METRICS_PORT: api publishes nothing, and that omission is what keeps
+      # the listener off the public internet in both documented deployments.
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      METRICS_PORT: ${METRICS_PORT:-9464}
+      METRICS_HOST: ${METRICS_HOST:-0.0.0.0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -171,6 +180,13 @@ services:
       POSTHOG_PUBLIC_KEY: ${POSTHOG_PUBLIC_KEY:-}
       POSTHOG_PUBLIC_HOST: ${POSTHOG_PUBLIC_HOST:-}
       POSTHOG_PUBLIC_ENVIRONMENT: ${POSTHOG_PUBLIC_ENVIRONMENT:-}
+      # Prometheus metrics (web container). Gates the static build-info
+      # exposition the entrypoint writes for GET /metrics. Value default, same
+      # rule as api above. APP_VERSION is deliberately NOT listed here: web has
+      # no `env_file:`, so the image ENV baked at build time is its only source,
+      # and injecting '' would erase it — turning the drift-detection metric
+      # into a drift source.
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
     networks:
       - tradr
     restart: unless-stopped

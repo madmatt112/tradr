@@ -16,6 +16,7 @@ import { poolerDriverOptions } from '@/db';
 import {
   config,
   isDirectDatabaseConfigured,
+  isMetricsConfigured,
   isObjectStorageConfigured,
   isRedisConfigured,
   isSplitOriginConfigured,
@@ -59,5 +60,18 @@ describe('self-host default parity (REQ-1.6) — every gated capability off', ()
     const opts = poolerDriverOptions(config.DB_TRANSACTION_POOLER);
     expect(opts).toEqual({});
     expect('prepare' in opts).toBe(false);
+  });
+});
+
+// Deliberately a SIBLING block, not a case inside the gated-capability describe
+// above: the metrics surface is NOT a hosted-only capability. Nothing about it
+// sits behind FEATURE_GATING, and a self-hoster can turn it on freely. What it
+// shares with those capabilities is only that it defaults OFF — which is the one
+// thing this block proves (REQ-1.7), under the METRICS_* pin in
+// vitest.workspace.ts that keeps a stray ambient value from reddening it (REQ-1.8).
+describe('metrics exposition surface (REQ-1.7) — off by default', () => {
+  it('isMetricsConfigured() is false with METRICS_ENABLED unset/false', () => {
+    expect(config.METRICS_ENABLED).toBe(false);
+    expect(isMetricsConfigured()).toBe(false);
   });
 });

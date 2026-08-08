@@ -67,4 +67,9 @@ exclude = [
   # Vendor endpoints that answer only to an authenticated client.
   "^https://api\\.github\\.com",
   "^https://us\\.i\\.posthog\\.com",
+  # Bot-walled: 403s CI runner egress while serving browsers normally, so the
+  # check fails intermittently on a page that is not rotten. This is the case
+  # the `accept` comment above describes; excluding the one host that does it
+  # keeps 403 meaningful everywhere else.
+  "^https://developers\\.google\\.com",
 ]

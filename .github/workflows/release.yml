@@ -128,8 +128,9 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/${{ matrix.arch }}
-          # APP_VERSION is only consumed by Dockerfile.api (GET /api/health);
-          # Dockerfile.web ignores an unknown build-arg.
+          # APP_VERSION is consumed by BOTH images: Dockerfile.api bakes it for
+          # GET /api/health and tradr_build_info, Dockerfile.web bakes it for the
+          # SPA's version badge and tradr_web_build_info in /metrics.
           build-args: |
             APP_VERSION=${{ github.ref_name }}
           labels: ${{ steps.meta.outputs.labels }}

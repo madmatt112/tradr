@@ -3,6 +3,7 @@ import { serve } from '@hono/node-server';
 import { sql } from '@/db';
 import { runPostMigrations } from '@/db/migrate';
 import { bootstrapFirstAdmin } from '@/features/admin/admin.service';
+import { startMetricsServer } from '@/features/metrics/metrics.server';
 import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
 import { drainMailer, initMailer } from '@/lib/mailer';
@@ -92,12 +93,25 @@ async function main() {
 
   logger.info(`Server started on port ${config.PORT}`);
 
+  // The exposition listener (REQ-2.1), on its own private port. `undefined` when
+  // METRICS_ENABLED is off — nothing is bound at all (REQ-1.4). Synchronous, so
+  // initMetrics() has run before this line returns and no scrape can beat it.
+  const metricsServer = startMetricsServer();
+  if (metricsServer) {
+    logger.info(`Metrics listening on ${config.METRICS_HOST}:${config.METRICS_PORT}`);
+  }
+
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return; // REQ-7.5 double-signal guard (SIGTERM then SIGINT)
     shuttingDown = true;
     logger.info('Shutting down...');
     server.close(); // stop accepting NEW connections (REQ-7.2 ordering)
+    // Closed alongside the main server and BEFORE the drains and sql.end()
+    // (REQ-2.8): a scrape arriving mid-shutdown runs an active database probe,
+    // so leaving the listener open past the connection teardown would answer it
+    // against a closed pool.
+    metricsServer?.close();
     // Concurrent bounded drains — telemetry 3 s, mailer 5 s (worst case 5 s,
     // inside the ~10 s Docker grace, D9). Neither ever rejects, so Promise.all
     // is safe. Does NOT await in-flight/SSE request drain.

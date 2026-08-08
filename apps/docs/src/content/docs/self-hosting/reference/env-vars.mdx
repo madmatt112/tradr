@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **80 environment variables**, of which **3 are required** —
+Tradr reads **83 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 80 variables, **52 ship unset** — either commented out in the
+Of the 83 variables, **52 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -81,6 +81,14 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `ADVISOR_NGINX_PROXY_TIMEOUT` | `180s` | nginx proxy read timeout for advisor streaming responses. MUST exceed the app ADVISOR_STREAM_TIMEOUT_MS below, or nginx will cut the stream early. |
 | `CSV_IMPORT_NGINX_PROXY_TIMEOUT` | `300s` | nginx proxy read timeout for the dedicated /api/csv-import/ route. A large within-cap synchronous import can exceed nginx's default 60s; this raises the timeout for that route only (other routes unchanged). Keep CSV_IMPORT_CLAIM_TIMEOUT_SECONDS (api) ≥ 2 × this value — the two live in different containers and are hand-synced. |
 | `MAX_UPLOAD_SIZE` | `20m` | nginx client_max_body_size for uploads. Must accommodate ADVISOR_MAX_IMAGES_PER_MESSAGE images per request, or large uploads 413. OPERATOR CONSTRAINT: keep MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (below), or oversized CSV imports are rejected by nginx before the api can size them. |
+
+## Metrics (Prometheus exposition)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `METRICS_ENABLED` | `false` | Prometheus text-format metrics for the api container, served as GET /metrics on a listener of its own — separate from the application port, so the exposition is never reachable through the app's routes. It carries HTTP request counters and latency, database connection-state and probe gauges, Node.js process metrics, and a build-info gauge. OFF BY DEFAULT: the surface is absent, not broken, when unset. Set this to true to arm it. Only the literal values true and false parse; anything else is a startup error rather than a silent default. DO NOT PUBLISH THE METRICS PORT. The exposition is unauthenticated by design — network isolation is the control, because a bearer token copied into every scrape config is a worse posture than a private bind. It exposes no user data, only aggregate operational counters and the build version. Every scrape is an ACTIVE DATABASE PROBE: the connection-state and probe gauges are collected on demand, so the scrape interval you configure on the Prometheus side is a database load knob — on top of the SELECT 1 the Fly health check already issues every 15 seconds. |
+| `METRICS_PORT` | `9464` | Port the metrics listener binds inside the api container. Chosen to collide with neither the api port (3100), WEB_PORT, nor Fly's internal_port. Nothing publishes it: docker-compose.yml deliberately adds no ports: mapping for the api service — only web publishes a host port — and that omission is what keeps the surface off the public internet. Scrape it from another container on the same compose network, or over 6PN on Fly. |
+| `METRICS_HOST` | `0.0.0.0` | Address the metrics listener binds to. The default is deliberate, not lazy: 127.0.0.1 would bind the CONTAINER's own loopback and be unreachable from a Prometheus elsewhere on the compose network, and a Fly scrape arrives over 6PN rather than loopback. Binding all interfaces is already private in both documented deployments precisely because nothing publishes the port. Residual threat model: the listener becomes reachable from outside only if an operator adds a ports: mapping for the api service or runs it with host networking. This variable exists so those operators can narrow the bind to a specific interface instead of widening their exposure. |
 
 ## Advisor — encryption
 

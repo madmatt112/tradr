@@ -68,6 +68,18 @@ export default defineWorkspace([
         EMAIL_FROM: '',
         EMAIL_FROM_NAME: '',
         WEB_BASE_URL: '',
+        // Affirmative pin-off of the Prometheus exposition surface (REQ-1.8) — a
+        // stray ambient METRICS_* must not arm the surface or red the REQ-1.7
+        // parity assertion. All three are pinned to their REAL values, never '':
+        // METRICS_ENABLED is an enum, so '' fails it and boot-crashes
+        // envSchema.parse (the rule recorded on the gated-capability block above);
+        // METRICS_PORT is a bare z.coerce.number() with NO empty-tolerant
+        // preprocess (unlike SMTP_PORT), so '' would coerce to the valid number 0;
+        // METRICS_HOST's .default() fires only on `undefined`, so '' would yield
+        // an empty host.
+        METRICS_ENABLED: 'false',
+        METRICS_PORT: '9464',
+        METRICS_HOST: '0.0.0.0',
       },
     },
     resolve: {
@@ -124,6 +136,14 @@ export default defineWorkspace([
         EMAIL_FROM: '',
         EMAIL_FROM_NAME: '',
         WEB_BASE_URL: '',
+        // Pin the Prometheus exposition surface off for the migration tests too
+        // (REQ-1.8). Real values, never '': METRICS_ENABLED is an enum ('' fails
+        // it and boot-crashes envSchema.parse), METRICS_PORT is a bare
+        // z.coerce.number() with no empty-tolerant preprocess ('' → 0), and
+        // METRICS_HOST's .default() fires only on `undefined` ('' → empty host).
+        METRICS_ENABLED: 'false',
+        METRICS_PORT: '9464',
+        METRICS_HOST: '0.0.0.0',
       },
     },
     resolve: {
