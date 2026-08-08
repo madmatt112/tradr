@@ -202,10 +202,35 @@ describe('CoachMark', () => {
     // modal popover sets this to 'none'.
     expect(document.body.style.pointerEvents).not.toBe('none');
 
+    // AND THE CARD IS OUT OF THE POINTER PATH, which is the half of R7.3 this
+    // environment cannot otherwise reach. jsdom has no layout: nothing here
+    // overlaps anything, so the click below lands on the button whether or not
+    // an opaque popover is sitting on top of it in a real browser — which is
+    // exactly what happened, and what let the import page ship with its mark
+    // covering the account picker. This assertion pins the MECHANISM; the
+    // behaviour is pinned where geometry exists, in `e2e/tests/user-onboarding.
+    // spec.ts` ("a coach mark does not stand between the user and the control it
+    // describes"), which drives a real click at the covered control.
+    expect(mark('position-partials')?.className).toContain('pointer-events-none');
+
     await user.click(screen.getByRole('button', { name: 'Add Fill' }));
 
     expect(onSurfaceClick).toHaveBeenCalledTimes(1);
     expect(mark('position-partials')).toBeNull();
+  });
+
+  it('leaves its own two controls clickable through the transparent card (R7.3)', () => {
+    // The other side of `pointer-events-none`: opting the card out entirely
+    // would take "Got it" and "Read more" out with it, and a prompt nobody can
+    // acknowledge is not one-shot at all.
+    render(<CoachMark surface="csv-import" />);
+
+    expect(screen.getByRole('button', { name: 'Got it' }).className).toContain(
+      'pointer-events-auto',
+    );
+    expect(screen.getByRole('link', { name: 'Read more' }).className).toContain(
+      'pointer-events-auto',
+    );
   });
 
   it('carries its docs deep link through docsUrl(), in a new tab (R7.4, C11)', () => {

@@ -3,7 +3,13 @@ import { useRouter } from '@tanstack/react-router';
 
 import type { User } from '@tradr/shared';
 
-import { api, markSessionEnded, markSessionStarted, setIsLoggingOut } from '@/lib/api';
+import {
+  api,
+  markSessionConfirmed,
+  markSessionEnded,
+  markSessionStarted,
+  setIsLoggingOut,
+} from '@/lib/api';
 import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
@@ -22,7 +28,13 @@ export function useAuth() {
       // is a session, right now. Declared HERE rather than from an effect over
       // `user` — an effect fires on every mount, including the ones that read a
       // cached user belonging to a session that has already ended.
-      markSessionStarted();
+      //
+      // CONFIRMED, not started: this answer says a session exists, not that one
+      // has just begun, and the difference is what the redirect latch turns on.
+      // An expiry clears the cache, which sends this very query back to the
+      // network, and re-arming the latch on what comes back is what turned one
+      // expiry into a loop of them. The login below is the one that re-arms.
+      markSessionConfirmed();
       return me;
     },
     retry: false,
@@ -32,9 +44,10 @@ export function useAuth() {
     mutationFn: (credentials: { email: string; password: string }) =>
       api.post<{ user: User }>('/auth/login', credentials),
     onSuccess: (data) => {
-      // The other moment the server confirms an identity. Seeding the query
-      // below means its `queryFn` may not run again for this session, so the
-      // session start is declared from the answer that established it.
+      // The one answer that means a session BEGAN rather than merely exists, so
+      // this is where the 401 interception is re-armed. Seeding the query below
+      // means its `queryFn` may not run again for this session, so the session
+      // start is declared from the answer that established it.
       markSessionStarted();
       queryClient.setQueryData(['auth', 'me'], data.user);
     },

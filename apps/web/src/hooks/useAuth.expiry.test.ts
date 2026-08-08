@@ -35,19 +35,30 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-/** Every request answers 200 with the user until `expire()` is called. */
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
+function ok(body: unknown) {
+  return new Response(JSON.stringify(body), { status: 200, headers: JSON_HEADERS });
+}
+
+/**
+ * Every request answers 200 with the user until `expire()` is called.
+ *
+ * `POST /auth/login` is the exception and answers its own `{ user }` envelope
+ * whatever the session state — logging in is how a session STARTS, so it cannot
+ * be gated on one already being live.
+ */
 function stubNetwork() {
   let live = true;
   vi.stubGlobal(
     'fetch',
-    vi.fn(() =>
+    vi.fn((input: RequestInfo | URL) =>
       Promise.resolve(
-        live
-          ? new Response(JSON.stringify(A_USER), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            })
-          : new Response('', { status: 401 }),
+        String(input).includes('/auth/login')
+          ? ok({ user: A_USER })
+          : live
+            ? ok(A_USER)
+            : new Response('', { status: 401 }),
       ),
     ),
   );
@@ -59,6 +70,23 @@ function stubNetwork() {
       live = true;
     },
   };
+}
+
+/**
+ * The network an endpoint-scoped 401 looks like: `/auth/me` keeps answering, and
+ * one feature endpoint does not. Nothing about the SESSION has changed, which is
+ * the whole point — this is the shape that turned the expiry teardown into a
+ * loop.
+ */
+function stubOneDeadEndpoint(deadPath: string) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input).includes(deadPath) ? new Response('', { status: 401 }) : ok(A_USER),
+      ),
+    ),
+  );
 }
 
 const onLogout = vi.fn();
@@ -95,10 +123,18 @@ async function signIn() {
   return mounted;
 }
 
-/** A request from some other feature — the usual way an expiry is discovered. */
-async function anAuthedRequest() {
+/** Sign in the way the login FORM does — the one answer that starts a session. */
+async function logIn(mounted: Awaited<ReturnType<typeof mountAuth>>) {
   await act(async () => {
-    await api.get('/positions').catch(() => undefined);
+    mounted.result.current.login.mutate({ email: A_USER.email, password: 'pw' });
+  });
+  await waitFor(() => expect(mounted.result.current.isAuthenticated).toBe(true));
+}
+
+/** A request from some other feature — the usual way an expiry is discovered. */
+async function anAuthedRequest(path = '/positions') {
+  await act(async () => {
+    await api.get(path).catch(() => undefined);
   });
 }
 
@@ -172,10 +208,13 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     first.unmount();
     expect(onLogout).toHaveBeenCalledOnce();
 
-    // The user logs back in on the same tab: the server answers, which is the
-    // one thing allowed to say a session has begun.
+    // The user logs back in on the same tab. `POST /auth/login` answering is the
+    // one thing allowed to say a session has BEGUN — a 200 from `/auth/me` says
+    // only that one exists, which is also what it says moments after every
+    // expiry, and re-arming on that is the loop below.
     network.restore();
-    const second = await signIn();
+    const second = await mountAuth();
+    await logIn(second);
     // Signing in ends nothing, so it announces nothing.
     expect(onLogout).toHaveBeenCalledOnce();
 
@@ -184,6 +223,40 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
 
     expect(onLogout).toHaveBeenCalledTimes(2);
     second.unmount();
+  });
+
+  // THE LOOP. `announceSessionExpired` empties the query cache, which leaves
+  // every mounted observer — the me-query first among them — holding a query
+  // that no longer exists, so they all refetch on the spot. When a 401 comes
+  // from ONE endpoint rather than from the session ending, `/auth/me` answers
+  // that refetch with a 200; if that answer re-opened the interception, the next
+  // 401 out of the same burst announced the same expiry over again, and the page
+  // sat on the auth layout's "Loading…" while it went round.
+  it('announces once for a 401 that /auth/me does not corroborate, and does not loop', async () => {
+    stubOneDeadEndpoint('/symbols/quote-config');
+    const session = await signIn();
+
+    // The first 401: a real termination as far as this module can tell, so it
+    // announces and redirects — once.
+    await anAuthedRequest('/symbols/quote-config');
+    expect(onLogout).toHaveBeenCalledOnce();
+    expect(interceptNavigate).toHaveBeenCalledOnce();
+    session.unmount();
+
+    // What happens next, four passes of it: /login mounts and its me-query —
+    // emptied by the clear — goes back to the network and answers 200, because
+    // the session was never the thing that was wrong. /login reads that as
+    // signed in and sends the user to /dashboard, which mounts the surface that
+    // 401s, and round again. The pass is bounded only by the latch staying shut.
+    for (let i = 0; i < 4; i++) {
+      const remounted = await mountAuth();
+      await waitFor(() => expect(remounted.result.current.isAuthenticated).toBe(true));
+      await anAuthedRequest('/symbols/quote-config');
+      remounted.unmount();
+    }
+
+    expect(onLogout).toHaveBeenCalledOnce();
+    expect(interceptNavigate).toHaveBeenCalledOnce();
   });
 
   it('says nothing for the 401 a logged-out visitor gets', async () => {

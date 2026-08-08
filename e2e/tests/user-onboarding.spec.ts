@@ -470,6 +470,47 @@ test.describe('user onboarding', () => {
     expect(accounts).toHaveLength(0);
   });
 
+  // R7.3, and the half of it no unit test can hold. `CoachMark.test.tsx` asserts
+  // non-blocking in jsdom, where nothing has a position or a size — so its click
+  // reached the surface whether or not an opaque popover was sitting on top of
+  // it, and the assertion passed while the import page shipped with its mark
+  // covering the account picker. Playwright's actionability check is the thing
+  // that can tell: it hit-tests the point it is about to click and refuses to
+  // dispatch when something else would receive the event.
+  //
+  // The import surface is the case that broke, so it is the case pinned here:
+  // the mark opens below the page heading, and step 1's combobox is directly
+  // under it.
+  test('a coach mark does not stand between the user and the control it describes', async ({
+    page,
+    request,
+  }) => {
+    const email = await registerUser(request, 'coachmark');
+    // The picker needs something to pick, and the mark needs the surface to be
+    // usable — it is gated on the plan having imports left (R7.5).
+    const created = await request.post('/api/accounts', {
+      data: { name: 'Coach Mark Acct', currency: 'USD' },
+      headers: { 'X-Forwarded-For': uniqueIp() },
+    });
+    expect(created.status(), 'seed account').toBe(201);
+    await loginViaUi(page, email);
+
+    await page.goto('/import');
+    const coachMark = page.getByTestId('coach-mark-csv-import');
+    await expect(coachMark).toBeVisible();
+
+    // THE CLICK IS THE ASSERTION. With the popover in the pointer path this
+    // times out with "subtree intercepts pointer events" — the exact failure
+    // that took the whole csv-import suite down.
+    const picker = page.getByRole('combobox', { name: 'Target account' });
+    await picker.click({ timeout: 5_000 });
+    await expect(page.getByRole('option', { name: 'Coach Mark Acct (USD)' })).toBeVisible();
+
+    // And the same gesture dismissed the mark: reaching past it is an outside
+    // press, which is a dismissal like any other close.
+    await expect(coachMark).toHaveCount(0);
+  });
+
   test('the walkthrough is reachable and traversable with the keyboard alone', async ({
     page,
     request,

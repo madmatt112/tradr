@@ -45,6 +45,28 @@
 //   where it was; nothing here is ever trapped, and Tab walks straight past the
 //   mark into the page.
 //
+//   THE MARK IS OUT OF THE POINTER PATH — `pointer-events-none` on the card,
+//   `pointer-events-auto` on the two controls inside it. The first two choices
+//   only stop the popover CLAIMING the page; they do nothing about it SITTING
+//   ON it. A mark opens on arrival, unasked, directly below the heading of the
+//   surface it describes — which on every one of the four surfaces is where
+//   that surface's first control is. The card is opaque and above it, so a
+//   click aimed at the control landed on the card and did nothing: the user had
+//   to dismiss a prompt before they could use the thing it was telling them
+//   about, which is exactly what R7.3 forbids. Transparent to the pointer, the
+//   click reaches the control AND registers as an outside press, so the mark
+//   dismisses in the same gesture — one click, not two. "Got it" and "Read
+//   more" opt back in: `pointer-events: auto` on a descendant re-enables
+//   hit-testing whatever its ancestors said.
+//
+//   AND THE WRAPPER TOO, WHICH IS WHY `data-coach-mark` EXISTS. Radix positions
+//   this content inside a `[data-radix-popper-content-wrapper]` div it builds
+//   itself and takes no props for, and that wrapper is sized to the card — so
+//   with only the card opted out the browser hit-tests the wrapper instead and
+//   the mark still blocks. It is unreachable from here, so `index.css` reaches
+//   it by `:has()` on the attribute below. Both halves are needed; neither
+//   works alone.
+//
 // R7.6 — SUPPRESSED WHILE A WALKTHROUGH RUNS, and suppressed properly. The
 // signal is read from the walkthrough's module-scoped store SYNCHRONOUSLY
 // during render, so a mark on a surface the tour navigates to never mounts at
@@ -194,6 +216,9 @@ export function CoachMark({ surface, available = true }: CoachMarkProps) {
       </PopoverAnchor>
       <PopoverContent
         data-testid={`coach-mark-${surface}`}
+        // The hook `index.css` needs to reach the Radix positioning wrapper this
+        // content sits in — see the R7.3 note at the top of the file.
+        data-coach-mark=""
         role="note"
         aria-label={mark.title}
         side="bottom"
@@ -201,7 +226,10 @@ export function CoachMark({ surface, available = true }: CoachMarkProps) {
         collisionPadding={8}
         // Never take focus from the surface being described (R7.3).
         onOpenAutoFocus={(event) => event.preventDefault()}
-        className="max-w-[calc(100vw-2rem)] space-y-3"
+        // Never stand between the user and the surface being described (R7.3).
+        // See the note at the top of the file: the two controls below opt back
+        // in, and nothing else here needs the pointer.
+        className="pointer-events-none max-w-[calc(100vw-2rem)] space-y-3"
       >
         <div className="space-y-1">
           <p className="text-sm font-medium">{mark.title}</p>
@@ -215,7 +243,7 @@ export function CoachMark({ surface, available = true }: CoachMarkProps) {
               href={docsUrl(mark.docs)}
               target="_blank"
               rel="noreferrer"
-              className="cursor-pointer text-sm font-medium text-primary underline underline-offset-2"
+              className="pointer-events-auto cursor-pointer text-sm font-medium text-primary underline underline-offset-2"
             >
               Read more
             </a>
@@ -227,7 +255,7 @@ export function CoachMark({ surface, available = true }: CoachMarkProps) {
             type="button"
             variant="outline"
             size="sm"
-            className="cursor-pointer"
+            className="pointer-events-auto cursor-pointer"
             onClick={dismiss}
           >
             Got it

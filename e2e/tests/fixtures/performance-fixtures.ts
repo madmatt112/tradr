@@ -162,6 +162,7 @@ export const SESSION_RESPONSE = {
  *   - GET  /positions[?status=open] (SideDrawer Open Positions / Recently Created tabs)
  *   - GET  /performance?…           (SideDrawer Quick Stats tab → usePerformance)
  *   - GET  /users/me/display-currency (SideDrawer Quick Stats tab)
+ *   - GET  /accounts                (DemoBanner → useDemoAccount → useAccounts)
  *
  * The fully-mocked specs (performance, ledger-balances) provide a synthetic
  * `/auth/me` session but do NOT serve these shell endpoints, so they fall
@@ -267,4 +268,20 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route('**/api/users/me/onboarding', (route) =>
     route.fulfill(json({ status: 'done', coachMarksSeen: [] })),
   );
+  // The sample-data notice is mounted in the AUTHENTICATED LAYOUT rather than on
+  // the dashboard (user-onboarding R9.4), so the accounts read behind it is now
+  // shell surface on every authenticated route, not just the ones with an
+  // accounts-shaped page. The list is the only thing that can answer "is any of
+  // this sample data", and the banner has to be able to answer it wherever the
+  // figures are shown — so this belongs here rather than being pushed back into
+  // the product.
+  //
+  // Empty is the neutral answer: no sample account, so the banner renders
+  // nothing and no spec sees a surface it was not written for. Specs that need
+  // real accounts (ledger-balances) register their own handler AFTER this one
+  // and win, per the note above.
+  //
+  // Anchored on the collection so it does not swallow `/accounts/:id`,
+  // `/accounts/demo` or `/accounts/writable`, which are separate handlers.
+  await page.route(/\/api\/accounts(\?.*)?$/, (route) => route.fulfill(json([])));
 }

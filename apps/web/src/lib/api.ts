@@ -60,7 +60,15 @@ let router: any = null;
  * property is load-bearing — the interception navigates to /login and /login
  * navigates back to /dashboard while it still believes there is a user, so a
  * latch that re-arms on the way round is a bounce with nothing to stop it.
- * Only `markSessionStarted` re-arms it, and only the server can cause that.
+ *
+ * ONLY A LOGIN RE-ARMS IT — `markSessionStarted`, never `markSessionConfirmed`.
+ * A 200 from `GET /auth/me` was allowed to re-arm it once, and that is a cycle:
+ * `announceSessionExpired` clears the query cache, the still-mounted me-query
+ * refetches at once, the answer re-arms the latch, and the next 401 — from the
+ * refetch storm the same clear set off — announces all over again. Only a login
+ * can mean a session that did not exist a moment ago does now, so only a login
+ * may re-open the interception. Everything else that legitimately re-arms it is
+ * a fresh page load, which resets this module anyway.
  */
 let redirecting = false;
 
@@ -77,7 +85,7 @@ let hasSession = false;
 
 /**
  * Record that the server has just confirmed an identity for this tab — a 200
- * from `GET /auth/me` or from `POST /auth/login`, and nothing else.
+ * from `GET /auth/me`, and nothing else.
  *
  * ONLY A NETWORK ANSWER MAY SET THIS, NEVER A RENDER. The first version of it
  * was driven by a `useAuth` effect over the cached user, and that is precisely
@@ -88,11 +96,27 @@ let hasSession = false;
  * the `/login` ↔ `/dashboard` bounce it exists to bound. A cache can be stale;
  * a 200 cannot.
  *
- * Starting a session re-arms that latch, and must: it coalesces one
- * termination's burst of 401s rather than disabling the interception for the
- * rest of the page's life. Without the re-arm the logged-out me-query on a
- * fresh /login load consumes it and the session the user then logs into has no
- * expiry handling at all.
+ * IT DOES NOT TOUCH THE REDIRECT LATCH. `/auth/me` answering 200 says a session
+ * exists, which is not the same claim as one having just begun — and it is a
+ * claim this module hears again moments after every expiry, because the clear
+ * below sends the me-query straight back to the network. Re-arming on it is the
+ * cycle the latch's own note describes. `markSessionStarted` is the one that
+ * re-opens the interception.
+ */
+export function markSessionConfirmed(): void {
+  hasSession = true;
+}
+
+/**
+ * Record that a session has just BEGUN — a 200 from `POST /auth/login`, which is
+ * the only answer that can mean there is a session where a moment ago there was
+ * none.
+ *
+ * This is what re-arms the redirect latch, and something must: the latch
+ * coalesces one termination's burst of 401s rather than disabling the
+ * interception for the rest of the page's life. Without the re-arm here, the
+ * logged-out me-query on a fresh /login load consumes it and the session the
+ * user then logs into has no expiry handling at all.
  */
 export function markSessionStarted(): void {
   hasSession = true;
@@ -136,6 +160,13 @@ export function announceSessionExpired(): void {
   // departed user's row: `/login` remounts, reads it as "signed in", and sends
   // the user back to `/dashboard` over a session that no longer exists. This is
   // the same client `main.tsx` provides, so it is the same clear.
+  //
+  // The clear is not free, and what it costs is why `markSessionConfirmed`
+  // exists: emptying the cache leaves every mounted observer holding a query
+  // that no longer exists, so they all rebuild and refetch on the spot — the
+  // me-query among them. Those answers used to re-open the interception, and the
+  // 401s from the same burst then announced the same expiry over again, round
+  // and round. They no longer do, so the burst dies out instead.
   queryClient.clear();
   eventBus.publish('auth:logout', {});
 }
