@@ -32,6 +32,15 @@ vi.mock('./useOnboarding', () => ({
   useOnboarding: () => ({ checklist, setStatus, dismiss }),
 }));
 
+// `lib/analytics` is the REAL module here — only the vendor-facing capture is a
+// double. The interesting claims are about which events the walkthrough sends
+// and when, and stubbing the analytics module would assert nothing but that the
+// hook calls the function it plainly calls.
+const captureClientEvent = vi.fn();
+vi.mock('@/lib/telemetry/posthog', () => ({
+  captureClientEvent: (...args: unknown[]) => captureClientEvent(...args),
+}));
+
 let started: { steps: TourStep[]; handlers: TourHandlers } | null = null;
 const engine = {
   startTour: vi.fn((steps: TourStep[], handlers: TourHandlers = {}) => {
@@ -81,6 +90,13 @@ function currentTargets(): (string | undefined)[] {
 
 function gatedTargets(): (string | undefined)[] {
   return (started?.steps ?? []).filter((s) => s.advanceOnAction).map((s) => s.target);
+}
+
+/** The property bags captured under one event name, in order. */
+function eventsNamed(name: string): Record<string, unknown>[] {
+  return captureClientEvent.mock.calls
+    .filter(([sent]) => sent === name)
+    .map(([, properties]) => properties as Record<string, unknown>);
 }
 
 beforeEach(() => {
@@ -459,6 +475,146 @@ describe('useWalkthrough — logging out ends the session', () => {
     });
 
     expect(useWalkthroughStore.getState().isUnavailable).toBe(false);
+  });
+});
+
+// --- the funnel events (R8.1) -----------------------------------------------
+
+describe('useWalkthrough — analytics (R8.1)', () => {
+  it('reports the walkthrough as offered once per item on offer', () => {
+    const { rerender } = renderHook(() => useWalkthrough());
+
+    expect(eventsNamed('onboarding_walkthrough_offered')).toEqual([{ item: 'account' }]);
+
+    // Re-renders of the same offer are the same offer.
+    rerender();
+    rerender();
+    expect(eventsNamed('onboarding_walkthrough_offered')).toHaveLength(1);
+
+    // Finishing an item puts a genuinely different one on offer.
+    checklist = aChecklist('account');
+    rerender();
+    expect(eventsNamed('onboarding_walkthrough_offered')).toEqual([
+      { item: 'account' },
+      { item: 'calculator' },
+    ]);
+  });
+
+  it('reports nothing offered when there is nothing behind the button', () => {
+    checklist = undefined;
+    const { rerender } = renderHook(() => useWalkthrough());
+    expect(captureClientEvent).not.toHaveBeenCalled();
+
+    checklist = null;
+    rerender();
+    expect(captureClientEvent).not.toHaveBeenCalled();
+
+    checklist = aChecklist('account', 'calculator', 'position', 'close');
+    rerender();
+    expect(captureClientEvent).not.toHaveBeenCalled();
+  });
+
+  it('reports a start only once a tour actually begins', async () => {
+    await start('account');
+
+    await waitFor(() => expect(engine.startTour).toHaveBeenCalledOnce());
+    expect(eventsNamed('onboarding_walkthrough_started')).toEqual([
+      { item: 'account', stepCount: WALKTHROUGH_STEPS.account.length },
+    ]);
+  });
+
+  it('reports a completion when the tour runs to the end', async () => {
+    await start('calculator');
+    await waitFor(() => expect(engine.startTour).toHaveBeenCalledOnce());
+
+    act(() => {
+      started?.handlers.onExit?.('completed');
+    });
+
+    expect(eventsNamed('onboarding_walkthrough_completed')).toEqual([
+      { item: 'calculator', stepCount: WALKTHROUGH_STEPS.calculator.length },
+    ]);
+    expect(eventsNamed('onboarding_walkthrough_abandoned')).toEqual([]);
+  });
+
+  it('carries the step the user was on when they left, without storing one', async () => {
+    const result = await start('account');
+    await waitFor(() => expect(result.current.isRunning).toBe(true));
+    highlight(3);
+
+    act(() => {
+      started?.handlers.onExit?.('dismissed');
+    });
+
+    // The index comes from the live session — the same number the overlay was
+    // painting — read on the way out. Nothing wrote it down, which is why the
+    // session is back at -1 immediately afterwards.
+    expect(eventsNamed('onboarding_walkthrough_abandoned')).toEqual([
+      {
+        item: 'account',
+        stepIndex: 3,
+        stepCount: WALKTHROUGH_STEPS.account.length,
+        reason: 'dismissed',
+      },
+    ]);
+    expect(eventsNamed('onboarding_walkthrough_completed')).toEqual([]);
+    expect(result.current.stepIndex).toBe(-1);
+  });
+
+  it('reports a target that never appeared as an abandonment with its own reason', async () => {
+    await start('position');
+    await waitFor(() => expect(engine.startTour).toHaveBeenCalledOnce());
+    highlight(1);
+
+    act(() => {
+      started?.handlers.onExit?.('target-missing');
+    });
+
+    expect(eventsNamed('onboarding_walkthrough_abandoned')).toEqual([
+      {
+        item: 'position',
+        stepIndex: 1,
+        stepCount: WALKTHROUGH_STEPS.position.length,
+        reason: 'target-missing',
+      },
+    ]);
+  });
+
+  it('sends no trade or monetary data on any of them (R8.5)', async () => {
+    const result = await start('close', { positionId: 'pos-1' });
+    await waitFor(() => expect(result.current.isRunning).toBe(true));
+    highlight(2);
+    act(() => {
+      started?.handlers.onExit?.('dismissed');
+    });
+
+    // The position id the caller handed `start()` is used to NAVIGATE and never
+    // reaches a payload.
+    const properties = captureClientEvent.mock.calls.map(
+      ([, props]) => props as Record<string, unknown>,
+    );
+    const keys = new Set(properties.flatMap((props) => Object.keys(props)));
+    expect([...keys].sort()).toEqual(['item', 'reason', 'stepCount', 'stepIndex']);
+    expect(properties.flatMap((props) => Object.values(props))).not.toContain('pos-1');
+  });
+
+  it('a failing capture changes nothing about the tour', async () => {
+    captureClientEvent.mockImplementation(() => {
+      throw new Error('vendor SDK exploded');
+    });
+
+    const result = await start('account');
+
+    // Started, ran and ended exactly as it would have with nobody counting.
+    await waitFor(() => expect(result.current.isRunning).toBe(true));
+    expect(engine.startTour).toHaveBeenCalledOnce();
+
+    act(() => {
+      started?.handlers.onExit?.('completed');
+    });
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.itemId).toBeNull();
+    expect(setStatus).not.toHaveBeenCalled();
   });
 });
 

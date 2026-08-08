@@ -50,12 +50,13 @@
 // plus whatever the user actually did.
 
 import { useNavigate } from '@tanstack/react-router';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 
 import { eventBus } from '@/stores/event-bus.store';
 import type { EventName } from '@/stores/events.types';
 
+import { emitOnboardingEvent } from '../lib/analytics';
 import type { ChecklistItemId, Checklist } from '../lib/derive-checklist';
 import type { WalkthroughStep } from '../lib/steps';
 
@@ -294,15 +295,48 @@ async function run(
     stepIndex: -1,
   });
 
+  // Emitted here rather than from `start()`: this is the first line at which a
+  // tour genuinely begins. A runtime that would not load, or a set with no
+  // steps, has already returned above, so "started" never counts a walkthrough
+  // the user did not get.
+  emitOnboardingEvent({
+    name: 'onboarding_walkthrough_started',
+    item: itemId,
+    stepCount: activeSteps.length,
+  });
+
   engine.startTour(activeSteps, {
     onStepChange: (index) => {
       useWalkthroughStore.setState({ stepIndex: index, currentStep: activeSteps[index] ?? null });
     },
     // Every ending arrives here — completed, dismissed, or a target that never
-    // appeared — and all three do the same thing, because none of them has any
-    // work to undo (R5.3).
-    onExit: () => {
+    // appeared — and all three do the same thing to the user's data, because
+    // none of them has any work to undo (R5.3). They are told apart only for the
+    // funnel.
+    onExit: (reason) => {
+      // THE STEP INDEX COMES FROM THE LIVE SESSION, AND IS READ BEFORE THE
+      // TEARDOWN THAT CLEARS IT (R8.1). Nothing stores a step index — resume
+      // re-derives its position from the checklist instead (R5.6), and adding a
+      // stored one for the sake of an event would be a second source of truth
+      // that could disagree with the first. The running session already tracks
+      // where the tour is, because the overlay has to be somewhere; the
+      // abandonment event is just that number, taken on the way out. It is `-1`
+      // when no step was ever highlighted.
+      const { stepIndex } = useWalkthroughStore.getState();
+      const stepCount = activeSteps.length;
       endSession();
+
+      if (reason === 'completed') {
+        emitOnboardingEvent({ name: 'onboarding_walkthrough_completed', item: itemId, stepCount });
+        return;
+      }
+      emitOnboardingEvent({
+        name: 'onboarding_walkthrough_abandoned',
+        item: itemId,
+        stepIndex,
+        stepCount,
+        reason,
+      });
     },
   });
 }
@@ -351,6 +385,29 @@ export function useWalkthrough(): UseWalkthroughResult {
   const navigate = useNavigate();
   const { checklist } = useOnboarding();
   const state = useWalkthroughStore();
+
+  // R8.1's "offered": there is a walkthrough behind the button and the user
+  // could press it. Mounting this hook IS the offer — `ZeroState` is the only
+  // thing that mounts it, and it does so precisely to put "Walk me through it"
+  // and the checklist's per-item "Start" on screen — so the condition here is
+  // the same one `ZeroState` disables its control on: a runtime that will load,
+  // and a checklist naming an outstanding item.
+  //
+  // This does not weaken R5.2. Nothing below starts anything; it counts an
+  // opportunity that was on screen either way, and the tour still only ever
+  // begins from a click.
+  //
+  // The ref makes it the OFFER that is counted rather than the render. Emitting
+  // on every render would report a few dozen offers per screen, and emitting
+  // once per mount would miss the genuinely new offer a user is given when they
+  // finish one item and the next becomes outstanding under them.
+  const offeredItem = state.isUnavailable ? null : nextIncompleteItem(checklist);
+  const lastOffered = useRef<ChecklistItemId | null>(null);
+  useEffect(() => {
+    if (offeredItem === null || offeredItem === lastOffered.current) return;
+    lastOffered.current = offeredItem;
+    emitOnboardingEvent({ name: 'onboarding_walkthrough_offered', item: offeredItem });
+  }, [offeredItem]);
 
   const start = useCallback(
     (itemId?: ChecklistItemId, params?: Record<string, string>) => {

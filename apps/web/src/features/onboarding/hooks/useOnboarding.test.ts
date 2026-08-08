@@ -9,12 +9,21 @@ import type { Account, OnboardingPatch, OnboardingState, PositionListItem } from
 
 import { api } from '@/lib/api';
 
+import { __resetOnboardingAnalyticsForTests } from '../lib/analytics';
+
 import { ONBOARDING_QUERY_KEY, useOnboarding, useOnboardingPatch } from './useOnboarding';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+// The real `lib/analytics` runs; only the vendor-facing capture is a double, so
+// the R8.2 tests below assert on the events the hook genuinely produces.
+const captureClientEvent = vi.fn();
+vi.mock('@/lib/telemetry/posthog', () => ({
+  captureClientEvent: (...args: unknown[]) => captureClientEvent(...args),
 }));
 
 // --- fixtures ---------------------------------------------------------------
@@ -105,6 +114,10 @@ function doneVector(items: { id: string; done: boolean }[]) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // The completion baseline is module state that deliberately outlives every
+  // component, so it has to be dropped between tests by hand.
+  __resetOnboardingAnalyticsForTests();
+  captureClientEvent.mockReset();
 });
 
 // --- derivation -------------------------------------------------------------
@@ -602,5 +615,162 @@ describe('useOnboardingPatch — silent', () => {
     });
     await waitFor(() => expect(silent.result.current.isError).toBe(true));
     expect(errorToast).not.toHaveBeenCalled();
+  });
+});
+
+// --- per-item completion events (R8.2) --------------------------------------
+
+describe('useOnboarding — checklist completion events (R8.2)', () => {
+  /**
+   * The three reads again, but with the two lists swappable, so a test can move
+   * the user's data under a mounted hook the way creating a position does.
+   * Each read answers with a COPY: an identical array reference would leave the
+   * derivation memo untouched and hide the very re-render being tested.
+   */
+  function mockMovableServer(initial: {
+    accounts: Account[];
+    positions: PositionListItem[];
+    preference?: OnboardingState;
+  }) {
+    let accounts = initial.accounts;
+    let positions = initial.positions;
+    const preference = initial.preference ?? FRESH;
+
+    vi.spyOn(api, 'get').mockImplementation((path: string) => {
+      if (path === '/accounts') return Promise.resolve([...accounts]) as never;
+      if (path === '/positions') return Promise.resolve([...positions]) as never;
+      if (path === '/users/me/onboarding') return Promise.resolve({ ...preference }) as never;
+      return Promise.reject(new Error(`unexpected GET ${path}`)) as never;
+    });
+
+    return (next: { accounts?: Account[]; positions?: PositionListItem[] }) => {
+      accounts = next.accounts ?? accounts;
+      positions = next.positions ?? positions;
+    };
+  }
+
+  /** The zero-state screen mounts this hook three times over; so does this. */
+  function renderThreeCopies(qc: QueryClient) {
+    return renderHook(() => [useOnboarding(), useOnboarding(), useOnboarding()] as const, {
+      wrapper: makeWrapper(qc),
+    });
+  }
+
+  function completedItems() {
+    return captureClientEvent.mock.calls
+      .filter(([name]) => name === 'onboarding_checklist_item_completed')
+      .map(([, properties]) => (properties as { item: string }).item);
+  }
+
+  it('says nothing about the items the user arrived with', async () => {
+    mockMovableServer({
+      accounts: [anAccount],
+      positions: [aPosition('p1', 'closed')],
+      preference: { ...FRESH, calculatorFirstUsedAt: '2026-08-01T10:00:00.000Z' },
+    });
+    const { result } = renderThreeCopies(makeQueryClient());
+
+    await waitFor(() => expect(result.current[0].checklist?.allComplete).toBe(true));
+
+    // Four items complete, and the user completed none of them just now.
+    expect(captureClientEvent).not.toHaveBeenCalled();
+  });
+
+  it('emits once — not once per mounted copy — when an item transitions', async () => {
+    const qc = makeQueryClient();
+    const move = mockMovableServer({ accounts: [anAccount], positions: [] });
+    const { result } = renderThreeCopies(qc);
+
+    await waitFor(() => expect(result.current[0].checklist).toBeDefined());
+    expect(captureClientEvent).not.toHaveBeenCalled();
+
+    move({ positions: [aPosition('p1', 'open')] });
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ['positions'] });
+    });
+    await waitFor(() => expect(result.current[0].checklist!.items[2].done).toBe(true));
+
+    expect(captureClientEvent.mock.calls).toEqual([
+      ['onboarding_checklist_item_completed', { item: 'position' }],
+    ]);
+  });
+
+  it('does not repeat itself on the re-renders that follow', async () => {
+    const qc = makeQueryClient();
+    const move = mockMovableServer({ accounts: [anAccount], positions: [] });
+    const { result } = renderThreeCopies(qc);
+
+    await waitFor(() => expect(result.current[0].checklist).toBeDefined());
+    move({ positions: [aPosition('p1', 'open')] });
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ['positions'] });
+    });
+    await waitFor(() => expect(completedItems()).toEqual(['position']));
+
+    // Every settled query re-derives the checklist, and the item still reads
+    // complete on every one of them. Only the transition counts.
+    await act(async () => {
+      await qc.invalidateQueries();
+    });
+    await act(async () => {
+      await qc.invalidateQueries();
+    });
+
+    expect(completedItems()).toEqual(['position']);
+  });
+
+  it('emits nothing when sample data lands, because sample data completes nothing', async () => {
+    const qc = makeQueryClient();
+    const move = mockMovableServer({ accounts: [], positions: [] });
+    const { result } = renderThreeCopies(qc);
+
+    await waitFor(() => expect(result.current[0].checklist).toBeDefined());
+
+    // The seeder's account and its ten closed positions, exactly as R4.8 leaves
+    // them: excluded from every count, so no item moves and nothing is reported.
+    move({
+      accounts: [aDemoAccount],
+      positions: [
+        aPosition('d1', 'closed', aDemoAccount.id),
+        aPosition('d2', 'closed', aDemoAccount.id),
+      ],
+    });
+    await act(async () => {
+      await qc.invalidateQueries();
+    });
+
+    // The refetch landed and moved nothing: all four items still incomplete, so
+    // there was no transition to report.
+    await waitFor(() =>
+      expect((api.get as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(doneVector(result.current[0].checklist!.items)).toEqual([
+      ['account', false],
+      ['calculator', false],
+      ['position', false],
+      ['close', false],
+    ]);
+    expect(captureClientEvent).not.toHaveBeenCalled();
+  });
+
+  it('carries the item id and nothing else (R8.5)', async () => {
+    const qc = makeQueryClient();
+    const move = mockMovableServer({ accounts: [], positions: [] });
+    const { result } = renderThreeCopies(qc);
+
+    await waitFor(() => expect(result.current[0].checklist).toBeDefined());
+    move({ accounts: [anAccount], positions: [aPosition('p1', 'closed')] });
+    await act(async () => {
+      await qc.invalidateQueries();
+    });
+    await waitFor(() => expect(completedItems()).toHaveLength(3));
+
+    // Three items ticked at once, and between them the payloads name a checklist
+    // item and nothing else — no position id, no account, no count of anything
+    // the user owns.
+    for (const [, properties] of captureClientEvent.mock.calls) {
+      expect(Object.keys(properties as Record<string, unknown>)).toEqual(['item']);
+    }
+    expect(completedItems().sort()).toEqual(['account', 'close', 'position']);
   });
 });

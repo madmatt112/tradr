@@ -54,7 +54,7 @@
 // going to happen.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 
 import type { OnboardingPatch, OnboardingState, OnboardingStatus } from '@tradr/shared';
@@ -63,6 +63,7 @@ import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { api } from '@/lib/api';
 
+import { reportChecklistCompletions } from '../lib/analytics';
 import { deriveChecklist, type Checklist } from '../lib/derive-checklist';
 
 /** [feature, scope, id] — the same shape as the other /users/me/* preferences. */
@@ -234,6 +235,17 @@ export function useOnboarding(): UseOnboardingResult {
       calculatorFirstUsedAt: preference.calculatorFirstUsedAt,
     });
   }, [accounts, positions, preference, checklistNeeded]);
+
+  // R8.2 — one event per item as it BECOMES complete. The transition is worked
+  // out in `lib/analytics.ts` against a module-scoped baseline rather than here,
+  // because completion is derived from counts on every render (R4.2) and this
+  // hook is mounted several times over on the same screen; a ref in this file
+  // would report each completion once per mounted copy. An effect rather than a
+  // render-time call, and idempotent either way — a second run over the same
+  // checklist finds the baseline already moved and emits nothing.
+  useEffect(() => {
+    reportChecklistCompletions(checklist);
+  }, [checklist]);
 
   const { mutate } = patch;
   const setStatus = useCallback(
