@@ -7,6 +7,7 @@ import {
   getCorsAllowedOrigins,
   isDirectDatabaseConfigured,
   isEmailConfigured,
+  isMetricsConfigured,
   isObjectStorageConfigured,
   isPostHogConfigured,
   isProSubscriptionConfigured,
@@ -815,6 +816,74 @@ describe('isEmailConfigured', () => {
     expect(isEmailConfigured()).toBe(true);
     config.SMTP_HOST = undefined;
     expect(isEmailConfigured()).toBe(false);
+  });
+});
+
+describe('envSchema.METRICS_ENABLED', () => {
+  it('parses "true" to boolean true', () => {
+    const parsed = envSchema.parse({ ...baseEnv, METRICS_ENABLED: 'true' });
+    expect(parsed.METRICS_ENABLED).toBe(true);
+  });
+
+  it('parses "false" to boolean false', () => {
+    const parsed = envSchema.parse({ ...baseEnv, METRICS_ENABLED: 'false' });
+    expect(parsed.METRICS_ENABLED).toBe(false);
+  });
+
+  it('defaults to false when unset', () => {
+    const parsed = envSchema.parse(baseEnv);
+    expect(parsed.METRICS_ENABLED).toBe(false);
+  });
+
+  it.each(['1', 'yes', '', '0', 'TRUE'])('rejects %j', (v) => {
+    const result = envSchema.safeParse({ ...baseEnv, METRICS_ENABLED: v });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('envSchema.METRICS_PORT', () => {
+  it('defaults to 9464 when unset', () => {
+    const parsed = envSchema.parse(baseEnv);
+    expect(parsed.METRICS_PORT).toBe(9464);
+  });
+
+  it('coerces a numeric string', () => {
+    const parsed = envSchema.parse({ ...baseEnv, METRICS_PORT: '9100' });
+    expect(parsed.METRICS_PORT).toBe(9100);
+  });
+});
+
+describe('envSchema.METRICS_HOST', () => {
+  it('defaults to 0.0.0.0 when unset', () => {
+    const parsed = envSchema.parse(baseEnv);
+    expect(parsed.METRICS_HOST).toBe('0.0.0.0');
+  });
+
+  it('passes through a provided value', () => {
+    const parsed = envSchema.parse({ ...baseEnv, METRICS_HOST: '127.0.0.1' });
+    expect(parsed.METRICS_HOST).toBe('127.0.0.1');
+  });
+});
+
+describe('isMetricsConfigured predicate', () => {
+  // Mutate + restore the live `config` object — the established config-mutation
+  // test pattern (isPostHogConfigured above). The self-host parity test only ever
+  // sees the pinned-off env, so the TRUE branch is exercised here.
+  const prev = { METRICS_ENABLED: config.METRICS_ENABLED };
+
+  afterEach(() => {
+    config.METRICS_ENABLED = prev.METRICS_ENABLED;
+  });
+
+  it('is false in the test env (vitest workspace pin-off)', () => {
+    expect(isMetricsConfigured()).toBe(false);
+  });
+
+  it('follows METRICS_ENABLED both ways (live read per call)', () => {
+    config.METRICS_ENABLED = true;
+    expect(isMetricsConfigured()).toBe(true);
+    config.METRICS_ENABLED = false;
+    expect(isMetricsConfigured()).toBe(false);
   });
 });
 

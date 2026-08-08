@@ -42,6 +42,7 @@ import {
 import { initStockQuoteCache } from '@/features/symbols/stock-quote.client';
 import symbolsRouter from '@/features/symbols/symbols.route';
 import { syncSymbolsIfStale } from '@/features/symbols/symbols.service';
+import { isMetricsConfigured } from '@/lib/config';
 import {
   loadEncryptionKeyMaterial,
   runEncryptionFingerprintCheckIfConfigured,
@@ -51,11 +52,36 @@ import { corsMiddleware } from '@/middleware/cors.middleware';
 import { csrfMiddleware } from '@/middleware/csrf.middleware';
 import { errorHandler } from '@/middleware/error.middleware';
 import { loggingMiddleware } from '@/middleware/logging.middleware';
+import { metricsMiddleware } from '@/middleware/metrics.middleware';
 
 const app = new Hono();
 
 // Global middleware
 app.use(loggingMiddleware);
+
+// HTTP metrics (REQ-1.4) — registered only when METRICS_ENABLED. Placed AFTER
+// loggingMiddleware so a metrics failure can never prevent the request log, and
+// before every app.route() mount below so it wraps route dispatch.
+//
+// Two classes of short-circuit therefore label a request by something other than
+// its route pattern, both pinned in metrics.middleware.test.ts so nobody reads
+// them as a bug:
+//
+//  1. GLOBAL — corsMiddleware/csrfMiddleware sit AFTER this and can return
+//     without calling next() (csrfMiddleware returns 403 CSRF_FORBIDDEN). Route
+//     dispatch never happens, so the request resolves to a global middleware's
+//     /* and is labelled route="unmatched" alongside genuine 404s. Only on the
+//     split-origin hosted tier — both are pure pass-through when
+//     isSplitOriginConfigured() is false.
+//  2. PER-ROUTER — the feature routers below call router.use(authMiddleware),
+//     which returns 401 without next() when unauthenticated. That resolves to
+//     the router's MOUNT WILDCARD (e.g. route="/api/positions/*"), not
+//     "unmatched" — a third bucket a dashboard shows next to /api/positions/:id.
+//     This is the highest-volume case, since 401s are routine.
+//
+// Both satisfy REQ-5.7's letter (no app route's handler ever matched) and stay
+// bounded: one extra label value per mounted router (REQ-8.2).
+if (isMetricsConfigured()) app.use(metricsMiddleware);
 
 // Split-origin CORS + anti-CSRF (REQ-5/6, design §Component 4/5). Both gate on
 // the single isSplitOriginConfigured() predicate (evaluated per request), so
