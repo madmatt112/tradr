@@ -190,11 +190,14 @@ describe('onboarding surface parity — every optional integration off', () => {
     // Read back through the ordinary list, so a seed that answered 201 without
     // writing anything would not pass. The fixture's own figures are pinned by
     // the sample-account suite; what matters here is only that it seeds at all.
+    // Containment, not an exact array: whether registration also leaves the user
+    // some other account is no business of this block, and pinning it here would
+    // report an unrelated signup change as a hosted-vs-self-host regression.
     const list = await authedRequest('GET', '/api/accounts', cookie);
     expect(list.status).toBe(200);
-    expect((await list.json()) as { id: string; isDemo: boolean }[]).toEqual([
+    expect((await list.json()) as { id: string; isDemo: boolean }[]).toContainEqual(
       expect.objectContaining({ id: account.id, isDemo: true }),
-    ]);
+    );
   });
 
   it('sample data can be removed again', async () => {
@@ -206,9 +209,15 @@ describe('onboarding surface parity — every optional integration off', () => {
     const teardown = await authedRequest('DELETE', `/api/accounts/${id}?cascade=demo`, cookie);
     expect(teardown.status).toBe(204);
 
+    // Containment again, for the reason given above, and the teardown is still
+    // pinned on both counts: the account just seeded is gone by id, and no
+    // sample account survives it at all. A teardown that deleted the wrong row,
+    // or left a second demo account standing, still reds.
     const list = await authedRequest('GET', '/api/accounts', cookie);
     expect(list.status).toBe(200);
-    expect(await list.json()).toEqual([]);
+    const remaining = (await list.json()) as { id: string; isDemo: boolean }[];
+    expect(remaining.map((account) => account.id)).not.toContain(id);
+    expect(remaining.filter((account) => account.isDemo)).toEqual([]);
   });
 
   it('refuses a real account while the sample account exists, unaided', async () => {
