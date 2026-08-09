@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { advance, isActive, startTour, stop, type TourStep } from './tour-engine';
@@ -139,6 +142,96 @@ describe('action steps (R5.5)', () => {
     clickPopoverButton('.driver-popover-next-btn');
 
     expect(popoverTitle()).toBe('Second');
+  });
+
+  // The trap this releases: the rest of the page is inert under a running tour,
+  // so a gated step pointing at a control the user cannot press leaves Escape —
+  // which ENDS the walkthrough — as the only way on. The close set reaches it
+  // whenever the user takes the partial exit its previous step invites.
+  it('releases the gate while the highlighted control is disabled', () => {
+    document.querySelector<HTMLButtonElement>('#one')!.disabled = true;
+    startTour(steps);
+
+    clickPopoverButton('.driver-popover-next-btn');
+    expect(popoverTitle()).toBe('Done');
+  });
+
+  it('releases it for the right-arrow key on the same terms', () => {
+    document.querySelector<HTMLButtonElement>('#one')!.disabled = true;
+    startTour(steps);
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
+    expect(popoverTitle()).toBe('Done');
+  });
+
+  it('reads the control live, so a gate closes again once it can be pressed', () => {
+    const target = document.querySelector<HTMLButtonElement>('#one')!;
+    target.disabled = true;
+    startTour(steps);
+
+    target.disabled = false;
+    clickPopoverButton('.driver-popover-next-btn');
+    expect(popoverTitle()).toBe('Do it');
+  });
+
+  // Radix marks its own disabled triggers this way rather than with the
+  // attribute, and they are just as unpressable.
+  it('counts an aria-disabled control as one the user cannot press', () => {
+    document.querySelector('#one')!.setAttribute('aria-disabled', 'true');
+    startTour(steps);
+
+    clickPopoverButton('.driver-popover-next-btn');
+    expect(popoverTitle()).toBe('Done');
+  });
+});
+
+/**
+ * The caller's chance to put the next step's screen up before the tour moves
+ * onto it. Only for a move the USER made: a caller driving the tour with
+ * `advance()` has already prepared, and firing here as well would do it twice.
+ */
+describe('onBeforeAdvance', () => {
+  it('fires before a "Next" press moves the tour, naming the outgoing step', () => {
+    const onBeforeAdvance = vi.fn(() => {
+      expect(popoverTitle()).toBe('First');
+    });
+    startTour(TWO_STEPS, { onBeforeAdvance });
+
+    clickPopoverButton('.driver-popover-next-btn');
+
+    expect(onBeforeAdvance).toHaveBeenCalledExactlyOnceWith(0);
+    expect(popoverTitle()).toBe('Second');
+  });
+
+  it('fires on the right-arrow key too', () => {
+    const onBeforeAdvance = vi.fn();
+    startTour(TWO_STEPS, { onBeforeAdvance });
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
+
+    expect(onBeforeAdvance).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it('does not fire when the caller advances the tour itself', () => {
+    const onBeforeAdvance = vi.fn();
+    startTour(TWO_STEPS, { onBeforeAdvance });
+
+    advance();
+
+    expect(onBeforeAdvance).not.toHaveBeenCalled();
+    expect(popoverTitle()).toBe('Second');
+  });
+
+  it('does not fire on the last step, where the press is "Done"', () => {
+    const onBeforeAdvance = vi.fn();
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onBeforeAdvance, onExit });
+    advance();
+
+    clickPopoverButton('.driver-popover-next-btn');
+
+    expect(onBeforeAdvance).not.toHaveBeenCalled();
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
   });
 });
 
@@ -344,6 +437,46 @@ describe('an ending the tour itself cannot see', () => {
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
   });
+});
+
+/**
+ * The stylesheet this module imports is loaded for the rest of the SESSION, not
+ * for the tour — nothing unloads it when the tour ends. So every rule in it that
+ * hands `pointer-events` back has to be scoped to `.driver-active`, the class
+ * driver.js keeps on `<body>` for exactly as long as a tour is running.
+ *
+ * Unscoped, the dialog-release rules outrank `disabled:pointer-events-none` and
+ * `data-[disabled]:pointer-events-none` and go on doing so in every dialog the
+ * user opens afterwards, which turns disabled controls back into clickable ones
+ * in an app that is no longer running a tour. Checked as text because jsdom
+ * applies no stylesheet — the behaviour itself is asserted in the e2e suite.
+ */
+describe('tour.css scoping', () => {
+  const css = readFileSync(path.join(__dirname, '../tour.css'), 'utf8');
+
+  // Declaration blocks only: the file's prose explains these rules at length,
+  // and a comment naming a selector is not a selector.
+  const selectors = css
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('}')
+    .flatMap((block) => block.split('{')[0].split(','))
+    // One selector per entry, whitespace collapsed: a list is only as scoped as
+    // its loosest branch, so every branch is checked on its own.
+    .map((selector) => selector.trim().replace(/\s+/g, ' '))
+    .filter((selector) => selector.length > 0 && !selector.startsWith('@'));
+
+  it('has rules that release pointer-events while a dialog is open', () => {
+    // The guard below passes vacuously if the rules are renamed out from under
+    // it, so this is the check that there is still something to scope.
+    expect(selectors.filter((s) => s.includes("[data-slot='dialog-content']")).length).toBe(3);
+  });
+
+  it.each(selectors.filter((s) => s.includes("[data-slot='dialog-content']")))(
+    'scopes %s to a running tour',
+    (selector) => {
+      expect(selector).toContain('.driver-active');
+    },
+  );
 });
 
 describe('idle engine', () => {

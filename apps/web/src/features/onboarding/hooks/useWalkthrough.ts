@@ -404,6 +404,16 @@ async function run(
   });
 
   engine.startTour(activeSteps, {
+    // The same navigation `bindAdvance` does, for the moves it does not make:
+    // the ones the user makes themselves with "Next" or the right arrow. A set
+    // changes screen only across an action-gated step, so this used to be
+    // unreachable — until a gated step whose control is disabled began handing
+    // "Next" back (tour-engine.ts, `isGatedStep`), which is exactly the move
+    // that carries the close set from the position onto the dashboard when the
+    // user exited only part of their position.
+    onBeforeAdvance: (index) => {
+      navigateBetweenSteps(activeSteps[index], activeSteps[index + 1], params, navigate);
+    },
     onStepChange: (index) => {
       useWalkthroughStore.setState({ stepIndex: index, currentStep: activeSteps[index] ?? null });
     },

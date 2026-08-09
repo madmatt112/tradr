@@ -118,7 +118,7 @@
   "paths": {
     "/api/accounts": {
       "post": {
-        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass through unchanged.\n",
+        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass through unchanged.\n\nWhile the sample account exists the create is refused with `409 DEMO_ACCOUNT_EXISTS` instead: sample and real data are mutually exclusive, because every aggregate scopes by currency and not by account. That check runs BEFORE the plan cap, so a Free user holding sample data is told to remove it rather than to upgrade — the sample account occupies their one slot. Remove it with `DELETE /api/accounts/{id}?cascade=demo` and retry.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -164,7 +164,7 @@
         },
         "responses": {
           "201": {
-            "description": "The created account."
+            "description": "The created account, with `isDemo: false`."
           },
           "400": {
             "description": "Validation error."
@@ -173,10 +173,27 @@
             "description": "TIER_LIMIT_ACCOUNTS (account cap reached on the current plan) or FORBIDDEN (cross-user brokerage)."
           },
           "409": {
-            "description": "Duplicate account name."
+            "description": "DEMO_ACCOUNT_EXISTS (sample data present — remove it and retry) or CONFLICT (duplicate account name)."
           }
         },
         "summary": "Create an account.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
+    "/api/accounts/demo": {
+      "post": {
+        "description": "Authed. Creates one flagged sample account for the current user, seeded with a fixed set of trades — closed, open and planned — driven through the normal position lifecycle so realized P&L and its ledger entries are derived exactly as they are for real trades. The fixture is identical on every run, so support, the documentation screenshots and the end-to-end tests all describe the same figures.\n\nRefused with `409` when the user already has an account. Sample figures are kept out of real ones by keeping sample and real data mutually exclusive, so there is no supported state in which both exist. Seeding is all-or-nothing: a failure leaves no account behind, and a retry is safe.\n\nAvailable identically to self-hosted and hosted deployments — it needs no optional integration configured.\n\nEvery account read — the list, the detail and this response — carries a boolean `isDemo`, which is `true` on the sample account and `false` on every real one. That is how a client identifies the sample account to label or remove it; it is server-set and cannot be sent in on create or update.\n",
+        "responses": {
+          "201": {
+            "description": "The created sample account, with `isDemo: true`."
+          },
+          "409": {
+            "description": "The user already has an account."
+          }
+        },
+        "summary": "Add sample data.",
         "tags": [
           "Accounts"
         ]
@@ -222,6 +239,52 @@
       }
     },
     "/api/accounts/{id}": {
+      "delete": {
+        "description": "Authed. Refused with `409` when the account holds positions — deleting one would take its trading history with it.\n\n`?cascade=demo` asks instead for the sample-account teardown: the account and every position, fill and ledger entry booked against it, removed together in one transaction, leaving nothing orphaned behind. It is a request and not an authorisation — the server decides from the account's own stored sample-data flag, so the same call against a real account holding positions is refused with `409` exactly as it is without the parameter. Nothing a client sends can reach the flag.\n\nTeardown is idempotent: repeating it against a sample account that has already been removed answers `204`, so two tabs pressing the same button settle on the same state. That applies only to the caller's own former sample account; every other unknown id is a `404`, as is any account belonging to another user.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "`demo` requests the sample-account teardown. Any other value is a `400`.\n",
+            "in": "query",
+            "name": "cascade",
+            "required": false,
+            "schema": {
+              "enum": [
+                "demo"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted",
+            "or already torn down.": null
+          },
+          "400": {
+            "description": "Validation error (a non-uuid id",
+            "or an unrecognised cascade value).": null
+          },
+          "404": {
+            "description": "Account not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "The account has positions and no cascade applies."
+          }
+        },
+        "summary": "Delete an account.",
+        "tags": [
+          "Accounts"
+        ]
+      },
       "put": {
         "description": "Authed. All fields optional. `startingBalance` is deliberately absent — it is creation-only. `timezone` IS editable: it changes only subsequent trading-day evaluations and rewrites no history, and `defaultRiskPercent` is editable for the same reason.\n",
         "parameters": [
@@ -274,7 +337,7 @@
         },
         "responses": {
           "200": {
-            "description": "The updated account."
+            "description": "The updated account. `isDemo` is server-set and unchanged by this call."
           },
           "400": {
             "description": "Validation error (includes an unknown IANA timezone)."
@@ -3837,7 +3900,58 @@
         },
         "responses": {
           "201": {
-            "description": "The created fill."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "fees": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "filledAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "notes": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "positionClosed": {
+                      "type": "boolean"
+                    },
+                    "positionId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "entry",
+                        "exit"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The created fill, plus `positionClosed` — true when this was the exit that balanced the entered quantity, which closes the position in the same transaction.\n"
           },
           "400": {
             "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."

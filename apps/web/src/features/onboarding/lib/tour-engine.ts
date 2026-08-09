@@ -58,7 +58,8 @@ export interface TourStep {
    *
    * Has no effect on the LAST step, where the button is "Done" — finishing is
    * not advancing, and trapping the user behind an action they may have already
-   * taken would leave no way out but Escape.
+   * taken would leave no way out but Escape. For the same reason it has no
+   * effect while the highlighted control is disabled — see `isGatedStep`.
    *
    * READ THIS BEFORE BELIEVING THE STEP DATA. The flag carries two meanings, and
    * only one of them is this one. It also declares "the next step's target is
@@ -99,6 +100,18 @@ export type TourExitReason =
 export interface TourHandlers {
   /** Fires as each step is highlighted, before any animation. */
   onStepChange?: (index: number, step: TourStep) => void;
+  /**
+   * Fires just before a move the USER made — "Next", or the right arrow —
+   * carries the tour off `index`, while that step is still the current one.
+   *
+   * It is the caller's chance to prepare the screen the next step lives on,
+   * which cannot wait until the move has happened: driver.js reports a step
+   * change only once it has RESOLVED that step's target, and a target on a
+   * screen nobody navigated to resolves never. A caller driving the tour with
+   * `advance()` needs no such hook — it already knows it is about to advance,
+   * and prepares before it calls.
+   */
+  onBeforeAdvance?: (index: number) => void;
   /** Fires exactly once per tour, however it ended. */
   onExit?: (reason: TourExitReason) => void;
 }
@@ -139,9 +152,48 @@ function clearState(): void {
   exitReason = 'dismissed';
 }
 
-/** R5.5 — the one step state that decides whether "Next" (or its key) advances. */
+/**
+ * Whether the control a step points at can be used at all right now.
+ *
+ * Read live rather than remembered from the highlight, because the answer
+ * changes under the step: the control a user is being asked to press is often
+ * disabled until they have done something else, and that something else may
+ * happen while the popover is on screen.
+ */
+function isTargetUnusable(target: string | undefined): boolean {
+  if (target === undefined) return false;
+  const element = document.querySelector(target);
+  // A target that is not there at all is `handleHighlightStarted`'s to deal
+  // with — it ends the tour. Not knowing is not the same as knowing it is dead,
+  // so the gate stands.
+  if (element === null) return false;
+  return element.matches(':disabled, [aria-disabled="true"], [data-disabled]');
+}
+
+/**
+ * R5.5 — the one step state that decides whether "Next" (or its key) advances.
+ *
+ * A GATE THE USER CANNOT OPEN IS NOT A GATE, IT IS A TRAP. Suppressing "Next"
+ * is only safe while the highlighted control is one the user can actually
+ * press: the rest of the page is `pointer-events: none` under a running tour,
+ * so a gated step whose control is disabled leaves Escape as the only way out —
+ * and Escape ends the walkthrough rather than continuing it.
+ *
+ * The close set reaches exactly that state. "It closes itself" highlights Close
+ * Position, which is disabled until the whole entered quantity has been exited
+ * ("Exit the full quantity first"), and the step before it advances on any exit
+ * fill — so a user who records a PARTIAL exit, which the step before explicitly
+ * invites, arrives at a control they cannot press waiting for a `closed` event
+ * that will not come. Releasing the gate here hands them "Next" instead, which
+ * is what a step whose action is unavailable owes them.
+ *
+ * It costs the happy path nothing: an enabled control keeps its gate, so the
+ * step still ignores "Next" for every user who can do the thing it asks.
+ */
 function isGatedStep(index: number): boolean {
-  return activeSteps[index]?.advanceOnAction === true;
+  const step = activeSteps[index];
+  if (step?.advanceOnAction !== true) return false;
+  return !isTargetUnusable(step.target);
 }
 
 /**
@@ -166,7 +218,7 @@ function isGatedStep(index: number): boolean {
  *
  * Everything below routes through the SAME functions the popover's own buttons
  * do, so the two paths cannot drift: the gate is `isGatedStep`, advancing is
- * `advance()`, and exiting is `stop()`. `keyup` rather than `keydown` matches
+ * `advanceFromUser()`, and exiting is `stop()`. `keyup` rather than `keydown` matches
  * what driver.js listened for, so holding a key still moves one step rather than
  * racing through the set. Nothing filters by event target, also as before: the
  * highlighted control is interactive (`disableActiveInteraction: false`) and a
@@ -183,7 +235,7 @@ function handleKeyup(event: KeyboardEvent): void {
   }
   if (event.key === 'ArrowRight') {
     if (isGatedStep(running.getActiveIndex() ?? -1)) return;
-    advance();
+    advanceFromUser();
     return;
   }
   // Never off the front of the set: driver.js's own left-arrow handler stops at
@@ -219,8 +271,28 @@ const handleNextClick: DriverHook = (_element, _driveStep, opts) => {
   // right-arrow key is suppressed by the same gate in `handleKeyup`, which is
   // why the test lives in one function rather than in both callers.
   if (isGatedStep(opts.index ?? -1)) return;
-  advance();
+  advanceFromUser();
 };
+
+/**
+ * Advance because the USER asked to, rather than because the caller did.
+ *
+ * The difference is `onBeforeAdvance`: a caller that calls `advance()` has
+ * already prepared for the move, while a "Next" press is the first anyone hears
+ * of it — and the step after a press may live on a screen that has to be
+ * navigated to before its target can ever resolve.
+ */
+function advanceFromUser(): void {
+  const running = instance;
+  if (!running?.isActive()) return;
+  // Not on the last step: that press is "Done", and there is no next screen to
+  // prepare. driver.js routes it to `onDoneClick`; the right-arrow key reaches
+  // here, so the guard is needed either way.
+  if (!running.isLastStep()) {
+    activeHandlers.onBeforeAdvance?.(running.getActiveIndex() ?? -1);
+  }
+  advance();
+}
 
 const handleDoneClick: DriverHook = () => {
   exitReason = 'completed';

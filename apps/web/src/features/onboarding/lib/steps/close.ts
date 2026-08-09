@@ -26,6 +26,14 @@
  *   partial exit moves the balance the moment it is recorded. The close hook
  *   posts only what is still unposted, which on a one-entry-one-exit trade is
  *   nothing. The account balance is `startingBalance + SUM(ledger)`.
+ * - A PARTIAL EXIT IS A SUPPORTED PATH THROUGH THIS SET, because step 1 invites
+ *   one. It does not close the position, so step 2's `closed` signal never
+ *   arrives and Close Position stays disabled — which used to leave Escape as
+ *   the only way on. `tour-engine.ts` now releases the "Next" gate on a step
+ *   whose control is disabled, so step 2 is a step the user reads and moves
+ *   past rather than a dead end, and its copy says so. Nothing here claims the
+ *   position closed: the last step attributes the figures to the exits
+ *   recorded, which is true of a partial exit and of a full one alike.
  * - `[data-grid-mode]` is `DashboardGrid`'s own attribute, set on both the
  *   desktop grid and the mobile stack, so the closing step anchors to the
  *   widgets at any width.
@@ -62,7 +70,9 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
       'Exit the whole quantity you entered and Tradr closes the position for you, timed to that ' +
       'last fill — Close Position is here for the ones it cannot, such as a trade you finish by ' +
       'correcting an earlier fill. Your realised P&amp;L reached the account with each exit fill ' +
-      'as you recorded it, not at the end, so the balance has already moved.',
+      'as you recorded it, not at the end, so the balance has already moved. Exited only part of ' +
+      'it? That is a finished step, not a finished trade: carry on with Next and add the rest ' +
+      'from Add Fill whenever you close it out.',
   },
   {
     target: '[data-grid-mode]',
@@ -72,7 +82,8 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     title: 'And there it is',
     body:
       'Back on the dashboard, with figures in it. Everything here is derived from the trades you ' +
-      'log — the stats, the equity curve and your account balance all just moved because that ' +
-      'position is now closed. Log the next one and they move again.',
+      'log — the stats, the equity curve and your account balance all just moved, because each ' +
+      'exit you recorded booked its share of the result as you recorded it. Log the next one and ' +
+      'they move again.',
   },
 ];

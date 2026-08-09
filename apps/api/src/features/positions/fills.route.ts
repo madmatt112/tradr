@@ -71,6 +71,17 @@ const FillParamSchema = z.object({
  *             schema:
  *               type: object
  *               properties:
+ *                 id: { type: string, format: uuid }
+ *                 positionId: { type: string, format: uuid }
+ *                 type:
+ *                   type: string
+ *                   enum: [entry, exit]
+ *                 price: { type: string, description: Decimal. }
+ *                 quantity: { type: string, description: Decimal. }
+ *                 fees: { type: string, description: Decimal. }
+ *                 notes: { type: string, nullable: true }
+ *                 filledAt: { type: string, format: date-time }
+ *                 createdAt: { type: string, format: date-time }
  *                 positionClosed: { type: boolean }
  *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position.' }
  *       404: { description: No such position for this user. }

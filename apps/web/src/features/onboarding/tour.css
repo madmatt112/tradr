@@ -134,13 +134,29 @@
    Keyed off the app's own `data-slot` rather than `[role="dialog"]`, because
    driver.js gives its popover that role and the rule would then never be off.
    `!important` on the path for the reason the wash above needs it: driver.js
-   writes that one as an inline style, which outranks any selector without it. */
-body:has([data-slot='dialog-content'][data-state='open']) .driver-overlay path {
+   writes that one as an inline style, which outranks any selector without it.
+
+   AND SCOPED TO `.driver-active`, WHICH IS THE WHOLE OF WHAT THESE RULES ARE
+   FOR. This stylesheet is loaded by the tour engine and stays loaded for the
+   rest of the session — it is not unloaded when the tour ends — so an unscoped
+   `pointer-events: auto` on everything a dialog did not hide goes on applying
+   to every dialog the user opens afterwards, forever. It outranks
+   `disabled:pointer-events-none` and `data-disabled:pointer-events-none`
+   (0,3,1 against 0,2,0), so a disabled control in an ordinary dialog becomes
+   clickable in a session that merely ran the walkthrough once. driver.js puts
+   `driver-active` on `<body>` for exactly as long as a tour is running and
+   removes it on destroy, so it is the switch these rules should have been on:
+   the page is only locked while it is there, and only a locked page needs
+   unlocking. */
+body.driver-active:has([data-slot='dialog-content'][data-state='open']) .driver-overlay path {
   pointer-events: none !important;
 }
 
-body:has([data-slot='dialog-content'][data-state='open']) > :not([data-aria-hidden='true']),
-body:has([data-slot='dialog-content'][data-state='open']) > :not([data-aria-hidden='true']) * {
+body.driver-active:has([data-slot='dialog-content'][data-state='open'])
+  > :not([data-aria-hidden='true']),
+body.driver-active:has([data-slot='dialog-content'][data-state='open'])
+  > :not([data-aria-hidden='true'])
+  * {
   pointer-events: auto;
 }
 

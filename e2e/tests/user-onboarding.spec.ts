@@ -404,6 +404,118 @@ test.describe('user onboarding', () => {
     expect(closed.map((position) => position.status)).toEqual(['closed']);
   });
 
+  // THE OTHER WAY OUT OF THE SAME SET, and the one its first step invites in so
+  // many words: "Partial exits are ordinary". A partial exit does not close the
+  // position, so the middle step's `closed` signal never arrives and the Close
+  // Position it highlights stays disabled ("Exit the full quantity first") —
+  // which used to leave the user on a live overlay with a control they could not
+  // press, no "Next", and nothing but Escape, which ends the walkthrough.
+  test('a partial exit carries on through the close set instead of trapping', async ({
+    page,
+    request,
+  }) => {
+    const email = await registerUser(request, 'partialexit');
+    const accountId = await createAccount(request, 'Partial account');
+    const positionId = await createOpenPosition(request, accountId);
+
+    await loginViaUi(page, email);
+    await page.locator('[data-checklist-action="close"]').click();
+    await expect(page).toHaveURL(new RegExp(`/positions/${positionId}`));
+    await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[0]);
+
+    // Half of the ten units entered — a real exit, and not the last one.
+    await page.locator('[data-tour="position-add-fill"]').click();
+    await expect(page.getByLabel('Price')).toBeVisible();
+    await page.getByRole('dialog').getByRole('combobox').click();
+    await page.getByRole('option', { name: 'Exit' }).click();
+    await page.locator('#price').fill('160.00');
+    await page.locator('#quantity').fill('5');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+
+    // The fill is real, so the tour moves — onto the step whose control this
+    // exit leaves unpressable.
+    await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[1]);
+    await expect(page.locator('[data-tour="position-close"]')).toBeDisabled();
+
+    // THE ASSERTION. "Next" is live, because the gate behind it cannot be
+    // opened — and it carries the user to the last step, on the dashboard,
+    // exactly as the full exit does.
+    await popoverNext(page).click();
+    await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[2]);
+    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page.locator('[data-grid-mode]')).toBeVisible();
+
+    await popoverNext(page).click();
+    await expect(popover(page)).toHaveCount(0);
+
+    // And nothing closed the position to get there: item 4 is honestly still
+    // outstanding, because the trade is.
+    const after = (await (await request.get('/api/positions')).json()) as { status: string }[];
+    expect(after.map((position) => position.status)).toEqual(['open']);
+    await expect(checklistItemLabel(page, 'close')).not.toHaveText(/— completed$/);
+  });
+
+  // THE TOUR'S STYLESHEET OUTLIVES THE TOUR. It arrives with the engine chunk
+  // and nothing unloads it, so its rules go on applying for the rest of the
+  // session — including the ones that hand `pointer-events` back to everything a
+  // dialog did not hide, which exist so the tour cannot block a dialog it told
+  // the user to open. Unscoped, those outrank `disabled:pointer-events-none` and
+  // leave every disabled control in every ordinary dialog clickable to a user
+  // whose only crime was running the walkthrough once.
+  //
+  // ONE PAGE, NO RELOAD, DELIBERATELY: a reload drops the dynamically imported
+  // engine chunk and its stylesheet with it, which would make this pass for a
+  // reason that has nothing to do with the scoping under test.
+  test('a disabled control in an ordinary dialog is still inert after a tour', async ({
+    page,
+    request,
+  }) => {
+    const email = await registerUser(request, 'cssrelease');
+    const accountId = await createAccount(request, 'Leak account');
+    const positionId = await createOpenPosition(request, accountId);
+
+    await loginViaUi(page, email);
+    await page.locator('[data-checklist-action="close"]').click();
+    await expect(page).toHaveURL(new RegExp(`/positions/${positionId}`));
+    await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[0]);
+
+    // DURING the tour, the release still does the job it was added for. Clicking
+    // is the proof, not typing: Playwright hit-tests a click against whatever is
+    // actually on top, so a field left under the overlay fails here.
+    await page.locator('[data-tour="position-add-fill"]').click();
+    await expect(page.getByLabel('Price')).toBeVisible();
+    await page.locator('#price').click();
+    await page.locator('#price').fill('160.00');
+    await expect(page.locator('#price')).toHaveValue('160.00');
+
+    // Out of the dialog and out of the tour, into an ordinary session — with the
+    // stylesheet still loaded, because nothing unloads it.
+    await page.keyboard.press('Escape');
+    await escapeTour(page);
+    await expect(page.locator('body.driver-active')).toHaveCount(0);
+
+    // Close the position from the app itself, so the page never reloads.
+    await page.locator('[data-tour="position-add-fill"]').click();
+    await page.getByRole('dialog').getByRole('combobox').click();
+    await page.getByRole('option', { name: 'Exit' }).click();
+    await page.locator('#price').fill('160.00');
+    await page.locator('#quantity').fill('10');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(page.locator('[data-tour="position-close"]')).toHaveCount(0);
+
+    // An ordinary dialog with a genuinely disabled control in it: editing a fill
+    // on a CLOSED position cannot change its quantity.
+    await page.locator('table [aria-haspopup="menu"]').first().click();
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    const quantity = page.locator('#quantity');
+    await expect(quantity).toBeDisabled();
+
+    // THE ASSERTION, on the property the leak actually broke. `toBeDisabled`
+    // reads the DOM and would pass either way; this reads what the cascade
+    // resolved to, which is what decides whether a pointer can reach it.
+    await expect(quantity).toHaveCSS('pointer-events', 'none');
+  });
+
   test('exiting mid-walkthrough keeps the work already done', async ({ page, request }) => {
     const email = await registerUser(request, 'exit');
     await loginViaUi(page, email);
