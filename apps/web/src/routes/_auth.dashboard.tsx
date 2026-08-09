@@ -20,7 +20,9 @@ import { findFirstSlot } from '@/features/dashboard/layout';
 import { ActivationChecklist } from '@/features/onboarding/components/ActivationChecklist';
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { ZeroState } from '@/features/onboarding/components/ZeroState';
-import { useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
+import { useOnboarding, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
+import { useWalkthrough } from '@/features/onboarding/hooks/useWalkthrough';
+import type { ChecklistItemId } from '@/features/onboarding/lib/derive-checklist';
 import { useAuth } from '@/hooks/useAuth';
 
 /**
@@ -115,12 +117,39 @@ function ReadOnlyDefaultLayout(): ReactElement {
  * space between the header and the grid that was not there before.
  */
 function ChecklistSlot(): ReactElement {
+  // THE WALKTHROUGH'S OTHER DOOR, and without it items 2-4 had none. `ZeroState`
+  // wires the checklist's per-item "Start" to the walkthrough, but a user leaves
+  // the zero-state the instant they create their first account — which is the
+  // instant "size a trade", "log a position" and "close it" become the
+  // outstanding work. Their step sets shipped and nothing could open them.
+  //
+  // The two lines below are `ZeroState.beginGuided`, for the same reason it
+  // gives: the status write is the opt-in record ("this user asked to be
+  // guided"), and it belongs at the door rather than in `useWalkthrough`, which
+  // deliberately writes no onboarding state at all. Choosing one item off the
+  // checklist is the same choice made about one step instead of four.
+  //
+  // No params: `useWalkthrough` fills in the position a set needs from the
+  // user's own data, which is the only place that knows it.
+  const { start, isUnavailable } = useWalkthrough();
+  const { setStatus } = useOnboarding();
+  const beginGuided = useCallback(
+    (itemId: ChecklistItemId) => {
+      setStatus('active');
+      start(itemId);
+    },
+    [setStatus, start],
+  );
+
   return (
     <div
       data-slot="activation-checklist-slot"
       className="empty:hidden has-data-[testid=activation-checklist-loading]:min-h-[238px]"
     >
-      <ActivationChecklist />
+      {/* Withdrawn when the tour runtime will not load, exactly as the
+          zero-state withdraws it: a "Start" with nothing behind it is a dead
+          control, and the checklist is useful without one. */}
+      <ActivationChecklist onStartStep={isUnavailable ? undefined : beginGuided} />
     </div>
   );
 }
@@ -371,8 +400,9 @@ function DashboardPage(): ReactElement {
   // NO SECOND PRIMARY ACTION. The checklist carries no amber of its own by
   // design, so the one primary each of these views is allowed stays where it is
   // — "Use the default layout" below, and nothing on the populated dashboard.
-  // `onStartStep` is deliberately NOT passed: the walkthrough is Phase E, and a
-  // per-item "Start" button with nothing behind it is a dead control.
+  // The per-item "Start" buttons `ChecklistSlot` now wires are ghost-variant and
+  // change none of that; they were left unwired only while the walkthrough
+  // itself was still to be built.
   // ===========================================================================
 
   // Empty

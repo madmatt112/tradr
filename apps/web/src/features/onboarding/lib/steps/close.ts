@@ -9,12 +9,23 @@
  * - `FillDialog` offers Type Exit once the position is open, alongside Price,
  *   Quantity, Fees and Date & Time; a position can carry several exit fills,
  *   which is what a partial exit is.
- * - "Close Position" is disabled until the full entered quantity has been
- *   exited, with the tooltip "Exit the full quantity first"
- *   (`PositionDetail.tsx`).
- * - Closing is the point realised P&L reaches the ledger — the close hook in
- *   `positions.service.ts` posts it — and the account balance is
- *   `startingBalance + SUM(ledger)`, so that is the moment the balance moves.
+ * - THE EXIT THAT BALANCES THE ENTRY CLOSES THE POSITION ITSELF. `addFill` in
+ *   `positions.service.ts` runs `closePositionTx` in the same transaction once
+ *   the exit quantity reconciles with the entry quantity, stamping `closedAt`
+ *   from that fill's own timestamp. So in the ordinary flow nobody presses
+ *   "Close Position": it renders only while the position is open, and it is
+ *   disabled until the full quantity is exited ("Exit the full quantity first"),
+ *   which is the same moment the automatic close fires. What is left for it is
+ *   the position that reached zero open units by a path that does not
+ *   auto-close, which is editing a fill afterwards: `editFill` recomputes the
+ *   quantities and does not close, so correcting a partial exit up to the full
+ *   size leaves an open position with nothing outstanding. `positions.test.ts`
+ *   pins that path as the reason the close route survives the auto-close.
+ * - REALISED P&L DOES NOT WAIT FOR THE CLOSE. Every fill runs the fill hook,
+ *   which posts the realised delta to the ledger (`postFillLedgerEntries`), so a
+ *   partial exit moves the balance the moment it is recorded. The close hook
+ *   posts only what is still unposted, which on a one-entry-one-exit trade is
+ *   nothing. The account balance is `startingBalance + SUM(ledger)`.
  * - `[data-grid-mode]` is `DashboardGrid`'s own attribute, set on both the
  *   desktop grid and the mobile stack, so the closing step anchors to the
  *   widgets at any width.
@@ -36,7 +47,8 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     title: 'Record the exit',
     body:
       'Add a fill with the type set to Exit, at the price and quantity you actually closed at. ' +
-      'Partial exits are ordinary — add one fill per exit and Tradr averages them for you.',
+      'Partial exits are ordinary — one fill per exit, averaged for you — and the one that ' +
+      'leaves nothing open is the one that finishes the trade.',
   },
   {
     target: '[data-tour="position-close"]',
@@ -45,11 +57,12 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     docs: 'positions',
     waitForMs: 3000,
     advanceOnAction: true,
-    title: 'Close the position',
+    title: 'It closes itself',
     body:
-      'Once the whole quantity you entered has been exited, Close Position finishes the trade. ' +
-      'This is the point your realised P&amp;L is booked to the account and the balance moves — ' +
-      'the reason a draft changed nothing and this does.',
+      'Exit the whole quantity you entered and Tradr closes the position for you, timed to that ' +
+      'last fill — Close Position is here for the ones it cannot, such as a trade you finish by ' +
+      'correcting an earlier fill. Your realised P&amp;L reached the account with each exit fill ' +
+      'as you recorded it, not at the end, so the balance has already moved.',
   },
   {
     target: '[data-grid-mode]',
@@ -59,7 +72,7 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     title: 'And there it is',
     body:
       'Back on the dashboard, with figures in it. Everything here is derived from the trades you ' +
-      'log — the stats, the equity curve and your account balance all just moved because you ' +
-      'closed one position. Log the next one and they move again.',
+      'log — the stats, the equity curve and your account balance all just moved because that ' +
+      'position is now closed. Log the next one and they move again.',
   },
 ];

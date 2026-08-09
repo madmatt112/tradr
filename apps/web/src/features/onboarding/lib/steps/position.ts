@@ -20,7 +20,13 @@
  * - "Open Position" is disabled until an entry fill exists, with the tooltip
  *   "Add an entry fill first" (`PositionDetail.tsx`), which is why the fill step
  *   comes before the open step.
- * - Realised P&L reaches the ledger through the close hook, not on open.
+ * - OPENING POSTS NOTHING TO THE LEDGER, and that is the only claim the open
+ *   step may make about P&L. Realised P&L is posted by the FILL hook
+ *   (`postFillLedgerEntries`), which runs on every fill, so the first exit moves
+ *   the balance whether or not the position is closed — and the exit that
+ *   balances the entry closes it by itself (`addFill` in `positions.service.ts`).
+ *   An open position's cost is held against the account as position value:
+ *   `accounts.query.ts` counts `status = 'open'` rows only.
  */
 
 import type { WalkthroughStepSource } from './index';
@@ -77,8 +83,9 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     title: 'Open the position',
     body:
       'With an entry fill recorded, Open Position moves it from draft to open. Its cost is now ' +
-      'held against the account as position value; realised P&amp;L is a separate thing, and it ' +
-      'only lands when you close.',
+      'held against the account as position value; realised P&amp;L is a separate thing, and ' +
+      'nothing is realised until you start exiting. Each exit fill books its share of the ' +
+      'result to the account as you record it.',
   },
   {
     // Centred, and deliberately last. `advanceOnAction` has no effect on a final

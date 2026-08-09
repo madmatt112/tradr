@@ -1041,7 +1041,13 @@ export async function addFill(
     }
   }
 
-  return fill;
+  // The caller is told the position closed, because it did. The auto-close is a
+  // second state change riding on this request, and a response carrying only the
+  // fill leaves every client to infer it — by refetching and comparing, or by
+  // not noticing at all. The web app publishes its own 'closed' event off this
+  // flag, which is what keeps a balance-derived view (and the guided
+  // walkthrough's close step) in step with a position that closed itself.
+  return { ...fill, positionClosed: closed !== null };
 }
 
 // Tx-accepting variant — runs directly on the passed tx (no re-wrap / savepoint).

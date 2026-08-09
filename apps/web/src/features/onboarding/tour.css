@@ -101,6 +101,49 @@
   opacity: 0.8 !important;
 }
 
+/* --- The tour lets go while a dialog is open --------------------------------
+   THE TOUR MUST NOT BLOCK THE DIALOG IT TOLD THE USER TO OPEN, and without this
+   it does — twice over. driver.js locks the whole page down while a tour runs:
+   `.driver-active *` takes `pointer-events` away from every element in the
+   document and hands them back to the highlighted element and its own popover
+   alone, and the overlay path keeps them so a click on the wash can close the
+   tour. Both are what makes "only the highlighted control is live" true, and
+   both are wrong for a modal the tour itself asked for. A dialog opened from a
+   highlighted button arrives with every field inert: the click lands on the
+   wash instead, and with `allowClose` that ends the walkthrough.
+
+   Two shipped steps ask for exactly that. "Record the exit" and "It starts as a
+   draft" both highlight Add Fill and then wait for a fill that is recorded in a
+   dialog neither of them walks into — so neither could be finished. Walking
+   every dialog field would be a different tour, so the fix belongs here: while
+   one of the app's own dialogs is open, the tour stops holding the page.
+
+   Nothing is left unguarded. A modal dialog is already modal — Radix puts its
+   own scrim over the page, marks everything else `aria-hidden`, and drops
+   `pointer-events` on `body` — so the background is the dialog's to protect,
+   and it protects it. Only the dialog and the poppers it opens (its selects,
+   its tooltips, which Radix portals out to `body`) are handed back.
+
+   WHAT IT HANDS BACK IS "WHATEVER THE DIALOG DID NOT HIDE", which is the
+   dialog's own answer rather than a list this file would have to maintain. Radix
+   marks every other top-level node `data-aria-hidden` as the modal opens, so the
+   unmarked ones are exactly the dialog and the poppers it opens afterwards — its
+   selects, its menus — however they are portalled. The app behind it stays
+   marked, and stays locked.
+
+   Keyed off the app's own `data-slot` rather than `[role="dialog"]`, because
+   driver.js gives its popover that role and the rule would then never be off.
+   `!important` on the path for the reason the wash above needs it: driver.js
+   writes that one as an inline style, which outranks any selector without it. */
+body:has([data-slot='dialog-content'][data-state='open']) .driver-overlay path {
+  pointer-events: none !important;
+}
+
+body:has([data-slot='dialog-content'][data-state='open']) > :not([data-aria-hidden='true']),
+body:has([data-slot='dialog-content'][data-state='open']) > :not([data-aria-hidden='true']) * {
+  pointer-events: auto;
+}
+
 /* --- Highlighted element ---------------------------------------------------
    The stage cut-out is the only thing driver.js gives the highlighted control,
    which is a brightness channel alone. Add the shape channel with the

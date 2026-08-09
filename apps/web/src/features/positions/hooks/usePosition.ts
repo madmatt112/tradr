@@ -5,6 +5,7 @@ import type {
   PositionDetail,
   UpdatePositionInput,
   CreateFillInput,
+  CreatedFill,
   UpdateFillInput,
   Fill,
   Position,
@@ -51,18 +52,34 @@ export function usePosition(id: string) {
   });
 }
 
-function usePositionMutation<TInput>(
-  mutationFn: (input: TInput) => Promise<unknown>,
+function usePositionMutation<TInput, TResult = unknown>(
+  mutationFn: (input: TInput) => Promise<TResult>,
   successMsg: string,
   reason: PositionChangeReason,
   positionId?: string,
+  /**
+   * A SECOND state change the same request produced, read off its response.
+   *
+   * One request can move a position twice — an exit fill that balances the
+   * entered quantity is recorded AND closes the position, in one transaction.
+   * Both are real, both matter to different listeners, and only the server can
+   * say whether the second happened, so it is read from the response rather than
+   * guessed at here. Return `null` when it did not.
+   */
+  alsoPublish?: (result: TResult) => PositionChangeReason | null,
 ) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn,
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['positions'] });
       eventBus.publish('positions:cache-invalidate', { reason, positionId });
+      // Second, and in this order, because that is the order it happened in: the
+      // fill was recorded, and recording it closed the position.
+      const also = alsoPublish?.(result) ?? null;
+      if (also !== null) {
+        eventBus.publish('positions:cache-invalidate', { reason: also, positionId });
+      }
       toast.success(successMsg);
     },
     onError: (err: unknown) => {
@@ -122,12 +139,20 @@ export function useReopenPosition(id: string) {
   );
 }
 
+// An exit fill that leaves nothing open CLOSES the position, server-side, in the
+// same transaction that records it (`addFill` in positions.service.ts) — there is
+// no second request to hang a 'closed' event off. So the response says whether it
+// happened and this publishes it, exactly as `useClosePosition` would: the close
+// posts realized P&L to the ledger and moves the account balance, so the
+// balance-derived queries have to be invalidated whether a button or an exit did
+// it. The guided walkthrough's close step waits on the same signal.
 export function useAddFill(positionId: string) {
-  return usePositionMutation<CreateFillInput>(
-    (data) => api.post<Fill>(`/positions/${positionId}/fills`, data),
+  return usePositionMutation<CreateFillInput, CreatedFill>(
+    (data) => api.post<CreatedFill>(`/positions/${positionId}/fills`, data),
     'Fill added',
     'fill-added',
     positionId,
+    (created) => (created.positionClosed ? 'closed' : null),
   );
 }
 

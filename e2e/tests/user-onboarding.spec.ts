@@ -228,6 +228,62 @@ async function createAccountFromDialog(page: Page, name: string): Promise<void> 
 const checklistProgress = (page: Page): Locator =>
   page.getByTestId('activation-checklist-progress');
 
+/**
+ * One checklist item's LABEL — the span carrying its name and the screen-reader
+ * completion text, not the whole row.
+ *
+ * The row also holds the per-item "Start" button, which renders for an item that
+ * is outstanding and has a walkthrough behind it. Reading the row would put that
+ * label after the completion text and defeat the `$` anchor the assertions below
+ * are made of, for a reason that has nothing to do with completion.
+ */
+const checklistItemLabel = (page: Page, id: string): Locator =>
+  page.locator(`[data-checklist-item="${id}"] > span`).first();
+
+/**
+ * The close set's three step titles, in order, from
+ * `features/onboarding/lib/steps/close.ts`.
+ */
+const CLOSE_STEP_TITLES = ['Record the exit', 'It closes itself', 'And there it is'] as const;
+
+/** An account, over the API — this suite's own guided path already covers the UI one. */
+async function createAccount(req: APIRequestContext, name: string): Promise<string> {
+  const res = await req.post('/api/accounts', {
+    data: { name, currency: 'USD' },
+    headers: { 'X-Forwarded-For': uniqueIp() },
+  });
+  expect(res.status(), `POST /accounts ${name}`).toBe(201);
+  return ((await res.json()) as { id: string }).id;
+}
+
+/**
+ * A position the user has open with one entry fill — the state checklist item 4
+ * is about, and the only state its walkthrough makes sense in.
+ *
+ * The entry fill MUST precede `/open`: the API refuses to open a position that
+ * has none.
+ */
+async function createOpenPosition(req: APIRequestContext, accountId: string): Promise<string> {
+  const posRes = await req.post('/api/positions', {
+    data: { accountId, symbol: 'AAPL', side: 'long', assetType: 'stock' },
+  });
+  expect(posRes.status(), 'POST /positions').toBe(201);
+  const positionId = ((await posRes.json()) as { id: string }).id;
+
+  const entryRes = await req.post(`/api/positions/${positionId}/fills`, {
+    data: { type: 'entry', price: '150.00', quantity: '10', fees: '0', filledAt: OPENED_AT },
+  });
+  expect(entryRes.status(), 'POST entry fill').toBe(201);
+
+  const openRes = await req.post(`/api/positions/${positionId}/open`, {
+    data: { openedAt: OPENED_AT },
+  });
+  expect(openRes.status(), 'POST /open').toBe(200);
+  return positionId;
+}
+
+const OPENED_AT = '2026-05-01T14:30:00.000Z';
+
 test.describe('user onboarding', () => {
   // Desktop only. The walkthrough overlay, the account dialog and the sample
   // data banner are all exercised here at a width where they coexist; the
@@ -290,7 +346,62 @@ test.describe('user onboarding', () => {
 
     // Item 1 ticked itself off the user's real data, no flag written.
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
-    await expect(page.locator('[data-checklist-item="account"]')).toHaveText(/— completed$/);
+    await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
+  });
+
+  // A COMPLETE RUN OF THE SET THAT ENDS THE WALKTHROUGH, and the reason this
+  // suite needed one: every scenario above stops partway, so the thing item 4
+  // exists to show — the dashboard with the user's own figures in it — was
+  // never reached by a test, and was not reachable by a user either.
+  //
+  // The trade closes ITSELF here. Nobody presses "Close Position": an exit that
+  // balances the entered quantity closes the position in the same transaction
+  // that records the fill, so the control the middle step highlights is gone by
+  // the time the tour has finished with it. Without the response saying the
+  // close happened, no 'closed' event is published, the tour sits on that step
+  // waiting for a signal that will never come, and the last step is unreachable.
+  test('the close set runs through to the now-populated dashboard', async ({ page, request }) => {
+    const email = await registerUser(request, 'closeset');
+    const accountId = await createAccount(request, 'Close account');
+    const positionId = await createOpenPosition(request, accountId);
+
+    await loginViaUi(page, email);
+    // An account and a logged position, both derived from the data — so the two
+    // outstanding items are the calculator and this one.
+    await expect(checklistProgress(page)).toHaveText('2 of 4 complete');
+
+    await page.locator('[data-checklist-action="close"]').click();
+
+    // It opens on the position the user has open, which nobody told it: the
+    // checklist names the ITEM, never the row.
+    await expect(page).toHaveURL(new RegExp(`/positions/${positionId}`));
+    await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[0]);
+
+    // The exit, recorded from the control this step highlights.
+    await page.locator('[data-tour="position-add-fill"]').click();
+    await expect(page.getByLabel('Price')).toBeVisible();
+    await page.getByRole('dialog').getByRole('combobox').click();
+    await page.getByRole('option', { name: 'Exit' }).click();
+    await page.locator('#price').fill('160.00');
+    await page.locator('#quantity').fill('10');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+
+    // THE ASSERTION. The tour follows the position closing itself all the way to
+    // its last step, on the dashboard, with the widgets it was pointing at.
+    await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[2]);
+    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page.locator('[data-grid-mode]')).toBeVisible();
+    // And it got there without anyone closing anything by hand — that button
+    // renders only while a position is open, and this one is not.
+    await expect(page.locator('[data-tour="position-close"]')).toHaveCount(0);
+
+    // "Done" finishes it, and item 4 ticks off the user's real data.
+    await popoverNext(page).click();
+    await expect(popover(page)).toHaveCount(0);
+    await expect(checklistProgress(page)).toHaveText('3 of 4 complete');
+    await expect(checklistItemLabel(page, 'close')).toHaveText(/— completed$/);
+    const closed = (await (await request.get('/api/positions')).json()) as { status: string }[];
+    expect(closed.map((position) => position.status)).toEqual(['closed']);
   });
 
   test('exiting mid-walkthrough keeps the work already done', async ({ page, request }) => {
@@ -367,7 +478,7 @@ test.describe('user onboarding', () => {
     // — nothing here is a stored per-step flag.
     await page.goto('/dashboard');
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
-    await expect(page.locator('[data-checklist-item="calculator"]')).toHaveText(/— completed$/);
+    await expect(checklistItemLabel(page, 'calculator')).toHaveText(/— completed$/);
     await expect(page.locator('[data-checklist-action="calculator"]')).toHaveCount(0);
 
     // Re-entering resumes by re-deriving the outstanding item from the user's
@@ -416,8 +527,8 @@ test.describe('user onboarding', () => {
     // The checklist follows the user off the zero-state, ticked by what they
     // actually did and still naming the three items left.
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
-    await expect(page.locator('[data-checklist-item="account"]')).toHaveText(/— completed$/);
-    await expect(page.locator('[data-checklist-item="calculator"]')).toHaveText(/— not completed$/);
+    await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
+    await expect(checklistItemLabel(page, 'calculator')).toHaveText(/— not completed$/);
   });
 
   test('sample data banners app-wide, completes nothing, and tears down clean', async ({
@@ -436,7 +547,7 @@ test.describe('user onboarding', () => {
     // Seeding is not creating an account: item 1 stays open and the checklist
     // stays on screen with every item still to do.
     await expect(checklistProgress(page)).toHaveText('0 of 4 complete');
-    await expect(page.locator('[data-checklist-item="account"]')).toHaveText(/— not completed$/);
+    await expect(checklistItemLabel(page, 'account')).toHaveText(/— not completed$/);
 
     // App-wide, not dashboard-only — every derived surface carries the notice,
     // because the banner is mounted in the authenticated layout rather than on

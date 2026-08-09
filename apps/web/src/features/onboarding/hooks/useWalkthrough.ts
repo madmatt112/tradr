@@ -50,9 +50,10 @@
 // plus whatever the user actually did.
 
 import { useNavigate } from '@tanstack/react-router';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
 
+import { usePositions } from '@/features/positions/hooks/usePositions';
 import { eventBus } from '@/stores/event-bus.store';
 import type { EventName } from '@/stores/events.types';
 
@@ -78,6 +79,14 @@ type StepsModule = typeof import('../lib/steps');
  *
  * A step marked `advanceOnAction` whose action is NOT in here is handled by
  * `withObservableActionsOnly()` below — see the note there.
+ *
+ * 'closed' IS PUBLISHED BY THE EXIT FILL AS WELL AS BY THE CLOSE BUTTON, and the
+ * close step depends on it. An exit that leaves nothing open closes the position
+ * server-side, in the same request that records the fill, so the button that
+ * step highlights is gone before anyone could press it. `useAddFill` publishes
+ * the close it was told about, which is what carries the tour past that step —
+ * the walkthrough learns about the state change rather than the product being
+ * bent to produce one it can see.
  */
 export const ACTION_SIGNALS: Readonly<Record<string, { event: EventName; reason: string }>> = {
   '[data-tour="account-submit"]': { event: 'accounts:cache-invalidate', reason: 'created' },
@@ -218,12 +227,26 @@ async function loadRuntime(): Promise<[TourEngineModule, StepsModule] | null> {
  * Every other event on the bus — a position updated elsewhere, a fill deleted —
  * passes through without touching the tour.
  */
-function bindAdvance(engine: TourEngineModule): void {
+function bindAdvance(
+  engine: TourEngineModule,
+  params: Record<string, string> | undefined,
+  navigate: NavigateFn,
+): void {
   const advanceOn = (event: EventName) => (payload: { reason: string }) => {
-    const step = useWalkthroughStore.getState().currentStep;
+    const { currentStep: step, stepIndex } = useWalkthroughStore.getState();
     if (!step?.advanceOnAction || step.target === undefined) return;
     const signal = ACTION_SIGNALS[step.target];
     if (signal?.event !== event || signal.reason !== payload.reason) return;
+    // BEFORE the tour moves, never after. A set can change screen mid-way — the
+    // close set ends on `/dashboard`, whose grid is the last thing it shows the
+    // user — and nothing else is going to put them there: the overlay is up, so
+    // the sidebar is not theirs to click. The engine's step-change callback is
+    // too late to do it from, because driver.js only calls it once it has
+    // RESOLVED the step's target, which for a target that never appears is after
+    // `waitForMs` has expired and the tour has already given up. Navigating here
+    // means the new route is mounting while that window is still open, exactly as
+    // it is for the first step of a set.
+    navigateBetweenSteps(step, activeSteps[stepIndex + 1], params, navigate);
     engine.advance();
   };
 
@@ -271,8 +294,8 @@ export function nextIncompleteItem(
 type NavigateFn = (opts: { to: string; params?: Record<string, string> }) => unknown;
 
 /**
- * Put the user on the screen the set starts on, before the tour starts, so the
- * first step's `waitForMs` covers the route mounting rather than a navigation
+ * Put the user on the screen a step lives on, before the tour reaches it, so
+ * that step's `waitForMs` covers the route mounting rather than a navigation
  * that has not been asked for yet.
  *
  * A parameterised route (`/positions/$positionId`) needs values only the caller
@@ -281,7 +304,7 @@ type NavigateFn = (opts: { to: string; params?: Record<string, string> }) => unk
  * right when they got here from that very position's page and degrades to a
  * clean `target-missing` exit when they did not.
  */
-function navigateToStart(
+function navigateToStep(
   step: WalkthroughStep,
   params: Record<string, string> | undefined,
   navigate: NavigateFn,
@@ -291,10 +314,55 @@ function navigateToStart(
   navigate(needed.length > 0 ? { to: step.route, params } : { to: step.route });
 }
 
-async function run(
-  itemId: ChecklistItemId,
+/**
+ * The same, for a move BETWEEN two steps: navigate only when the set actually
+ * changes screen.
+ *
+ * Most transitions do not. A set that stays on one route must not re-navigate to
+ * it on every step — that would remount the screen under a dialog the previous
+ * step just opened. And the one transition that does change route without this
+ * is the position set's: `/positions` → `/positions/$positionId`, where the app
+ * navigates itself the moment the position is created and the id is not
+ * something the walkthrough was handed. `navigateToStep` declines that one on
+ * its own, because the param it would need is missing.
+ */
+function navigateBetweenSteps(
+  from: WalkthroughStep,
+  to: WalkthroughStep | undefined,
   params: Record<string, string> | undefined,
   navigate: NavigateFn,
+): void {
+  if (to === undefined || to.route === from.route) return;
+  navigateToStep(to, params, navigate);
+}
+
+/**
+ * Fill in the values a set's OPENING route needs and the caller did not give.
+ *
+ * Only the opening one, and that boundary is the point. A set that opens on
+ * `/positions/$positionId` has nowhere else to start, so a fallback is the
+ * difference between running and exiting `target-missing` on the first step. A
+ * set that merely REACHES a parameterised route later — the position set, which
+ * starts on `/positions` and follows the user to whatever position they just
+ * created — must be left alone: handing it an id derived from the user's other
+ * data would navigate them away from their new position onto an older one.
+ */
+function withOpeningParams(
+  first: WalkthroughStep,
+  params: Record<string, string> | undefined,
+  fallback: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const needed = first.routeParams ?? [];
+  if (needed.length === 0) return params;
+  if (needed.every((name) => params?.[name] !== undefined)) return params;
+  return { ...fallback, ...params };
+}
+
+async function run(
+  itemId: ChecklistItemId,
+  callerParams: Record<string, string> | undefined,
+  navigate: NavigateFn,
+  fallbackParams?: Record<string, string>,
 ): Promise<void> {
   const runtime = await loadRuntime();
   if (!runtime) return;
@@ -302,6 +370,8 @@ async function run(
 
   const set = steps.WALKTHROUGH_STEPS[itemId];
   if (!set || set.length === 0) return;
+
+  const params = withOpeningParams(set[0], callerParams, fallbackParams);
 
   // Any session already running ends HERE, before anything new is set up.
   // `startTour` ends the previous tour itself, but it does so from inside the
@@ -312,8 +382,8 @@ async function run(
   endSession();
 
   activeSteps = withObservableActionsOnly(set);
-  bindAdvance(engine);
-  navigateToStart(activeSteps[0], params, navigate);
+  bindAdvance(engine, params, navigate);
+  navigateToStep(activeSteps[0], params, navigate);
 
   useWalkthroughStore.setState({
     isRunning: true,
@@ -374,7 +444,9 @@ export interface UseWalkthroughResult {
    * Start a walkthrough. With no argument it runs the set for the first
    * incomplete checklist item, which is both "start me at the beginning" and
    * "resume where I was" (R5.6) — the two are the same question asked of the
-   * same data. `params` supplies the values a parameterised route needs.
+   * same data. `params` supplies the values a parameterised route needs;
+   * omitted, a set that opens on a position falls back to the most recently
+   * touched open one.
    *
    * Never throws, and never rejects: a runtime that will not load leaves
    * `isUnavailable` true and everything else exactly as it was (R5.8).
@@ -414,12 +486,30 @@ export function useWalkthrough(): UseWalkthroughResult {
   const { checklist } = useOnboarding();
   const state = useWalkthroughStore();
 
+  // THE SET THAT OPENS ON A POSITION NEEDS ONE, AND NO CALLER HAS IT. The
+  // checklist knows which ITEM is outstanding — "close it and see the stats" —
+  // and never which row that is about, so a caller pressing its "Start" can only
+  // name the set. Without a `positionId` the close set opens wherever the user
+  // happens to be, finds none of its targets and exits `target-missing`: the
+  // guided path for item 4 was reachable and useless.
+  //
+  // The position they mean is the one they last touched and have not closed.
+  // `GET /positions` comes back ordered by `updatedAt` descending, so that is
+  // the first open row in the list the checklist was already derived from — the
+  // same cache entry, so this observer costs no extra request. An explicit
+  // `params` from the caller always wins; this is only the fallback.
+  const { data: positions } = usePositions(undefined, { enabled: checklist != null });
+  const openPositionParams = useMemo(() => {
+    const open = positions?.find((position) => position.status === 'open');
+    return open ? { positionId: open.id } : undefined;
+  }, [positions]);
+
   // R8.1's "offered": there is a walkthrough behind the button and the user
-  // could press it. Mounting this hook IS the offer — `ZeroState` is the only
-  // thing that mounts it, and it does so precisely to put "Walk me through it"
-  // and the checklist's per-item "Start" on screen — so the condition here is
-  // the same one `ZeroState` disables its control on: a runtime that will load,
-  // and a checklist naming an outstanding item.
+  // could press it. Mounting this hook IS the offer — the two things that mount
+  // it, `ZeroState` and the dashboard's checklist slot, do so precisely to put
+  // "Walk me through it" and the checklist's per-item "Start" on screen — so the
+  // condition here is the same one `ZeroState` disables its control on: a
+  // runtime that will load, and a checklist naming an outstanding item.
   //
   // This does not weaken R5.2. Nothing below starts anything; it counts an
   // opportunity that was on screen either way, and the tour still only ever
@@ -444,9 +534,9 @@ export function useWalkthrough(): UseWalkthroughResult {
       // every item is already done. Silence is right — there is no failure here
       // to report.
       if (!target) return;
-      void run(target, params, navigate as NavigateFn);
+      void run(target, params, navigate as NavigateFn, openPositionParams);
     },
-    [checklist, navigate],
+    [checklist, navigate, openPositionParams],
   );
 
   const stop = useCallback(() => {

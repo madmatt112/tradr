@@ -32,6 +32,14 @@ vi.mock('./useOnboarding', () => ({
   useOnboarding: () => ({ checklist, setStatus, dismiss }),
 }));
 
+// The positions list, supplied directly for the same reason. The walkthrough
+// reads it for exactly one thing — which position the close set opens on — and
+// the real hook would need a QueryClient and a fetch to say so.
+let positions: { id: string; status: string }[] | undefined;
+vi.mock('@/features/positions/hooks/usePositions', () => ({
+  usePositions: () => ({ data: positions }),
+}));
+
 // `lib/analytics` is the REAL module here — only the vendor-facing capture is a
 // double. The interesting claims are about which events the walkthrough sends
 // and when, and stubbing the analytics module would assert nothing but that the
@@ -114,6 +122,7 @@ function eventsNamed(name: string): Record<string, unknown>[] {
 
 beforeEach(() => {
   checklist = aChecklist();
+  positions = [];
   started = null;
 });
 
@@ -196,6 +205,33 @@ describe('useWalkthrough — start and exit', () => {
     expect(navigate).toHaveBeenCalledWith({
       to: '/positions/$positionId',
       params: { positionId: 'pos-1' },
+    });
+  });
+
+  // The checklist's "Start" can only name the SET — it knows item 4 is
+  // outstanding, never which row that is about — so a set that opens on a
+  // position has to find one, or it opens wherever the user happens to be and
+  // exits `target-missing`.
+  it('opens a set that needs a position on the one the user still has open', async () => {
+    positions = [
+      { id: 'pos-closed', status: 'closed' },
+      { id: 'pos-open', status: 'open' },
+    ];
+    await start('close');
+
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/positions/$positionId',
+      params: { positionId: 'pos-open' },
+    });
+  });
+
+  it('prefers the caller`s own position over the one it would have found', async () => {
+    positions = [{ id: 'pos-open', status: 'open' }];
+    await start('close', { positionId: 'pos-asked-for' });
+
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/positions/$positionId',
+      params: { positionId: 'pos-asked-for' },
     });
   });
 
@@ -328,6 +364,61 @@ describe('useWalkthrough — action-driven advance (R5.5)', () => {
       eventBus.publish('positions:cache-invalidate', { reason: 'closed' });
     });
     expect(engine.advance).toHaveBeenCalledTimes(2);
+  });
+
+  // The close set ends on the dashboard, and nothing else can put the user
+  // there: the overlay is up, so the sidebar is not theirs to click. The
+  // navigation has to happen as the tour MOVES — driver.js only reports a step
+  // change once it has resolved that step's target, which for a target on a
+  // screen nobody navigated to is after the wait expired and the tour gave up.
+  it('puts the user on the next step`s screen before moving onto it', async () => {
+    await start('close', { positionId: 'pos-1' });
+    const closeSet = WALKTHROUGH_STEPS.close;
+    navigate.mockClear();
+
+    highlight(closeSet.findIndex((s) => s.target === '[data-tour="position-close"]'));
+    act(() => {
+      eventBus.publish('positions:cache-invalidate', { reason: 'closed' });
+    });
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/dashboard' });
+    expect(navigate.mock.invocationCallOrder[0]).toBeLessThan(
+      engine.advance.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('navigates nowhere when the next step is on the same screen', async () => {
+    await start('account');
+    navigate.mockClear();
+
+    highlight(
+      WALKTHROUGH_STEPS.account.findIndex((s) => s.target === '[data-tour="account-submit"]'),
+    );
+    act(() => {
+      eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
+    });
+
+    expect(engine.advance).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // `/positions` → `/positions/$positionId`: the app navigates itself the moment
+  // the position is created, and the id is not something the walkthrough was
+  // handed, so it must not try.
+  it('leaves a route it has no values for to the app', async () => {
+    // Even with an open position on file. The position the user is logging is
+    // the one the app has just navigated them to, and it is not this one.
+    positions = [{ id: 'pos-open', status: 'open' }];
+    await start('position');
+    navigate.mockClear();
+
+    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    act(() => {
+      eventBus.publish('positions:cache-invalidate', { reason: 'created' });
+    });
+
+    expect(engine.advance).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('leaves a step that is not action-gated alone', async () => {

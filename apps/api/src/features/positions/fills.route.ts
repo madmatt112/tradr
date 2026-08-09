@@ -61,7 +61,17 @@ const FillParamSchema = z.object({
  *               notes: { type: string, maxLength: 10000, nullable: true }
  *               filledAt: { type: string, format: date-time }
  *     responses:
- *       201: { description: The created fill. }
+ *       201:
+ *         description: >
+ *           The created fill, plus `positionClosed` — true when this was the
+ *           exit that balanced the entered quantity, which closes the position
+ *           in the same transaction.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 positionClosed: { type: boolean }
  *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position.' }
  *       404: { description: No such position for this user. }
  *       409: { description: The position is closed, or an exit fill was sent to a position that is still a draft. }
