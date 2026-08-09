@@ -94,6 +94,26 @@ describe('InvalidTimezoneBanner — second failure (non-dismissible, assertive)'
     const html = renderToStaticMarkup(<InvalidTimezoneBanner isSecondFailure={true} />);
     expect(html).toContain('data-second-failure="true"');
   });
+
+  // The zone is the STORED reporting preference, not a per-render browser
+  // guess, so the copy must not blame the browser and must send the user to
+  // the one place the preference is editable.
+  it('attributes the zone to the stored reporting preference, not the browser', () => {
+    const html = renderToStaticMarkup(<InvalidTimezoneBanner isSecondFailure={true} />);
+    expect(html).toContain('Your reporting timezone is not recognized by the server.');
+    expect(html).not.toContain('browser timezone');
+  });
+
+  it('links to profile settings as the place to change the preference', () => {
+    const html = renderToStaticMarkup(<InvalidTimezoneBanner isSecondFailure={true} />);
+    const link = html.match(
+      /<a[^>]*data-testid="invalid-timezone-banner-settings-link"[^>]*>[^<]*<\/a>/,
+    );
+    expect(link).not.toBeNull();
+    expect(link?.[0]).toContain('href="/settings/profile"');
+    expect(link?.[0]).toContain('cursor-pointer');
+    expect(link?.[0]).toContain('profile settings');
+  });
 });
 
 describe('InvalidTimezoneBanner — Safari private mode (setItem throws)', () => {

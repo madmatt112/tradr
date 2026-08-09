@@ -58,10 +58,10 @@ export interface InvalidTimezoneBannerProps {
  * Banner shown when the server rejects the requested IANA timezone.
  *
  * First failure: the hook's retry already swapped in UTC; the banner is
- * informational and dismissible. Second failure (same session): user's
- * environment is repeatedly producing an unparseable TZ → non-dismissible
- * because no user action will resolve the underlying issue without changing
- * something outside the page.
+ * informational and dismissible. Second failure (same session): the stored
+ * reporting timezone (`useUserTimezone`) is repeatedly rejected →
+ * non-dismissible because nothing on this page resolves it; the preference is
+ * changed under Settings → Profile.
  */
 export function InvalidTimezoneBanner({ isSecondFailure, className }: InvalidTimezoneBannerProps) {
   const [dismissed, setDismissed] = useState<boolean>(() =>
@@ -92,9 +92,21 @@ export function InvalidTimezoneBanner({ isSecondFailure, className }: InvalidTim
           {isSecondFailure ? 'Timezone could not be resolved' : 'Dates shown in UTC'}
         </AlertTitle>
         <AlertDescription>
-          {isSecondFailure
-            ? 'Your browser timezone is not recognized by the server. Try a different timezone or contact support.'
-            : 'We could not resolve your local timezone, so dates are shown in UTC for this session.'}
+          {isSecondFailure ? (
+            <>
+              Your reporting timezone is not recognized by the server. Change it in{' '}
+              <a
+                href="/settings/profile"
+                data-testid="invalid-timezone-banner-settings-link"
+                className="cursor-pointer underline underline-offset-4"
+              >
+                profile settings
+              </a>
+              , or contact support.
+            </>
+          ) : (
+            'We could not resolve your reporting timezone, so dates are shown in UTC for this session.'
+          )}
         </AlertDescription>
       </div>
       {!isSecondFailure ? (
