@@ -81,41 +81,28 @@ describe('EventBusBridge', () => {
     unmount();
   });
 
-  it('invalidates performance only on reason=fill-added', () => {
-    const { qc, unmount } = mountBridge();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
+  // Every fill mutation runs the ledger fill hook server-side, which posts the
+  // realized-P&L delta as it happens. A PARTIAL exit therefore moves the derived
+  // account balance without ever closing the position, so these three must
+  // refresh exactly what a full exit refreshes.
+  it.each(['fill-added', 'fill-updated', 'fill-deleted'] as const)(
+    'invalidates accounts, dashboard totals, and performance on reason=%s',
+    (reason) => {
+      const { qc, unmount } = mountBridge();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    eventBus.publish('positions:cache-invalidate', { reason: 'fill-added' });
+      eventBus.publish('positions:cache-invalidate', { reason });
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(invalidatedKeys(spy)).toEqual([['performance']]);
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(invalidatedKeys(spy)).toEqual([
+        ['accounts'],
+        ['dashboard', 'totals'],
+        ['performance'],
+      ]);
 
-    unmount();
-  });
-
-  it('invalidates performance only on reason=fill-updated', () => {
-    const { qc, unmount } = mountBridge();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
-
-    eventBus.publish('positions:cache-invalidate', { reason: 'fill-updated' });
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(invalidatedKeys(spy)).toEqual([['performance']]);
-
-    unmount();
-  });
-
-  it('invalidates performance only on reason=fill-deleted', () => {
-    const { qc, unmount } = mountBridge();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
-
-    eventBus.publish('positions:cache-invalidate', { reason: 'fill-deleted' });
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(invalidatedKeys(spy)).toEqual([['performance']]);
-
-    unmount();
-  });
+      unmount();
+    },
+  );
 
   it('invalidates nothing on reason=created (draft create is a no-op)', () => {
     const { qc, unmount } = mountBridge();
