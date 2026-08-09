@@ -150,6 +150,25 @@ describe('EventBusBridge', () => {
     unmount();
   });
 
+  it('refreshes the same surfaces when a CSV import is committed', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    // A commit writes a batch of positions and fills in one transaction, and the
+    // fills post realized P&L — so the balance-derived surfaces are stale too,
+    // not just the positions list.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'csv-imported' });
+
+    expect(invalidatedKeys(spy)).toEqual([
+      ['accounts'],
+      ['positions'],
+      ['dashboard', 'totals'],
+      ['performance'],
+    ]);
+
+    unmount();
+  });
+
   it('invalidates nothing on an account create', () => {
     const { qc, unmount } = mountBridge();
     const spy = vi.spyOn(qc, 'invalidateQueries');
