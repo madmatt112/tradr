@@ -34,10 +34,25 @@ const webSharedLibPattern = {
     'apps/web must not import from @tradr/shared/lib/* — import schemas or expose a new api entry in @tradr/shared/src/index.ts instead.',
 };
 
+// Scoped to TS/JS module imports on purpose: ESLint lints no CSS, so the
+// vendor stylesheet pulled in by apps/web/src/features/onboarding/tour.css
+// (`@import 'driver.js/dist/driver.css'`) is a permitted second importer of
+// driver.js assets that this gate cannot see. Say so rather than claim a
+// reach the rule does not have.
+const driverJsMessage =
+  'apps/web/src/features/onboarding/lib/tour-engine.ts is the only module permitted to import driver.js from TypeScript/JavaScript — go through that wrapper so no driver.js type crosses the boundary. The vendor stylesheet @import in apps/web/src/features/onboarding/tour.css is a known, permitted exception that lint cannot see.';
+
 const driverJsPattern = {
   group: ['driver.js', 'driver.js/**'],
-  message:
-    'apps/web/src/features/onboarding/lib/tour-engine.ts is the only module permitted to import driver.js — go through that wrapper so no driver.js type crosses the boundary.',
+  message: driverJsMessage,
+};
+
+// `no-restricted-imports` only inspects static import/export declarations, so
+// `await import('driver.js')` slips straight past `driverJsPattern`. Match the
+// import expression itself to close that door.
+const driverJsDynamicImportSelector = {
+  selector: 'ImportExpression[source.value=/^driver\\.js($|\\/)/]',
+  message: driverJsMessage,
 };
 
 export default tseslint.config(
@@ -139,11 +154,19 @@ export default tseslint.config(
           patterns: [webSharedLibPattern, driverJsPattern],
         },
       ],
+      // The base selectors are repeated because rule options replace rather
+      // than merge — dropping them here would disable them across apps/web.
+      'no-restricted-syntax': [
+        'error',
+        processEnvSelector,
+        ...positionsInsertSelectors,
+        driverJsDynamicImportSelector,
+      ],
     },
   },
   {
-    // The tour engine is the wrapper the rule above points at, so it is the one
-    // module in apps/web allowed to import driver.js.
+    // The tour engine is the wrapper the rules above point at, so it is the one
+    // module in apps/web allowed to import driver.js, statically or lazily.
     files: ['apps/web/src/features/onboarding/lib/tour-engine.ts'],
     rules: {
       'no-restricted-imports': [
@@ -153,6 +176,7 @@ export default tseslint.config(
           patterns: [webSharedLibPattern],
         },
       ],
+      'no-restricted-syntax': ['error', processEnvSelector, ...positionsInsertSelectors],
     },
   },
   {
