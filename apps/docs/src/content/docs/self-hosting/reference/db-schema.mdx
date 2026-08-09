@@ -6,9 +6,9 @@ description: Every table Tradr creates, its columns, and how they reference each
 {/* GENERATED FILE — do not edit.
     Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}
 
-Tradr's schema is **32 tables**, created by **29 migrations** that run
+Tradr's schema is **32 tables**, created by **30 migrations** that run
 automatically when the api boots. This page is generated from the Drizzle snapshot
-for the latest schema-changing migration (`0027_user_onboarding_preference`), so it describes the schema the migrations
+for the latest schema-changing migration (`0029_account_is_demo`), so it describes the schema the migrations
 actually produce.
 
 You do not need any of this to run Tradr. It is here for writing queries against
@@ -87,6 +87,7 @@ a query you write against these tables may need updating on any release.
 | `brokerage_id` | `uuid` | — |
 | `starting_balance` | `numeric(18, 4)` | not null, default `'0'` |
 | `default_risk_percent` | `numeric(5, 2)` | — |
+| `is_demo` | `boolean` | not null, default `false` |
 | `created_at` | `timestamp with time zone` | not null, default `now()` |
 | `updated_at` | `timestamp with time zone` | not null, default `now()` |
 
