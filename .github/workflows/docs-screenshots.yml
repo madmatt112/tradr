@@ -1,0 +1,170 @@
+name: Docs screenshots
+
+# Regenerates every image the user-guide "Getting started" page shows, and
+# proposes the result as a pull request.
+#
+# MANUAL ONLY, deliberately. The capture boots the whole stack, seeds the sample
+# data and writes eighteen full-page images in two themes — minutes of runner
+# time whose output changes only when the UI does. The spec it invokes skips
+# itself unless DOCS_SCREENSHOT_CAPTURE is set, so the CI e2e job never pays for
+# it; this workflow is the only thing that turns it on, and no push or pull
+# request can start it.
+#
+# It PROPOSES rather than commits. `main` is protected — a pull request and a
+# green CI run are required — and fresh screenshots are a judgement call someone
+# has to actually look at. So the run pushes a branch of its own and opens a PR
+# against the ref it was dispatched from. Nothing here writes to a branch that
+# already exists.
+#
+# Actions are pinned to commit SHAs with the release in a trailing comment,
+# matching the other workflows here: a tag is mutable, a SHA is not.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two runs at once would race to open competing pull requests for the same
+# images. Queue instead of cancelling: a run that has already pushed its branch
+# should finish opening the PR rather than abandon it.
+concurrency:
+  group: docs-screenshots
+  cancel-in-progress: false
+
+# What the API needs to boot and what the capture needs to reach it, matching
+# the CI e2e job. The encryption key is a throwaway 64-hex value; the trusted
+# proxy is what lets the spec vary X-Forwarded-For so its registrations do not
+# trip the per-IP limit on /register.
+env:
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tradr_test
+  SESSION_SECRET: ci-test-secret-that-is-at-least-32-characters-long
+  NODE_ENV: test
+  TRUSTED_PROXIES: '127.0.0.1'
+  ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write # push the branch carrying the regenerated images
+      pull-requests: write # open the pull request that proposes them
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tradr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The push below authenticates explicitly, so there is no reason to
+          # leave a credential sitting in .git/config for the rest of the run.
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      # No dependency cache here, unlike the CI jobs. This job holds a token that
+      # can push a branch and open a pull request, and a shared pnpm store is
+      # writable by every ordinary pull-request run — restoring one into a
+      # privileged job is the escalation path worth declining. A cold install
+      # costs well under a minute against a capture measured in minutes.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - run: pnpm install
+
+      # Chromium alone. The capture spec skips every other browser — the guide
+      # documents the desktop chrome — so the webkit install the CI e2e job
+      # needs for its mobile projects would be dead weight here.
+      - name: Install Playwright browser
+        run: pnpm --filter @tradr/e2e exec playwright install --with-deps chromium
+
+      # Playwright boots web + api + the stubs itself, exactly as it does in CI;
+      # only Postgres comes from the service above. DOCS_SCREENSHOT_CAPTURE is
+      # what un-skips the spec, and CI pins chromium's rendering so two
+      # regenerations of the same commit are comparable.
+      #
+      # A surface that cannot be photographed fails this step and stops the run,
+      # which is the point: no pull request is opened carrying a stale or
+      # missing image.
+      - name: Capture the documentation screenshots
+        env:
+          CI: '1'
+          DOCS_SCREENSHOT_CAPTURE: '1'
+        run: >-
+          pnpm --filter @tradr/e2e exec playwright test
+          docs-screenshots.spec.ts --project=chromium
+
+      # For the failing case: the report names the surface that never painted,
+      # which the log alone does not always make obvious.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Commit the regenerated images
+        id: commit
+        env:
+          BRANCH: docs/screenshots-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          # Only the capture's own output directory: whatever else the run left
+          # in the tree is not what this workflow is proposing.
+          git add apps/docs/src/assets/screenshots
+          if git diff --cached --quiet; then
+            echo 'nothing to propose — the regenerated images match the committed ones' \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Signed off, because the DCO check gates the pull request this opens.
+          git commit -s -m 'docs: refresh the getting-started screenshots'
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+          BASE: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${BRANCH}"
+          {
+            echo "Regenerated against a booted stack and the sample-data fixture, in both"
+            echo "themes, by ${RUN_URL}."
+            echo
+            echo "Look at the images before merging: the capture proves every surface"
+            echo "painted, not that it reads well."
+          } > "${RUNNER_TEMP}/pr-body.txt"
+          url=$(gh pr create \
+            --base "$BASE" \
+            --head "$BRANCH" \
+            --title 'docs: refresh the getting-started screenshots' \
+            --body-file "${RUNNER_TEMP}/pr-body.txt")
+          echo "opened $url"
+          echo "proposed in $url" >> "$GITHUB_STEP_SUMMARY"
