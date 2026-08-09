@@ -169,7 +169,7 @@ const streamBodyLimit = bodyLimit({
  *       403: { description: Monthly advisor image quota exceeded for the user's tier (TIER_LIMIT_IMAGES) — text-only turns unaffected. }
  *       404: { description: Conversation not found (or not owned). }
  *       413: { description: Request body exceeds the byte-cap floor (PAYLOAD_TOO_LARGE). }
- *       429: { description: Stream in progress, retry-while-in-flight, or rate limit. }
+ *       429: { description: 'Stream in progress, retry-while-in-flight, or rate limit.' }
  *       500: { description: Provider-key decryption failure. }
  */
 advisorRouter.post(
@@ -376,7 +376,7 @@ advisorRouter.get('/conversations/:id/messages', listMessagesHandler);
  *           image/png: { schema: { type: string, format: binary } }
  *           image/jpeg: { schema: { type: string, format: binary } }
  *           image/webp: { schema: { type: string, format: binary } }
- *       404: { description: Not found, not owned, out of range, non-image, unrecoverable, or object gone. }
+ *       404: { description: 'Not found, not owned, out of range, non-image, unrecoverable, or object gone.' }
  *       503: { description: Object storage temporarily unreachable (OBJECT_UNREACHABLE). }
  */
 advisorRouter.get(
@@ -591,7 +591,7 @@ advisorRouter.get('/provider-keys', listProviderKeysHandler);
  *             properties:
  *               defaultModel: { type: string, minLength: 1, maxLength: 64 }
  *     responses:
- *       200: { description: The updated key (ProviderKeyListItem, no key material). }
+ *       200: { description: 'The updated key (ProviderKeyListItem, no key material).' }
  *       400: { description: Validation error. }
  *       404: { description: No key configured for this provider. }
  *   delete:

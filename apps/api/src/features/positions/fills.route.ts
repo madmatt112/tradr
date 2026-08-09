@@ -85,7 +85,7 @@ const FillParamSchema = z.object({
  *                 positionClosed: { type: boolean }
  *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position.' }
  *       404: { description: No such position for this user. }
- *       409: { description: The position is closed, or an exit fill was sent to a position that is still a draft. }
+ *       409: { description: 'The position is closed, or an exit fill was sent to a position that is still a draft.' }
  */
 fillsRouter.post(
   '/:id/fills',
@@ -174,7 +174,7 @@ fillsRouter.put(
  *     responses:
  *       204: { description: Deleted. }
  *       404: { description: No such position or fill for this user. }
- *       409: { description: The position is closed, the fill is the last remaining entry, or removing it would leave exit fills unbacked. }
+ *       409: { description: 'The position is closed, the fill is the last remaining entry, or removing it would leave exit fills unbacked.' }
  */
 fillsRouter.delete('/:id/fills/:fillId', validate('param', FillParamSchema), async (c) => {
   const userId = c.get('userId');

@@ -149,7 +149,7 @@ const consumeBodyOrEmit413 = createMiddleware(async (c, next) => {
  *               theme: { type: string, enum: [light, dark, system] }
  *     responses:
  *       200: { description: The saved layout. }
- *       400: { description: Validation error, or a body containing neither widgets nor theme. }
+ *       400: { description: 'Validation error, or a body containing neither widgets nor theme.' }
  *       413: { description: PAYLOAD_TOO_LARGE — the request body exceeds the limit. }
  */
 app.put(

@@ -132,7 +132,7 @@ passwordReset.post(
  *                 description: The new password (the shared registration policy).
  *     responses:
  *       200: { description: '{ success: true } — password rewritten, all sessions revoked, no session cookie set.' }
- *       400: { description: Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body). }
+ *       400: { description: 'Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body).' }
  *       429: { description: Rate limit reached (IP-keyed). }
  */
 passwordReset.post(

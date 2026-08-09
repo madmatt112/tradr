@@ -244,7 +244,7 @@ accounts.put('/writable', validate('json', SetWritableAccountSchema), async (c) 
  *       400: { description: Validation error (includes an unknown IANA timezone). }
  *       403: { description: FORBIDDEN (cross-user brokerage). }
  *       404: { description: Account not found. }
- *       409: { description: Duplicate account name, or currency change while positions exist. }
+ *       409: { description: 'Duplicate account name, or currency change while positions exist.' }
  */
 accounts.put(
   '/:id',
@@ -294,8 +294,8 @@ accounts.put(
  *         description: >
  *           `demo` requests the sample-account teardown. Any other value is a `400`.
  *     responses:
- *       204: { description: Deleted, or already torn down. }
- *       400: { description: Validation error (a non-uuid id, or an unrecognised cascade value). }
+ *       204: { description: 'Deleted, or already torn down.' }
+ *       400: { description: 'Validation error (a non-uuid id, or an unrecognised cascade value).' }
  *       404: { description: Account not found (or not owned by the user). }
  *       409: { description: The account has positions and no cascade applies. }
  */

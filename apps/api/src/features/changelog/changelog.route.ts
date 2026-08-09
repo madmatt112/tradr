@@ -43,7 +43,7 @@ changelogRouter.use(authMiddleware);
  *     responses:
  *       200: { description: '{ releases, fetchedAt, stale, lastViewedAt }.' }
  *       401: { description: Not authenticated. }
- *       503: { description: CHANGELOG_UNAVAILABLE (empty cache, upstream down). }
+ *       503: { description: 'CHANGELOG_UNAVAILABLE (empty cache, upstream down).' }
  */
 changelogRouter.get('/releases', async (c) => {
   return c.json(await getChangelogReleases(c.get('userId')), 200);

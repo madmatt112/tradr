@@ -452,8 +452,8 @@ userPreferencesRouter.get('/users/me/onboarding', async (c) => {
  *                   keys.
  *                 example: partial-close
  *     responses:
- *       200: { description: The merged onboarding preference, in the same shape as the GET. }
- *       400: { description: Unknown field, empty body, or an invalid status or timestamp. }
+ *       200: { description: 'The merged onboarding preference, in the same shape as the GET.' }
+ *       400: { description: 'Unknown field, empty body, or an invalid status or timestamp.' }
  *       401: { description: Authentication required. }
  */
 userPreferencesRouter.patch(

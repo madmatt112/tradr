@@ -154,8 +154,8 @@ positions.get('/:id', validate('param', ParamSchema), async (c) => {
  *     responses:
  *       200: { description: The updated position. }
  *       400: { description: Validation error (e.g. an invalid option symbol or plan price). }
- *       404: { description: Position not found (or not owned), or the target account not found. }
- *       409: { description: A restricted field (symbol/side/assetType/accountId) was changed on a non-draft position, or an asset-type change was attempted. }
+ *       404: { description: 'Position not found (or not owned), or the target account not found.' }
+ *       409: { description: 'A restricted field (symbol/side/assetType/accountId) was changed on a non-draft position, or an asset-type change was attempted.' }
  *   delete:
  *     summary: Delete a position (any status).
  *     description: >
@@ -261,7 +261,7 @@ positions.post(
  *       200: { description: The reopened (now open) position. }
  *       400: { description: reopenedAt precedes closedAt or is in the future. }
  *       404: { description: Position not found (or not owned by the user). }
- *       409: { description: The position is not closed, or its open day (in the account timezone) differs from the reopen day. }
+ *       409: { description: 'The position is not closed, or its open day (in the account timezone) differs from the reopen day.' }
  */
 positions.post(
   '/:id/reopen',

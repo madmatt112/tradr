@@ -60,7 +60,7 @@ const verification = new Hono<AuthEnv>();
  *                 description: The raw token from the emailed link's URL fragment.
  *     responses:
  *       200: { description: '{ success: true } — account marked email-verified, token consumed.' }
- *       400: { description: Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body). }
+ *       400: { description: 'Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body).' }
  *       429: { description: Rate limit reached (IP-keyed). }
  */
 verification.post(

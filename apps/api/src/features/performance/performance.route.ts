@@ -65,7 +65,7 @@ const performance = new Hono<PerformanceEnv>();
  *           `tierWindow: { clamped: true, effectiveStart: ISO date-time,
  *           lookbackMonths: integer }` field; a window entirely before the
  *           floor yields empty series, still marked.
- *       400: { description: Validation error (invalid timezone, invalid dates, start before 2000-01-01, start not before end, end beyond today + 1 day, bucket count over cap, unsupported currency) — identical on every tier. }
+ *       400: { description: 'Validation error (invalid timezone, invalid dates, start before 2000-01-01, start not before end, end beyond today + 1 day, bucket count over cap, unsupported currency) — identical on every tier.' }
  *       401: { description: Not authenticated. }
  *       503: { description: TIMEOUT or CLIENT_ABORT. }
  */
