@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api, markSessionConfirmed, markSessionEnded, markSessionStarted } from '@/lib/api';
+import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
-import { useAuth } from './useAuth';
+import { useAuth, useLogin } from './useAuth';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -41,6 +42,7 @@ beforeEach(() => {
 
 afterEach(() => {
   eventBus.__resetForTests();
+  localStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -147,13 +149,45 @@ describe('useAuth — logging out announces the end of the session', () => {
     expect(markSessionConfirmed).toHaveBeenCalledOnce();
     first.unmount();
 
-    // /login and _auth both mount `useAuth`, and on this remount the query
-    // answers from the cache — no request, so nothing has been confirmed.
+    // _auth and every surface under it mount `useAuth`, and on this remount the
+    // query answers from the cache — no request, so nothing has been confirmed.
     vi.mocked(api.get).mockClear();
     const second = renderHook(() => useAuth(), { wrapper: makeWrapper(qc) });
     expect(second.result.current.isAuthenticated).toBe(true);
     expect(api.get).not.toHaveBeenCalled();
 
     expect(markSessionConfirmed).toHaveBeenCalledOnce();
+  });
+});
+
+// TWO USERS, ONE TAB. /login stopped bouncing an authenticated visitor to
+// /dashboard when it stopped mounting the me-query — a public page that mounts
+// it redirects itself away on a cold load — so a signed-in user can now reach
+// the form and sign in as somebody else without a logout in between. The server
+// caps sessions, so nothing leaks there; what leaks is CLIENT state, and the
+// second user would see the first one's rows.
+describe('useLogin — a login begins from clean client state', () => {
+  it("drops the previous user's cached data, stored drawer state and module state", async () => {
+    vi.mocked(api.post).mockResolvedValue({ user: { id: 'u-2', email: 'b@example.com' } });
+    const qc = makeClient();
+    // User A's tab, mid-session: server state in the cache, stored state in
+    // localStorage, and the module-scoped state each feature drops for itself.
+    qc.setQueryData(['auth', 'me'], { id: 'u-1', email: 'a@example.com' });
+    qc.setQueryData(['positions'], [{ id: 'p-1', symbol: 'AAPL' }]);
+    localStorage.setItem(DRAWER_STORAGE_KEY, '{"isOpen":true,"activeTab":"quick-stats"}');
+    const onLogout = vi.fn();
+    eventBus.subscribe('auth:logout', onLogout);
+
+    const { result } = renderHook(() => useLogin(), { wrapper: makeWrapper(qc) });
+    await act(async () => {
+      await result.current.mutateAsync({ email: 'b@example.com', password: 'pw' });
+    });
+
+    expect(qc.getQueryData(['positions'])).toBeUndefined();
+    expect(localStorage.getItem(DRAWER_STORAGE_KEY)).toBeNull();
+    expect(onLogout).toHaveBeenCalledOnce();
+    // And the teardown ran BEFORE the seeding, or the clear would have taken
+    // the incoming user out with the departing one.
+    expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u-2' });
   });
 });

@@ -1,5 +1,4 @@
-import { queryClient } from '@/lib/queryClient';
-import { eventBus } from '@/stores/event-bus.store';
+import { clearClientSessionState } from '@/lib/sessionTeardown';
 
 declare global {
   interface Window {
@@ -57,9 +56,13 @@ let router: any = null;
  * It coalesces the burst of 401s a SINGLE termination produces across every
  * in-flight request, and it is also what BOUNDS the redirect: one termination
  * produces one navigation to /login, whatever 401s afterwards. That second
- * property is load-bearing — the interception navigates to /login and /login
- * navigates back to /dashboard while it still believes there is a user, so a
- * latch that re-arms on the way round is a bounce with nothing to stop it.
+ * property is load-bearing wherever the redirect can be answered by a redirect
+ * back. /login used to do exactly that — it read the stale-but-truthy user the
+ * expiry left in the cache and sent them to /dashboard, which 401'd, round and
+ * round — and it no longer mounts the me-query or guards on it at all. The
+ * bound stays because it is not /login's to keep: any surface that navigates on
+ * the session it has just lost re-enters the same cycle, and one navigation per
+ * termination is what forbids it.
  *
  * ONLY A LOGIN RE-ARMS IT — `markSessionStarted`, never `markSessionConfirmed`.
  * A 200 from `GET /auth/me` was allowed to re-arm it once, and that is a cycle:
@@ -154,12 +157,11 @@ export function markSessionEnded(): void {
 export function announceSessionExpired(): void {
   if (!hasSession) return;
   hasSession = false;
-  // The server state goes first, exactly as it does on `useAuth`'s logout —
-  // and this is the only place that can do it for an expiry, because nothing
-  // is guaranteed to be mounted here. Left alone, `['auth', 'me']` keeps the
-  // departed user's row: `/login` remounts, reads it as "signed in", and sends
-  // the user back to `/dashboard` over a session that no longer exists. This is
-  // the same client `main.tsx` provides, so it is the same clear.
+  // The same teardown the logout and login paths run — and this is the only
+  // place that can run it for an expiry, because nothing is guaranteed to be
+  // mounted here. Left alone, `['auth', 'me']` keeps the departed user's row for
+  // the next mount to read as "signed in". It clears the singleton client, which
+  // is the one `main.tsx` provides, so it is the same cache.
   //
   // The clear is not free, and what it costs is why `markSessionConfirmed`
   // exists: emptying the cache leaves every mounted observer holding a query
@@ -167,8 +169,7 @@ export function announceSessionExpired(): void {
   // me-query among them. Those answers used to re-open the interception, and the
   // 401s from the same burst then announced the same expiry over again, round
   // and round. They no longer do, so the burst dies out instead.
-  queryClient.clear();
-  eventBus.publish('auth:logout', {});
+  clearClientSessionState();
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

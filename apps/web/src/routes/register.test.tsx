@@ -78,8 +78,6 @@ function jsonResponse(status: number, body: unknown) {
 
 // ---- Mutable fetch fixtures (rebound per test) ------------------------------
 
-// /auth/me payload: null = logged out (useAuth sees no user, no 401 involved).
-let meUser: User | null;
 // /auth/register 201 payload.
 let registered: User;
 // /auth/verify-email/resend response factory (fresh Response per call).
@@ -122,15 +120,16 @@ function registerBody(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  meUser = null;
   registered = { id: 'u1', email: 'new@user.dev', isAdmin: false, emailVerified: false };
   resendResponse = () => jsonResponse(200, { success: true });
 
+  // No `/auth/me` case on purpose: this page must not ask. Case 1 puts the
+  // session in the query cache directly instead, which is what the answer would
+  // have produced anyway and does not depend on the page requesting it.
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes('/auth/verify-email/resend')) return resendResponse();
     if (url.includes('/auth/register')) return jsonResponse(201, { user: registered });
-    if (url.includes('/auth/me')) return jsonResponse(200, meUser);
     throw new Error(`Unexpected fetch in test: ${url}`);
   });
 
@@ -180,13 +179,30 @@ describe('register route', () => {
     // so ['auth','me'] flips from logged-out to an authenticated user the moment
     // anything asks — the focus refetch when the user tabs back from their mail
     // client. Seeded straight into the cache rather than refetched because this
-    // page mounts no me-query of its own (SF-3, public-routes-cold-load.test.tsx).
-    meUser = { id: 'u1', email: 'new@user.dev', isAdmin: false, emailVerified: false };
+    // page mounts no me-query of its own (SF-3, public-routes-cold-load.test.tsx);
+    // seeding is also what makes this hold whether or not it ever mounts one,
+    // since `setQueryData` is the same flip either way.
+    const authedUser: User = {
+      id: 'u1',
+      email: 'new@user.dev',
+      isAdmin: false,
+      emailVerified: false,
+    };
     await act(async () => {
-      qc.setQueryData(['auth', 'me'], meUser);
+      qc.setQueryData(['auth', 'me'], authedUser);
     });
     // The flip really landed (isAuthenticated is now true)...
     expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u1' });
+
+    // GIVE ANY GUARD ITS CHANCE TO FIRE BEFORE ASSERTING NONE DID. An
+    // `isAuthenticated` redirect placed above the `pendingEmail` return is the
+    // regression this case exists to catch, and it lands a tick later than the
+    // render that triggers it — whether it navigates from an effect or renders
+    // `<Navigate>`. Asserting synchronously on the flip above sees the DOM
+    // before the navigation and passes either way, which is no test at all.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
 
     // ...and the state persisted: no navigate-away, state still rendered.
     expect(screen.getByText('Check your email')).toBeTruthy();

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import { markSessionEnded, markSessionStarted, setRouter } from '@/lib/api';
 
+import { Route as RootRoute } from '../__root';
 import { Route as ForgotPasswordRoute } from '../forgot-password';
 import { Route as LoginRoute } from '../login';
 import { Route as RegisterRoute } from '../register';
@@ -20,8 +21,9 @@ import { Route as VerifyEmailRoute } from '../verify-email';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The resend hook toasts; mocked so no Toaster mount is needed.
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+// The resend hook toasts, and the real root renders a <Toaster />; both are
+// stubbed so neither needs a live sonner.
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() }, Toaster: () => null }));
 
 // SF-3 teeth, for EVERY unauthenticated route rather than one of them.
 //
@@ -54,8 +56,15 @@ const PUBLIC_ROUTES = [
 
 // Re-host the real route components under a fresh root (the reset-password /
 // settings-layout test pattern) so Links and navigate() resolve in-memory.
+//
+// The root carries the REAL __root component rather than an empty one. A page
+// does not have to mount the me-query itself to be redirected away by it —
+// anything rendered ABOVE it on a public route does just as well, and a
+// synthetic empty root would render none of that and see none of it. __root is
+// the only layout above these five (they are top-level; _auth is a sibling), so
+// hosting it here covers the whole chain a cold load actually mounts.
 function buildRouter(initialPath: string) {
-  const rootRoute = createRootRoute();
+  const rootRoute = createRootRoute({ component: (RootRoute.options as any).component });
 
   const publicRoutes = PUBLIC_ROUTES.map((route) =>
     createRoute({

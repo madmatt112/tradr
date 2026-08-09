@@ -193,10 +193,12 @@ describe('session expiry announces the end of the session', () => {
   });
 
   // THE LATCH IS ALSO WHAT BOUNDS THE REDIRECT. The interception sends the user
-  // to /login, and /login sends them back to /dashboard for as long as anything
-  // still reads as signed in; one navigation per termination is what stops that
-  // going round. Only a confirmed session start re-arms it, so no amount of
-  // remounting and 401ing can re-open it.
+  // to /login, and anything that answers that by navigating back on a session
+  // that has already ended is round one of a cycle; one navigation per
+  // termination is what stops it. /login itself no longer answers — it mounts no
+  // me-query and guards on nothing — but the bound is not its to keep. Only a
+  // confirmed session start re-arms the latch, so no amount of remounting and
+  // 401ing can re-open it.
   it('navigates once per termination, whatever 401s afterwards', async () => {
     stub401();
     const { api, markSessionStarted, onLogout, navigate } = await importFresh();

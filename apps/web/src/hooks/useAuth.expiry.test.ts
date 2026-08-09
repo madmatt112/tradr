@@ -138,7 +138,7 @@ async function anAuthedRequest(path = '/positions') {
   });
 }
 
-/** /login mounting, then _auth mounting behind it, three bounces over. */
+/** The _auth layout and the surfaces under it remounting, three passes over. */
 async function remountAsThePagesWould() {
   for (let i = 0; i < 3; i++) {
     const remounted = await mountAuth();
@@ -156,9 +156,10 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     await anAuthedRequest();
     expect(onLogout).toHaveBeenCalledOnce();
 
-    // /login mounts `useAuth`, and so does _auth on the way back. Each of them
-    // used to re-declare the session off the user still sitting in the cache,
-    // and the next 401 announced its end all over again.
+    // The _auth layout mounts `useAuth`, and so does every surface under it —
+    // the sidebar, the theme hook, the dashboard. Each of them used to
+    // re-declare the session off the user still sitting in the cache, and the
+    // next 401 announced its end all over again.
     session.unmount();
     await remountAsThePagesWould();
 
@@ -182,7 +183,7 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     });
   });
 
-  it('leaves no user behind for /login to bounce back to /dashboard on', async () => {
+  it('leaves no user behind for the next mount to read as signed in', async () => {
     const network = stubNetwork();
     const session = await signIn();
     network.expire();
@@ -190,9 +191,9 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     await anAuthedRequest();
     session.unmount();
 
-    // What /login reads. `isAuthenticated` there IS its redirect condition, so
-    // a truthy user is a navigation to /dashboard — which mounts _auth, which
-    // 401s, which is the bounce.
+    // What the next mount reads. A truthy user here is an authenticated app
+    // rendered over a session that no longer exists: _auth lets the surfaces
+    // under it through, and every one of them 401s.
     expect(queryClient.getQueryData(['auth', 'me'])).toBeUndefined();
     const login = await mountAuth();
     await waitFor(() => expect(login.result.current.isLoading).toBe(false));
@@ -215,13 +216,17 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     network.restore();
     const second = await mountAuth();
     await logIn(second);
-    // Signing in ends nothing, so it announces nothing.
-    expect(onLogout).toHaveBeenCalledOnce();
+    // Signing in announces too, but as a TEARDOWN of whatever the tab held
+    // before it, not as an expiry — a login on a tab someone else was signed in
+    // on has to leave the same nothing behind that a logout does. Counted from
+    // here rather than asserted absolutely, because what this test is about is
+    // the expiry below still being announced at all.
+    const afterLogin = onLogout.mock.calls.length;
 
     network.expire();
     await anAuthedRequest();
 
-    expect(onLogout).toHaveBeenCalledTimes(2);
+    expect(onLogout.mock.calls.length - afterLogin).toBe(1);
     second.unmount();
   });
 
@@ -243,11 +248,11 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     expect(interceptNavigate).toHaveBeenCalledOnce();
     session.unmount();
 
-    // What happens next, four passes of it: /login mounts and its me-query —
-    // emptied by the clear — goes back to the network and answers 200, because
-    // the session was never the thing that was wrong. /login reads that as
-    // signed in and sends the user to /dashboard, which mounts the surface that
-    // 401s, and round again. The pass is bounded only by the latch staying shut.
+    // What happens next, four passes of it: the layout remounts and its
+    // me-query — emptied by the clear — goes back to the network and answers
+    // 200, because the session was never the thing that was wrong. The app
+    // renders as signed in, the surface that 401s mounts under it, and round
+    // again. The pass is bounded only by the latch staying shut.
     for (let i = 0; i < 4; i++) {
       const remounted = await mountAuth();
       await waitFor(() => expect(remounted.result.current.isAuthenticated).toBe(true));

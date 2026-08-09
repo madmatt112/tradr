@@ -10,8 +10,7 @@ import {
   markSessionStarted,
   setIsLoggingOut,
 } from '@/lib/api';
-import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
-import { eventBus } from '@/stores/event-bus.store';
+import { clearClientSessionState } from '@/lib/sessionTeardown';
 
 /**
  * The login mutation ALONE, without the `['auth','me']` query `useAuth` mounts
@@ -33,6 +32,15 @@ export function useLogin() {
     mutationFn: (credentials: { email: string; password: string }) =>
       api.post<{ user: User }>('/auth/login', credentials),
     onSuccess: (data) => {
+      // A LOGIN BEGINS FROM CLEAN CLIENT STATE, whatever was on the tab before
+      // it. /login no longer bounces an authenticated visitor to /dashboard —
+      // that guard is what made a public page mount the me-query and redirect
+      // itself away on a cold load — so a signed-in user can reach this form
+      // and sign in as somebody else. Without the teardown the second user
+      // inherits the first one's cached rows, drawer state and walkthrough.
+      // This is the same teardown the logout and expiry paths run; the seeding
+      // below has to follow it, or the clear would take the new user with it.
+      clearClientSessionState(queryClient);
       // The one answer that means a session BEGAN rather than merely exists, so
       // this is where the 401 interception is re-armed. Seeding the query below
       // means its `queryFn` may not run again for this session, so the session
@@ -80,21 +88,9 @@ export function useAuth() {
     onSettled: () => {
       setIsLoggingOut(false);
       // The session is over on this path too, so a later 401 must not be read
-      // as a second one ending — this one already published below.
+      // as a second one ending — the teardown below already announced it.
       markSessionEnded();
-      try {
-        localStorage.removeItem(DRAWER_STORAGE_KEY);
-      } catch {
-        /* swallow */
-      }
-      queryClient.clear();
-      // Clearing the query cache only drops SERVER state. Module-scoped client
-      // state outlives it — the guided walkthrough keeps its session, and its
-      // driver.js overlay, next to the module rather than in a component — and
-      // the next user to log in on this tab would inherit it. Announcing the
-      // logout lets each owner tear its own down; a direct import from here
-      // into the onboarding feature would couple auth to it and invite a cycle.
-      eventBus.publish('auth:logout', {});
+      clearClientSessionState(queryClient);
       router.navigate({ to: '/login' });
     },
   });
