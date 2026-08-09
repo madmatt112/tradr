@@ -77,7 +77,7 @@ never places or executes trades. You record trades you have already made.
 2. Fill in the form described below.
 3. Choose **Create**.
 
-<Screenshot name="new-account-dialog" alt="The New Account dialog, showing its six fields: Name, Currency, Trading-day timezone, Starting balance, Default risk percent, and Brokerage." />
+<Screenshot name="new-account-dialog" alt="The New Account dialog, showing its six fields: Name, Currency, Trading-day timezone, Starting balance, Default risk %, and Brokerage." />
 
 The form has six fields, in this order.
 
@@ -112,11 +112,12 @@ yourself on each fill, and you can attach a brokerage later.
 **Expected result:** your dashboard replaces the welcome screen. The first
 checklist item ticks itself.
 
-Open **Accounts** to see what you made. The list shows **Name** and **Currency**,
-and nothing else. Balances are not in this list. They appear in the dashboard's
-**Account Balances** widget.
+Open **Accounts** to see what you made. The list shows **Name**, **Currency**,
+and an unlabelled last column holding a **⋯** menu with **Edit** and **Delete**
+in it. Balances are not in this list. They appear in the dashboard's **Account
+Balances** widget.
 
-<Screenshot name="accounts-list" alt="The Accounts page, listing one account under a Name column and a Currency column. A banner above it marks the figures on screen as sample data." />
+<Screenshot name="accounts-list" alt="The Accounts page, listing one account under a Name column and a Currency column, with an unlabelled third column holding a row menu. A banner above it marks the figures on screen as sample data." />
 
 The figure above carries the sample account rather than one of your own, so the
 sample-data banner sits above it.
@@ -157,8 +158,13 @@ completes on sample data alone.
 
 ## Step 3 — Size a trade in the calculator
 
-Open **Calculator**. Nothing here is submitted or saved, and the results
-recompute as you type.
+Open **Calculator**. There is nothing to submit, the results recompute as you
+type, and no trade is created. Neither your entries nor the figures they produce
+are stored.
+
+Tradr records one fact here, the first time a calculation succeeds: a timestamp.
+That is how the **Get set up** checklist can tell this step is done. Nothing
+about the calculation itself is kept.
 
 1. Enter the **Entry price**.
 2. Enter the **Stop loss**. The distance from entry to stop is your per-unit risk.
@@ -166,6 +172,10 @@ recompute as you type.
 4. Under **Risk**, choose **Dollar** or **Percent**. Dollar is the default.
 5. Choose the **Account** you are trading.
 6. Set the amount you are willing to lose.
+
+**Direction** starts on **Long** and **Mode** on **Stock**, so a long stock trade
+needs neither. **Symbol** changes no figure. With a quote provider configured, a
+symbol unlocks **Pull last price**, which fills the entry price for you.
 
 Under **Percent**, **Risk percent** prefills from that account's **Default risk
 %** when it has one. Under **Dollar**, you type the **Dollar risk** yourself.
@@ -176,11 +186,20 @@ The account does two more things. It supplies the currency the results are shown
 in. It also caps the position at the buying power the account has.
 
 **Expected result:** a **Position Sizing** card gives you the **Position size**,
-the **Per-unit risk**, and the **Actual dollar risk**. With a target, a **Risk /
-Reward** card adds the **Per-unit reward** and the **Risk/Reward ratio**.
+the **Per-unit risk**, the **Actual dollar risk**, and the **Total position
+value**. With a target, a **Risk / Reward** card adds the **Per-unit reward** and
+the **Risk/Reward ratio**.
+
+<Screenshot name="calculator" alt="The Trade Calculator, with entry 182.40, stop 178.00 and target 191.20 on the left, and a Position Sizing card reading 113 units on the right beside a Risk / Reward card." />
+
+The figure above risks $500 at the prices the worked AAPL trade below uses. Entry
+182.40 against a stop at 178.00 is $4.40 of risk per share, which buys 113 shares
+worth $20,611.20. The target at 191.20 pays $8.80 a share, a reward of twice the
+risk.
 
 Position size is rounded down to whole units. That is why the actual dollar risk
-lands at or under your budget rather than on it.
+lands at or under your budget rather than on it. Here it is $497.20, not the
+$500 you asked for.
 
 See [Use the trade calculator](/user-guide/trade-calculator/) for fee estimates
 and the options mode.
@@ -203,8 +222,9 @@ through three states.
    want back later.
 5. Choose **Create**.
 
-The form asks for nothing else. There is no quantity and no price here — both
-come from fills.
+That is the whole form for a stock. There is no quantity and no price here —
+both come from fills. Setting **Asset Type** to **Option** replaces **Symbol**
+with the contract's underlying, expiry, type, and strike.
 
 **Expected result:** the position is created as a **draft**. Your account balance
 is unchanged, because a draft is a plan rather than a trade.
@@ -282,8 +302,9 @@ step is optional.
   The advisor needs either **wallet credits** (buy a credit pack and pay per use
   against your balance) **or** your own API key. Bring your own key (**BYOK**)
   means you paste a provider key in settings and the provider bills you directly.
-  Pick whichever you prefer in **Settings → Advisor**. Without one of the two,
-  the advisor is unavailable — nothing breaks.
+  Credits are bought under **Settings → Billing**; a key of your own goes under
+  **Settings → Advisor**. Without one of the two, the advisor is unavailable —
+  nothing breaks.
 </HostedOnly>
 
 <SelfHosted>
@@ -295,7 +316,8 @@ step is optional.
 
 Once a key or credits are in place:
 
-1. Open **Settings → Advisor** and add a provider key.
+1. Open **Settings → Advisor**. Add a provider key there if you are bringing
+   your own.
 2. Turn on **trade-data access** in the same place if you want personalised
    answers. This is optional, and it is off until you turn it on.
 3. Open the **Advisor**.

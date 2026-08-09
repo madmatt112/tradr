@@ -25,9 +25,9 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  *
  * `CI=1` pins the chromium rendering to what a CI re-run would produce, so two
  * regenerations of the same commit are comparable. There is no
- * `--update-snapshots` here because there are no snapshots — the images are
- * written straight into `apps/docs/src/assets/screenshots/`, and the resulting
- * working-tree change is what gets reviewed.
+ * `--update-snapshots` here because there are no snapshots — the published
+ * images are written straight into `apps/docs/src/assets/screenshots/`, and the
+ * resulting working-tree change is what gets reviewed.
  *
  * ── Why the figures are quotable ───────────────────────────────────────────
  *
@@ -39,11 +39,35 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  *
  * ── Why a failed run leaves no image behind ────────────────────────────────
  *
- * The output directory is emptied before the first capture, and the run ends by
- * checking that exactly the manifest's files came back, each one non-empty and
- * written during this run. A surface that cannot be reached therefore fails
- * loudly at its own paint gate and leaves a hole a reader can see, rather than
- * leaving last month's image in place to be shipped as if it were current.
+ * Both output directories are emptied before the first capture, and the run
+ * ends by checking that exactly the manifest's files came back, each one
+ * non-empty and written during this run. A surface that cannot be reached
+ * therefore fails loudly at its own paint gate and leaves a hole a reader can
+ * see, rather than leaving last month's image in place to be shipped as if it
+ * were current.
+ *
+ * ── Why some surfaces are captured but never committed ─────────────────────
+ *
+ * Every surface below is captured and held to the same paint gate. Only the
+ * ones the guide actually embeds are written into
+ * `apps/docs/src/assets/screenshots/` — the rest go to a git-ignored holding
+ * directory under `e2e/test-results/`.
+ *
+ * That split is what keeps the guide's curation from being undone. The refresh
+ * workflow stages the published directory wholesale, so anything written there
+ * is proposed for commit; before the split, a surface deliberately left out of
+ * the repository came straight back on the next dispatch. The dashboard pair is
+ * the live case. It passes its paint gate, but the Stats Summary widget
+ * photographs blank at its pinned height, so the committed image would
+ * misrepresent the product. `published: false` says that in the one file
+ * someone changing the capture will read, and the workflow needs no rule of its
+ * own.
+ *
+ * Held surfaces are captured rather than dropped because the gate is the cheap
+ * part, and it is the only thing proving those pages still render at all. It is
+ * also how an exclusion gets revisited: the refresh workflow uploads the held
+ * images as an artifact, so whether Stats Summary is fixed can be checked
+ * without editing this file first.
  *
  * ── Why "painted", not "not loading" ───────────────────────────────────────
  *
@@ -64,67 +88,102 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 // Output
 // ---------------------------------------------------------------------------
 
-const OUTPUT_DIR = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../apps/docs/src/assets/screenshots',
-);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The published set — the directory `Screenshot.astro` globs, and the only one
+ * the refresh workflow stages. A file here is a file the documentation ships.
+ */
+const PUBLISHED_DIR = path.resolve(HERE, '../../apps/docs/src/assets/screenshots');
+
+/**
+ * The held set — captured, gated, looked at, never committed. Under
+ * `e2e/test-results/`, which `.gitignore` already covers, so a held image
+ * cannot be staged by a `git add -A` in a contributor's tree either.
+ */
+const HELD_DIR = path.resolve(HERE, '../test-results/docs-screenshots-held');
 
 const THEMES = ['light', 'dark'] as const;
 type Theme = (typeof THEMES)[number];
 
 /**
- * THE MANIFEST — one entry per surface the getting-started guide walks a reader
- * through, in the order the guide meets them. It is the contract the final
- * check reads: a surface listed here but never captured fails the run, and a
- * file in the output directory that no entry names fails it too, which is what
- * keeps a renamed surface from leaving its predecessor behind.
+ * THE MANIFEST — one entry per surface this capture visits, in the order the
+ * getting-started guide meets them, and whether that guide EMBEDS it.
+ *
+ * It is the contract the final check reads: a surface listed here but never
+ * captured fails the run, and a file in either output directory that no entry
+ * names fails it too, which is what keeps a renamed surface from leaving its
+ * predecessor behind.
+ *
+ * `published` is the whole of the curation. Setting it decides which directory
+ * the image lands in, and therefore whether the refresh workflow proposes it —
+ * see the header for why the two are kept apart.
  */
 const SURFACES = [
-  // Step 1 — create your account.
-  'sign-up',
-  'dashboard-first-login',
+  // Step 1 — create your account. The guide describes the sign-up form in
+  // prose and shows the screen it lands on, so only the second is embedded.
+  { name: 'sign-up', published: false },
+  { name: 'dashboard-first-login', published: true },
   // Step 2 — add a brokerage account.
-  'new-account-dialog',
-  'accounts-list',
-  // Step 3 — log a trade through its lifecycle.
-  'positions-list',
-  'position-detail',
-  // Step 4 — see it on the dashboard.
-  'dashboard',
-  // Step 5 — ask the advisor.
-  'advisor',
-  // Step 6 — review performance.
-  'performance',
+  { name: 'new-account-dialog', published: true },
+  { name: 'accounts-list', published: true },
+  // Step 3 — size the trade in the calculator.
+  { name: 'calculator', published: true },
+  // Steps 4-5 — log a trade through its lifecycle. The list adds nothing the
+  // detail view does not, so the guide embeds the worked example alone.
+  { name: 'positions-list', published: false },
+  { name: 'position-detail', published: true },
+  // Step 6 — see it on the dashboard. HELD: the Stats Summary widget
+  // photographs blank at its pinned height, and an image that shows the
+  // dashboard's headline numbers as empty misrepresents the product. Publish
+  // this pair once that widget photographs its figures.
+  { name: 'dashboard', published: false },
+  // Step 7 — ask the advisor. HELD: an untouched conversation pane is an empty
+  // box, and the step is about credentials rather than a screen.
+  { name: 'advisor', published: false },
+  // Step 8 — review performance.
+  { name: 'performance', published: true },
 ] as const;
-type Surface = (typeof SURFACES)[number];
+type Surface = (typeof SURFACES)[number]['name'];
+
+const PUBLISHED: ReadonlySet<string> = new Set(
+  SURFACES.filter((surface) => surface.published).map((surface) => surface.name),
+);
 
 /** A PNG under 4 KB is a blank or half-painted frame, not a screenshot. */
 const MIN_IMAGE_BYTES = 4096;
 
 const imagePath = (surface: Surface, theme: Theme): string =>
-  path.join(OUTPUT_DIR, `${surface}-${theme}.png`);
+  path.join(PUBLISHED.has(surface) ? PUBLISHED_DIR : HELD_DIR, `${surface}-${theme}.png`);
 
 /** Milliseconds at which the capture began — every image must post-date it. */
 let runStartedAt = 0;
 
 /**
- * Empty the output directory before anything is written. This is the half of
+ * Empty both output directories before anything is written. This is the half of
  * the no-stale-image guarantee that a mid-run failure cannot undo: once the old
  * files are gone, a run that dies on surface five cannot leave surfaces six
  * onwards looking current.
  *
- * EVERYTHING GOES, not just `*.png`. This directory exists to hold this spec's
- * output and nothing else, so a leftover of any other kind — a `.jpeg` from a
- * capture that once wrote one, a half-written temp file, a renamed surface's
- * `.webp` — is the same stale artefact the PNG sweep was written to prevent,
- * and outliving the sweep is exactly what made it dangerous. The directory node
- * itself is kept (only its contents are removed) so nothing outside it can be
- * reached, and `verifyManifest` reads the same unfiltered listing back.
+ * EVERYTHING GOES, not just `*.png`. These directories exist to hold this
+ * spec's output and nothing else, so a leftover of any other kind — a `.jpeg`
+ * from a capture that once wrote one, a half-written temp file, a renamed
+ * surface's `.webp` — is the same stale artefact the PNG sweep was written to
+ * prevent, and outliving the sweep is exactly what made it dangerous. The
+ * directory nodes themselves are kept (only their contents are removed) so
+ * nothing outside them can be reached, and `verifyManifest` reads the same
+ * unfiltered listings back.
+ *
+ * The held directory is swept for the same reason as the published one, plus
+ * one of its own: a surface that flips to `published: true` must not leave its
+ * held copy behind for the next reader to mistake for the current image.
  */
-function clearOutputDir(): void {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  for (const entry of fs.readdirSync(OUTPUT_DIR)) {
-    fs.rmSync(path.join(OUTPUT_DIR, entry), { recursive: true, force: true });
+function clearOutputDirs(): void {
+  for (const dir of [PUBLISHED_DIR, HELD_DIR]) {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const entry of fs.readdirSync(dir)) {
+      fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    }
   }
   runStartedAt = Date.now();
 }
@@ -154,6 +213,19 @@ const PAINTED_WHEN: Record<Surface, readonly string[]> = {
   ],
   'new-account-dialog': ['[data-slot="dialog-content"]'],
   'accounts-list': ['[data-testid="demo-banner"]', 'table tbody tr'],
+  // Both halves of the calculator, because the figure is both halves. The
+  // account picker is named by its ENABLED trigger: while the accounts query is
+  // in flight, and again if it fails, the same control renders disabled behind
+  // a "Loading accounts…" placeholder, and a frame taken then shows the reader
+  // a spinner where their account list belongs. The results panel is named by a
+  // card TITLE, which only the sized output carries — the empty, error and
+  // zero-position states are a single untitled card holding one line of text,
+  // so this is the difference between a computed figure and an excuse.
+  calculator: [
+    '#entryPrice',
+    '[data-tour="calculator-account"] [data-slot="select-trigger"]:not([disabled])',
+    '[data-tour="calculator-results"] [data-slot="card-title"]',
+  ],
   'positions-list': ['table tbody tr'],
   'position-detail': ['table tbody tr'],
   dashboard: [
@@ -320,20 +392,33 @@ async function shoot(page: Page, surface: Surface, theme: Theme): Promise<void> 
 
 /**
  * The last word on whether the run produced a publishable set. Set equality in
- * both directions: a missing image is a surface that never got captured, and an
- * unexpected one is a leftover the docs could still be pointing at.
+ * both directions, per directory: a missing image is a surface that never got
+ * captured, and an unexpected one is a leftover the docs could still be
+ * pointing at.
  *
- * The listing is UNFILTERED, matching `clearOutputDir`. Filtering to `*.png`
+ * BOTH directories are checked, not only the published one. The published check
+ * is what stops a held surface reaching the repository — the refresh workflow
+ * stages that directory wholesale, so a stray file there is a stray commit. The
+ * held check is what stops the split from quietly becoming a way to drop a
+ * surface: mark one `published: false` and forget to capture it, and this fails
+ * rather than shrugging.
+ *
+ * The listings are UNFILTERED, matching `clearOutputDirs`. Filtering to `*.png`
  * would let a non-PNG stray sit in the published directory unremarked.
  */
 function verifyManifest(): void {
-  const expected = SURFACES.flatMap((surface) =>
-    THEMES.map((theme) => `${surface}-${theme}.png`),
-  ).sort();
-  const actual = fs.readdirSync(OUTPUT_DIR).sort();
-  expect(actual, 'every documented surface has an image in both themes, and nothing else').toEqual(
-    expected,
-  );
+  for (const [dir, label, published] of [
+    [PUBLISHED_DIR, 'published', true],
+    [HELD_DIR, 'held', false],
+  ] as const) {
+    const expected = SURFACES.filter((surface) => surface.published === published)
+      .flatMap((surface) => THEMES.map((theme) => `${surface.name}-${theme}.png`))
+      .sort();
+    const actual = fs.readdirSync(dir).sort();
+    expect(actual, `every ${label} surface has an image in both themes, and nothing else`).toEqual(
+      expected,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,7 +499,7 @@ test.describe('documentation screenshots', () => {
   );
 
   test('capture every documented surface in light and dark', async ({ page, request }) => {
-    // One booted stack, one user, eighteen full-page images — far past the
+    // One booted stack, one user, twenty full-page images — far past the
     // default per-test budget, and a generator rather than a gate.
     test.setTimeout(600_000);
     // Wider than the project's default desktop viewport. The positions table is
@@ -422,7 +507,7 @@ test.describe('documentation screenshots', () => {
     // the page scrolls sideways, which both crops the table and drags the side
     // drawer's parked panel into a full-page frame.
     await page.setViewportSize({ width: 1440, height: 900 });
-    clearOutputDir();
+    clearOutputDirs();
 
     const email = await registerUser(request);
 
@@ -500,6 +585,28 @@ test.describe('documentation screenshots', () => {
       await expect(page.getByTestId('demo-banner')).toBeVisible();
       await assertTheme(page, theme);
       await shoot(page, 'accounts-list', theme);
+
+      // --- Step 3: the calculator, with the guide's worked example in it -----
+      // No seeded state of its own — the arithmetic is a pure function of what
+      // is typed, so these four values are the whole fixture and the prose can
+      // quote the figures they produce. Deliberately no account selected: an
+      // account would cap the size against its cash and the numbers on screen
+      // would stop being the ones the arithmetic above gives.
+      //
+      // Entry and target are the AAPL prices the guide already quotes, so a
+      // reader meets the same trade in step 3 and step 5.
+      await page.goto('/calculator');
+      await expect(page.getByRole('heading', { name: 'Trade Calculator' })).toBeVisible();
+      await page.getByLabel('Entry price').fill('182.40');
+      await page.getByLabel('Stop loss').fill('178.00');
+      await page.getByLabel('Target price (optional)').fill('191.20');
+      await page.getByLabel('Dollar risk').fill('500');
+      // The form never submits and validates on blur, so the last field has to
+      // lose focus before the results exist at all. Filling the earlier fields
+      // blurred each of them in turn; this one has nothing after it.
+      await page.getByLabel('Dollar risk').blur();
+      await expect(page.getByText('Position Sizing')).toBeVisible();
+      await shoot(page, 'calculator', theme);
 
       await page.goto('/positions');
       await expect(page.getByRole('heading', { name: 'Positions' })).toBeVisible();

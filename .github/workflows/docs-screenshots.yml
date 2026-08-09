@@ -4,11 +4,22 @@ name: Docs screenshots
 # proposes the result as a pull request.
 #
 # MANUAL ONLY, deliberately. The capture boots the whole stack, seeds the sample
-# data and writes eighteen full-page images in two themes — minutes of runner
-# time whose output changes only when the UI does. The spec it invokes skips
-# itself unless DOCS_SCREENSHOT_CAPTURE is set, so the CI e2e job never pays for
-# it; this workflow is the only thing that turns it on, and no push or pull
-# request can start it.
+# data and writes twenty full-page images in two themes — minutes of runner time
+# whose output changes only when the UI does. The spec it invokes skips itself
+# unless DOCS_SCREENSHOT_CAPTURE is set, so the CI e2e job never pays for it;
+# this workflow is the only thing that turns it on, and no push or pull request
+# can start it.
+#
+# TWENTY CAPTURED, TWELVE PROPOSED. The capture visits every surface the guide
+# walks a reader through, but the guide embeds only some of them, and the ones
+# it does not are held back on purpose — the dashboard pair, for one, because
+# the Stats Summary widget photographs blank. The spec is what decides which is
+# which: published surfaces are written into apps/docs/src/assets/screenshots/
+# and held ones into a git-ignored directory under e2e/test-results/. So the
+# staging below can go on adding that one directory wholesale and still propose
+# exactly what the docs reference. Do not widen it to catch the held images —
+# adding them back is what this split exists to prevent, and the spec fails the
+# run if either directory holds anything else.
 #
 # It PROPOSES rather than commits. `main` is protected — a pull request and a
 # green CI run are required — and fresh screenshots are a judgement call someone
@@ -138,6 +149,22 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      # The surfaces the guide does not embed. They are captured and gated like
+      # every other one, so without this the run would prove they still render
+      # and then throw the evidence away. Uploaded rather than committed: this
+      # is how "does Stats Summary still photograph blank?" gets answered — look
+      # at the artifact, and flip that surface to published in the spec if it
+      # does not. `always()` because a run that failed after the dashboard was
+      # taken still carries the image that answers it.
+      - name: Upload the held screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: held-screenshots
+          path: e2e/test-results/docs-screenshots-held
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Commit the regenerated images
         id: commit
         env:
@@ -147,8 +174,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -c "$BRANCH"
-          # Only the capture's own output directory: whatever else the run left
-          # in the tree is not what this workflow is proposing.
+          # Only the capture's PUBLISHED output directory: whatever else the run
+          # left in the tree — the held images among it — is not what this
+          # workflow is proposing. The spec has already asserted that this
+          # directory holds exactly the surfaces the guide embeds.
           git add apps/docs/src/assets/screenshots
           if git diff --cached --quiet; then
             echo 'nothing to propose — the regenerated images match the committed ones' \
