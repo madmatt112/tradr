@@ -76,8 +76,8 @@ export interface PresetPerformanceResult {
  * on the 1st of any month, everyone — that window is empty, and a widget
  * labelled "all-time" then draws bare axes and a collapsed stats panel. So the
  * response's real `historyRange` is latched here and the window re-derived from
- * it, which is the second fetch the design's §10.4 cycle-prevention note
- * describes.
+ * it. That costs a second fetch, and latching is what stops it becoming an
+ * endless series of them — see below.
  *
  * WHY IT TERMINATES, and why the learned value is held in state rather than
  * read straight off `query.data`. Reading it off the response would flip-flop:
@@ -135,7 +135,8 @@ export function usePresetPerformance({
   );
 
   const response = query.data;
-  // §A — currencies is an ARRAY: use find(), not record-style indexing.
+  // `currencies` is an ARRAY, not a record keyed by currency code, so the entry
+  // has to be matched with find() rather than indexed by `currency`.
   const currencyData =
     currency != null ? (response?.currencies.find((c) => c.code === currency) ?? null) : null;
 
