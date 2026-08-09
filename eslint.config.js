@@ -22,6 +22,24 @@ const positionsInsertSelectors = [
   },
 ];
 
+const webSharedLibPath = {
+  name: '@tradr/shared/lib/performance',
+  message:
+    'apps/web must not import from @tradr/shared/lib/* — performance computation primitives live in @tradr/shared/schemas/* or are backend-only.',
+};
+
+const webSharedLibPattern = {
+  group: ['@tradr/shared/lib/*'],
+  message:
+    'apps/web must not import from @tradr/shared/lib/* — import schemas or expose a new api entry in @tradr/shared/src/index.ts instead.',
+};
+
+const driverJsPattern = {
+  group: ['driver.js', 'driver.js/**'],
+  message:
+    'apps/web/src/features/onboarding/lib/tour-engine.ts is the only module permitted to import driver.js — go through that wrapper so no driver.js type crosses the boundary.',
+};
+
 export default tseslint.config(
   {
     // `.astro/` is a generated type-output cache — not source.
@@ -117,20 +135,22 @@ export default tseslint.config(
       'no-restricted-imports': [
         'error',
         {
-          paths: [
-            {
-              name: '@tradr/shared/lib/performance',
-              message:
-                'apps/web must not import from @tradr/shared/lib/* — performance computation primitives live in @tradr/shared/schemas/* or are backend-only.',
-            },
-          ],
-          patterns: [
-            {
-              group: ['@tradr/shared/lib/*'],
-              message:
-                'apps/web must not import from @tradr/shared/lib/* — import schemas or expose a new api entry in @tradr/shared/src/index.ts instead.',
-            },
-          ],
+          paths: [webSharedLibPath],
+          patterns: [webSharedLibPattern, driverJsPattern],
+        },
+      ],
+    },
+  },
+  {
+    // The tour engine is the wrapper the rule above points at, so it is the one
+    // module in apps/web allowed to import driver.js.
+    files: ['apps/web/src/features/onboarding/lib/tour-engine.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [webSharedLibPath],
+          patterns: [webSharedLibPattern],
         },
       ],
     },
@@ -163,6 +183,7 @@ export default tseslint.config(
               message:
                 'drawer code MUST NOT import from @/stores barrels (REQ-8.1). Barrel imports from the stores module are blocked; import the specific store module directly (e.g. @/stores/drawer.store).',
             },
+            driverJsPattern,
           ],
         },
       ],
