@@ -1,19 +1,23 @@
 ---
 title: Getting started
-description: Create your account and log your first trade end to end in about ten minutes.
+description: Create a brokerage account, size a trade, log a position, and read your own figures back — in about ten minutes.
 ---
 
 import HostedOnly from '@/components/HostedOnly.astro';
 import SelfHosted from '@/components/SelfHosted.astro';
+import Screenshot from '@/components/Screenshot.astro';
 
-This is a hand-held first session. By the end you will have created an account,
-set up a brokerage account with a starting balance, logged a trade through its
-full lifecycle, seen it on your dashboard and equity curve, asked the AI advisor
-one question, and reviewed your performance. It takes about ten minutes and
-nothing here can go wrong — every step tells you what you should see.
+This is a hand-held first session. By the end you will have a brokerage account
+(an **account** in Tradr) and one position taken from draft to closed. You will
+also have read your own figures back. It takes about ten minutes, and every step
+tells you what you should see.
+
+Tradr walks you through the same four steps inside the app. Choose **Walk me
+through it** on your first dashboard and the product guides you through them in
+order. This page is that same route, written down.
 
 This guide describes the **hosted app at `app.tradr.cloud`**. If you run your own
-instance, the screens are identical; the few differences are called out in
+instance, the screens are identical. The few differences are called out in
 **Self-hosted** notes.
 
 <SelfHosted>
@@ -26,190 +30,317 @@ instance, the screens are identical; the few differences are called out in
 
 You need:
 
-- An email address and a browser (latest Chrome, Firefox, Safari, or Edge).
-- Nothing else. Tradr works as a plain manual journal — no broker connection, no
-  API keys, no payment required to complete this tutorial.
+- An email address and a browser. Use the latest Chrome, Firefox, Safari, or Edge.
+- Nothing else. Tradr works as a plain manual journal. This tutorial needs no
+  broker connection, no API keys, and no payment.
 
-## Step 1 — Create your account
+## Step 1 — Register
 
-1. Go to **https://app.tradr.cloud** and choose **Sign up**.
-2. Enter your email and a password, then submit.
+1. Open **https://app.tradr.cloud**.
+2. Choose **Register**.
+3. Enter your email and a password, then confirm the password.
+4. Choose **Register** again.
 
-**Expected result:** you land on an empty dashboard. There are no trades yet, so
-most widgets show zeros or an empty state — that is correct.
+**Expected result:** you land on a setup screen headed **Welcome to Tradr**. It is
+not an empty dashboard. Below it sits a **Get set up** checklist of four items.
+
+<Screenshot name="dashboard-first-login" alt="The Tradr dashboard on first login. A Welcome to Tradr card offers Create my first account, Walk me through it, and Add sample data, above a Get set up checklist of four items." />
+
+The welcome card offers three ways forward:
+
+- **Create my first account** — the path this guide follows.
+- **Walk me through it** — the same four steps, guided inside the app.
+- **Add sample data** — a ready-made account to look around in.
 
 <HostedOnly>
-  You may be asked to verify your email. Click the link in the message to
-  confirm; you can still explore before verifying.
+  You may be asked to verify your email. Follow the link in the message to
+  confirm. You can still explore before verifying.
 </HostedOnly>
 
 <SelfHosted>
-  Email verification is only active if the operator configured SMTP. If it is
-  off, your account is usable immediately. If you ever forget your password on an
+  Email verification is active only if the operator configured SMTP. If it is
+  off, your account is usable immediately. If you forget your password on an
   instance without email, the operator can reset it from the server with `tradr
   reset-password <your-email>`.
 </SelfHosted>
 
-## Step 2 — Add a brokerage account with a starting balance
+## Step 2 — Create a brokerage account
 
-Every trade is booked against an **account** — this is how Tradr tracks your
-balance and builds your equity curve. Create one before logging trades.
+Every position, fill and ledger entry is booked against an account. Nothing else
+in Tradr works until one exists.
 
-1. Open **Accounts** from the main navigation.
-2. Choose **New account**.
-3. Fill in:
-   - **Name** — e.g. `Main` or your broker's name.
-   - **Currency** — e.g. `USD`. Pick the currency this account trades in.
-   - **Starting balance** — e.g. `10000`. This is your opening cash; the equity
-     curve begins here.
-4. Save.
+A Tradr account mirrors a real brokerage account: the same currency, the same
+starting balance, the same trades. It is not connected to your broker. Tradr
+never places or executes trades. You record trades you have already made.
 
-**Expected result:** the account appears in your accounts list showing a balance
-of your starting amount (e.g. `$10,000.00`). This opening balance is the
-baseline every future P&L figure is measured against.
+1. Choose **Create my first account**.
+2. Fill in the form described below.
+3. Choose **Create**.
+
+<Screenshot name="new-account-dialog" alt="The New Account dialog, showing its six fields: Name, Currency, Trading-day timezone, Starting balance, Default risk percent, and Brokerage." />
+
+The form has six fields, in this order.
+
+**Name.** Name the account after the brokerage account it mirrors. You pick it by
+this name every time you log a position.
+
+**Currency.** The currency this account trades in. Its balance, fees and P&L are
+all recorded and shown in this currency.
+
+**Trading-day timezone.** This defaults to `America/New_York` because NYSE,
+NASDAQ and NYSE Arca all operate on US Eastern. It defines the trading day for
+this account. That is what decides whether a position can be re-entered the same
+day. It is not your reporting timezone — see [the next
+section](#your-reporting-timezone-is-a-separate-setting).
+
+**Starting balance.** The account's opening cash, and the baseline every later
+figure is measured against. Set it once, here. The balance Tradr shows you is
+this figure plus every ledger entry. Editing it later would move every historical
+balance with it, so **it cannot be changed once the account exists**. Leave it
+empty and the account starts at zero.
+
+**Default risk %.** The share of this account's balance you risk on a single
+trade. It prefills the trade calculator, and you can override it on any one
+calculation without changing the account. If you have no rule of your own yet, 3%
+is a conservative starting point. Leave it empty to set no rule. Unlike the
+starting balance, you can change this whenever you want.
+
+**Brokerage.** Choose a brokerage and Tradr records this account's fees from that
+brokerage's fee schedule. Leaving it on **None** is valid. You then enter fees
+yourself on each fill, and you can attach a brokerage later.
+
+**Expected result:** your dashboard replaces the welcome screen. The first
+checklist item ticks itself.
+
+Open **Accounts** to see what you made. The list shows **Name** and **Currency**,
+and nothing else. Balances are not in this list. They appear in the dashboard's
+**Account Balances** widget.
+
+<Screenshot name="accounts-list" alt="The Accounts page, listing one account under a Name column and a Currency column. A banner above it marks the figures on screen as sample data." />
+
+The figure above carries the sample account rather than one of your own, so the
+sample-data banner sits above it.
 
 Tradr supports **multiple accounts in different currencies** and consolidates
-them into a single view. For this tutorial one account is enough — see
-[Accounts & the multi-currency ledger](/user-guide/accounts/) when you are
-ready to add more.
+them into a single view. One account is enough for this tutorial. See [Accounts &
+the multi-currency ledger](/user-guide/accounts/) when you are ready to add more.
 
-## Step 3 — Log your first trade through its lifecycle
+### Your reporting timezone is a separate setting
 
-A Tradr position moves through three states:
+Separately from the account, Tradr stores one **reporting timezone** for you. It
+is the zone your P&L is bucketed into by day, week and month. It follows you, so
+those figures stay the same wherever you open Tradr.
+
+Tradr stored one from your browser when you registered. Confirm or correct it
+under **Settings → Profile**.
+
+Setting one zone never sets the other. Changing your reporting timezone leaves
+every account's trading-day timezone untouched. Changing an account's leaves your
+reporting timezone untouched.
+
+| | Trading-day timezone | Reporting timezone |
+| --- | --- | --- |
+| Belongs to | One account | You |
+| Set under | The account form | Settings → Profile |
+| Decides | Whether a position can be re-entered the same day | How your P&L is bucketed by day, week and month |
+| Starts as | `America/New_York` | The zone your browser reported at registration |
+
+### Prefer to look around first?
+
+Choose **Add sample data** on the welcome screen. Tradr creates one sample
+account with a fixed set of positions in it. A banner then marks every figure on
+screen as sample data.
+
+Sample data and your own accounts cannot both exist. Choose **Remove sample
+data** in the banner when you are ready to enter your own. No checklist item
+completes on sample data alone.
+
+## Step 3 — Size a trade in the calculator
+
+Open **Calculator**. Nothing here is submitted or saved, and the results
+recompute as you type.
+
+1. Enter the **Entry price**.
+2. Enter the **Stop loss**. The distance from entry to stop is your per-unit risk.
+3. Enter a **Target price (optional)** if you have one.
+4. Under **Risk**, choose **Dollar** or **Percent**. Dollar is the default.
+5. Choose the **Account** you are trading.
+6. Set the amount you are willing to lose.
+
+Under **Percent**, **Risk percent** prefills from that account's **Default risk
+%** when it has one. Under **Dollar**, you type the **Dollar risk** yourself.
+Either way the figure applies to this calculation only. The account keeps its own
+rule.
+
+The account does two more things. It supplies the currency the results are shown
+in. It also caps the position at the buying power the account has.
+
+**Expected result:** a **Position Sizing** card gives you the **Position size**,
+the **Per-unit risk**, and the **Actual dollar risk**. With a target, a **Risk /
+Reward** card adds the **Per-unit reward** and the **Risk/Reward ratio**.
+
+Position size is rounded down to whole units. That is why the actual dollar risk
+lands at or under your budget rather than on it.
+
+See [Use the trade calculator](/user-guide/trade-calculator/) for fee estimates
+and the options mode.
+
+## Step 4 — Log the position
+
+A position in Tradr is one trade and every fill that belongs to it. It moves
+through three states.
 
 | State | Meaning |
 | --- | --- |
-| **Draft** | An idea you are planning but have not entered. No effect on your balance. |
-| **Open** | You are in the trade. It shows in open positions and uses live/marked P&L. |
-| **Closed** | You have exited. Realised P&L is booked to the account. |
+| **Draft** | A plan you have not entered. It posts nothing to your ledger and leaves your balance where it was. |
+| **Open** | You are in the trade. Its cost is held against the account as position value. |
+| **Closed** | You have exited in full. |
 
-You will walk a trade through all three.
+1. Open **Positions**.
+2. Choose **New Position**.
+3. Enter the **Symbol** and choose the **Side**, the **Asset Type**, and the **Account**.
+4. Add **Notes** describing the setup. Why you took the trade is the part you will
+   want back later.
+5. Choose **Create**.
 
-### 3a. Create a draft
+The form asks for nothing else. There is no quantity and no price here — both
+come from fills.
 
-1. Open **Positions** and choose **New position**.
-2. Select the **account** you created in Step 2.
-3. Enter the trade idea:
-   - **Symbol** — e.g. `AAPL`.
-   - **Side** — `Long`.
-   - **Quantity** — e.g. `10` shares.
-   - **Planned entry price** — e.g. `200`.
-   - Optionally a **target**, a **stop**, and a **note** describing the setup.
-4. Save it as a **Draft**.
+**Expected result:** the position is created as a **draft**. Your account balance
+is unchanged, because a draft is a plan rather than a trade.
 
-**Expected result:** the position appears in your Positions list tagged
-**Draft**. Your account balance is unchanged — a draft is just a plan.
+### Record the entry fill
 
-> **Tip:** the [Trade calculator](/user-guide/trade-calculator/) turns an
-> entry, target, and stop into a suggested position size, risk/reward ratio, and
-> dollar risk. Use it to size the trade before you commit.
+1. Choose **Add Fill**.
+2. Leave **Type** on **Entry**.
+3. Enter the **Price**, the **Quantity**, any **Fees**, and the **Date & Time**.
+4. Choose **Add**.
 
-### 3b. Open the position
+### Open the position
 
-When you actually enter the trade:
+Choose **Open Position**.
 
-1. Open the draft and choose **Open** (or **Add fill**).
-2. Confirm the **entry price**, **quantity**, **fill date**, and any **fees**.
-3. Submit.
+The button stays disabled until an entry fill exists, and its tooltip then reads
+*Add an entry fill first*.
 
-**Expected result:** the position is now tagged **Open** and shows in your open
-positions. If you added fees, they are recorded against the trade.
+**Expected result:** the position is tagged **open**. Its cost is now held
+against the account as position value.
 
-### 3c. Close the position
+## Step 5 — Close it and see the stats
 
-When you exit:
+1. Choose **Add Fill**.
+2. Set **Type** to **Exit**.
+3. Enter the exit **Price**, the **Quantity**, any **Fees**, and the **Date & Time**.
+4. Choose **Add**.
 
-1. Open the position and choose **Close** (or **Add closing fill**).
-2. Enter the **exit price** (e.g. `210`), **quantity**, **date**, and any exit
-   **fees**.
-3. Submit.
+Partial exits are ordinary. Add one fill per exit, and Tradr averages them for
+you.
 
-**Expected result:** the position is tagged **Closed** and shows a **realised
-P&L** (e.g. a $10 move on 10 shares ≈ `+$100.00`, less fees). Your **account
-balance updates** to reflect the gain or loss.
+**Realized P&L does not wait for the close.** Each exit fill posts its share to
+your account balance as it lands, which is the moment your balance moves.
 
-Positions also support **partial closes**, **scale-ins**, and **multiple
-fills**. See [Log and manage positions](/user-guide/positions/) for the full
-lifecycle, including deleting a draft you decide not to take.
+When your exits balance the entered quantity, Tradr closes the position itself.
+**Close Position** stays disabled while any quantity is still open, with the
+tooltip *Exit the full quantity first*. The button covers the cases the automatic
+path does not.
 
-## Step 4 — See it on the dashboard and equity curve
+**Expected result:** the position is tagged **closed** and carries its realized
+figures.
 
-1. Go back to the **Dashboard**.
+<Screenshot name="position-detail" alt="A closed AAPL position, showing average entry and exit prices, gross and net P&L, return percent, notes, and a Fills table with one entry fill and one exit fill." />
 
-**Expected result:** the widgets are no longer empty. You should see:
+The figure above is the sample account's closed AAPL position. It entered 50
+shares at 182.40 and exited at 191.20, paying 1.00 in fees each side. Gross P&L
+is +$440.00, net P&L is +$438.00, and the return is +4.8%.
 
-- **Stats** reflecting one closed trade (e.g. trade count, win rate, net P&L).
-- The **equity curve** now showing a line that starts at your $10,000 opening
-  balance and steps to your post-trade balance.
-- Your **account balance** widget showing the updated figure.
+Positions also support **scale-ins**, **partial exits**, and **reopening**. See
+[Log and manage positions](/user-guide/positions/) for the full lifecycle,
+including deleting a draft you decide not to take.
 
-The dashboard is a **drag-and-drop widget grid** — add, remove, and rearrange
-panels (stats, open positions, performance charts, account balances, position
-sizing). Your layout is saved to your account. See [Customise the
-dashboard](/user-guide/dashboard/).
+## Step 6 — Read your dashboard
 
-## Step 5 — Ask the AI advisor one question
+Go back to the **Dashboard**. The widgets now carry your own figures. Six ship by
+default: **Stats Summary**, **Performance Chart**, **Equity Curve**, **Account
+Balances**, **Position Sizing**, and **Open Positions**.
 
-The AI advisor is a conversational assistant that can analyse trade ideas and,
-if you opt in, reason over your own trade history.
+**Expected result:** all four checklist items are ticked. The checklist then
+retires and stops rendering.
+
+The dashboard is a **drag-and-drop widget grid**. Use **Add Widget** to add a
+panel and **Reset layout** to start over. Your layout is saved to your account.
+See [Customise the dashboard](/user-guide/dashboard/).
+
+## Step 7 — Ask the AI advisor
+
+The advisor is a conversational assistant. It can analyse trade ideas and, if you
+opt in, reason over your own trade history.
+
+The walkthrough inside the app stops at Step 6. The advisor is an extra, and this
+step is optional.
 
 <HostedOnly>
   The advisor needs either **wallet credits** (buy a credit pack and pay per use
-  against your balance) **or** your **own API key** (BYOK — paste an
-  Anthropic/OpenAI key in settings and you are billed by the provider directly).
-  Pick whichever you prefer in **Settings → Advisor**. Without one of the two, the
-  advisor is simply unavailable — nothing breaks.
+  against your balance) **or** your own API key. Bring your own key (**BYOK**)
+  means you paste a provider key in settings and the provider bills you directly.
+  Pick whichever you prefer in **Settings → Advisor**. Without one of the two,
+  the advisor is unavailable — nothing breaks.
 </HostedOnly>
 
 <SelfHosted>
-  There are no wallet credits. You (or your operator) supply an LLM API key,
-  either as a platform key in the server's `.env` or as your own BYOK key in
-  settings. See [How the AI advisor
+  There are no wallet credits. You or your operator supply an LLM API key. Use
+  either a platform key in the server's `.env` or your own BYOK key in settings.
+  See [How the AI advisor
   works](/user-guide/explanation/how-the-advisor-works/).
 </SelfHosted>
 
 Once a key or credits are in place:
 
-1. Open the **Advisor**.
-2. (Optional) turn on **trade-data access** so the advisor can see your positions
-   and accounts for personalised answers.
-3. Ask something concrete, e.g. _"Review my AAPL trade — was the risk/reward
-   reasonable?"_
-4. Send.
+1. Open **Settings → Advisor** and add a provider key.
+2. Turn on **trade-data access** in the same place if you want personalised
+   answers. This is optional, and it is off until you turn it on.
+3. Open the **Advisor**.
+4. Ask something concrete, such as _"Review my AAPL position — was the
+   risk/reward reasonable?"_
 
-**Expected result:** the advisor streams back a response token by token. If you
-granted data access, it can reference the trade you just logged. You can also
-**upload a chart screenshot** for the advisor to read (requires a vision-capable
-model).
+**Expected result:** the advisor streams back a response token by token. With
+trade-data access on, it can reference the position you logged. You can also
+upload a chart screenshot for the advisor to read, which needs a vision-capable
+model.
 
-> Prefer a provider without tool-use? You still get a **conversation-only** mode
-> — you just lose live market-data fetching. This is surfaced when you pick the
-> model.
+> Turning trade-data access on lets the advisor send your trade data to a
+> third-party provider. Turning it off stops new reads and removes the stored
+> structured trade data.
 
-## Step 6 — Review your performance
+## Step 8 — Review your performance
 
 1. Open **Performance**.
-2. Choose a timeframe — **daily, weekly, monthly, yearly, YTD,** or **all-time**.
+2. Choose a timeframe: **Daily**, **Weekly**, **Monthly**, **Yearly**, **YTD**,
+   or **All-Time**.
 
-**Expected result:** a P&L breakdown for the chosen period and an equity curve
-covering it. With one closed trade you will see a single data point; the picture
-fills in as you log more.
+**Expected result:** an equity curve for the window, a **Statistics** panel, and
+a breakdown table by period. With one closed position you get a single row. The
+picture fills in as you log more.
+
+<Screenshot name="performance" alt="The Performance page, showing an equity curve, a Statistics panel with total positions, net P&L and win rate, and a monthly breakdown table." />
+
+The figure above is the sample account across six months. It shows 10 closed
+positions, a total net P&L of +$1,728.00, and a win rate of 70.0%.
 
 ## You're done
 
-You have completed a full loop: **account → draft → open → closed → dashboard →
-advisor → performance.** From here, keep logging real trades — the value
-compounds as your history grows.
+You have completed a full loop: **account → calculator → draft → open → closed →
+dashboard**. From here, keep logging real positions. The value compounds as your
+history grows.
 
 ### Next steps
 
-- [Log and manage positions](/user-guide/positions/) — partial closes,
-  scale-ins, tags, and editing.
-- [Use the trade calculator](/user-guide/trade-calculator/) — size and
-  risk-check before you enter.
+- [Log and manage positions](/user-guide/positions/) — partial exits, scale-ins,
+  reopening, and editing.
+- [Use the trade calculator](/user-guide/trade-calculator/) — size and risk-check
+  before you enter.
 - [Import trades from CSV](/user-guide/import-history/) — bring your history in
   from another journal or your broker.
 - [Accounts & the multi-currency ledger](/user-guide/accounts/) — add more
   brokers and currencies.
-- [Metrics glossary](/user-guide/reference/metrics-glossary/) — exactly how
-  each number is calculated.
+- [Metrics glossary](/user-guide/reference/metrics-glossary/) — exactly how each
+  number is calculated.

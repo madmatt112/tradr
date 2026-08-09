@@ -88,3 +88,18 @@ summary {
   --sl-color-asides-border: var(--info);
   background-color: color-mix(in oklch, var(--info) 12%, var(--bg));
 }
+
+/* --- Theme-paired screenshots (components/Screenshot.astro). Starlight's inline
+       ThemeProvider stamps `data-theme` on <html> before first paint, and it is
+       only ever `light` or `dark`. The dark image is matched with `:not()` so the
+       light one is what shows in the moment before that script has run, rather
+       than both. --- */
+:root:not([data-theme='dark']) .screenshot--dark,
+:root[data-theme='dark'] .screenshot--light {
+  display: none;
+}
+
+.screenshot {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}

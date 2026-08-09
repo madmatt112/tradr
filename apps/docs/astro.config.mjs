@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig } from 'astro/config';
+import { defineConfig, passthroughImageService } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import starlightPageContextAction from 'starlight-page-context-action';
@@ -91,6 +91,12 @@ const APP_VERSION = JSON.parse(
 export default defineConfig({
   site: 'https://docs.tradr.cloud',
   output: 'static',
+  // Astro's default image service re-encodes every imported image with sharp, a
+  // native dependency this site does not otherwise need and does not have. The
+  // only images here are the screenshots the e2e capture spec writes, already
+  // sized to one fixed viewport, so there is nothing for a resize step to
+  // decide. Pass them through as captured and skip the dependency.
+  image: { service: passthroughImageService() },
   vite: {
     define: {
       __TRADR_VERSION__: JSON.stringify(APP_VERSION),
