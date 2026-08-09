@@ -16,6 +16,17 @@ name: Docs screenshots
 # against the ref it was dispatched from. Nothing here writes to a branch that
 # already exists.
 #
+# KNOWN LIMITATION, and please read it before "fixing" the token. A pull request
+# opened with the built-in GITHUB_TOKEN does not start `pull_request` workflows.
+# That is GitHub's loop guard, not a bug here and not something a permission
+# widens away: ci.yml and dco.yml will not run on the PR this opens, and `main`
+# needs them green. The remedy belongs to whoever picks the PR up — closing it
+# and reopening it by hand fires the triggers as them — so the PR body says so
+# in as many words rather than leaving a stuck PR unexplained. A GitHub App
+# token or a PAT would also start the checks, but that is a long-lived
+# credential this repo keeps for nothing else today; it is a call to take
+# deliberately, not a line to slip in here.
+#
 # Actions are pinned to commit SHAs with the release in a trailing comment,
 # matching the other workflows here: a tag is mutable, a SHA is not.
 
@@ -46,7 +57,11 @@ env:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The capture spec allows itself 600s and CI retries once, so the test alone
+    # can legitimately spend 20 minutes before the install, the chromium
+    # download and the one-time web build are counted. 30 left a slow-but-fine
+    # run no margin; this is a runaway bound, not a budget.
+    timeout-minutes: 45
 
     permissions:
       contents: write # push the branch carrying the regenerated images
@@ -76,11 +91,14 @@ jobs:
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      # No dependency cache here, unlike the CI jobs. This job holds a token that
-      # can push a branch and open a pull request, and a shared pnpm store is
-      # writable by every ordinary pull-request run — restoring one into a
-      # privileged job is the escalation path worth declining. A cold install
-      # costs well under a minute against a capture measured in minutes.
+      # No dependency cache here, unlike the CI jobs — but not because a pull
+      # request could poison one. Actions scopes a cache to the ref that wrote
+      # it, so a store written by an ordinary PR run is not restorable into a
+      # dispatch run on a branch; that path is already closed. The reason is
+      # narrower and cheaper than it: this job holds a token that can push a
+      # branch and open a pull request, keeping it free of restored artifacts
+      # altogether is one less thing to reason about, and a cold install costs
+      # well under a minute against a capture measured in minutes.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -152,7 +170,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # An empty expected value means "only if this ref does not exist yet".
+          # BRANCH carries the run id so it never should — but asserting it is
+          # what makes the cleanup below provably ours: this step cannot adopt a
+          # branch that was already there, so it cannot delete one either.
+          git push --force-with-lease="refs/heads/${BRANCH}:" "$remote" \
             "HEAD:refs/heads/${BRANCH}"
           {
             echo "Regenerated against a booted stack and the sample-data fixture, in both"
@@ -160,11 +183,40 @@ jobs:
             echo
             echo "Look at the images before merging: the capture proves every surface"
             echo "painted, not that it reads well."
+            echo
+            echo '### Close and reopen this pull request before reviewing it'
+            echo
+            echo 'A workflow opened this using GITHUB_TOKEN, and GitHub deliberately does'
+            echo 'not start pull_request workflows for pull requests opened that way. So CI'
+            echo 'and the DCO check have not run here, and will not start on their own —'
+            echo 'while branch protection on main requires both of them green.'
+            echo
+            echo 'Closing this pull request and immediately reopening it re-fires the'
+            echo 'triggers under your account, after which the checks run normally. Nothing'
+            echo 'is wrong with the branch; it just needs a human to start the checks.'
           } > "${RUNNER_TEMP}/pr-body.txt"
-          url=$(gh pr create \
+          if url=$(gh pr create \
             --base "$BASE" \
             --head "$BRANCH" \
             --title 'docs: refresh the getting-started screenshots' \
-            --body-file "${RUNNER_TEMP}/pr-body.txt")
-          echo "opened $url"
-          echo "proposed in $url" >> "$GITHUB_STEP_SUMMARY"
+            --body-file "${RUNNER_TEMP}/pr-body.txt"); then
+            echo "opened $url"
+            echo "proposed in $url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Must be the first command here: it is gh's exit status, and the
+            # step has to end on it.
+            status=$?
+            # The most likely cause is the repository setting "Allow GitHub
+            # Actions to create and approve pull requests" being off, which 403s.
+            # Whatever the cause, the branch above is now pushed with nothing
+            # referencing it, and every re-dispatch would leave another. Delete
+            # exactly the ref this run created — same variable as the push, which
+            # the lease proved was new. gh's own error is already on stderr; a
+            # failed delete is reported next to it rather than replacing it, and
+            # the original status is still what leaves the step.
+            git push "$remote" --delete "refs/heads/${BRANCH}" \
+              || echo "could not delete ${BRANCH} — remove it by hand" >&2
+            echo "could not open the pull request (gh exit ${status}); pushed branch removed" \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
