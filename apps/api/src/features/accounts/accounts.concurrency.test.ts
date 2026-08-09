@@ -127,11 +127,11 @@ async function accountKinds(userId: string): Promise<string[]> {
 }
 
 describe('sample data vs real account under real concurrency (committed data)', () => {
-  // The ordering the UI makes easy: R9.1 puts "create an account" and "show me
-  // sample data" side by side, and the seed's own window is a quarter of a
-  // second wide. Creation starts inside it, so its demo-present read runs while
-  // the sample account exists but is uncommitted — the exact interleaving that
-  // used to let both commit.
+  // The ordering the UI makes easy: the zero-state offers "create an account"
+  // and "show me sample data" side by side, and the seed's own window is a
+  // quarter of a second wide. Creation starts inside it, so its demo-present
+  // read runs while the sample account exists but is uncommitted — the exact
+  // interleaving that used to let both commit.
   it('seed first, creation into its window: one wins, never both', async () => {
     const userId = await createCommittedUser();
     try {

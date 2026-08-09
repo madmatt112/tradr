@@ -76,8 +76,8 @@ export function CalculatorResults({
   const hasAdjustedRR = result !== null && result.adjustedRiskRewardRatio !== undefined;
 
   return (
-    // `data-tour` is the walkthrough's anchor for the output panel
-    // (user-onboarding R6.7) and carries no behaviour.
+    // `data-tour` is the walkthrough's anchor for the output panel and carries
+    // no behaviour.
     <div
       aria-live="polite"
       aria-atomic="true"

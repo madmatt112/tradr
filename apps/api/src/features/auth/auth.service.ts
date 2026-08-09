@@ -51,10 +51,10 @@ export async function registerUser(email: string, password: string, timezone?: s
     // zero-persistence branch, D10): configured ⇒ false (verification email
     // follows below); unconfigured ⇒ true (nothing is ever demanded).
     //
-    // The reporting zone (user-onboarding R2.2/R2.3) is seeded from the
-    // client's browser-detected value, or from the defined default when the
-    // client sends none — never left NULL to be guessed at later. A NULL
-    // column is reserved for rows that predate the column (R2.5).
+    // The reporting zone is seeded from the client's browser-detected value, or
+    // from the defined default when the client sends none — never left NULL to
+    // be guessed at later. A NULL column is reserved for rows that predate the
+    // column.
     user = await insertUser(db, {
       email,
       passwordHash,
@@ -151,21 +151,20 @@ export async function logoutUser(tokenHash: string) {
 
 /**
  * The user's REPORTING timezone — the zone P&L is bucketed into by day, week
- * and month (user-onboarding R2). Distinct from `accounts.timezone`, the
- * account's trading-day boundary; neither is derived from the other (R2.7).
+ * and month. Distinct from `accounts.timezone`, the account's trading-day
+ * boundary; neither is derived from the other.
  *
  * Always resolves to a usable zone, never null. `users.timezone` is nullable
  * with no DB default, so NULL means the row predates the column; registration
- * has seeded a value since (R2.3), so the fallback here is the pre-migration
- * path (R2.5) plus the missing-row case of a deleted user racing a request. It
- * is the SAME constant registration falls back to, so the two paths cannot
- * drift apart.
+ * has seeded a value ever since, so the fallback here is the pre-migration path
+ * plus the missing-row case of a deleted user racing a request. It is the SAME
+ * constant registration falls back to, so the two paths cannot drift apart.
  *
  * `stored` reports WHICH of those two happened, and exists because the resolved
  * zone alone cannot tell a client "never set" from "deliberately UTC" — and the
  * client needs that distinction to seed a pre-migration row once with the zone
- * the user was already bucketing by, without ever overwriting a chosen one
- * (R2.5). The read itself stays side-effect-free: the server does not backfill.
+ * the user was already bucketing by, without ever overwriting a chosen one. The
+ * read itself stays side-effect-free: the server does not backfill.
  */
 export async function getReportingTimezone(
   userId: string,
@@ -182,9 +181,10 @@ export async function setReportingTimezone(userId: string, timezone: string): Pr
 }
 
 /**
- * The user's onboarding PREFERENCE (user-onboarding R4.6) — walkthrough status,
- * the first-calculator-use timestamp and the coach marks already seen. Never
- * checklist item completion: that is derived from the user's real data (R4.2).
+ * The user's onboarding PREFERENCE — walkthrough status, the
+ * first-calculator-use timestamp and the coach marks already seen. Never
+ * checklist item completion: that is derived from the user's real data, so it
+ * cannot disagree with reality or need repair.
  *
  * The raw column is `{}` for anyone who has never expressed a preference,
  * including every row that predates it, so the resolution is

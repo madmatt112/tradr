@@ -1,13 +1,14 @@
 import { z } from 'zod';
 
-// Onboarding PREFERENCE state (user-onboarding R4.5, R4.6, R4.7, R7.2), stored
-// as the `users.onboarding` jsonb column.
+// Onboarding PREFERENCE state — whether the user has opted out of, dismissed
+// or finished the walkthrough, and which one-shot coach marks they have already
+// dismissed — stored as the `users.onboarding` jsonb column.
 //
 // PREFERENCE ONLY. Per-item checklist completion is NEVER stored here — it is
 // derived at read time from the user's real data (account count, position
 // count, closed-position count) so it cannot disagree with reality, drift, or
-// need repair (R4.2). If you are tempted to add `accountCreated` or
-// `positionLogged` to this object, that is the bug this comment exists to stop.
+// need repair. If you are tempted to add `accountCreated` or `positionLogged`
+// to this object, that is the bug this comment exists to stop.
 //
 // `calculatorFirstUsedAt` is the single named exception, and it is not a
 // completion flag: the calculator writes nothing else to the database, so
@@ -69,14 +70,16 @@ export type OnboardingState = z.infer<typeof OnboardingStateSchema>;
 // valid WidgetPlacement[], so its `$type` can be the resolved type directly.)
 export type StoredOnboardingState = z.input<typeof OnboardingStateSchema>;
 
-// A coach-mark key names a UI surface (R7.1), so it is short and slug-shaped.
-// Bounded because the stored set only ever grows: nothing removes a key, so an
+// A coach-mark key names a UI surface, so it is short and slug-shaped. Bounded
+// because the stored set only ever grows: nothing removes a key, so an
 // unbounded key would let a client grow one row's jsonb without limit.
 export const COACH_MARK_KEY_MAX_LENGTH = 64;
 
-// And the set itself is bounded for the same reason — R7.1 names five surfaces,
-// so this is an order of magnitude of headroom. Enforced by the server-side
-// merge, not here: the client never sends the whole array (see below).
+// And the set itself is bounded for the same reason — five surfaces are
+// introduced this way (partial closes, scale-ins, CSV import, the options
+// tools, dashboard widget management), so this is an order of magnitude of
+// headroom. Enforced by the server-side merge, not here: the client never sends
+// the whole array (see below).
 export const MAX_COACH_MARKS_SEEN = 64;
 
 // The PATCH body. STRICT, unlike OnboardingStateSchema above: this one's author

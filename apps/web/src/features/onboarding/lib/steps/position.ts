@@ -1,5 +1,5 @@
 /**
- * Checklist item 3 — log a position (R6.8).
+ * Checklist item 3 — log a position.
  *
  * Starts on `/positions` and ends on `/positions/$positionId`, the two routes
  * `routes/_auth/positions/` declares.

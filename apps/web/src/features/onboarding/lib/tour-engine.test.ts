@@ -81,11 +81,13 @@ describe('startTour', () => {
   it('shows progress and leaves the highlighted control interactive', () => {
     startTour(TWO_STEPS);
 
-    // R5.5 — `disableActiveInteraction: false`. driver.js blocks the spotlit
-    // control by tagging it `driver-no-interaction` (a `pointer-events: none`
-    // rule); its absence on the highlighted element is the observable proof the
-    // control is still clickable. Asserting a jsdom `.click()` would not be —
-    // jsdom dispatches regardless of CSS.
+    // An action step asks the user to press the thing it highlights, so the
+    // control must stay usable — hence `disableActiveInteraction: false`.
+    // driver.js blocks the spotlit control by tagging it
+    // `driver-no-interaction` (a `pointer-events: none` rule); its absence on
+    // the highlighted element is the observable proof the control is still
+    // clickable. Asserting a jsdom `.click()` would not be — jsdom dispatches
+    // regardless of CSS.
     const highlighted = document.querySelector('#one');
     expect(highlighted?.classList.contains('driver-active-element')).toBe(true);
     expect(highlighted?.classList.contains('driver-no-interaction')).toBe(false);
@@ -112,7 +114,7 @@ describe('startTour', () => {
   });
 });
 
-describe('action steps (R5.5)', () => {
+describe('action steps', () => {
   const steps: TourStep[] = [
     { target: '#one', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
     { target: '#two', title: 'Done', description: 'Here it is.' },
@@ -236,7 +238,7 @@ describe('onBeforeAdvance', () => {
 });
 
 /**
- * The keyboard is the engine's own, not driver.js's (R5.9).
+ * The keyboard is the engine's own, not driver.js's.
  *
  * driver.js drops an arrow press while a step transition is running, so a
  * keyboard user lost roughly every other press while a mouse user lost none —
@@ -246,7 +248,7 @@ describe('onBeforeAdvance', () => {
  * action gate applies to the key as well as the button, and that the binding
  * goes away with the tour.
  */
-describe('keyboard control (R5.9)', () => {
+describe('keyboard control', () => {
   function press(key: string): void {
     window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
   }
@@ -277,7 +279,7 @@ describe('keyboard control (R5.9)', () => {
     expect(isActive()).toBe(true);
   });
 
-  it('leaves an action step where it is, exactly as "Next" does (R5.5)', () => {
+  it('leaves an action step where it is, exactly as "Next" does', () => {
     startTour([
       { target: '#one', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
       { target: '#two', title: 'Done', description: 'Here it is.' },
@@ -301,7 +303,7 @@ describe('keyboard control (R5.9)', () => {
   });
 });
 
-describe('exiting (R5.3)', () => {
+describe('exiting', () => {
   it('reports a dismissal from the close button', () => {
     const onExit = vi.fn();
     startTour(TWO_STEPS, { onExit });
@@ -334,7 +336,7 @@ describe('exiting (R5.3)', () => {
   });
 });
 
-describe('missing targets (R5.4)', () => {
+describe('missing targets', () => {
   it('waits for a target that appears late, then anchors to it', async () => {
     const onStepChange = vi.fn();
     const steps: TourStep[] = [
@@ -391,7 +393,7 @@ describe('missing targets (R5.4)', () => {
   });
 });
 
-describe('reduced motion (R5.9)', () => {
+describe('reduced motion', () => {
   it('disables animation when the user prefers reduced motion', () => {
     stubReducedMotion(true);
     startTour(TWO_STEPS);

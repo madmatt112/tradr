@@ -184,7 +184,7 @@ async function pressToTitle(page: Page, key: string, expected: string): Promise<
   await expect(popoverTitle(page)).toHaveText(expected);
 }
 
-/** Escape out of the tour — also one press, for the same reason (R5.3). */
+/** Escape out of the tour — also one press, for the same reason. */
 async function escapeTour(page: Page): Promise<void> {
   await page.keyboard.press('Escape');
   await expect(popover(page)).toHaveCount(0);
@@ -601,11 +601,11 @@ test.describe('user onboarding', () => {
     //
     // THE ACCOUNT SET IS AS FAR AS THIS CAN GO, and the reason is a property of
     // the product rather than of the test: every way into a walkthrough lives on
-    // the zero-state, the zero-state renders only while the user has no accounts
-    // (R3.4), and having no accounts is exactly what leaves item 1 outstanding.
-    // So the first outstanding item is ALWAYS item 1 wherever the entry point
-    // exists, and resuming onto a later set — the calculator set, after an
-    // account is created — is unreachable from the UI as it stands.
+    // the zero-state, the zero-state renders only while the user has no
+    // accounts, and having no accounts is exactly what leaves item 1
+    // outstanding. So the first outstanding item is ALWAYS item 1 wherever the
+    // entry point exists, and resuming onto a later set — the calculator set,
+    // after an account is created — is unreachable from the UI as it stands.
     await startWalkthrough(page);
     await expect(popoverProgress(page)).toHaveText(`1 of ${ACCOUNT_STEP_TITLES.length}`);
 
@@ -693,13 +693,14 @@ test.describe('user onboarding', () => {
     expect(accounts).toHaveLength(0);
   });
 
-  // R7.3, and the half of it no unit test can hold. `CoachMark.test.tsx` asserts
-  // non-blocking in jsdom, where nothing has a position or a size — so its click
-  // reached the surface whether or not an opaque popover was sitting on top of
-  // it, and the assertion passed while the import page shipped with its mark
-  // covering the account picker. Playwright's actionability check is the thing
-  // that can tell: it hit-tests the point it is about to click and refuses to
-  // dispatch when something else would receive the event.
+  // A COACH MARK MUST NOT BLOCK THE SURFACE IT DESCRIBES, and this is the half
+  // of that no unit test can hold. `CoachMark.test.tsx` asserts non-blocking in
+  // jsdom, where nothing has a position or a size — so its click reached the
+  // surface whether or not an opaque popover was sitting on top of it, and the
+  // assertion passed while the import page shipped with its mark covering the
+  // account picker. Playwright's actionability check is the thing that can
+  // tell: it hit-tests the point it is about to click and refuses to dispatch
+  // when something else would receive the event.
   //
   // The import surface is the case that broke, so it is the case pinned here:
   // the mark opens below the page heading, and step 1's combobox is directly
@@ -710,7 +711,7 @@ test.describe('user onboarding', () => {
   }) => {
     const email = await registerUser(request, 'coachmark');
     // The picker needs something to pick, and the mark needs the surface to be
-    // usable — it is gated on the plan having imports left (R7.5).
+    // usable — it is gated on the plan having imports left.
     const created = await request.post('/api/accounts', {
       data: { name: 'Coach Mark Acct', currency: 'USD' },
       headers: { 'X-Forwarded-For': uniqueIp() },

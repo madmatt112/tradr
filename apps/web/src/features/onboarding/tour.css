@@ -1,4 +1,4 @@
-/* Guided-walkthrough surface (R5.9, R11.2, R11.3).
+/* Guided-walkthrough surface.
    ---------------------------------------------------------------------------
    driver.js ships an unthemed stylesheet: a flat white popover with #2d2d2d
    text, a #0006 shadow, a #fff arrow and a hardcoded black overlay wash. All
@@ -10,8 +10,8 @@
    else — never index.css. index.css is in the initial payload, so importing
    it there would drag driver.js's CSS into the dashboard route's first paint
    and burn budget on the users who are not being guided, which is every
-   returning user (R5.7 / R11.3). Importing it from the engine module means
-   Vite emits it as an async CSS asset fetched alongside the engine chunk.
+   returning user. Importing it from the engine module means Vite emits it as
+   an async CSS asset fetched alongside the engine chunk.
 
    The vendor stylesheet is pulled in here rather than by the engine so the
    cascade order is a property of this file: vendor first, overrides second.
@@ -42,14 +42,15 @@
    `@source not`, those two tokens go missing and the popover silently falls
    back to driver.js's px type. Nothing else here is at risk.
 
-   NO EXTERNAL ORIGIN (R11.2). driver.js is MIT with zero dependencies; its
-   stylesheet contains no url() and its runtime fetches nothing. Every value
-   below is a token reference or a plain length, so this file adds no
-   cross-origin asset either.
+   NO EXTERNAL ORIGIN. Nothing the walkthrough needs may be loaded from a
+   third-party host — a self-hosted deployment has to work without one.
+   driver.js is MIT with zero dependencies; its stylesheet contains no url()
+   and its runtime fetches nothing. Every value below is a token reference or a
+   plain length, so this file adds no cross-origin asset either.
 
-   CONTRAST (R5.9), measured per theme with the same OKLCH gamut-mapping and
-   WCAG ratio math scripts/check-contrast.mjs uses — its exports are importable,
-   so these are the numbers CI would compute, not eyeballed ones. Format:
+   CONTRAST, measured per theme with the same OKLCH gamut-mapping and WCAG
+   ratio math scripts/check-contrast.mjs uses — its exports are importable, so
+   these are the numbers CI would compute, not eyeballed ones. Format:
    light / dark.
 
      text, ≥4.5    popover-foreground on popover            18.81 / 14.84
@@ -164,7 +165,7 @@ body.driver-active:has([data-slot='dialog-content'][data-state='open'])
    The stage cut-out is the only thing driver.js gives the highlighted control,
    which is a brightness channel alone. Add the shape channel with the
    dedicated focus-indicator role — NOT the amber brand accent, which stays
-   reserved for the primary action (design-system → Color). --color-focus
+   reserved across the app for the primary action. --color-focus
    clears the ≥3:1 non-text floor against background, card and popover in both
    themes, asserted by scripts/check-contrast.mjs.
 
@@ -229,8 +230,7 @@ body.driver-active:has([data-slot='dialog-content'][data-state='open'])
 
 /* --- Popover controls ------------------------------------------------------
    ONE neutral treatment for every footer button. Amber is the primary action
-   and the walkthrough does not get to spend it (design-system → Color;
-   design.md: "Amber remains reserved for the primary action"), and no
+   everywhere in the app, and the walkthrough does not get to spend it, and no
    substitute primacy channel is invented in its place — "← Previous" and
    "Next →" are distinguished by their labels and their order, which is what
    driver.js already lays out.
@@ -328,7 +328,7 @@ body.driver-active:has([data-slot='dialog-content'][data-state='open'])
   border-bottom-color: var(--color-popover);
 }
 
-/* --- Reduced motion (R5.9) -------------------------------------------------
+/* --- Reduced motion --------------------------------------------------------
    The engine also passes driver.js `animate: false` under this media query, so
    the fade never gets scheduled in the first place. This block is the belt to
    that braces: it holds even if the engine is constructed before the query is

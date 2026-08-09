@@ -232,7 +232,7 @@ describe('AccountList — L1 cap-edge banner (REQ-6.4/11.6)', () => {
   });
 });
 
-describe('AccountList — creating a real account while sample data is present (R9.6)', () => {
+describe('AccountList — creating a real account while sample data is present', () => {
   it('opens the form straight away when there is no sample data', () => {
     render(<AccountList />);
 

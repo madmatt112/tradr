@@ -60,9 +60,9 @@ export function PositionList() {
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Positions</h1>
         {hasAccounts ? (
-          // `data-tour` is the walkthrough's anchor (user-onboarding R6.8).
-          // Only on the enabled branch: a tour that reached this step has an
-          // account, and highlighting a disabled button would be a dead end.
+          // `data-tour` is the walkthrough's anchor for the log-a-position
+          // step. Only on the enabled branch: a tour that reached this step has
+          // an account, and highlighting a disabled button would be a dead end.
           <Button
             data-tour="position-new"
             className="cursor-pointer"

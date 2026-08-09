@@ -62,7 +62,7 @@ export function QuickStatsTab() {
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
   const now = useNow(60_000);
-  // The user's STORED reporting timezone (user-onboarding R2.4), `undefined`
+  // The user's STORED reporting timezone, not the browser's — `undefined`
   // until that query settles. `derivePresetRange` resolves calendar boundaries
   // through `Intl`, so it cannot run before the zone is known.
   const timezone = useUserTimezone();

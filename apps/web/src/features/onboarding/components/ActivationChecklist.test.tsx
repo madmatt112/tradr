@@ -64,7 +64,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('ActivationChecklist — the four items (R4.1)', () => {
+describe('ActivationChecklist — the four items, in their fixed order', () => {
   it('renders exactly four items, in the derivation order', () => {
     useHook({ checklist: checklistOf(), preference: preference('pending') });
     render(<ActivationChecklist />);
@@ -86,8 +86,9 @@ describe('ActivationChecklist — the four items (R4.1)', () => {
 
   it('reflects per-item completion derived upstream, not recomputed here', () => {
     // Deliberately out of order: an account-less user who imported closed
-    // positions by CSV is a legitimate state (R4.3), so the component must
-    // render whatever the derivation says rather than assume a sequence.
+    // positions by CSV is a legitimate state — the items do not gate on each
+    // other — so the component must render whatever the derivation says rather
+    // than assume a sequence.
     useHook({
       checklist: checklistOf({ positionsEverCreatedCount: 3, closedPositionCount: 3 }),
       preference: preference('active'),
@@ -100,7 +101,7 @@ describe('ActivationChecklist — the four items (R4.1)', () => {
     expect(done).toEqual([false, false, true, true]);
   });
 
-  it('stays visible with item 1 incomplete when only demo data is present (R4.8)', () => {
+  it('stays visible with item 1 incomplete when only demo data is present', () => {
     // Demo seeding gives positions but no account the user created, so the
     // hook's account count is still 0 and item 1 is still open.
     useHook({
@@ -196,7 +197,7 @@ describe('ActivationChecklist — undefined vs null are different answers', () =
   });
 });
 
-describe('ActivationChecklist — dismissal round-trips and is recoverable (R4.5)', () => {
+describe('ActivationChecklist — dismissal round-trips and is recoverable', () => {
   it('calls dismiss from the dismiss control', async () => {
     const hook = useHook({ checklist: checklistOf(), preference: preference('pending') });
     render(<ActivationChecklist />);
@@ -244,7 +245,7 @@ describe('ActivationChecklist — dismissal round-trips and is recoverable (R4.5
   });
 });
 
-describe('ActivationChecklist — retirement (R4.7)', () => {
+describe('ActivationChecklist — retirement', () => {
   it('stops rendering and persists `done` when all four are complete', () => {
     const hook = useHook({ checklist: checklistOf(ALL_DONE), preference: preference('active') });
     const { container } = render(<ActivationChecklist />);

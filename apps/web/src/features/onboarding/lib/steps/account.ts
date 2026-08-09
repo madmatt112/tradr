@@ -1,5 +1,5 @@
 /**
- * Checklist item 1 — create a brokerage account (R6.1–R6.6).
+ * Checklist item 1 — create a brokerage account.
  *
  * Runs entirely on `/dashboard`: the zero-state mounts `AccountDialog` itself,
  * so the form opens over the same route the tour started on and no step here
@@ -24,8 +24,9 @@
  *   "None"); a set one is what joins `fee_schedules` in `positions.query.ts`.
  * - The reporting timezone is a separate per-user value, seeded at registration
  *   from the browser (`routes/register.tsx`) and edited under Settings →
- *   Profile (`ReportingTimezoneSelect`). R2.8 forbids conflating the two, so the
- *   trading-day step disclaims it and this set closes by naming it on its own.
+ *   Profile (`ReportingTimezoneSelect`). A user must not be able to conclude
+ *   that setting one has set the other, so the trading-day step disclaims it
+ *   and this set closes by naming it on its own.
  */
 
 import type { WalkthroughStepSource } from './index';
@@ -122,10 +123,10 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
       'and the first item on the setup checklist ticks itself.',
   },
   {
-    // No target: the reporting timezone is not a control on this screen, and
-    // R6.6 asks for the invitation at the point the account is created rather
-    // than for a detour into settings mid-walkthrough. Centred, so it reads as
-    // the aside it is.
+    // No target: the reporting timezone is not a control on this screen, and the
+    // invitation belongs at the point the account is created rather than as a
+    // detour into settings mid-walkthrough. Centred, so it reads as the aside it
+    // is.
     route: '/dashboard',
     docs: 'gettingStarted',
     title: 'Your reporting timezone',

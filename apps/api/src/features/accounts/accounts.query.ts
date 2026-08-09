@@ -111,7 +111,7 @@ export function findAccountsByUser(db: Database | Transaction, userId: string) {
       brokerageId: accounts.brokerageId,
       brokerageName: brokerages.name,
       // NULL means no rule set — the calculator then behaves exactly as it did
-      // before this column existed (user-onboarding R1.4).
+      // before this column existed.
       defaultRiskPercent: accounts.defaultRiskPercent,
       // Projected so a client can say WHICH account is the sample one rather
       // than inferring it from "there is exactly one account". Mutual exclusion
@@ -143,7 +143,7 @@ export function findAccountById(db: Database | Transaction, id: string, userId: 
       timezone: accounts.timezone,
       brokerageId: accounts.brokerageId,
       brokerageName: brokerages.name,
-      // NULL means no rule set (user-onboarding R1.4) — see findAccountsByUser.
+      // NULL means no rule set — see findAccountsByUser.
       defaultRiskPercent: accounts.defaultRiskPercent,
       // The sample-data flag — see findAccountsByUser. Also carried here so the
       // account this endpoint returns after seeding identifies itself.

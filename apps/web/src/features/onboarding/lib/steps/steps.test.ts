@@ -2,15 +2,16 @@
 //
 // node, NOT jsdom: the step sets are data, so proving them correct must not need
 // a browser. If a change makes this file need jsdom, the step modules have
-// stopped being data (design.md, "Modular Design Principles").
+// stopped being data — content reviewable as copy and testable without a
+// browser, which is the whole reason they live apart from the tour engine.
 //
-// WHAT THIS FILE IS FOR. R6.11 says no step may describe a field, default or
-// behaviour that does not exist. Prose cannot be checked mechanically, but its
-// two mechanical halves can, and they are the two ways the copy rots without
-// anyone noticing: a step anchored to a selector nobody renders any more, and a
-// "read more" link to a page nobody wrote. Both are checked against the source
-// tree here rather than against a list maintained alongside it, so a rename in
-// `AccountDialog`, a deleted route or a moved docs page fails this test.
+// WHAT THIS FILE IS FOR. No step may describe a field, default or behaviour that
+// does not exist. Prose cannot be checked mechanically, but its two mechanical
+// halves can, and they are the two ways the copy rots without anyone noticing: a
+// step anchored to a selector nobody renders any more, and a "read more" link to
+// a page nobody wrote. Both are checked against the source tree here rather than
+// against a list maintained alongside it, so a rename in `AccountDialog`, a
+// deleted route or a moved docs page fails this test.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -104,7 +105,7 @@ describe('walkthrough step definitions', () => {
     expect(step.description.replace(/<a .*$/s, '').trim().length).toBeGreaterThan(20);
   });
 
-  // R6.10 — every step deep-links to documentation, through docsUrl().
+  // Every step deep-links to documentation, through docsUrl().
   it.each(allSteps)('%s carries exactly one docs link, built from docsUrl()', (_name, step) => {
     const hrefs = Array.from(step.description.matchAll(/href="([^"]+)"/g), (m) => m[1]);
     expect(hrefs).toEqual([docsUrl(step.docs)]);
@@ -112,7 +113,7 @@ describe('walkthrough step definitions', () => {
     expect(step.description).toContain('rel="noreferrer"');
   });
 
-  // R6.10 — and it resolves: the named page is a real page in apps/docs.
+  // And it resolves: the named page is a real page in apps/docs.
   it.each(allSteps)('%s links to a documentation page that exists', (_name, step) => {
     const href = docsUrl(step.docs);
     expect(href.startsWith(DOCS_BASE_URL)).toBe(true);
@@ -131,12 +132,12 @@ describe('walkthrough step definitions', () => {
     expect(found, `no page in apps/docs for ${href}`).toBe(true);
   });
 
-  // R6.11 — no step anchors to a screen that does not exist. And R5.6 — that
-  // screen has to be one `useWalkthrough` can NAVIGATE to, which membership of
-  // the route tree alone does not establish: `/positions/$positionId` is the
-  // router's PATTERN, and navigating to it verbatim is a 404. A step on a
-  // parameterised route therefore has to name the params a caller must supply,
-  // and a step that names none has to be on a route that needs none.
+  // No step anchors to a screen that does not exist. And that screen has to be
+  // one `useWalkthrough` can NAVIGATE to, which membership of the route tree
+  // alone does not establish: `/positions/$positionId` is the router's PATTERN,
+  // and navigating to it verbatim is a 404. A step on a parameterised route
+  // therefore has to name the params a caller must supply, and a step that names
+  // none has to be on a route that needs none.
   //
   // This checks the two halves of that CONTRACT — the route is real, and the
   // param names match the pattern — and no more. It builds no URL: the values
@@ -151,7 +152,7 @@ describe('walkthrough step definitions', () => {
     ).toEqual(needed);
   });
 
-  // R6.11 — and no step anchors to an element nobody renders.
+  // And no step anchors to an element nobody renders.
   it.each(allSteps)('%s targets a selector the app actually renders', (_name, step) => {
     if (step.target === undefined) return; // A centred step is about the screen.
     for (const anchor of anchorsFor(step.target)) {
@@ -161,9 +162,9 @@ describe('walkthrough step definitions', () => {
     }
   });
 
-  // R5.4 — a target that is not already on screen when its step is reached must
-  // be waited for. Omitting `waitForMs` means "must already be there", and a
-  // miss ends the tour on `target-missing`.
+  // A target that is not already on screen when its step is reached must be
+  // waited for. Omitting `waitForMs` means "must already be there", and a miss
+  // ends the tour on `target-missing`.
   //
   // THE FIRST STEP OF A SET IS INCLUDED, and that is the whole point. It used to
   // be exempt, on the assumption that a set opens on a screen already rendered.

@@ -22,8 +22,8 @@ vi.mock('@/features/positions/hooks/usePositions', () => ({
 vi.mock('@/hooks/useNow', () => ({
   useNow: vi.fn(() => new Date('2026-05-27T12:00:00.000Z')),
 }));
-// The stored reporting timezone (user-onboarding R2.4) is a useQuery; a fixed
-// zone keeps this suite about P&L rendering, not the bucketing window.
+// The user's stored reporting timezone is a useQuery; a fixed zone keeps this
+// suite about P&L rendering, not the bucketing window.
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => 'America/New_York',
 }));

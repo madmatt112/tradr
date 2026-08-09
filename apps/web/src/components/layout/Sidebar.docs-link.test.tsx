@@ -30,8 +30,8 @@ vi.mock('@/features/changelog/hooks/useChangelog', () => ({
 
 vi.mock('@/components/layout/ThemeToggle', () => ({ ThemeToggle: () => null }));
 
-// The stored reporting timezone (user-onboarding R2.4) is a useQuery; stub it
-// so the sidebar mounts standalone.
+// The stored reporting timezone is a useQuery; stub it so the sidebar mounts
+// standalone.
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => 'America/New_York',
 }));

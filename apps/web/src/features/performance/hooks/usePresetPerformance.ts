@@ -98,9 +98,9 @@ export interface PresetPerformanceResult {
  * `historyAnchor` there for what an all-time window means in that case.
  *
  * The zone is NOT re-derived from the response (`resolvedTimezone`). Bucketing
- * follows the user's stored reporting timezone and nothing else
- * (user-onboarding R2.4); a `null` params disables the query until it lands so
- * nothing is ever bucketed by a guess.
+ * follows the user's stored reporting timezone and nothing else; a `null`
+ * params disables the query until it lands so nothing is ever bucketed by a
+ * guess.
  */
 export function usePresetPerformance({
   preset,

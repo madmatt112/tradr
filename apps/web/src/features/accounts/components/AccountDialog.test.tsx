@@ -275,7 +275,8 @@ describe('AccountDialog — TIER_LIMIT_ACCOUNTS mapping', () => {
   });
 });
 
-// Default risk percentage (user-onboarding R1.1/R1.6).
+// Default risk percentage — the optional per-account rule that seeds the
+// position-size calculator.
 describe('AccountDialog — default risk %', () => {
   it('offers the field with its explanation and a conservative hint on create', () => {
     renderDialog();
@@ -385,9 +386,8 @@ describe('AccountDialog — default risk %', () => {
   });
 });
 
-// This dialog is one of the two places both timezones are visible to the same
-// user (user-onboarding R2.8); the settings control is the other, and disclaims
-// this one in return.
+// This dialog is one of only two places both timezones are visible to the same
+// user; the settings control is the other, and disclaims this one in return.
 describe('AccountDialog — telling the two timezones apart', () => {
   it('names the boundary this field governs and disclaims the reporting zone', () => {
     renderPersistentDialog(true, null);

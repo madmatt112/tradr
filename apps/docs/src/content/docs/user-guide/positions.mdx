@@ -14,13 +14,35 @@ app does at each step.
 ## Before you start
 
 A position belongs to an account, so create one first. **New Position** stays
-disabled until you have at least one.
+disabled until you have at least one, and its tooltip reads *Create an account
+first*.
 
-Go to **Accounts → New Account**. Name it, pick the currency and timezone, and set
-a starting balance.
+Before you create your first account, the dashboard shows a **Welcome to Tradr**
+setup screen instead of the widget grid. **Create my first account** on that
+screen opens the same form as **Accounts → New Account**.
 
-The timezone matters later. It defines the trading day, which is what decides
-whether a closed position can be reopened.
+The form has six fields: **Name**, **Currency**, **Trading-day timezone**,
+**Starting balance**, **Default risk %**, and **Brokerage**. Only the name and
+currency are needed to log a position. [Getting
+started](/user-guide/getting-started/#step-2--create-a-brokerage-account)
+describes each field.
+
+Two of them matter on this page.
+
+**Trading-day timezone** defines the trading day for this account. That is what
+decides whether a closed position can be reopened. It is not your **reporting
+timezone**, which is a separate per-user setting under **Settings → Profile**.
+That one decides how your P&L is bucketed by day, week and month. Setting either
+one never sets the other.
+
+**Default risk %** is the share of the account balance you risk on one trade. It
+prefills the [trade calculator](/user-guide/trade-calculator/) and changes nothing
+about a position you log here. Leave it empty to set no rule.
+
+To look around before you create anything, choose **Add sample data** on the setup
+screen. Tradr creates one sample account with positions already in it, and a
+banner marks every figure on screen as sample data. Choose **Remove sample data**
+in that banner when you are ready to enter your own.
 
 ## The three states
 
@@ -75,6 +97,16 @@ In the worked example: 100 shares of AAPL at 190.00, fees 1.00.
 
 :::note
 Options are counted in whole contracts. A fractional option quantity is rejected.
+:::
+
+:::tip[The first time you open a position]
+A one-off tip opens beside the **Fills** heading, headed *Scale in and out with
+fills*. Choose **Got it** to dismiss it, or **Read more** to open this page. It
+does not come back, and it does not appear on a closed position — there is no
+**Add Fill** button there for it to introduce.
+
+The tip does not block the page. Click straight through it at the control
+underneath and it dismisses itself in the same gesture.
 :::
 
 ## Step 3 — Record the trade plan
@@ -172,8 +204,9 @@ fills.
 Two rules apply:
 
 - **Same trading day only.** A position can be reopened only on the day it was
-  opened, measured in the account's timezone. This is for re-entering a trade you
-  scratched, not for reviving last month's.
+  opened, measured in the account's **trading-day timezone**. This is for
+  re-entering a trade you scratched, not for reviving last month's. Your
+  reporting timezone has no say here.
 - **Add a fill before closing again.** A reopened position starts with nothing
   open, so a straight re-close would be a no-op. Tradr rejects it and says so.
 

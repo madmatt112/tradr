@@ -11,8 +11,7 @@ import type { StoredOnboardingState } from '@tradr/shared';
 import { db } from '@/db';
 import { accounts, positions, users } from '@/db/schema';
 
-// Migration 0028 — "users who predate onboarding start out already onboarded"
-// (user-onboarding R3.6).
+// Migration 0028 — users who predate onboarding start out already onboarded.
 //
 // The statement under test is the migration FILE itself, read from disk and
 // executed, not a hand-copied paraphrase of it. A paraphrase would pass while
@@ -84,10 +83,10 @@ function setStoredOnboarding(id: string, value: Record<string, unknown>) {
 }
 
 describe('migration 0028 — onboarding backfill for pre-existing users', () => {
-  it('marks a user with history as done, so the zero-state cannot come back (R3.6)', async () => {
-    // The user R3.6 is about: years of history, and `{}` in the column because
-    // the 0027 fast default put every existing row at 'pending'. Left alone,
-    // deleting their last account shows them "Welcome to Tradr".
+  it('marks a user with history as done, so the zero-state cannot come back', async () => {
+    // The user this backfill exists for: years of history, and `{}` in the
+    // column because the 0027 fast default put every existing row at 'pending'.
+    // Left alone, deleting their last account shows them "Welcome to Tradr".
     const user = await makeUser();
     const accountId = await makeAccount(user.id);
     await makePosition(user.id, accountId);
@@ -105,8 +104,9 @@ describe('migration 0028 — onboarding backfill for pre-existing users', () => 
   });
 
   it('marks a user whose only history is an account', async () => {
-    // Deleting the last account is R3.6's own scenario, and the account is the
-    // history that proves they are not new. Positions are not required.
+    // Deleting the last account is the scenario this backfill exists for, and
+    // the account is the history that proves they are not new. Positions are
+    // not required.
     const user = await makeUser();
     await makeAccount(user.id);
 
@@ -148,7 +148,7 @@ describe('migration 0028 — onboarding backfill for pre-existing users', () => 
   });
 
   it('never overwrites a preference the user has already expressed', async () => {
-    // A dismissal (R4.5) is recoverable and a `skipped` user still reaches the
+    // A dismissal is recoverable and a `skipped` user still reaches the
     // zero-state and its reopen row. Backfilling over it would retire the
     // checklist behind their back and delete the only way back.
     const skipped = await makeUser();

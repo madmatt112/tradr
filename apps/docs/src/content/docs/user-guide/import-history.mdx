@@ -32,6 +32,15 @@ trades twice. There is no de-duplication.
 
 Open **Import** and pick the account under **1. Target account**.
 
+:::tip[The first time you open this page]
+A one-off tip opens beside the **Import trades from CSV** heading, headed *Bring
+your history in from a CSV*. Choose **Got it** to dismiss it, or **Read more** to
+open this page. It does not come back.
+
+The tip does not appear when your plan has no CSV imports left, because you could
+not act on it. See [Plan limits](/user-guide/reference/plan-limits/).
+:::
+
 ## Step 2 — Upload the file
 
 Select **Choose file** and pick your export. The server parses and validates it
@@ -55,7 +64,7 @@ Set these alongside the mapping:
 | Setting | What it controls |
 | --- | --- |
 | **Row shape** | Whether each row is one fill (**Execution**) or a whole round trip with entry and exit on one line (**Round-trip**). Set independently of the preset. |
-| **Timezone** | The zone your export's timestamps are written in. |
+| **Timezone** | The zone your export's timestamps are written in. This is neither the account's trading-day timezone nor your reporting timezone. |
 | **Date format** | How to read the date column — ISO, US, and so on. |
 | **Number format** | Whether `1,234.56` or `1.234,56`. |
 

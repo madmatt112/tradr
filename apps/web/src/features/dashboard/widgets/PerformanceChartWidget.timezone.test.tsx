@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
-// user-onboarding R2.4 — the per-bucket P&L chart must bucket by the user's
-// STORED reporting timezone. The configured timeframe still decides the
-// granularity; only the zone the buckets are cut in changed.
+// The per-bucket P&L chart must bucket by the user's STORED reporting
+// timezone. The configured timeframe still decides the granularity; only the
+// zone the buckets are cut in changed.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

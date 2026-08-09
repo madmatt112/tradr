@@ -1,11 +1,11 @@
-// useWalkthrough — the guided walkthrough's whole behaviour (R5).
+// useWalkthrough — the guided walkthrough's whole behaviour.
 //
 // It composes three things that were built separately and deliberately know
 // nothing about each other: `lib/tour-engine.ts` (mechanics), `lib/steps/`
 // (content), and `useOnboarding` (the user's real data). Everything below is
-// the glue, and each rule it enforces is a requirement.
+// the glue, and every rule it enforces is load-bearing.
 //
-// THE RUNTIME IS LOADED DYNAMICALLY, AND THAT IS THE POINT (R5.7, R11.3). Both
+// THE RUNTIME IS LOADED DYNAMICALLY, AND THAT IS THE POINT. Both
 // `lib/tour-engine` and `lib/steps` are reached ONLY through `import()` inside
 // `run()` below — never a top-level import. `tour-engine` is the sole module
 // that pulls in `driver.js` and `tour.css`, so a static edge from here would put
@@ -15,8 +15,8 @@
 // `apps/web/scripts/check-bundle-size.mjs` fails the build if a driver.js marker
 // appears in the entry chunk.
 //
-// THE SESSION IS MODULE-SCOPED, NOT COMPONENT-SCOPED (R5.6). A walkthrough
-// crosses routes: the position set starts on `/positions` and finishes on
+// THE SESSION IS MODULE-SCOPED, NOT COMPONENT-SCOPED. A walkthrough crosses
+// routes: the position set starts on `/positions` and finishes on
 // `/positions/$positionId`, and the close set ends up back on `/dashboard`. The
 // component that started it (`ZeroState`, on the dashboard) unmounts on the
 // first of those navigations. If `isRunning`, the current step and the event
@@ -25,24 +25,24 @@
 // overlay nothing was driving. So the session lives in a store next to the
 // engine's own module state, and the hook is a thin binding onto it. It is also
 // what lets a component on a completely different route ask `isRunning` (the
-// coach marks are suppressed while a walkthrough runs, R7.6).
+// coach marks are suppressed while a walkthrough runs).
 //
-// NOTHING AUTO-STARTS (R5.2). Mounting this hook has no effect whatsoever;
-// `start()` is a user action, called from the zero-state's "Walk me through it"
-// and the checklist's per-item buttons. There is no effect that reads the stored
-// status and begins a tour, and there must never be one.
+// NOTHING AUTO-STARTS. Mounting this hook has no effect whatsoever; `start()`
+// is a user action, called from the zero-state's "Walk me through it" and the
+// checklist's per-item buttons. There is no effect that reads the stored status
+// and begins a tour, and there must never be one.
 //
-// RESUME IS JUST `start()` WITH NO ARGUMENT (R5.6). After a reload there is no
-// step index to restore because none was ever stored — `nextIncompleteItem()`
-// re-derives the set from the checklist, which is itself derived from the user's
-// accounts and positions (R4.2). A user who reloads after creating their account
-// resumes at the calculator set because their data says the account step is
-// done, not because we wrote that down. Storing an index would be a second
-// source of truth that could disagree with the first, and the first is the one
-// that is right.
+// RESUME IS JUST `start()` WITH NO ARGUMENT. After a reload there is no step
+// index to restore because none was ever stored — `nextIncompleteItem()`
+// re-derives the set from the checklist, which is itself derived from the
+// user's accounts and positions. A user who reloads after creating their
+// account resumes at the calculator set because their data says the account
+// step is done, not because we wrote that down. Storing an index would be a
+// second source of truth that could disagree with the first, and the first is
+// the one that is right.
 //
-// EXITING DISCARDS NOTHING (R5.3), and it is structural rather than careful:
-// this module never writes onboarding state at all. The opt-in record
+// EXITING DISCARDS NOTHING, and it is structural rather than careful: this
+// module never writes onboarding state at all. The opt-in record
 // (`status: 'active'`) is the caller's, written when the user chooses to be
 // guided; completion is derived. So there is nothing an exit — by the close
 // button, Escape, an unresolvable target or a failed chunk load — could roll
@@ -68,7 +68,7 @@ type StepsModule = typeof import('../lib/steps');
 
 /**
  * The real event that completes an action step, keyed by the step's target
- * selector (R5.5).
+ * selector.
  *
  * KEYED BY TARGET, NOT BY INDEX, on purpose. The selectors are the step data's
  * own stable identity — `steps.test.ts` already fails if one is renamed or stops
@@ -98,7 +98,7 @@ export const ACTION_SIGNALS: Readonly<Record<string, { event: EventName; reason:
 
 interface WalkthroughStoreState {
   isRunning: boolean;
-  /** The runtime failed to load and this session gave up on it (R5.8). */
+  /** The runtime failed to load and this session gave up on it. */
   isUnavailable: boolean;
   /** Which checklist item's set is running, or `null`. */
   itemId: ChecklistItemId | null;
@@ -152,19 +152,19 @@ function endSession(): void {
  * tour is running. The bus stores handlers in a `Set`, so re-arming is a no-op.
  */
 function teardownOnLogout(): void {
-  // THE ENGINE GOES DOWN BEFORE THE SESSION DOES, AND THE ORDER IS THE POINT
-  // (R8.1). `engine.stop()` fires `onExit`, and `onExit` builds the abandonment
-  // event out of the LIVE session — the step the user was on, and the size of
-  // the set it was a step of. Clearing the session first would hand the funnel
+  // THE ENGINE GOES DOWN BEFORE THE SESSION DOES, AND THE ORDER IS THE POINT.
+  // `engine.stop()` fires `onExit`, and `onExit` builds the abandonment event
+  // out of the LIVE session — the step the user was on, and the size of the set
+  // it was a step of. Clearing the session first would hand the funnel
   // `stepIndex: -1` in a tour of `stepCount: 0` for every user who ever logs
-  // out mid-walkthrough: "abandoned at no step, of nothing", which is precisely
-  // the measurement Requirement 8 exists to produce.
+  // out mid-walkthrough: "abandoned at no step, of nothing", which destroys
+  // precisely the measurement the funnel exists to produce.
   //
   // A session ending IS a place a user stopped, so it is reported rather than
   // suppressed — under `session-ended`, its own reason. It used to arrive as
   // `dismissed`, which also means "the user turned the walkthrough down", and
-  // R8 exists to find where users stop: a funnel that cannot tell someone who
-  // declined the tour from someone whose session went away under them has
+  // the funnel exists to find where users stop: one that cannot tell someone
+  // who declined the tour from someone whose session went away under them has
   // blurred the one thing it was built to see.
   //
   // `onExit` runs `endSession()` itself, so the teardown below is for the tour
@@ -196,13 +196,13 @@ armLogoutTeardown();
 /**
  * Load the tour runtime and the step content, together and lazily.
  *
- * R5.8 / Principle 4: a rejection here is an ordinary outcome, not an
- * exception. The chunk can 404 after a deploy, be blocked, or simply be
- * unreachable offline. We mark the walkthrough unavailable, leave the stored
- * onboarding status ALONE — the user has not skipped anything and must not be
- * recorded as having done so — and return `null`. The zero-state and checklist
- * are untouched by all of this and keep working, which is the whole point: the
- * unguided path is the fallback, and it is the same path everyone else uses.
+ * A rejection here is an ordinary outcome, not an exception. The chunk can 404
+ * after a deploy, be blocked, or simply be unreachable offline. We mark the
+ * walkthrough unavailable, leave the stored onboarding status ALONE — the user
+ * has not skipped anything and must not be recorded as having done so — and
+ * return `null`. The zero-state and checklist are untouched by all of this and
+ * keep working, which is the whole point: the unguided path is the fallback,
+ * and it is the same path everyone else uses.
  *
  * The promise is cached on success and dropped on failure, so a later retry
  * genuinely retries rather than re-awaiting the rejection.
@@ -271,10 +271,10 @@ function bindAdvance(
  * control stays interactive either way (`disableActiveInteraction: false`), so
  * the user still performs the gesture; they just also press Next afterwards, and
  * the following step's `waitForMs` covers a dialog that is still opening. That
- * is a narrower reading of R5.5 than those four steps were authored for, and it
- * is the honest one until a gesture has an event to advance on — being asked to
- * press Next is a worse tour, but a tour that cannot be advanced at all is a
- * broken one.
+ * is a narrower reading of advance-on-the-real-action than those four steps
+ * were authored for, and it is the honest one until a gesture has an event to
+ * advance on — being asked to press Next is a worse tour, but a tour that
+ * cannot be advanced at all is a broken one.
  */
 function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] {
   return steps.map((step) => {
@@ -284,7 +284,7 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
   });
 }
 
-/** The first item the user has not done — the set to run, and the resume point (R5.6). */
+/** The first item the user has not done — the set to run, and the resume point. */
 export function nextIncompleteItem(
   checklist: Checklist | null | undefined,
 ): ChecklistItemId | null {
@@ -419,14 +419,14 @@ async function run(
     },
     // Every ending arrives here — completed, dismissed, or a target that never
     // appeared — and all three do the same thing to the user's data, because
-    // none of them has any work to undo (R5.3). They are told apart only for the
+    // none of them has any work to undo. They are told apart only for the
     // funnel.
     onExit: (reason) => {
       // THE STEP INDEX COMES FROM THE LIVE SESSION, AND IS READ BEFORE THE
-      // TEARDOWN THAT CLEARS IT (R8.1). Nothing stores a step index — resume
-      // re-derives its position from the checklist instead (R5.6), and adding a
-      // stored one for the sake of an event would be a second source of truth
-      // that could disagree with the first. The running session already tracks
+      // TEARDOWN THAT CLEARS IT. Nothing stores a step index — resume
+      // re-derives its position from the checklist instead, and adding a stored
+      // one for the sake of an event would be a second source of truth that
+      // could disagree with the first. The running session already tracks
       // where the tour is, because the overlay has to be somewhere; the
       // abandonment event is just that number, taken on the way out. It is `-1`
       // when no step was ever highlighted.
@@ -453,19 +453,19 @@ export interface UseWalkthroughResult {
   /**
    * Start a walkthrough. With no argument it runs the set for the first
    * incomplete checklist item, which is both "start me at the beginning" and
-   * "resume where I was" (R5.6) — the two are the same question asked of the
-   * same data. `params` supplies the values a parameterised route needs;
-   * omitted, a set that opens on a position falls back to the most recently
-   * touched open one.
+   * "resume where I was" — the two are the same question asked of the same
+   * data. `params` supplies the values a parameterised route needs; omitted, a
+   * set that opens on a position falls back to the most recently touched open
+   * one.
    *
    * Never throws, and never rejects: a runtime that will not load leaves
-   * `isUnavailable` true and everything else exactly as it was (R5.8).
+   * `isUnavailable` true and everything else exactly as it was.
    */
   start: (itemId?: ChecklistItemId, params?: Record<string, string>) => void;
   /** End the running walkthrough. A no-op when none is running. */
   stop: () => void;
   isRunning: boolean;
-  /** The tour runtime failed to load; offer the unguided path instead (R5.8). */
+  /** The tour runtime failed to load; offer the unguided path instead. */
   isUnavailable: boolean;
   /** Which set is running, or `null`. */
   itemId: ChecklistItemId | null;
@@ -475,7 +475,7 @@ export interface UseWalkthroughResult {
 }
 
 /**
- * Just the R7.6 signal: is a walkthrough on screen right now?
+ * Just the suppression signal: is a walkthrough on screen right now?
  *
  * A separate hook rather than `useWalkthrough().isRunning` because the full
  * hook composes `useOnboarding()` — which pulls the entire unfiltered positions
@@ -514,15 +514,16 @@ export function useWalkthrough(): UseWalkthroughResult {
     return open ? { positionId: open.id } : undefined;
   }, [positions]);
 
-  // R8.1's "offered": there is a walkthrough behind the button and the user
-  // could press it. Mounting this hook IS the offer — the two things that mount
-  // it, `ZeroState` and the dashboard's checklist slot, do so precisely to put
-  // "Walk me through it" and the checklist's per-item "Start" on screen — so the
-  // condition here is the same one `ZeroState` disables its control on: a
-  // runtime that will load, and a checklist naming an outstanding item.
+  // What the funnel counts as "offered": there is a walkthrough behind the
+  // button and the user could press it. Mounting this hook IS the offer — the
+  // two things that mount it, `ZeroState` and the dashboard's checklist slot,
+  // do so precisely to put "Walk me through it" and the checklist's per-item
+  // "Start" on screen — so the condition here is the same one `ZeroState`
+  // disables its control on: a runtime that will load, and a checklist naming
+  // an outstanding item.
   //
-  // This does not weaken R5.2. Nothing below starts anything; it counts an
-  // opportunity that was on screen either way, and the tour still only ever
+  // This does not weaken opt-in-only. Nothing below starts anything; it counts
+  // an opportunity that was on screen either way, and the tour still only ever
   // begins from a click.
   //
   // The ref makes it the OFFER that is counted rather than the render. Emitting

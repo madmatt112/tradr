@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// user-onboarding R2.4 — the equity curve must bucket by the user's STORED
-// reporting timezone, not by whatever zone the current device reports.
+// The equity curve must bucket by the user's STORED reporting timezone, not by
+// whatever zone the current device happens to report.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

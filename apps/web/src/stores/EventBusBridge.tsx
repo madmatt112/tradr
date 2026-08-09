@@ -6,16 +6,16 @@ import { eventBus } from './event-bus.store';
 export function EventBusBridge(): null {
   const queryClient = useQueryClient();
 
-  // Sample data (user-onboarding R9). Seeding and teardown each add or remove a
-  // whole account's worth of positions, fills and ledger rows in a single call,
-  // so every derived surface is stale at once and the user must not have to
-  // reload to see it. The seeding hook publishes and knows none of these keys;
-  // this is the one place that maps the announcement onto them.
+  // Sample data. Seeding and teardown each add or remove a whole account's
+  // worth of positions, fills and ledger rows in a single call, so every derived
+  // surface is stale at once and the user must not have to reload to see it. The
+  // seeding hook publishes and knows none of these keys; this is the one place
+  // that maps the announcement onto them.
   //
   // 'created' is NOT handled here. `useCreateAccount` invalidates its own
-  // queries, and the event exists for the walkthrough's advance-on-action step
-  // (R5.5), not for cache work — invalidating again here would double every
-  // account create for no gain.
+  // queries, and the event exists for the walkthrough's advance-on-action step,
+  // not for cache work — invalidating again here would double every account
+  // create for no gain.
   useEffect(() => {
     return eventBus.subscribe('accounts:cache-invalidate', ({ reason }) => {
       if (reason === 'created') return;

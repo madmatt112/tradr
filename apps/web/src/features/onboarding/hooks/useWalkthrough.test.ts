@@ -139,9 +139,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-// --- opt-in (R5.2) ----------------------------------------------------------
+// --- opt-in -----------------------------------------------------------------
 
-describe('useWalkthrough — opt-in only (R5.2)', () => {
+describe('useWalkthrough — opt-in only', () => {
   it('mounting starts nothing and navigates nowhere', async () => {
     const { result } = renderHook(() => useWalkthrough());
 
@@ -235,7 +235,7 @@ describe('useWalkthrough — start and exit', () => {
     });
   });
 
-  it('going idle on exit, however the tour ended, writes no onboarding state (R5.3)', async () => {
+  it('going idle on exit, however the tour ended, writes no onboarding state', async () => {
     const result = await start('account');
     await waitFor(() => expect(result.current.isRunning).toBe(true));
 
@@ -276,9 +276,9 @@ describe('useWalkthrough — start and exit', () => {
   });
 });
 
-// --- resume (R5.6) ----------------------------------------------------------
+// --- resume -----------------------------------------------------------------
 
-describe('useWalkthrough — resume (R5.6)', () => {
+describe('useWalkthrough — resume', () => {
   it('re-derives the set from the checklist rather than a stored step', async () => {
     checklist = aChecklist('account');
     await start();
@@ -315,9 +315,9 @@ describe('useWalkthrough — resume (R5.6)', () => {
   });
 });
 
-// --- advance on the real action (R5.5) --------------------------------------
+// --- advance on the real action ---------------------------------------------
 
-describe('useWalkthrough — action-driven advance (R5.5)', () => {
+describe('useWalkthrough — action-driven advance', () => {
   it('advances the "create the account" step when the account is created', async () => {
     await start('account');
     const index = WALKTHROUGH_STEPS.account.findIndex(
@@ -447,7 +447,7 @@ describe('useWalkthrough — action-driven advance (R5.5)', () => {
     expect(engine.advance).not.toHaveBeenCalled();
   });
 
-  it('survives the component that started it unmounting mid-tour (R5.6)', async () => {
+  it('survives the component that started it unmounting mid-tour', async () => {
     const { result, unmount } = renderHook(() => useWalkthrough());
     await act(async () => {
       result.current.start('position');
@@ -506,7 +506,7 @@ describe('useWalkthrough — action signals', () => {
   // absent from the lists it compares. This one is the guard for that: the
   // override is a general rule, and the set of steps it silently downgrades is
   // enumerated here by name. A fifth turns this red, which is the whole point.
-  it('downgrades exactly these four gated steps, and no others (R5.5)', () => {
+  it('downgrades exactly these four gated steps, and no others', () => {
     const downgraded = allSteps
       .filter((s) => s.advanceOnAction)
       .map((s) => s.target ?? '(centred)')
@@ -574,12 +574,12 @@ describe('useWalkthrough — logging out ends the session', () => {
   // it. Tearing the session down before the engine reported `stepIndex: -1` of
   // a `stepCount: 0` tour — an abandonment at no step, in a walkthrough of
   // nothing — for every logout mid-tour.
-  // The reason is `session-ended`, not `dismissed`. This replaces the version of
-  // this test that pinned `dismissed`, which was the conflation itself: R8 asks
-  // where users stop, and a user whose session went away under them did not
-  // decline the walkthrough. The assertion is otherwise the same one, and
-  // narrower — it now names which of the two it was.
-  it('reports the step the user was actually on when they logged out (R8.1)', async () => {
+  // The reason is `session-ended`, not `dismissed`. This replaces the version
+  // of this test that pinned `dismissed`, which was the conflation itself: the
+  // funnel asks where users stop, and a user whose session went away under them
+  // did not decline the walkthrough. The assertion is otherwise the same one,
+  // and narrower — it now names which of the two it was.
+  it('reports the step the user was actually on when they logged out', async () => {
     const result = await start('account');
     await waitFor(() => expect(result.current.isRunning).toBe(true));
     highlight(2);
@@ -632,7 +632,7 @@ describe('useWalkthrough — logging out ends the session', () => {
     expect(captureClientEvent).not.toHaveBeenCalled();
   });
 
-  it('clears an unavailable runtime with no tour running (R5.8)', () => {
+  it('clears an unavailable runtime with no tour running', () => {
     act(() => {
       useWalkthroughStore.setState({ isUnavailable: true });
     });
@@ -645,9 +645,9 @@ describe('useWalkthrough — logging out ends the session', () => {
   });
 });
 
-// --- the funnel events (R8.1) -----------------------------------------------
+// --- the funnel events ------------------------------------------------------
 
-describe('useWalkthrough — analytics (R8.1)', () => {
+describe('useWalkthrough — analytics', () => {
   it('reports the walkthrough as offered once per item on offer', () => {
     const { rerender } = renderHook(() => useWalkthrough());
 
@@ -747,7 +747,7 @@ describe('useWalkthrough — analytics (R8.1)', () => {
     ]);
   });
 
-  it('sends no trade or monetary data on any of them (R8.5)', async () => {
+  it('sends no trade or monetary data on any of them', async () => {
     const result = await start('close', { positionId: 'pos-1' });
     await waitFor(() => expect(result.current.isRunning).toBe(true));
     highlight(2);
@@ -785,9 +785,9 @@ describe('useWalkthrough — analytics (R8.1)', () => {
   });
 });
 
-// --- graceful failure (R5.8) ------------------------------------------------
+// --- graceful failure -------------------------------------------------------
 
-describe('useWalkthrough — the runtime will not load (R5.8)', () => {
+describe('useWalkthrough — the runtime will not load', () => {
   afterEach(() => {
     vi.doUnmock('../lib/tour-engine');
     vi.resetModules();
@@ -810,7 +810,7 @@ describe('useWalkthrough — the runtime will not load (R5.8)', () => {
     await waitFor(() => expect(result.current.isUnavailable).toBe(true));
     expect(result.current.isRunning).toBe(false);
     expect(result.current.currentStep).toBeNull();
-    // The user has not skipped anything, so nothing says they have (R5.8).
+    // The user has not skipped anything, so nothing says they have.
     expect(setStatus).not.toHaveBeenCalled();
     expect(dismiss).not.toHaveBeenCalled();
     expect(consoleError).toHaveBeenCalled();

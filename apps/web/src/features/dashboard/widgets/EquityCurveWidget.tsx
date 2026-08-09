@@ -14,10 +14,10 @@ import { useUserTimezone } from '@/hooks/useUserTimezone';
  * Data flow mirrors `StatsSummaryWidget` (Task 37):
  *   1. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
  *   2. Compute {start, end} via `derivePresetRange('all-time', ...)` anchored at
- *      the user's stored reporting timezone (`useUserTimezone`,
- *      user-onboarding R2.4 — NOT the browser's zone). The first request
- *      bootstraps with `DEFAULT_CURRENCY_HISTORY_RANGE` (§B); once the response
- *      lands, `usePresetPerformance` re-derives the window from the real
+ *      the user's stored reporting timezone (`useUserTimezone` — NOT the
+ *      browser's zone). The first request bootstraps with
+ *      `DEFAULT_CURRENCY_HISTORY_RANGE` (§B); once the response lands,
+ *      `usePresetPerformance` re-derives the window from the real
  *      `historyRange`, so "all-time" reaches the account's earliest close
  *      instead of stopping at the current month.
  *   3. Fetch via `usePerformance({ granularity: 'month', ... })`, passing `null`

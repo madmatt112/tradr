@@ -14,8 +14,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useUserTimezoneMutation, useUserTimezoneQuery } from '@/hooks/useUserTimezone';
 
 /**
- * The user's reporting timezone (user-onboarding R2.6), viewable and changeable
- * from settings on its own, independent of onboarding.
+ * The user's reporting timezone, viewable and changeable from settings on its
+ * own, independent of onboarding.
  *
  * Lives in `components/` rather than a feature slice for the same reason
  * `hooks/useUserTimezone.ts` does: the zone is not owned by any one feature —
@@ -24,10 +24,10 @@ import { useUserTimezoneMutation, useUserTimezoneQuery } from '@/hooks/useUserTi
  * their endpoint (`accounting`, `calculator`); this preference has no such
  * slice.
  *
- * The copy carries R2.8. The two timezones in this product are different
- * quantities and neither is derived from the other, so the failure this
- * component has to prevent is a user setting one and believing they have set
- * the other.
+ * The copy carries the distinction, because this is one of the few places both
+ * timezones are visible at once. They are different quantities and neither is
+ * derived from the other, so the failure this component has to prevent is a
+ * user setting one and believing they have set the other.
  */
 export function ReportingTimezoneSelect() {
   const { data, isLoading, isError, refetch } = useUserTimezoneQuery();

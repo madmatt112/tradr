@@ -1,18 +1,19 @@
-// DemoBanner — the standing "these figures are sample data" notice (R9.4).
+// DemoBanner — the standing "these figures are sample data" notice.
 //
 // IT IS MOUNTED IN THE AUTHENTICATED LAYOUT, NOT ON THE DASHBOARD. Sample data
 // reaches every derived surface in the app — the dashboard, positions,
 // performance, the accounting ledger — because no aggregate filters by account.
 // A notice that only appeared on the dashboard would let a user read a
 // performance page of invented figures with nothing on screen to say so, which
-// is the exact failure R9.4 exists to prevent.
+// is the exact failure this notice exists to prevent.
 //
-// IT CARRIES THE REMOVAL ACTION, and that is the requirement rather than a
+// IT CARRIES THE REMOVAL ACTION, and that is deliberate rather than a
 // convenience: the notice and the way out are the same control, so a user who
-// has seen enough never has to go looking for the switch. One click, no confirm
-// (R9.5) — the data is disposable by construction, it is regenerated identically
-// by seeding again, and a confirmation step on a reversible action about
-// invented trades is friction that teaches the user to click through dialogs.
+// has seen enough never has to go looking for the switch. One click, no
+// confirm — the data is disposable by construction, it is regenerated
+// identically by seeding again, and a confirmation step on a reversible action
+// about invented trades is friction that teaches the user to click through
+// dialogs.
 //
 // `info`, NEVER the gain/loss tokens. This is a system-status notice about the
 // provenance of the figures, not a statement about money direction. Borrowing

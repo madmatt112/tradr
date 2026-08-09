@@ -36,10 +36,10 @@ export const accounts = pgTable(
       .notNull()
       .default('0'),
     // Share of the account balance the user is willing to risk per trade, used
-    // to seed the position-size calculator's riskPercent input (user-onboarding
-    // R1). NULL means "no rule set" and preserves today's calculator behaviour
-    // exactly — an empty field the user fills in per calculation (R1.4). It is
-    // NOT a default of 0, which would mean "risk nothing on every trade".
+    // to seed the position-size calculator's riskPercent input. NULL means "no
+    // rule set" and preserves today's calculator behaviour exactly — an empty
+    // field the user fills in per calculation. It is NOT a default of 0, which
+    // would mean "risk nothing on every trade".
     //
     // Unlike starting_balance above, this stays editable after creation: it
     // seeds a form field and rewrites no history.

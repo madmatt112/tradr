@@ -15,8 +15,9 @@ type DB = Database | Transaction;
 //
 // `timezone` is likewise optional. The column has no DB default, so omitting it
 // stores NULL — indistinguishable from a pre-migration row, which then resolves
-// through `getReportingTimezone` (user-onboarding R2.5). Registration always
-// passes a value (browser-detected or the default, R2.3).
+// through `getReportingTimezone`. Registration always passes a value, either
+// browser-detected or the default, so NULL never means "a new user we did not
+// ask".
 export function insertUser(
   db: DB,
   data: { email: string; passwordHash: string; emailVerified?: boolean; timezone?: string },
@@ -88,7 +89,8 @@ export function selectUserOnboarding(db: DB, userId: string) {
  * Coach-mark append is idempotent by containment test, and capped: nothing ever
  * removes a key, so an uncapped append is unbounded growth of one row's jsonb.
  * Past the cap the append is a no-op rather than an error — a coach mark is a
- * UI nicety and the cap is an order of magnitude above the surfaces R7.1 names.
+ * UI nicety, and the cap is an order of magnitude above the five surfaces that
+ * carry one.
  */
 export function updateUserOnboarding(db: DB, userId: string, patch: OnboardingPatch) {
   // Built from the column outwards. Each clause names only the keys it changes.

@@ -142,7 +142,7 @@ describe('ReportingTimezoneSelect', () => {
     expect(document.body.textContent).not.toMatch(/valid IANA timezone/i);
   });
 
-  it('states the distinction from the account trading-day timezone (R2.8)', () => {
+  it('states the distinction from the account trading-day timezone', () => {
     // The failure this copy exists to prevent: a user setting this one and
     // concluding they have set their accounts' trading-day zone too.
     render(<ReportingTimezoneSelect />);

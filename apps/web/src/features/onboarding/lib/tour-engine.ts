@@ -1,19 +1,18 @@
 /**
  * The walkthrough's tour engine — a thin adapter over `driver.js`.
  *
- * This is the ONLY module in the codebase permitted to import `driver.js`
- * (design.md, "Modular Design Principles"). Everything a caller touches is
- * declared here: `TourStep`, `TourHandlers`, `TourExitReason`. No `driver.js`
- * type crosses the boundary, so swapping the library out is a change to this
- * file and nothing else.
+ * This is the ONLY module in the codebase permitted to import `driver.js`.
+ * Everything a caller touches is declared here: `TourStep`, `TourHandlers`,
+ * `TourExitReason`. No `driver.js` type crosses the boundary, so swapping the
+ * library out is a change to this file and nothing else.
  *
- * It also owns the ONE `import '../tour.css'` (R5.7, R11.3). That stylesheet
- * `@import`s the vendor CSS itself, so this module must not import
- * `driver.js/dist/driver.css` as well — doing so would put the vendor rules
- * after the token overrides and lose the cascade. Because the stylesheet is
- * reached only from here, and `useWalkthrough` reaches here only through a
- * dynamic import, neither the tour runtime nor its CSS lands in the dashboard
- * route's initial payload.
+ * It also owns the ONE `import '../tour.css'`. That stylesheet `@import`s the
+ * vendor CSS itself, so this module must not import `driver.js/dist/driver.css`
+ * as well — doing so would put the vendor rules after the token overrides and
+ * lose the cascade. Because the stylesheet is reached only from here, and
+ * `useWalkthrough` reaches here only through a dynamic import, neither the tour
+ * runtime nor its CSS lands in the dashboard route's initial payload — which is
+ * every returning user, none of whom are being guided.
  *
  * The module holds NO step content — copy, targets and docs links are data,
  * authored in `lib/steps/*.ts` and passed in.
@@ -38,23 +37,23 @@ export interface TourStep {
   title: string;
   /**
    * Rendered as HTML, so a step can carry its `docsUrl()` "read more" anchor
-   * (R6.10) without this module knowing anything about documentation. Step copy
-   * is author-written and lives in the repo; NEVER interpolate user input here.
+   * without this module knowing anything about documentation. Step copy is
+   * author-written and lives in the repo; NEVER interpolate user input here.
    */
   description: string;
   side?: TourStepSide;
   align?: TourStepAlign;
   /**
-   * How long to wait for `target` to appear, in ms, before giving up (R5.4).
-   * Set it on any step whose target is created by the step before it — a dialog
-   * opening, a route still navigating. Omitted means "must already be there";
-   * on a miss the tour ends rather than pointing at nothing.
+   * How long to wait for `target` to appear, in ms, before giving up. Set it on
+   * any step whose target is created by the step before it — a dialog opening, a
+   * route still navigating. Omitted means "must already be there"; on a miss the
+   * tour ends rather than pointing at nothing.
    */
   waitForMs?: number;
   /**
-   * R5.5. When true, "Next" does NOT advance the tour: the caller calls
-   * `advance()` when the real event lands. The highlighted control stays
-   * interactive either way (`disableActiveInteraction: false`).
+   * When true, "Next" does NOT advance the tour: the caller calls `advance()`
+   * when the real event lands. The highlighted control stays interactive either
+   * way (`disableActiveInteraction: false`).
    *
    * Has no effect on the LAST step, where the button is "Done" — finishing is
    * not advancing, and trapping the user behind an action they may have already
@@ -83,13 +82,13 @@ export type TourExitReason =
   | 'completed'
   /**
    * The user turned the walkthrough down where it stood — close button, overlay
-   * click, or Escape (R5.3). It means they did not want the tour, which is why
-   * it does NOT cover a tour that ended because the session did: R8 exists to
+   * click, or Escape. It means they did not want the tour, which is why it does
+   * NOT cover a tour that ended because the session did: the funnel exists to
    * find where users stop, and "declined the walkthrough" and "left the app"
    * are different answers to that question.
    */
   | 'dismissed'
-  /** A step's target never appeared within its `waitForMs` (R5.4). */
+  /** A step's target never appeared within its `waitForMs`. */
   | 'target-missing'
   /**
    * The session ended under the tour — a logout, or an expiry — and took it
@@ -171,7 +170,7 @@ function isTargetUnusable(target: string | undefined): boolean {
 }
 
 /**
- * R5.5 — the one step state that decides whether "Next" (or its key) advances.
+ * The one step state that decides whether "Next" (or its key) advances.
  *
  * A GATE THE USER CANNOT OPEN IS NOT A GATE, IT IS A TRAP. Suppressing "Next"
  * is only safe while the highlighted control is one the user can actually
@@ -198,7 +197,7 @@ function isGatedStep(index: number): boolean {
 
 /**
  * THE WALKTHROUGH'S KEYBOARD CONTROLS ARE OURS, NOT DRIVER.JS'S, AND THAT IS A
- * BUG FIX (R5.9).
+ * BUG FIX.
  *
  * driver.js 1.8.0 guards its own arrow-key handlers on `__transitionCallback`
  * and drops the press when one is in flight — `return`, not queue. A transition
@@ -253,7 +252,7 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
   // driver.js passes `undefined` when it could not resolve the step's target and
   // fell back to its own hidden, centred placeholder. For a step that DECLARES a
   // target that means the `waitForElement` window expired, so end the tour
-  // rather than float a popover over nothing or drift onto a neighbour (R5.4).
+  // rather than float a popover over nothing or drift onto a neighbour.
   if (step.target !== undefined && element === undefined) {
     exitReason = 'target-missing';
     // Deferred by a tick on purpose: driver.js writes its own step state
@@ -267,9 +266,9 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
 };
 
 const handleNextClick: DriverHook = (_element, _driveStep, opts) => {
-  // R5.5 — an action step advances on the action, never on "Next". The
-  // right-arrow key is suppressed by the same gate in `handleKeyup`, which is
-  // why the test lives in one function rather than in both callers.
+  // An action step advances on the action, never on "Next". The right-arrow key
+  // is suppressed by the same gate in `handleKeyup`, which is why the test lives
+  // in one function rather than in both callers.
   if (isGatedStep(opts.index ?? -1)) return;
   advanceFromUser();
 };
@@ -329,10 +328,10 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
 
   instance = driver({
     steps: steps.map(toDriveStep),
-    // R5.9 — the design system's reduced-motion gate. `tour.css` also disables
-    // the transitions this option does not reach.
+    // The design system's reduced-motion gate. `tour.css` also disables the
+    // transitions this option does not reach.
     animate: !prefersReducedMotion(),
-    // R5.3 — escapable in one action, by close button, overlay or Escape.
+    // Escapable in one action, by close button, overlay or Escape.
     allowClose: true,
     // OFF, so `handleKeyup` above is the only thing driving the tour from the
     // keyboard. Leaving it on would double-handle every arrow press that landed
@@ -340,7 +339,7 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
     allowKeyboardControl: false,
     // The non-motion carrier of step state.
     showProgress: true,
-    // R5.5 — the highlighted control stays usable.
+    // The highlighted control stays usable.
     disableActiveInteraction: false,
     popoverClass: POPOVER_CLASS,
     onHighlightStarted: handleHighlightStarted,
@@ -358,8 +357,8 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
 
 /**
  * Move to the next step, or finish if this was the last one. This is what an
- * action step waits for: the caller calls it when the real event lands (R5.5).
- * A no-op when no tour is running.
+ * action step waits for: the caller calls it when the real event lands. A no-op
+ * when no tour is running.
  */
 export function advance(): void {
   if (!instance?.isActive()) return;

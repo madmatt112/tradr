@@ -22,8 +22,8 @@ interface StatTile {
  * Data flow:
  *   1. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
  *   2. Compute {start, end} via `derivePresetRange('all-time', historyRange, ...)`
- *      anchored at the user's stored reporting timezone (`useUserTimezone`,
- *      user-onboarding R2.4 — NOT the browser's zone).
+ *      anchored at the user's stored reporting timezone (`useUserTimezone` —
+ *      NOT the browser's zone).
  *      On first render `historyRange = DEFAULT_CURRENCY_HISTORY_RANGE` (§B);
  *      once the response lands `usePresetPerformance` re-derives the window
  *      from the currency entry's real `historyRange`, so "all-time" reaches the
@@ -37,7 +37,7 @@ function StatsSummaryWidget() {
   const { data: displayCurrencyData } = useDisplayCurrencyQuery();
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
-  // The user's STORED reporting timezone (user-onboarding R2.4) — `undefined`
+  // The user's STORED reporting timezone, not the browser's — `undefined`
   // until that query settles.
   const timezone = useUserTimezone();
 

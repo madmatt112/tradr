@@ -89,10 +89,9 @@ function ReadOnlyDefaultLayout(): ReactElement {
  * skeleton while its derived reads are in flight, and the skeleton is SHORTER
  * than the card that replaces it — so on the primary screen the widget grid
  * dropped by the difference, once per load, for every user still mid-onboarding.
- * The design system forbids exactly that ("no layout jump between loading →
- * empty → loaded", visual-design R4.4). The checklist itself is correct and is
- * left alone; the geometry is the mount site's problem, and this is the mount
- * site.
+ * The design system forbids exactly that — no layout jump between loading,
+ * empty and loaded. The checklist itself is correct and is left alone; the
+ * geometry is the mount site's problem, and this is the mount site.
  *
  * THE RESERVATION IS DRIVEN BY WHAT ACTUALLY RENDERED, via `:has()` on the
  * skeleton's own test id, rather than by re-deciding here which users get a
@@ -161,7 +160,7 @@ function DashboardPage(): ReactElement {
   const { data, isLoading, isError, refetch, flushPending, scheduleLayoutWrite } = layout;
 
   // ===========================================================================
-  // THE ZERO-STATE GATE (Req 3.1, 3.4, 3.6).
+  // THE ZERO-STATE GATE.
   //
   // A user with no accounts gets a screen that tells them what to do instead of
   // six widgets that are each individually empty for a different reason.
@@ -184,7 +183,7 @@ function DashboardPage(): ReactElement {
   // ===========================================================================
   const onboardingQuery = useOnboardingQuery();
   const preference = onboardingQuery.data;
-  // `done` ONLY. `skipped` is an R4.5 dismissal of the CHECKLIST, not of
+  // `done` ONLY. `skipped` is a dismissal of the CHECKLIST, not of
   // onboarding: a skipped user with no accounts still has nothing to look at,
   // and the zero-state is where `ActivationChecklist` — hence the product's only
   // "Reopen setup checklist" control — is mounted. Retiring on `skipped` would
@@ -341,8 +340,8 @@ function DashboardPage(): ReactElement {
     );
   }
 
-  // Zero state — takes precedence over the empty layout below (Req 3.5), and
-  // sits behind isLoading/isError so neither of those branches changes.
+  // Zero state — takes precedence over the empty layout below, and sits behind
+  // isLoading/isError so neither of those branches changes.
   //
   // NO FLASH IN EITHER DIRECTION, which is the whole reason this is three
   // conditions and not one. Deciding early would be wrong both ways: `accounts`
@@ -362,25 +361,27 @@ function DashboardPage(): ReactElement {
     if (preference === undefined || accounts === undefined) {
       return <DashboardSkeleton />;
     }
-    // Req 3.4 needs nothing extra: `useCreateAccount` invalidates ['accounts'],
-    // this observer refetches, and the next render falls through to the grid.
+    // Leaving this screen on the first account needs nothing extra:
+    // `useCreateAccount` invalidates ['accounts'], this observer refetches, and
+    // the next render falls through to the grid — no reload, no manual swap.
     if (accounts.length === 0) {
       return <ZeroState />;
     }
   }
 
   // ===========================================================================
-  // THE CHECKLIST'S HOME ON EVERY OTHER PATH (R4.5, R4.7).
+  // THE CHECKLIST'S HOME ON EVERY OTHER PATH.
   //
   // `ZeroState` composes `ActivationChecklist` itself, so the zero-state branch
   // above needs nothing — and must not double-mount it. But the zero-state is
   // the ONLY screen the checklist had, and a user leaves it the instant they
   // create their first account. That is precisely when items 2-4 (size a trade,
   // log a position, close it) become the outstanding work, when the "Reopen
-  // setup checklist" row R4.5 depends on would otherwise be unreachable, and
-  // when R4.7's retirement — which is what finally switches `useOnboarding`'s
-  // two expensive gated reads off for good — would never get a chance to fire.
-  // So both remaining branches mount it.
+  // setup checklist" row that keeps a dismissal recoverable would otherwise be
+  // unreachable, and when the retirement that fires on the fourth completed
+  // item — which is what finally switches `useOnboarding`'s two expensive gated
+  // reads off for good — would never get a chance to fire. So both remaining
+  // branches mount it.
   //
   // UNCONDITIONALLY, and that is safe because the component answers for every
   // state itself: nothing for a retired (`done`) user, nothing while the stored
@@ -448,13 +449,14 @@ function DashboardPage(): ReactElement {
   const placedTypes = widgets.map((w) => w.type);
   return (
     <div className="space-y-4">
-      {/* THE COACH MARK RIDES WITH THE HEADER, and only on this branch (R7.1,
-          R7.5). Widget management is what the mark describes — Add Widget, the
-          per-card menu, drag and resize, Reset layout — and all of it is on
-          screen here and only here. The empty branch has no cards to arrange
-          and no Reset layout button, and the zero-state above returns before
-          either. There is no deployment gate to consult: the grid is local
-          layout state persisted per user, configured nowhere. */}
+      {/* THE COACH MARK RIDES WITH THE HEADER, and only on this branch. Widget
+          management is what the mark describes — Add Widget, the per-card menu,
+          drag and resize, Reset layout — and all of it is on screen here and
+          only here. The empty branch has no cards to arrange and no Reset
+          layout button, and the zero-state above returns before either. A mark
+          also has to stay off a surface the deployment does not offer, but
+          there is no deployment gate to consult here: the grid is local layout
+          state persisted per user, configured nowhere. */}
       <div className="flex items-center gap-2">
         <div className="flex-1">
           <DashboardHeader

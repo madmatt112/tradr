@@ -2,16 +2,15 @@ import { z } from 'zod';
 
 import { resolveTimezone } from './performance';
 
-// The user's REPORTING timezone (user-onboarding R2): the zone P&L is bucketed
-// into by day, week and month. It follows the person, not the market. It is
-// NOT a display format — nothing renders a timestamp in it.
+// The user's REPORTING timezone: the zone P&L is bucketed into by day, week and
+// month. It follows the person, not the market. It is NOT a display format —
+// nothing renders a timestamp in it.
 //
 // Deliberately NOT the same thing as `accounts.timezone`, which is the
 // account's trading-day boundary and defaults to 'America/New_York' because
-// that is where the US equity venues run. Neither is derived from the other
-// (R2.7) — a user in Tokyo trading US equities correctly has an account
-// timezone of America/New_York and a reporting timezone of Asia/Tokyo at the
-// same time.
+// that is where the US equity venues run. Neither is derived from the other — a
+// user in Tokyo trading US equities correctly has an account timezone of
+// America/New_York and a reporting timezone of Asia/Tokyo at the same time.
 //
 // Bounded to the users.timezone varchar(64) column, exactly as the account
 // field is bounded to its own. Validation reuses `resolveTimezone` for the
@@ -37,13 +36,15 @@ export const ReportingTimezoneField = z
     { message: 'Must be a valid IANA timezone name' },
   );
 
-// Body for PUT /api/users/me/timezone (R2.6). Mirrors the established
-// per-user-preference endpoint shape — `{ basis }` on
-// /api/users/me/buying-power-basis — rather than inventing a new convention.
+// Body for PUT /api/users/me/timezone — the settings-side write that lets a
+// user view and change their reporting zone at any time, independently of
+// onboarding. Mirrors the established per-user-preference endpoint shape —
+// `{ basis }` on /api/users/me/buying-power-basis — rather than inventing a new
+// convention.
 //
 // Required here, unlike on RegisterSchema: an explicit preference write with
 // no zone in it has no meaning. Clearing the preference is not offered, since
-// a NULL column only ever means "predates the column" (R2.5).
+// a NULL column only ever means "predates the column".
 export const UserTimezoneSchema = z.object({ timezone: ReportingTimezoneField });
 
 export type UserTimezoneInput = z.infer<typeof UserTimezoneSchema>;

@@ -4,9 +4,9 @@
 //
 // The other three stub it to null, and rightly: they mount this component bare
 // with no QueryClient, and none of them is about onboarding. But that leaves
-// `available={!isClosed}` (user-onboarding R7.5) asserted nowhere — a stub
-// renders nothing whatever the prop says, so the gate could be inverted, dropped
-// or hard-coded and all three would stay green.
+// `available={!isClosed}` asserted nowhere — a stub renders nothing whatever
+// the prop says, so the gate could be inverted, dropped or hard-coded and all
+// three would stay green.
 //
 // So this file fakes only the two cheap hooks the mark reads, exactly as
 // `CoachMark.test.tsx` does, and mounts the real component against the two
@@ -129,7 +129,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('PositionDetail — the Fills coach mark follows the Add Fill button (R7.5)', () => {
+describe('PositionDetail — the Fills coach mark follows the Add Fill button', () => {
   it('offers the mark on an open position, where Add Fill is on screen', () => {
     mockDetail({ status: 'open' });
     renderDetail();

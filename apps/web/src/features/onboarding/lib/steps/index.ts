@@ -1,5 +1,5 @@
 /**
- * The walkthrough's step content, as data (R6).
+ * The walkthrough's step content, as data.
  *
  * FOUR SETS, ONE PER CHECKLIST ITEM. `account`, `calculator`, `position` and
  * `close` are the same four ids `derive-checklist.ts` uses, so the checklist and
@@ -7,20 +7,23 @@
  *
  * DATA ONLY. No React, no `driver.js`, no DOM: `TourStep` is imported as a TYPE
  * from `../tour-engine`, which erases at compile time, so nothing here pulls the
- * tour runtime — or its CSS — into a chunk (R5.7, R11.3). The test for this
- * module runs under the node environment to keep that honest.
+ * tour runtime — or its CSS — into a chunk. The test for this module runs under
+ * the node environment to keep that honest.
  *
- * R6.11 IS THE BAR THIS FILE IS WRITTEN TO. Every field name, default, bound and
- * behaviour below was read out of the shipped source before it was written down,
- * and the copy uses the words the UI itself uses ("Trading-day timezone",
- * "Default risk %", "Risk percent", "Open Position") rather than paraphrases. A
- * walkthrough that describes a field the product does not have is the exact
- * failure Requirements 1 and 2 of this spec exist to prevent, so a claim that
- * cannot be substantiated against `apps/web`, `apps/api` or `packages/shared`
- * does not go in.
+ * ACCURACY AGAINST THE SHIPPED UI IS THE BAR THIS FILE IS WRITTEN TO. Every
+ * field name, default, bound and behaviour below was read out of the shipped
+ * source before it was written down, and the copy uses the words the UI itself
+ * uses ("Trading-day timezone", "Default risk %", "Risk percent", "Open
+ * Position") rather than paraphrases. No step may describe a field, default or
+ * behaviour that does not exist: the walkthrough is the first thing a new user
+ * believes about the product, so a claim that is not true of the screen in front
+ * of them is worse than no walkthrough at all. The account's default risk % and
+ * the stored reporting timezone were built before this copy was written, for
+ * exactly that reason. A claim that cannot be substantiated against `apps/web`,
+ * `apps/api` or `packages/shared` does not go in.
  *
  * WHY `body` AND `docs` RATHER THAN A HAND-WRITTEN `description`. Each step owes
- * a "read more" deep link (R6.10) and the host must appear exactly once, in
+ * a "read more" deep link and the host must appear exactly once, in
  * `lib/docs.ts`. Authors write prose and name a page; `compile()` below is the
  * only place an anchor is built, so no step file can hardcode a documentation
  * host and no step can forget the link.
@@ -46,12 +49,12 @@ export interface WalkthroughStepSource extends Omit<TourStep, 'description'> {
    * `&amp;`. Author-written repo source only — NEVER interpolate user input.
    */
   body: string;
-  /** The documentation page this step's "read more" link opens (R6.10). */
+  /** The documentation page this step's "read more" link opens. */
   docs: DocsPage;
   /**
    * The in-app route the step's target lives on. Not consumed by the engine —
    * it is what lets the test prove no step anchors to a screen that does not
-   * exist, and what `useWalkthrough` navigates to when resuming (R5.6).
+   * exist, and what `useWalkthrough` navigates to when resuming.
    *
    * This is the ROUTER'S PATTERN, not a URL: a parameterised route is written
    * `/positions/$positionId`, which no one can navigate to as it stands.
@@ -64,9 +67,9 @@ export interface WalkthroughStepSource extends Omit<TourStep, 'description'> {
    * is the case that IS navigable as written.
    *
    * Only the NAMES can be authored: the values are runtime state (the id of the
-   * position the user just made), and R5.6 re-derives the set from the user's
-   * data rather than storing a step, so `useWalkthrough` holds them, not this
-   * file. The test keeps the names in step with the pattern.
+   * position the user just made), and resuming re-derives the set from the
+   * user's data rather than storing a step, so `useWalkthrough` holds them, not
+   * this file. The test keeps the names in step with the pattern.
    */
   routeParams?: readonly string[];
 }

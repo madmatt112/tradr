@@ -1,11 +1,13 @@
--- Onboarding PREFERENCE state (user-onboarding R4.5, R4.6, R4.7, R7.2):
--- walkthrough status, the first-calculator-use timestamp, and the set of coach
--- marks already seen. See users.schema.ts and
--- packages/shared/src/schemas/onboarding.ts.
+-- Onboarding PREFERENCE state: walkthrough status, the first-calculator-use
+-- timestamp, and the set of coach marks already seen. Those are the three
+-- onboarding facts that have to outlive a session and follow the user across
+-- devices — a dismissed checklist must be re-openable, a retired one must stay
+-- retired, and a dismissed coach mark must never come back. See users.schema.ts
+-- and packages/shared/src/schemas/onboarding.ts.
 --
 -- PREFERENCE ONLY. Per-item checklist completion is DERIVED from the user's
 -- real data (account count, position count, closed-position count) and is never
--- stored here (R4.2), so it cannot disagree with reality or need repair.
+-- stored here, so it cannot disagree with reality or need repair.
 -- calculator_first_used_at is the single named exception and is a timestamp
 -- recording a fact, not a completion flag — the calculator writes nothing else,
 -- so checklist item 2 has no other data trace.

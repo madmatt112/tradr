@@ -2,14 +2,14 @@
 //
 // `useOnboarding` is faked wholesale — the hook has 22 tests of its own and
 // ActivationChecklist has 24, so this file is only about what the ZERO-STATE
-// does: the three forward actions, R3.3's copy, and the R3.2 guarantee that
-// neither fork leaves the user with less than they started with.
+// does: the three forward actions, the not-connected copy, and the guarantee
+// that neither fork leaves the user with less than they started with.
 //
-// ActivationChecklist is deliberately NOT mocked. R3.2 is a claim about the
-// composed screen ("declining guidance leaves the checklist and a docs link in
-// place"), and a stubbed checklist would let that claim pass while the real one
-// rendered nothing. The single `useOnboarding` mock reaches both components,
-// since both import it from the same path.
+// ActivationChecklist is deliberately NOT mocked. "Neither fork is a dead end"
+// is a claim about the composed screen ("declining guidance leaves the
+// checklist and a docs link in place"), and a stubbed checklist would let that
+// claim pass while the real one rendered nothing. The single `useOnboarding`
+// mock reaches both components, since both import it from the same path.
 //
 // AccountDialog IS mocked, to a marker that respects `open`. It pulls in
 // brokerages, tier state and the API client, none of which this screen's
@@ -84,7 +84,7 @@ function useHook(over: Partial<UseOnboardingResult> = {}): UseOnboardingResult {
   return value;
 }
 
-/** Idle by default — nothing on this screen starts a tour on its own (R5.2). */
+/** Idle by default — nothing on this screen starts a tour on its own. */
 function useTour(over: Partial<UseWalkthroughResult> = {}): UseWalkthroughResult {
   const value: UseWalkthroughResult = {
     start: vi.fn(),
@@ -115,7 +115,8 @@ function useDemo(over: Partial<UseDemoAccountResult> = {}): UseDemoAccountResult
 }
 
 beforeEach(() => {
-  // The idle walkthrough is the backdrop every test but the R5.8 ones want.
+  // The idle walkthrough is the backdrop every test but the failed-runtime
+  // ones want.
   useTour();
   useDemo();
 });
@@ -125,15 +126,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
+describe('ZeroState — the three forward actions', () => {
   it('renders all three, and the sample-data option alongside the real one', () => {
     useHook();
     render(<ZeroState />);
 
     expect(screen.getByRole('button', { name: 'Create my first account' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Walk me through it' })).toBeTruthy();
-    // R9.1: alongside, never instead of — the real account action is still the
-    // one that comes first and the one that carries the weight.
+    // Alongside, never instead of — the real account action is still the one
+    // that comes first and the one that carries the weight.
     expect(screen.getByRole('button', { name: 'Add sample data' })).toBeTruthy();
   });
 
@@ -147,7 +148,7 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
     expect(screen.getByTestId('account-dialog')).toBeTruthy();
   });
 
-  it('starts nothing at all on mount — the walkthrough is only ever asked for (R5.2)', () => {
+  it('starts nothing at all on mount — the walkthrough is only ever asked for', () => {
     const tour = useTour();
     const hook = useHook();
     render(<ZeroState />);
@@ -160,7 +161,7 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
     expect(hook.setStatus).not.toHaveBeenCalled();
   });
 
-  it('records the guided opt-in as `active` (R5.2)', async () => {
+  it('records the guided opt-in as `active`', async () => {
     const hook = useHook();
     render(<ZeroState />);
 
@@ -180,10 +181,10 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
     // PINNED ORDER, not incidental. The write lands before `start()` gets the
     // chance to fail on its lazy chunk, because what is recorded is the user's
     // CHOICE — made in full by the time the import is requested — not the
-    // chunk's fate. R5.8's "leave the status alone" forbids recording a REFUSAL
-    // the user never made; `active` is not one, and `skipped` is the value that
-    // would cost them the checklist (R4.5). Reordering this to write only on
-    // success would need tour lifecycle outside `useWalkthrough`, so it is a
+    // chunk's fate. Leaving the status alone on a failed load forbids recording
+    // a REFUSAL the user never made; `active` is not one, and `skipped` is the
+    // value that would cost them the checklist. Reordering this to write only
+    // on success would need tour lifecycle outside `useWalkthrough`, so it is a
     // decision, and this is what says so.
     const optInAt = vi.mocked(hook.setStatus).mock.invocationCallOrder[0] ?? 0;
     const handOffAt = vi.mocked(tour.start).mock.invocationCallOrder[0] ?? 0;
@@ -201,8 +202,8 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
 
     expect(tour.start).toHaveBeenCalledTimes(1);
     // No id: the hook resolves the first outstanding item itself, which is what
-    // makes "begin" and "resume after a reload" the same call (R5.6). A click
-    // event must not arrive here as a step id either.
+    // makes "begin" and "resume after a reload" the same call. A click event
+    // must not arrive here as a step id either.
     expect(tour.start).toHaveBeenCalledWith(undefined);
   });
 
@@ -267,7 +268,7 @@ describe('ZeroState — the three forward actions (R3.2, R9.1)', () => {
   });
 });
 
-describe('ZeroState — the checklist starts the walkthrough per item (R4.1, R5.2)', () => {
+describe('ZeroState — the checklist starts the walkthrough per item', () => {
   it('runs the set for the item whose action was pressed', async () => {
     const tour = useTour();
     useHook();
@@ -348,7 +349,7 @@ describe('ZeroState — the guided fork with no step behind it', () => {
     expect(tour.start).toHaveBeenCalledWith(undefined);
   });
 
-  it('points a dismissed checklist at reopening it rather than starting nothing (R4.5)', async () => {
+  it('points a dismissed checklist at reopening it rather than starting nothing', async () => {
     const tour = useTour();
     const hook = useHook({ checklist: null, preference: preference('skipped') });
     render(<ZeroState />);
@@ -366,7 +367,7 @@ describe('ZeroState — the guided fork with no step behind it', () => {
   });
 });
 
-describe('ZeroState — the runtime failed to load (R5.8)', () => {
+describe('ZeroState — the runtime failed to load', () => {
   it('says what happened rather than leaving a button that does nothing', () => {
     useTour({ isUnavailable: true });
     useHook();
@@ -420,7 +421,7 @@ describe('ZeroState — the runtime failed to load (R5.8)', () => {
   });
 });
 
-describe('ZeroState — what the screen says (R3.3)', () => {
+describe('ZeroState — what the screen says', () => {
   it('names the brokerage account as the prerequisite for everything else', () => {
     useHook();
     render(<ZeroState />);
@@ -449,7 +450,7 @@ describe('ZeroState — what the screen says (R3.3)', () => {
   });
 });
 
-describe('ZeroState — neither fork is a dead end (R3.2)', () => {
+describe('ZeroState — neither fork is a dead end', () => {
   it('leaves the checklist and the docs link in place after declining guidance', async () => {
     useHook();
     render(<ZeroState />);
@@ -605,7 +606,7 @@ describe('ZeroState — design-system gates', () => {
   });
 });
 
-describe('ZeroState — mobile widths (R3.7)', () => {
+describe('ZeroState — mobile widths', () => {
   it('renders every part of the screen at a 320px viewport', () => {
     window.innerWidth = 320;
     useHook();

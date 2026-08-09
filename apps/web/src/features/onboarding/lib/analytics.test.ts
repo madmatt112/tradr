@@ -8,9 +8,9 @@ import type { ChecklistItemId } from './derive-checklist';
 // THE VENDOR SDK IS THE DOUBLE, NOT THE TELEMETRY MODULE. Stubbing
 // `@/lib/telemetry/posthog` would prove only that this file calls the function
 // it obviously calls; the interesting claims are about what that module does
-// with the call, and the loudest of them is R8.4 — with nothing configured, the
-// SDK is never even loaded and nothing is sent. Mocking one level lower is what
-// lets the same spy answer both "was it sent?" and "was it not?".
+// with the call, and the loudest of them is that with nothing configured the SDK
+// is never even loaded and nothing is sent. Mocking one level lower is what lets
+// the same spy answer both "was it sent?" and "was it not?".
 const { initSpy, captureSpy } = vi.hoisted(() => ({ initSpy: vi.fn(), captureSpy: vi.fn() }));
 
 vi.mock('posthog-js', () => ({
@@ -88,7 +88,7 @@ afterEach(() => {
   delete window.__TRADR_CONFIG__;
 });
 
-// --- R8.4: nothing configured, nothing emitted ------------------------------
+// --- nothing configured, nothing emitted ------------------------------------
 
 describe('with analytics unconfigured (the self-hosted default)', () => {
   it('emits nothing, for any event, and returns normally', async () => {
@@ -149,7 +149,7 @@ describe('emitOnboardingEvent', () => {
     ]);
   });
 
-  it('carries the step index and the reason on abandonment (R8.1)', () => {
+  it('carries the step index and the reason on abandonment', () => {
     emit({
       name: 'onboarding_walkthrough_abandoned',
       item: 'close',
@@ -175,9 +175,9 @@ describe('emitOnboardingEvent', () => {
   });
 });
 
-// --- R8.5: what an event may carry ------------------------------------------
+// --- what an event may carry ------------------------------------------------
 
-describe('event payloads carry no trade or monetary data (R8.5)', () => {
+describe('event payloads carry no trade or monetary data', () => {
   // One of every variant, with the widest payload each one has.
   const EVERY_EVENT: OnboardingEvent[] = [
     { name: 'onboarding_walkthrough_offered', item: 'account' },
@@ -228,7 +228,7 @@ describe('event payloads carry no trade or monetary data (R8.5)', () => {
     const event: OnboardingEvent = {
       name: 'onboarding_checklist_item_completed',
       item: 'position',
-      // @ts-expect-error -- R8.5: there is no field for trade or monetary data.
+      // @ts-expect-error -- there is no field for trade or monetary data.
       symbol: 'AAPL',
     };
 
@@ -236,7 +236,7 @@ describe('event payloads carry no trade or monetary data (R8.5)', () => {
   });
 });
 
-// --- R8.2: per-item completion, on the transition ---------------------------
+// --- per-item completion, on the transition ---------------------------------
 
 describe('reportChecklistCompletions', () => {
   let report: AnalyticsModule['reportChecklistCompletions'];
@@ -304,8 +304,8 @@ describe('reportChecklistCompletions', () => {
 
   it('emits nothing when seeded sample data leaves the counts alone', () => {
     // Adding sample data completes no item, because `useOnboarding` excludes the
-    // demo account and its rows from every count (R4.8). So the checklist the
-    // seed produces is the same checklist, and there is no transition here.
+    // demo account and its rows from every count. So the checklist the seed
+    // produces is the same checklist, and there is no transition here.
     report(aChecklist());
     report(aChecklist());
 
@@ -328,7 +328,7 @@ describe('reportChecklistCompletions', () => {
     expect(captured()).toEqual([['onboarding_checklist_item_completed', { item: 'close' }]]);
   });
 
-  // --- first-visit completions (R8.2) ---------------------------------------
+  // --- first-visit completions ----------------------------------------------
   //
   // "The first checklist is the baseline" is right for the items a user arrived
   // with and wrong for the ones they finished on the way here. The bus is what
@@ -433,7 +433,7 @@ describe('reportChecklistCompletions', () => {
     const { eventBus } = await import('@/stores/event-bus.store');
 
     // Sample data is seeded under its own reason and its rows are excluded from
-    // every count (R4.8), so it can arm nothing and complete nothing.
+    // every count, so it can arm nothing and complete nothing.
     eventBus.publish('accounts:cache-invalidate', { reason: 'demo-seeded' });
     eventBus.publish('positions:cache-invalidate', { reason: 'updated' });
     report(aChecklist('account', 'position'));

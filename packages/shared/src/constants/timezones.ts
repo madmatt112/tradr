@@ -14,15 +14,16 @@ export const IANA_TIMEZONES: readonly string[] = Intl.supportedValuesOf('timeZon
 // the `accounts.timezone` column default.
 export const DEFAULT_ACCOUNT_TIMEZONE = 'America/New_York';
 
-// Default user REPORTING zone (user-onboarding R2.3, R2.5). Used on two paths
-// that must agree: the registration write when the client sends no
-// browser-detected zone, and the read of a pre-migration NULL column.
+// Default user REPORTING zone. Used on two paths that must agree: the
+// registration write when the client sends no browser-detected zone, and the
+// read of a pre-migration NULL column.
 //
 // It is deliberately NOT `DEFAULT_ACCOUNT_TIMEZONE`. That one is
 // 'America/New_York' because NYSE, NASDAQ and NYSE Arca run there, which says
-// where the *market* is, not where the *person* is; deriving one from the other
-// is exactly what R2.7 forbids. 'UTC' is also the fallback the six
-// timezone-bucketing surfaces already use when `Intl` yields nothing, so a
-// pre-migration row resolves to the value that path would have produced anyway
-// (R2.5). Any other zone would be an unfounded claim about the user's location.
+// where the *market* is, not where the *person* is; the reporting zone follows
+// the person, and neither zone is ever derived from the other. 'UTC' is also
+// the fallback the six timezone-bucketing surfaces already use when `Intl`
+// yields nothing, so a pre-migration row resolves to the value that path would
+// have produced anyway rather than silently rebucketing that user's history.
+// Any other zone would be an unfounded claim about the user's location.
 export const DEFAULT_REPORTING_TIMEZONE = 'UTC';

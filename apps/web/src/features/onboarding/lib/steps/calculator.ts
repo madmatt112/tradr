@@ -1,5 +1,5 @@
 /**
- * Checklist item 2 — size a trade in the calculator (R6.7).
+ * Checklist item 2 — size a trade in the calculator.
  *
  * Runs on `/calculator`, which `routes/_auth.calculator.tsx` mounts.
  *
@@ -20,7 +20,8 @@
  *   someone stayed on Dollar. It anchors to whichever field the chosen basis
  *   renders — `#riskPercent` or `#dollarRisk` — and names both.
  * - Selecting an account seeds `riskPercent` from `account.defaultRiskPercent`
- *   ONLY when the account carries one (R1.4), and never writes back (R1.3).
+ *   ONLY when the account carries one — an account without a default leaves the
+ *   field empty — and an edit there never writes back to the account.
  * - An account also supplies the display currency and the buying-power cap, in
  *   both risk bases.
  * - `positionSize` is floored to whole units, which is why the actual dollar

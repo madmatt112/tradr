@@ -1,5 +1,5 @@
 /**
- * Checklist item 4 — close it and see the stats (R6.9).
+ * Checklist item 4 — close it and see the stats.
  *
  * Starts on `/positions/$positionId` and lands on `/dashboard`, so the last
  * thing this walkthrough does is show the user their own figures on the screen

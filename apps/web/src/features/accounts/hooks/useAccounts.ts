@@ -54,8 +54,7 @@ export function useCreateAccount() {
       // Cross-feature announcement, not a cache concern: the invalidations above
       // already cover this feature's own reads. The onboarding walkthrough's
       // "Create the account" step advances on the account actually existing
-      // rather than on a "Next" click (user-onboarding R5.5), and this is that
-      // event.
+      // rather than on a "Next" click, and this is that event.
       eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
       toast.success('Account created');
     },
@@ -63,10 +62,10 @@ export function useCreateAccount() {
       // TIER_LIMIT_ACCOUNTS renders inline in the create dialog (mapped on the
       // CODE only) — no duplicate toast.
       if (getAccountErrorCode(err) === 'TIER_LIMIT_ACCOUNTS') return;
-      // The server refuses a real account while sample data is present
-      // (user-onboarding R9.6). The accounts page asks about that BEFORE opening
-      // the form, so reaching this means the cached list disagreed with the
-      // server — another tab seeded, most likely. Refetch, which brings the
+      // The server refuses a real account while sample data is present, because
+      // the two are mutually exclusive. The accounts page asks about that BEFORE
+      // opening the form, so reaching this means the cached list disagreed with
+      // the server — another tab seeded, most likely. Refetch, which brings the
       // sample-data banner back and puts the confirm-then-remove flow in front
       // of the next attempt. Branching on the CODE, never on the message: a
       // duplicate account name is a 409 from the same handler.

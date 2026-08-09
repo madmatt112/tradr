@@ -1,4 +1,4 @@
-// useDemoAccount — the client half of the disposable sample account (R9).
+// useDemoAccount — the client half of the disposable sample account.
 //
 // WHICH ACCOUNT IS THE SAMPLE ONE IS READ, NEVER INFERRED. The account reads
 // carry `isDemo`, and this hook keys off that flag alone. Sample and real data
@@ -12,9 +12,10 @@
 // remove a whole account's worth of positions, fills and ledger entries in one
 // call, so the dashboard, the accounts list, the positions list and performance
 // are all stale at once. This hook names none of their query keys: it publishes
-// on the event bus and `EventBusBridge` maps that announcement onto them
-// (structure.md, Cross-Feature Cache Invalidation). One publish, and a surface
-// added later subscribes rather than waiting for this file to hear about it.
+// on the event bus and `EventBusBridge` maps that announcement onto them, which
+// is how cross-feature invalidation works everywhere in this codebase. One
+// publish, and a surface added later subscribes rather than waiting for this
+// file to hear about it.
 
 import { useMutation } from '@tanstack/react-query';
 import { useCallback } from 'react';
@@ -39,10 +40,10 @@ export interface UseDemoAccountResult {
   isDemoPresent: boolean;
   /** The sample account itself, or `undefined` — the id teardown needs. */
   demoAccount: Account | undefined;
-  /** Seed the sample account (R9.2). Refused server-side if the user already has one. */
+  /** Seed the sample account. Refused server-side if the user already has one. */
   seed: () => void;
   /**
-   * Remove the sample account and everything booked against it (R9.5).
+   * Remove the sample account and everything booked against it.
    *
    * `onSuccess` is how the create flow continues after the teardown it asked
    * for. With no sample data present there is nothing to remove and the

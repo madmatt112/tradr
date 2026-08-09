@@ -94,8 +94,8 @@ describe('registration seeds the reporting timezone', () => {
   });
 
   it('falls back to the default when no zone is supplied', async () => {
-    // R2.3: absent ⇒ a defined default is STORED, not left null to be guessed
-    // at later. The stored value, not just the read, is asserted.
+    // Absent ⇒ a defined default is STORED, not left null to be guessed at
+    // later. The stored value, not just the read, is asserted.
     const { cookie, email } = await registerAndGetCookie();
     expect(await storedTimezone(email)).toBe(DEFAULT_REPORTING_TIMEZONE);
     expect(await getTimezone(cookie)).toBe(DEFAULT_REPORTING_TIMEZONE);
@@ -118,7 +118,7 @@ describe('registration seeds the reporting timezone', () => {
 
 describe('GET/PUT /api/users/me/timezone', () => {
   it('resolves a pre-migration NULL column to the default, flagged as NOT stored', async () => {
-    // R2.5: rows that predate the column read without erroring. NULLing the
+    // Rows that predate the column must read without erroring. NULLing the
     // column directly is the only way to reach that state now that
     // registration always seeds one.
     const { cookie, email } = await registerAndGetCookie({ timezone: 'Asia/Tokyo' });

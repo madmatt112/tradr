@@ -139,6 +139,8 @@ The running total of net P&L, bucket by bucket, over the range you selected. It
 starts at zero rather than at your account balance: it shows what your trading
 did, not what your account is worth.
 
+Bucket boundaries come from your reporting timezone, described below.
+
 ## Things worth knowing
 
 **Realized P&L does not wait for a close.** A partial exit realizes its share
@@ -146,6 +148,16 @@ immediately, so an open position can carry a realized P&L and contribute to your
 balance. The performance statistics above are a different question — they count
 positions that have gone flat, which is why a half-closed position appears in your
 balance but not yet in your win rate.
+
+**Day, week and month come from your reporting timezone.** Tradr buckets P&L in
+the zone stored against your user, not the zone of the browser you are reading
+from. A fill late in the evening lands in the same bucket wherever you open
+Tradr. Set the zone under **Settings → Profile**.
+
+That zone is not an account's trading-day timezone, and neither is derived from
+the other. The trading-day timezone belongs to one account and decides whether a
+position can be re-entered the same day. The reporting timezone belongs to you
+and decides how these figures are cut.
 
 **Currencies are never mixed.** Statistics are computed per currency. Positions in
 a currency Tradr has no rate for are excluded and reported as excluded rather than

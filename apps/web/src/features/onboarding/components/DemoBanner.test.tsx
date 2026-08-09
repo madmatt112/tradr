@@ -2,7 +2,7 @@
 //
 // `useDemoAccount` is faked wholesale — it has its own tests — so this file is
 // only about what the banner does with the answer: says the figures are sample
-// data, carries the control that removes them (R9.4), and stays out of the way
+// data, carries the control that removes them, and stays out of the way
 // entirely for everybody else.
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -52,11 +52,11 @@ describe('DemoBanner', () => {
 
     const banner = screen.getByTestId('demo-banner');
     expect(banner.textContent).toContain('sample data');
-    // R9.4: the notice and the way out are the same control.
+    // The notice and the way out are the same control.
     expect(screen.getByTestId('demo-banner-remove')).toBeTruthy();
   });
 
-  it('removes the sample data on one click, with no confirmation step (R9.5)', async () => {
+  it('removes the sample data on one click, with no confirmation step', async () => {
     const hook = useHook();
     render(<DemoBanner />);
 

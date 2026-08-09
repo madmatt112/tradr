@@ -387,9 +387,9 @@ describe('all-time dashboard widgets — the window widens once historyRange arr
     const last = requestedWindows().at(-1)!;
     expect(last.start <= historyRange().earliestClosedAt!).toBe(true);
     // The widened window is still the STORED zone's month boundary and still
-    // carries the stored zone (user-onboarding R2.4) — re-deriving must not
-    // reach for `Intl.DateTimeFormat().resolvedOptions()` or for the response's
-    // own `resolvedTimezone`.
+    // carries the stored reporting zone — re-deriving must not reach for
+    // `Intl.DateTimeFormat().resolvedOptions()` or for the response's own
+    // `resolvedTimezone`.
     expect(last.tz).toBe('UTC');
     expect(last.granularity).toBe('year');
 

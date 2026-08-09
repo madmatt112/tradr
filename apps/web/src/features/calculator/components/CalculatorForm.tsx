@@ -118,14 +118,13 @@ export function CalculatorForm() {
   const capBasis = buyingPowerBasisQuery.data?.basis ?? 'cash';
 
   // THE SINGLE NAMED EXCEPTION TO "checklist completion is derived, never
-  // stored" (user-onboarding R4.2, resolved in design.md §"Requirement 4.2 —
-  // the one exception"). The other three items read the user's real rows; the
-  // calculator is stateless and writes nothing, so "size a trade in the
-  // calculator" has no data trace unless this one timestamp is recorded. It is
-  // a fact about the user ("first used the calculator at T"), not a per-step
-  // flag — it is written once and never reconciled against anything. NOTHING
-  // ELSE about onboarding may be written from this form, and no other checklist
-  // item may acquire a flag like it.
+  // stored". The other three items read the user's real rows; the calculator is
+  // stateless and writes nothing, so "size a trade in the calculator" has no
+  // data trace unless this one timestamp is recorded. It is a fact about the
+  // user ("first used the calculator at T"), not a per-step flag — it is
+  // written once and never reconciled against anything. NOTHING ELSE about
+  // onboarding may be written from this form, and no other checklist item may
+  // acquire a flag like it.
   const onboardingQuery = useOnboardingQuery();
   // Silent: this write is not something the user asked for, so its failure has
   // nothing to tell them. See useOnboardingPatch.
@@ -298,13 +297,13 @@ export function CalculatorForm() {
     setValue('feeSchedule', parsed, { shouldValidate: true });
   };
 
-  // Seed the risk percent from the account's own rule (user-onboarding R1.2), at
-  // the two points that already re-seed `balance`. READ PATH ONLY — the account
-  // is never written back to from here (R1.3): a risk percent typed on one
-  // calculation is that calculation's, and the stored rule is unchanged.
+  // Seed the risk percent from the account's own rule, at the two points that
+  // already re-seed `balance`. READ PATH ONLY — the account is never written
+  // back to from here: a risk percent typed on one calculation is that
+  // calculation's, and the stored rule is unchanged.
   //
-  // Only when a rule EXISTS. An account without one deliberately leaves the field
-  // exactly as it found it (R1.4) rather than clearing it the way an absent
+  // Only when a rule EXISTS. An account without one deliberately leaves the
+  // field exactly as it found it rather than clearing it the way an absent
   // `balance` clears the balance — every account predating the column has no
   // rule, so clearing would wipe a percent the user typed before picking their
   // account and change today's behaviour for every existing user.
@@ -362,10 +361,9 @@ export function CalculatorForm() {
   // and the display currency, because a dollar risk is typed directly and a
   // `balance` set here would be a second, contradictory risk basis.
   // `data-tour` on this block and on the risk-basis tabs below are the
-  // walkthrough's anchors (user-onboarding R6.7). Neither the account picker nor
-  // the risk basis exposes a stable id of its own — the picker's trigger is
-  // rebuilt per query state — and the steps are data, so they cannot match on
-  // structure.
+  // walkthrough's anchors. Neither the account picker nor the risk basis exposes
+  // a stable id of its own — the picker's trigger is rebuilt per query state —
+  // and the steps are data, so they cannot match on structure.
   const accountPicker = (
     <div className="space-y-2 pt-2" data-tour="calculator-account">
       <Label>Account</Label>

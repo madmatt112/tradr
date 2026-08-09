@@ -38,7 +38,7 @@ vi.mock('@tradr/shared', async () => {
   };
 });
 
-// ---- Zero-state mocks (Req 3) ----------------------------------------------
+// ---- Zero-state mocks ------------------------------------------------------
 //
 // The route now composes two more reads before it decides what to show. Both
 // are faked here, but NOT identically:
@@ -48,8 +48,8 @@ vi.mock('@tradr/shared', async () => {
 // AccountBalancesWidget, CrossCurrencyTotal — pass none. So the mock hands the
 // route a controllable knob while handing the widgets exactly what they saw in
 // this file before the zero-state existed: a failed read, hence their skeleton.
-// That is what makes "the existing branches behave as before" (Req 3.5) a
-// literal claim about these tests rather than an approximate one.
+// That is what makes "the existing branches behave as before" a literal claim
+// about these tests rather than an approximate one.
 //
 // `useOnboarding` is faked wholesale rather than only `useOnboardingQuery`,
 // because ZeroState and the ActivationChecklist inside it both read the real
@@ -73,11 +73,11 @@ let onboardingQueryMock: {
   isError: boolean;
 };
 let onboardingMock: UseOnboardingResult;
-// `useOnboardingPatch` is here for the coach mark the populated branch mounts
-// (user-onboarding R7.1): it is the only write path that component has, and an
-// unmocked one would throw for want of a QueryClient. The mark itself is left
-// REAL — whether it appears on this branch and stays off the zero-state and
-// empty ones is a claim about this route, and a stub would let it pass.
+// `useOnboardingPatch` is here for the coach mark the populated branch mounts:
+// it is the only write path that component has, and an unmocked one would throw
+// for want of a QueryClient. The mark itself is left REAL — whether it appears
+// on this branch and stays off the zero-state and empty ones is a claim about
+// this route, and a stub would let it pass.
 vi.mock('@/features/onboarding/hooks/useOnboarding', () => ({
   useOnboardingQuery: () => onboardingQueryMock,
   useOnboarding: () => onboardingMock,
@@ -374,7 +374,7 @@ describe('_auth.dashboard route', () => {
   });
 });
 
-// ---- Zero state (Req 3) ----------------------------------------------------
+// ---- Zero state ------------------------------------------------------------
 
 describe('_auth.dashboard route — the zero-state gate', () => {
   const populated = {
@@ -385,9 +385,9 @@ describe('_auth.dashboard route — the zero-state gate', () => {
   const emptyLayout = { widgets: [], theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' };
   const oneAccount = [{ id: 'acct-1' }];
 
-  it('Req 3.1: a fresh user gets the zero-state instead of six empty widgets', () => {
+  it('gives a fresh user the zero-state instead of six empty widgets', () => {
     // The layout is fully populated, so without the gate this user would be
-    // looking at the grid — which is exactly the screen Req 3 exists to replace.
+    // looking at the grid — the exact screen the zero-state exists to replace.
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending');
     accountsMock = { data: [], isLoading: false, isError: false };
@@ -397,7 +397,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(container.querySelector('[data-slot="dashboard-skeleton"]')).toBeNull();
   });
 
-  it('Req 3.5: the zero-state takes precedence over the empty-layout state', () => {
+  it('takes precedence over the empty-layout state', () => {
     layoutMockValue = baseLayout({ data: emptyLayout });
     setOnboarding('pending');
     accountsMock = { data: [], isLoading: false, isError: false };
@@ -406,7 +406,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.queryByText('Your dashboard is empty')).toBeNull();
   });
 
-  it('Req 3.4: creating the first account swaps to the grid with no reload', async () => {
+  it('swaps to the grid with no reload when the first account is created', async () => {
     // `useCreateAccount` invalidates ['accounts'] and the route observes
     // ['accounts', 'list'], so a real create produces exactly this data change.
     // What is pinned here is the route's reaction to it: the SAME mounted tree
@@ -435,7 +435,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
   });
 
-  it('Req 3.6: a retired user with zero accounts gets the empty layout, not the zero-state', () => {
+  it('gives a retired user with zero accounts the empty layout, not the zero-state', () => {
     // The returning user who deleted every account. `done` is the whole reason
     // the stored status exists — the account count alone cannot tell them apart
     // from someone who registered a minute ago.
@@ -447,7 +447,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
   });
 
-  it('Req 3.6/4.5: a SKIPPED user with zero accounts still gets the zero-state, and with it the reopen control', () => {
+  it('still gives a SKIPPED user with zero accounts the zero-state, and with it the reopen control', () => {
     // The trap this gate is most likely to fall into. Retiring on
     // `done || skipped` would look harmless — but ActivationChecklist's
     // "Reopen setup checklist" row is the only way back from a dismissal
@@ -503,7 +503,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
   });
 
-  it('Req 3.5: the isLoading and isError branches are unchanged by the gate', () => {
+  it('leaves the isLoading and isError branches unchanged', () => {
     // Both sit ahead of the zero-state, so they must win even for the user the
     // zero-state is for.
     layoutMockValue = baseLayout({ isLoading: true });
@@ -521,15 +521,16 @@ describe('_auth.dashboard route — the zero-state gate', () => {
   });
 });
 
-// ---- The checklist beyond the zero-state (Req 4) ----------------------------
+// ---- The checklist beyond the zero-state ------------------------------------
 //
 // `ZeroState` mounts `ActivationChecklist` itself, and for a while that was the
 // checklist's ONLY home — which meant it disappeared from the product the
 // instant the user created their first account. Items 2-4 became invisible
-// exactly when they were the outstanding work; R4.5's reopen row became
-// unreachable; and R4.7's retirement could never fire, so the status never
-// reached `done` and the gated reads never switched off. These cases pin the
-// mount on the two branches a user with accounts actually lands on.
+// exactly when they were the outstanding work; the reopen row that keeps a
+// dismissal recoverable became unreachable; and the checklist could never retire
+// itself on the fourth completed item, so the status never reached `done` and
+// the gated reads never switched off. These cases pin the mount on the two
+// branches a user with accounts actually lands on.
 
 describe('_auth.dashboard route — the activation checklist beyond the zero-state', () => {
   const populated = {
@@ -546,7 +547,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     calculatorFirstUsedAt: '2026-05-01T00:00:00.000Z',
   });
 
-  it('R4: a user with an account and pending onboarding sees the checklist ABOVE the grid', async () => {
+  it('a user with an account and pending onboarding sees the checklist ABOVE the grid', async () => {
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
@@ -567,13 +568,13 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(checklist.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('R4: the empty-layout branch mounts it too, and keeps its own empty state', () => {
+  it('the empty-layout branch mounts it too, and keeps its own empty state', () => {
     layoutMockValue = baseLayout({ data: emptyLayout });
     setOnboarding('pending');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     renderRoute();
     expect(screen.getByTestId('activation-checklist')).toBeTruthy();
-    // The branch itself is untouched (Req 3.5).
+    // The branch itself is untouched.
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Use the default layout/i })).toBeTruthy();
   });
@@ -597,7 +598,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(slot.className).toContain('empty:hidden');
   });
 
-  it('R4.5: a SKIPPED user with accounts still reaches the reopen row — dismissal stays recoverable', () => {
+  it('a SKIPPED user with accounts still reaches the reopen row — dismissal stays recoverable', () => {
     // Before the checklist had a home here, creating the first account deleted
     // the product's only way back from a dismissal.
     layoutMockValue = baseLayout({ data: populated });
@@ -608,7 +609,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(screen.queryByTestId('activation-checklist')).toBeNull();
   });
 
-  it('R4.7: completing all four items retires the checklist and writes `done` once', async () => {
+  it('completing all four items retires the checklist and writes `done` once', async () => {
     // Reachable ONLY from this mount: items 2-4 cannot be completed by a user
     // who still qualifies for the zero-state, so retirement could never fire
     // while the zero-state was the checklist's only home — and with it the read
@@ -639,7 +640,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(screen.queryByTestId('activation-checklist-loading')).toBeNull();
   });
 
-  it('Req 3.5: the loading, error and zero-state branches mount no checklist of their own', () => {
+  it('mounts no checklist of its own in the loading, error and zero-state branches', () => {
     layoutMockValue = baseLayout({ isLoading: true });
     setOnboarding('pending');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
@@ -670,8 +671,8 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
 // are in flight, and that skeleton is 28px SHORTER than the card that replaces
 // it (210px vs 238px — the arithmetic is on `ChecklistSlot`). Mounted bare above
 // the widget grid, the swap dropped the whole grid by that much, once per load,
-// for every user still mid-onboarding — the layout jump `visual-design` R4.4
-// forbids of a loading state. The checklist is correct and untouched; the slot
+// for every user still mid-onboarding — exactly the loading-state layout jump
+// the design system forbids. The checklist is correct and untouched; the slot
 // it mounts into reserves the settled height.
 //
 // jsdom computes no layout, so these cases pin the two things it CAN see: the
@@ -733,7 +734,7 @@ describe('_auth.dashboard route — the checklist slot reserves its height', () 
     expect(slot).not.toBeNull();
     expect(slot.contains(screen.getByTestId('activation-checklist-loading'))).toBe(true);
     expect(slot.className).toContain(RESERVED);
-    // And the branch's own content is unchanged (Req 3.5).
+    // And the branch's own content is unchanged.
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
   });
 
@@ -753,7 +754,7 @@ describe('_auth.dashboard route — the checklist slot reserves its height', () 
   });
 });
 
-// ---- The widget coach mark (user-onboarding R7.1, R7.5) ---------------------
+// ---- The widget coach mark --------------------------------------------------
 //
 // The mark rides with the populated branch's header and MUST NOT reach the two
 // branches that return before it. That is a property of the route's branch
@@ -780,7 +781,7 @@ describe('_auth.dashboard route — the widget coach mark', () => {
   const emptyLayout = { widgets: [], theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' };
   const oneAccount = [{ id: 'acct-1' }];
 
-  it('R7.1: appears beside the header on the populated branch', () => {
+  it('appears beside the header on the populated branch', () => {
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };

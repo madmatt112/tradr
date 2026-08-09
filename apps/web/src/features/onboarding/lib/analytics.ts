@@ -1,15 +1,15 @@
 // The onboarding funnel's five events, and the only shape they are allowed to
-// take (R8).
+// take.
 //
-// THE POINT OF THE FILE IS THE TYPE, NOT THE FUNCTION. R8.5 says an onboarding
-// event carries no position, symbol, balance or monetary value, and the cheapest
-// way to break that rule is a helper that takes `Record<string, unknown>` — the
-// first caller with a position id to hand puts it in, nobody notices, and the
-// rule is now a comment. So there is no property bag: `OnboardingEvent` is a
-// closed discriminated union in which every event names its own properties, and
-// every one of those is a checklist item id, a tour exit reason, or a step
-// ordinal. A caller CANNOT attach anything else without editing this union,
-// which is a visible change to a file whose whole subject is what may be sent.
+// THE POINT OF THE FILE IS THE TYPE, NOT THE FUNCTION. An onboarding event may
+// carry no position, symbol, balance or monetary value, and the cheapest way to
+// break that rule is a helper that takes `Record<string, unknown>` — the first
+// caller with a position id to hand puts it in, nobody notices, and the rule is
+// now a comment. So there is no property bag: `OnboardingEvent` is a closed
+// discriminated union in which every event names its own properties, and every
+// one of those is a checklist item id, a tour exit reason, or a step ordinal. A
+// caller CANNOT attach anything else without editing this union, which is a
+// visible change to a file whose whole subject is what may be sent.
 //
 // The values are as narrow as the domain allows: `item` is one of the four
 // `ChecklistItemId` literals, `reason` is one of the three non-completing
@@ -18,16 +18,16 @@
 // ticker could be spelled into.
 //
 // EMISSION IS INVISIBLE TO THE FLOW. `captureClientEvent` already does nothing
-// when PostHog was never initialized — the default self-hosted case (R8.4) — so
-// there is deliberately no configured-check here; a second one could only drift
-// out of agreement with the first. What that helper does NOT do is guard against
-// the vendor SDK throwing, and these calls sit inside a tour's exit handler and a
+// when PostHog was never initialized — the default self-hosted case — so there
+// is deliberately no configured-check here; a second one could only drift out of
+// agreement with the first. What that helper does NOT do is guard against the
+// vendor SDK throwing, and these calls sit inside a tour's exit handler and a
 // query effect, where a throw would take the teardown or the render with it. So
 // every emission is wrapped and every failure is swallowed: a walkthrough must
 // end the same way whether or not anyone is counting.
 //
-// NO NEW VENDOR AND NO SECOND SDK (R8.3): the one import below is the telemetry
-// module the rest of the app already captures through.
+// NO NEW VENDOR AND NO SECOND SDK: the one import below is the telemetry module
+// the rest of the app already captures through.
 
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 import { eventBus } from '@/stores/event-bus.store';
@@ -53,12 +53,13 @@ export type OnboardingEvent =
       item: ChecklistItemId;
       stepIndex: number;
       stepCount: number;
-      // `target-missing` (R5.4) and `session-ended` are abandonments the user
-      // did not choose; `dismissed` is the one they did. They are carried as a
-      // reason rather than as three more event names so the funnel counts every
-      // kind of not-finishing together and can still tell them apart — which is
-      // the point of the distinction: R8 asks where users stop, and "declined
-      // the walkthrough" is a different answer from "left the app".
+      // `target-missing` and `session-ended` are abandonments the user did not
+      // choose; `dismissed` is the one they did. They are carried as a reason
+      // rather than as three more event names so the funnel counts every kind
+      // of not-finishing together and can still tell them apart — which is the
+      // point of the distinction: the funnel exists to find where users stop,
+      // and "declined the walkthrough" is a different answer from "left the
+      // app".
       reason: Exclude<TourExitReason, 'completed'>;
     }
   | { name: 'onboarding_checklist_item_completed'; item: ChecklistItemId };
@@ -75,7 +76,7 @@ export function emitOnboardingEvent(event: OnboardingEvent): void {
 }
 
 // ---------------------------------------------------------------------------
-// Checklist item completion (R8.2)
+// Checklist item completion
 // ---------------------------------------------------------------------------
 
 /**
@@ -100,12 +101,11 @@ let reportedDone: Set<ChecklistItemId> | null = null;
  * baseline-only rule throws both away. That silently drops real first-time
  * completions — for the user who created their account on `/accounts` and only
  * then opened the dashboard, item 1 never happened as far as the funnel is
- * concerned, which biases exactly the measurement Requirement 8 exists to
- * produce.
+ * concerned, which biases exactly the measurement the funnel exists to produce.
  *
  * THE SERVER CANNOT SETTLE IT, AND DELIBERATELY SO. Per-item completion is
- * derived, never stored (R4.2) — `packages/shared/src/schemas/onboarding.ts`
- * says in as many words that adding `accountCreated` or `positionLogged` to the
+ * derived, never stored — `packages/shared/src/schemas/onboarding.ts` says in
+ * as many words that adding `accountCreated` or `positionLogged` to the
  * preference is the bug its comment exists to stop, and the checklist reads
  * counts rather than timestamps precisely so completion cannot disagree with
  * reality. So there is no server-side "already complete when this session
@@ -115,7 +115,7 @@ let reportedDone: Set<ChecklistItemId> | null = null;
  * What there IS, server-confirmed, is the write itself. `accounts:` and
  * `positions:cache-invalidate` are published only once the server accepted a
  * mutation — the same signals `useWalkthrough` already trusts to advance an
- * action step (R5.5).
+ * action step.
  *
  * A COUNT, NOT A FLAG, AND THAT IS THE WHOLE OF IT. "This tab watched a write
  * for item X" is not "item X was completed in this session": a user with three
@@ -134,15 +134,14 @@ let reportedDone: Set<ChecklistItemId> | null = null;
  *
  * Nothing seeded can fire through this. The sample-data seeder publishes
  * `demo-seeded`, never `created`, and `useOnboarding` excludes its rows from
- * every count (R4.8) — a watched item that never becomes `done` is never
- * emitted.
+ * every count — a watched item that never becomes `done` is never emitted.
  *
  * THE HONEST LIMITS, all of them in the same direction (a real completion goes
  * unreported; none is invented):
  *   - a completion in a tab that reloaded before the checklist was ever derived
  *     leaves no trace, and recovering it would mean writing progress to the
- *     client, which R4.2/R4.4 rule out because a stored copy could disagree
- *     with the counts;
+ *     client, which is ruled out because a stored copy could disagree with the
+ *     counts the checklist derives from;
  *   - a CSV import publishes no `positions:cache-invalidate` at all
  *     (`useCsvCommit` invalidates the queries directly), so positions that
  *     arrive that way are counted by the checklist and watched by nothing;
@@ -213,8 +212,8 @@ function completedThisSession(id: ChecklistItemId, counts: ChecklistObservation[
  * Emit an event for each item that has just BECOME complete, and nothing for the
  * items that already were.
  *
- * Completion is derived from counts rather than stored (R4.2), so "is it done?"
- * is answerable on every render and the naive effect fires forever. The first
+ * Completion is derived from counts rather than stored, so "is it done?" is
+ * answerable on every render and the naive effect fires forever. The first
  * checklist observed therefore establishes the baseline: a user who signed up
  * last month and reloads the dashboard has four complete items and has just
  * completed none of them. From then on, an id present now and absent from the
@@ -231,8 +230,8 @@ function completedThisSession(id: ChecklistItemId, counts: ChecklistObservation[
  * every completion when the checklist came back.
  *
  * Nothing seeded fires: `useOnboarding` excludes the sample account and its rows
- * from the counts (R4.8/R9), so adding demo data completes no item and there is
- * no transition here to notice.
+ * from the counts, so adding demo data completes no item and there is no
+ * transition here to notice.
  */
 export function reportChecklistCompletions(
   observation: ChecklistObservation | null | undefined,

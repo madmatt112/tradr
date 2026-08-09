@@ -258,16 +258,17 @@
   overflow: hidden;
 }
 
-/* Coach marks must not sit in the pointer path of the surface they describe
-   (user-onboarding R7.3). The popover content opts itself out with
-   `pointer-events-none`, but Radix positions that content inside a wrapper div
-   it owns outright — `[data-radix-popper-content-wrapper]`, sized to the card,
-   taking no props — and the wrapper is what the browser hit-tests. A mark opens
-   directly below the surface's heading, over that surface's first control, so
-   left in the path it swallows the click aimed at the very thing it is pointing
-   at. The wrapper is unreachable from the component, hence this rule; the
-   component marks its own content with `data-coach-mark` for it to match on.
-   The mark's two controls re-enable themselves with `pointer-events-auto`. */
+/* A coach mark must never block interaction with the surface it describes, so it
+   must not sit in that surface's pointer path. The popover content opts itself
+   out with `pointer-events-none`, but Radix positions that content inside a
+   wrapper div it owns outright — `[data-radix-popper-content-wrapper]`, sized to
+   the card, taking no props — and the wrapper is what the browser hit-tests. A
+   mark opens directly below the surface's heading, over that surface's first
+   control, so left in the path it swallows the click aimed at the very thing it
+   is pointing at. The wrapper is unreachable from the component, hence this
+   rule; the component marks its own content with `data-coach-mark` for it to
+   match on. The mark's two controls re-enable themselves with
+   `pointer-events-auto`. */
 [data-radix-popper-content-wrapper]:has(> [data-coach-mark]) {
   pointer-events: none;
 }

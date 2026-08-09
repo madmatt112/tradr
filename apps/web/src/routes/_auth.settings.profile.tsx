@@ -18,8 +18,8 @@ function SettingsProfile() {
     <div className="space-y-8">
       <DisplayCurrencySelect />
       <BuyingPowerBasisSelect />
-      {/* Reporting timezone (user-onboarding R2.6) — viewable and changeable
-          here whether or not the user ever saw onboarding. */}
+      {/* Reporting timezone — viewable and changeable here whether or not the
+          user ever saw onboarding. */}
       <ReportingTimezoneSelect />
       <ExchangeRatesPage initialBase={base} initialQuote={quote} />
     </div>

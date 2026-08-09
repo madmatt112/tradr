@@ -1,17 +1,17 @@
-// ActivationChecklist — the four-item "what set up means" list (R4).
+// ActivationChecklist — the four-item "what set up means" list.
 //
 // It renders derived state and writes nothing except the onboarding STATUS.
 // Every completion decision comes from `useOnboarding().checklist`, which is
 // `deriveChecklist`'s output: this file must never restate a rule like
 // `accountCount > 0` or `items.every(done)`, because that would fork the rule
-// set out of `lib/derive-checklist.ts` (the "one function with one input shape"
-// NFR). `allComplete` is read, not recomputed.
+// set out of `lib/derive-checklist.ts` — one function, one input shape, and one
+// place the rules live. `allComplete` is read, not recomputed.
 //
-// R4.8 follows for free: NO item completes on demo data alone, because the hook
-// excludes the sample account and everything booked against it from the counts
-// it derives from — so nothing here strikes an item through, or withdraws its
-// guided-step button, for trades the user never made. Nothing here knows demo
-// data exists, and nothing here should.
+// NOTHING COMPLETES ON SAMPLE DATA ALONE, and this file gets that for free: the
+// hook excludes the sample account and everything booked against it from the
+// counts it derives from — so nothing here strikes an item through, or
+// withdraws its guided-step button, for trades the user never made. Nothing
+// here knows demo data exists, and nothing here should.
 //
 // THE THREE CHECKLIST VALUES ARE THREE DIFFERENT ANSWERS, and this component is
 // the reason the hook bothers to distinguish them:
@@ -42,7 +42,7 @@
 // `undefined` past this point can only mean the gated reads are still in
 // flight.
 //
-// R4.5 — WHERE RECOVERY LIVES. Dismissal is only `status: 'skipped'` (no
+// DISMISSAL — WHERE RECOVERY LIVES. Dismissal is only `status: 'skipped'` (no
 // progress is stored anywhere, so there is nothing to lose), which means it is
 // recoverable in principle. This component is what makes it recoverable in
 // PRACTICE: for a `skipped` user it renders a single quiet "Reopen setup
@@ -50,11 +50,11 @@
 // hook's gate on the same render, the two gated reads fire, and the checklist
 // comes back with real counts. A dismissed checklist that left NO trace
 // anywhere would satisfy "dismissible" and fail "re-openable without support
-// intervention". Note the asymmetry with `done`: retirement (R4.7) is
-// permanent and leaves nothing behind, dismissal leaves this one row.
+// intervention". Note the asymmetry with `done`: retirement is permanent and
+// leaves nothing behind, dismissal leaves this one row.
 //
-// R4.7 — RETIREMENT. When all four are complete the checklist stops rendering
-// AND writes `status: 'done'` once, so it does not reappear on later logins.
+// RETIREMENT. When all four are complete the checklist stops rendering AND
+// writes `status: 'done'` once, so it does not reappear on later logins.
 // The write is not merely an optimisation: it also switches off the two
 // expensive gated reads for a user who can never see a checklist again.
 //
@@ -90,13 +90,13 @@ interface ActivationChecklistProps {
    * Optional, and the per-item buttons render ONLY when it is supplied: a
    * "Start" button with nothing behind it is a dead control, and the checklist
    * is useful without one (the items name their own actions, all of which are
-   * reachable from the normal UI — R4.3).
+   * reachable from the normal UI).
    *
    * That optionality is load-bearing now that the walkthrough is wired.
    * `ZeroState` passes `useWalkthrough().start` here and withdraws it when the
-   * tour runtime fails to load (R5.8), so the shortcut disappears while the
-   * checklist itself carries on unchanged. Any other caller that has no
-   * walkthrough to offer simply omits the prop.
+   * tour runtime fails to load, so the shortcut disappears while the checklist
+   * itself carries on unchanged. Any other caller that has no walkthrough to
+   * offer simply omits the prop.
    */
   onStartStep?: (id: ChecklistItemId) => void;
 }
@@ -107,7 +107,7 @@ export function ActivationChecklist({ onStartStep }: ActivationChecklistProps) {
   const allComplete = checklist?.allComplete === true;
   const status = preference?.status;
 
-  // Fire the R4.7 retirement write exactly once per mount. The ref is what
+  // Fire the retirement write exactly once per mount. The ref is what
   // stops a second PATCH going out on the renders between the mutation being
   // sent and the new status landing in the cache — during that window
   // `allComplete` is still true and `status` is still the old one.
@@ -164,7 +164,7 @@ export function ActivationChecklist({ onStartStep }: ActivationChecklistProps) {
     );
   }
 
-  // R4.7: retired. The effect above persists it; this stops showing it now.
+  // Retired. The effect above persists it; this stops showing it now.
   if (allComplete) return null;
 
   const doneCount = checklist.items.filter((item) => item.done).length;
@@ -174,7 +174,7 @@ export function ActivationChecklist({ onStartStep }: ActivationChecklistProps) {
       <CardHeader className="px-4">
         <CardTitle className="text-base">Get set up</CardTitle>
         {/* The non-colour carrier for overall progress, and the answer to "how
-            far along am I?" that R4's user story asks for. */}
+            far along am I?" that a setup checklist has to give. */}
         <CardDescription data-testid="activation-checklist-progress">
           {doneCount} of {checklist.items.length} complete
         </CardDescription>
@@ -192,8 +192,8 @@ export function ActivationChecklist({ onStartStep }: ActivationChecklistProps) {
         </CardAction>
       </CardHeader>
       <CardContent className="px-4">
-        {/* Ordered because R4.1 fixes the order, not because the items gate on
-            each other — any one can be completed first (R4.3). */}
+        {/* Ordered because the four items have a fixed presentation order, not
+            because they gate on each other — any one can be completed first. */}
         <ol className="flex flex-col">
           {checklist.items.map((item) => (
             <li

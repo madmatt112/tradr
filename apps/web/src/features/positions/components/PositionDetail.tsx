@@ -139,9 +139,9 @@ export function PositionDetailView({ positionId }: Props) {
             <Tooltip>
               <TooltipTrigger asChild>
                 <span>
-                  {/* `data-tour` is the walkthrough's anchor (user-onboarding
-                      R6.8/R6.9) — the tour steps are data and cannot match on
-                      markup structure. Behaviourally inert. */}
+                  {/* `data-tour` is the walkthrough's anchor for the
+                      draft → open step — the tour steps are data and cannot
+                      match on markup structure. Behaviourally inert. */}
                   <Button
                     data-tour="position-open"
                     className="cursor-pointer"
@@ -342,9 +342,9 @@ export function PositionDetailView({ positionId }: Props) {
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold">Fills</h2>
-            {/* R7.5 — a closed position has no Add Fill button, so there is
-                nothing for the mark to introduce; it waits for an open or draft
-                one rather than describing a control that is not on screen. */}
+            {/* A closed position has no Add Fill button, so there is nothing
+                for the mark to introduce; it waits for an open or draft one
+                rather than describing a control that is not on screen. */}
             <CoachMark surface="position-partials" available={!isClosed} />
           </div>
           {!isClosed && (

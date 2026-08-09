@@ -1,14 +1,13 @@
-// useOnboarding — the one access point for onboarding state (R4).
+// useOnboarding — the one access point for onboarding state.
 //
 // It composes THREE reads: the accounts list, the positions list, and the
 // stored onboarding preference. Per-item checklist completion is DERIVED from
-// the first two (R4.2) and is never stored anywhere, which is exactly what
-// makes the checklist resume across sessions and devices with no extra state
-// (R4.4). Nothing in this file — or downstream of it — may write progress to
-// localStorage, Zustand or any other client store: the counts are the same
-// counts on every device, so a cached copy could only ever disagree with them.
-// Server data lives in TanStack Query and nowhere else (structure.md, State
-// Management Rules).
+// the first two and is never stored anywhere, which is exactly what makes the
+// checklist resume across sessions and devices with no extra state. Nothing in
+// this file — or downstream of it — may write progress to localStorage, Zustand
+// or any other client store: the counts are the same counts on every device, so
+// a cached copy could only ever disagree with them. Server data lives in
+// TanStack Query and nowhere else — that is the rule across this codebase.
 //
 // THE PREFERENCE READ IS SPLIT OUT as `useOnboardingQuery()` deliberately. A
 // consumer that needs only the status or the coach-mark seen set (the coach
@@ -20,25 +19,24 @@
 // from whichever counts have arrived so far. A partially-loaded derivation is
 // not a slightly-early answer, it is a WRONG one: every count starts absent, so
 // a fully set-up user would see four unticked boxes on every load and a
-// checklist that has already retired (R4.7) would flash back into existence
-// before vanishing again. `undefined` says "not known yet", which is the truth,
-// and lets the consumer render a skeleton or nothing at all. The same gate
-// covers terminal failure: on error the checklist stays `undefined` and
-// `isError` is set, because an unticked box we cannot substantiate is worse
-// than no box.
+// checklist that has already retired would flash back into existence before
+// vanishing again. `undefined` says "not known yet", which is the truth, and
+// lets the consumer render a skeleton or nothing at all. The same gate covers
+// terminal failure: on error the checklist stays `undefined` and `isError` is
+// set, because an unticked box we cannot substantiate is worse than no box.
 //
 // THE TWO EXPENSIVE READS ARE GATED ON THE STORED STATUS. `GET /positions` has
 // no LIMIT and returns every enriched row; running it on every dashboard mount
 // for a user who will never see a checklist again is a cost with no possible
 // payoff, and it grows with the account. So accounts and positions only fetch
 // while the status is `pending` or `active` — the two states in which a
-// checklist can still be shown. `done` is R4.7's retirement, which by
-// definition never reappears. `skipped` is an R4.5 dismissal, which IS
-// recoverable, and gating on it costs nothing precisely BECAUSE completion is
-// derived and never stored (R4.2/R4.4): `setStatus('active')` seeds the new
-// status into the cache, `checklistNeeded` flips on the same render, both reads
-// fire, and the checklist comes back with real counts. There is no client-side
-// progress that going quiet could have lost.
+// checklist can still be shown. `done` is retirement, which by definition never
+// reappears. `skipped` is a dismissal, which IS recoverable, and gating on it
+// costs nothing precisely BECAUSE completion is derived and never stored:
+// `setStatus('active')` seeds the new status into the cache, `checklistNeeded`
+// flips on the same render, both reads fire, and the checklist comes back with
+// real counts. There is no client-side progress that going quiet could have
+// lost.
 //
 // The test is an ALLOWLIST, not `!== 'done' && !== 'skipped'`. The status is
 // `undefined` until the preference read lands, and a denylist would read as
@@ -126,9 +124,9 @@ export function useOnboardingPatch(options?: { silent?: boolean }) {
     mutationFn: (patch: OnboardingPatch) =>
       api.patch<OnboardingState>('/users/me/onboarding', patch),
     onSuccess: (state, sent) => {
-      // R8.2 — checklist item 2 is the one with no `cache-invalidate` behind it
-      // (the calculator is stateless), so this write is the only signal that it
-      // was just completed. Without it, a user who sizes a trade on /calculator
+      // Checklist item 2 is the one with no `cache-invalidate` behind it (the
+      // calculator is stateless), so this write is the only signal that it was
+      // just completed. Without it, a user who sizes a trade on /calculator
       // before ever opening the dashboard has that completion baselined away.
       // Sent exactly once, when the stored timestamp is absent.
       if (sent.calculatorFirstUsedAt !== undefined) armChecklistCompletion('calculator');
@@ -165,11 +163,11 @@ export interface UseOnboardingResult {
   isSaving: boolean;
   setStatus: (status: OnboardingStatus) => void;
   /**
-   * Dismiss the checklist (R4.5). Dismissal is only a status, which is what
-   * makes it recoverable without support: `setStatus('active')` reopens it.
+   * Dismiss the checklist. Dismissal is only a status, which is what makes it
+   * recoverable without support: `setStatus('active')` reopens it.
    */
   dismiss: () => void;
-  /** Append one coach-mark key (R7.2). Idempotent server-side, so callers need no membership check. */
+  /** Append one coach-mark key. Idempotent server-side, so callers need no membership check. */
   markCoachMarkSeen: (key: string) => void;
 }
 
@@ -188,7 +186,7 @@ export function useOnboarding(): UseOnboardingResult {
   // item 3 asks whether they have ever logged one, and that cannot become
   // untrue later. An open-only list would un-tick item 3 the moment the user
   // closed their last position, and a user who had closed everything could
-  // never reach `allComplete`, so the checklist would never retire (R4.7).
+  // never reach `allComplete`, so the checklist would never retire.
   // The closed count below is filtered from this same unfiltered list rather
   // than fetched as a second, status-filtered query: one request, and no second
   // count sitting around that could be passed to the wrong field. The gate on
@@ -201,9 +199,10 @@ export function useOnboarding(): UseOnboardingResult {
   const positions = positionsQuery.data;
   const preference = preferenceQuery.data;
 
-  // The checklist AND the counts it was derived from, in one pass. R8.2's
-  // first-observation rule needs both, and needs them to be of the same moment
-  // — see `ChecklistObservation`. Everything below reads `checklist` off it.
+  // The checklist AND the counts it was derived from, in one pass. The
+  // first-observation rule behind the completion events needs both, and needs
+  // them to be of the same moment — see `ChecklistObservation`. Everything
+  // below reads `checklist` off it.
   const observation = useMemo<ChecklistObservation | null | undefined>(() => {
     // Order matters. "Not known yet" has to be answered before "not needed":
     // until the preference lands we cannot tell a fresh user from a retired
@@ -213,28 +212,28 @@ export function useOnboarding(): UseOnboardingResult {
     if (!checklistNeeded) return null;
     if (!accounts || !positions) return undefined;
     // NOTHING THE SEEDER WROTE COMPLETES ANYTHING, and this pair of filters is
-    // the whole of R4.8. Asking to see the product populated is not creating an
-    // account, and it is not logging or closing a trade either: the fixture
-    // seeds ten CLOSED positions, so counting them would tick "Log a position"
-    // and "Close it and see the stats" the instant the user clicked "Add sample
-    // data" — telling them they had recorded trades they never made, striking
-    // the two items through, and taking away the guided-step buttons that would
-    // have taught them how. R4.2 grounds completion in the USER's actual data
-    // and R4.3's "any route" means routes the user takes, not a server-side
-    // fixture.
+    // the whole of that rule. Asking to see the product populated is not
+    // creating an account, and it is not logging or closing a trade either: the
+    // fixture seeds ten CLOSED positions, so counting them would tick "Log a
+    // position" and "Close it and see the stats" the instant the user clicked
+    // "Add sample data" — telling them they had recorded trades they never
+    // made, striking the two items through, and taking away the guided-step
+    // buttons that would have taught them how. Completion is grounded in the
+    // USER's actual data, and "any route to an item" means routes the user
+    // takes, not a server-side fixture.
     //
-    // Which rows are the demo's is READ FROM THE FLAG, never inferred from "there
-    // is exactly one account" — the same rule `useDemoAccount` follows. Mutual
-    // exclusion (R9.6) is enforced on the server, in another file, for another
-    // reason, and a count that quietly leaned on it would start believing the
-    // wrong thing the moment it moved. Positions carry `accountId`, so the join
-    // is the flag on the account they are booked against and needs no extra
-    // read.
+    // Which rows are the demo's is READ FROM THE FLAG, never inferred from
+    // "there is exactly one account" — the same rule `useDemoAccount` follows.
+    // Mutual exclusion between sample and real data is enforced on the server,
+    // in another file, for another reason, and a count that quietly leaned on
+    // it would start believing the wrong thing the moment it moved. Positions
+    // carry `accountId`, so the join is the flag on the account they are booked
+    // against and needs no extra read.
     //
     // With item 1 already excluded, `allComplete` cannot become true on seeded
     // data alone, so the checklist cannot retire itself over trades the user
-    // never made (R4.7). `deriveChecklist` deliberately never learns that sample
-    // data exists, so this caller is the only place that can get it right.
+    // never made. `deriveChecklist` deliberately never learns that sample data
+    // exists, so this caller is the only place that can get it right.
     const demoAccountIds = new Set(
       accounts.filter((account) => account.isDemo).map((account) => account.id),
     );
@@ -261,10 +260,10 @@ export function useOnboarding(): UseOnboardingResult {
   // the consumer has to be able to tell apart, and neither has counts.
   const checklist: Checklist | null | undefined = observation ? observation.checklist : observation;
 
-  // R8.2 — one event per item as it BECOMES complete. The transition is worked
-  // out in `lib/analytics.ts` against a module-scoped baseline rather than here,
-  // because completion is derived from counts on every render (R4.2) and this
-  // hook is mounted several times over on the same screen; a ref in this file
+  // One event per item as it BECOMES complete. The transition is worked out in
+  // `lib/analytics.ts` against a module-scoped baseline rather than here,
+  // because completion is derived from counts on every render and this hook is
+  // mounted several times over on the same screen; a ref in this file
   // would report each completion once per mounted copy. An effect rather than a
   // render-time call, and idempotent either way — a second run over the same
   // checklist finds the baseline already moved and emits nothing.

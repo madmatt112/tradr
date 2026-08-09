@@ -115,17 +115,17 @@ export function ImportPage() {
     preview.mutate({ file, request });
   }
 
-  // NOTE: the import timezone stays UTC by default (csv-import REQ-7.4) — it
-  // describes the CSV's own timestamps, not the user's reporting zone
-  // (user-onboarding R2.4), so it is deliberately NOT seeded from
-  // `useUserTimezone`. The mapper's selector is where it gets corrected.
+  // NOTE: the import timezone stays UTC by default — it describes the CSV's own
+  // timestamps, not the user's stored reporting zone, so it is deliberately NOT
+  // seeded from `useUserTimezone`. The mapper's selector is where it gets
+  // corrected.
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">
       <div>
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-semibold">Import trades from CSV</h1>
-          {/* R7.5 — the coach mark is gated on the SAME figure the disclosure
+          {/* The coach mark is gated on the SAME figure the disclosure
               below is: a user whose plan's lifetime CSV imports are all spent
               cannot import, and `csv-import.service.ts` refuses the commit, so
               introducing the feature to them would be pointing at a door that

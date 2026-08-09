@@ -47,9 +47,8 @@ vi.mock('@tanstack/react-router', () => ({
   },
 }));
 
-// The stored reporting timezone (user-onboarding R2.4). The real hook is a
-// useQuery and would throw without a provider; `value: undefined` reproduces
-// the in-flight window.
+// The stored reporting timezone. The real hook is a useQuery and would throw
+// without a provider; `value: undefined` reproduces the in-flight window.
 const timezoneState = vi.hoisted(() => ({ value: undefined as string | undefined }));
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => timezoneState.value,
@@ -212,8 +211,9 @@ describe('Sidebar — Performance link', () => {
 });
 
 // ---------------------------------------------------------------------------
-// user-onboarding R2.4 — the default performance window is anchored at the
-// user's STORED reporting timezone, never at the browser's.
+// The default performance window is anchored at the user's STORED reporting
+// timezone, never at the browser's: a per-device guess would hand the same user
+// a different window — and different figures inside it — on every machine.
 // ---------------------------------------------------------------------------
 
 describe('Sidebar — Performance defaults anchor at the stored timezone', () => {

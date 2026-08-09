@@ -1,5 +1,5 @@
 // ZeroState — the screen a newly-registered user lands on instead of six empty
-// widgets (R3).
+// widgets.
 //
 // WHAT IT REPLACES. `/dashboard` renders six widgets, and for a user with no
 // accounts every one of them is empty and phrases its emptiness differently:
@@ -11,27 +11,27 @@
 //
 // WHY NOT `EmptyState`. The shared `EmptyState` is a centred `max-w-md` card
 // with one string description and one action slot, and the zero-state needs two
-// paragraphs (the prerequisite AND R3.3's not-connected statement), three
-// actions of three different weights, and an embedded checklist. Pushing all of
-// that through `action` would use the component as a container rather than as
-// the empty-state idiom, and widening the shared component for its one
+// paragraphs (the prerequisite AND the not-connected statement), three actions
+// of three different weights, and an embedded checklist. Pushing all of that
+// through `action` would use the component as a container rather than as the
+// empty-state idiom, and widening the shared component for its one
 // non-empty-state caller is worse. So the same Card primitives `EmptyState`
 // itself is built from are used directly, with the same real-heading shape —
 // no parallel primitive is introduced and no shared component is bent.
 //
-// R3.3 IS THE LOAD-BEARING COPY, not decoration. New users arrive expecting
-// either a broker connection or an execution platform, and the account form
-// asks for a starting balance and a currency without ever saying what the thing
-// it is creating IS. The card states both halves plainly: a Tradr account
-// MIRRORS a real brokerage account, and it is NOT connected to one — Tradr
-// never places or executes trades. Say it here, once, before the user types a
-// balance into a form and wonders whose money it is.
+// THE NOT-CONNECTED COPY IS LOAD-BEARING, not decoration. New users arrive
+// expecting either a broker connection or an execution platform, and the
+// account form asks for a starting balance and a currency without ever saying
+// what the thing it is creating IS. The card states both halves plainly: a
+// Tradr account MIRRORS a real brokerage account, and it is NOT connected to
+// one — Tradr never places or executes trades. Say it here, once, before the
+// user types a balance into a form and wonders whose money it is.
 //
 // EXACTLY ONE PRIMARY (AMBER) ACTION, AND IT IS "CREATE MY FIRST ACCOUNT".
 // The design system reserves amber for the single action a view is about, and
-// on this view that is the brokerage account: it is the prerequisite R3.3 names,
-// the only control here that changes the user's data, and the one that makes
-// this whole screen go away (R3.4). The walkthrough is a way of doing that same
+// on this view that is the brokerage account: it is the prerequisite that copy
+// names, the only control here that changes the user's data, and the one that
+// makes this whole screen go away. The walkthrough is a way of doing that same
 // thing with help, not a different outcome, so it takes `outline`; sample data
 // is an aside. `ActivationChecklist` deliberately carries no primary action of
 // its own for exactly this reason — the one amber this composed view is allowed
@@ -42,16 +42,16 @@
 // them; this one does, and an amber link two inches under an amber button is a
 // second primary action in everything but markup.
 //
-// NEITHER FORK IS A DEAD END (R3.2) — and it is structural, not a branch. The
+// NEITHER FORK IS A DEAD END — and it is structural, not a branch. The
 // checklist and the docs link are unconditional siblings: no choice on this
 // screen hides them, so there is no state in which declining guidance leaves the
 // user with less than they started with. That is cheaper to keep true than a
 // rule about which branch re-renders what.
 //
-// THIS IS WHERE THE WALKTHROUGH IS REACHED FROM (R5.2). `useWalkthrough` never
-// starts a tour on its own — mounting it does nothing, and no effect there reads
-// the stored status and begins one — so every walkthrough in the product starts
-// at one of the two call sites below: "Walk me through it", and the checklist's
+// THIS IS WHERE THE WALKTHROUGH IS REACHED FROM. `useWalkthrough` never starts
+// a tour on its own — mounting it does nothing, and no effect there reads the
+// stored status and begins one — so every walkthrough in the product starts at
+// one of the two call sites below: "Walk me through it", and the checklist's
 // per-item "Start". That is what makes opt-in structural rather than a rule
 // someone has to remember, and it is why a new entry point has to be a new
 // deliberate call rather than something a status value can trigger.
@@ -61,22 +61,23 @@
 // there is nothing for a stored status to auto-start: the restriction "declining
 // guidance must never let the walkthrough start later" is already satisfied by
 // the hook having no auto-start at all. Writing `skipped` here would be worse
-// than useless — that value is the checklist's OWN dismissal (R4.5), and
-// spending it on "I would rather click around myself" would take the checklist
-// away from a user who never asked to lose it.
+// than useless — that value is the checklist's OWN dismissal, and spending it
+// on "I would rather click around myself" would take the checklist away from a
+// user who never asked to lose it.
 //
 // "WALK ME THROUGH IT" IS BLOCKED RATHER THAN QUEUED WHEN THERE IS NO STEP TO
 // RUN. `start()` returns silently when the checklist names no outstanding item —
 // which is the truth for a whole round trip while the positions read is in
-// flight, and permanently for a user who dismissed the checklist (R4.5). Two
-// answers were available and only one of them is honest at the moment of the
-// click: remembering the click and firing when the checklist lands would put a
-// walkthrough on screen seconds after the user pressed a button that appeared to
-// do nothing, and it would need exactly the auto-start effect R5.2 exists to
-// forbid. So the control states its own condition instead — `aria-disabled` with
-// the reason next to it, and no status write — and becomes live the instant
-// there is a step behind it. `guidanceGap()` below is the single place that
-// decides, so the button, its description and the click guard can never disagree.
+// flight, and permanently for a user who dismissed the checklist. Two answers
+// were available and only one of them is honest at the moment of the click:
+// remembering the click and firing when the checklist lands would put a
+// walkthrough on screen seconds after the user pressed a button that appeared
+// to do nothing, and it would need exactly the auto-start effect nothing in
+// this feature is allowed to have. So the control states its own condition
+// instead — `aria-disabled` with the reason next to it, and no status write —
+// and becomes live the instant there is a step behind it. `guidanceGap()` below
+// is the single place that decides, so the button, its description and the
+// click guard can never disagree.
 
 import { useState } from 'react';
 
@@ -135,31 +136,31 @@ export function ZeroState() {
   /**
    * Both ways into the walkthrough, and they are the same three lines.
    *
-   * The status write is the OPT-IN RECORD R5.2 asks for — "this user asked to be
-   * guided" — and it belongs here rather than in `useWalkthrough` because the
-   * hook writes no onboarding state at all: that is what makes exiting a tour
-   * unable to discard anything (R5.3). Choosing an item off the checklist is the
-   * same choice made about one step instead of four, so it records the same
-   * thing.
+   * The status write is the OPT-IN RECORD — "this user asked to be guided" — and
+   * it belongs here rather than in `useWalkthrough` because the hook writes no
+   * onboarding state at all: that is what makes exiting a tour unable to discard
+   * anything. Choosing an item off the checklist is the same choice made about
+   * one step instead of four, so it records the same thing.
    *
    * THE WRITE COMES FIRST, BEFORE THE LAZY CHUNK HAS HAD A CHANCE TO FAIL, and
    * that is deliberate rather than an oversight. What is being recorded is the
    * user's CHOICE, which they have already made by the time the import is even
    * requested; whether the runtime then arrives is not something the choice was
-   * conditional on. R5.8's "leave the stored status alone" is a rule about never
-   * recording a REFUSAL the user did not make — `skipped` is the value that would
-   * cost them the checklist (R4.5) — and `active` is not one: it starts nothing
-   * on a later login (the hook has no auto-start at all), it keeps the checklist
-   * reads enabled exactly as `pending` does, and it is the same value a
-   * successful tour would have written. Deferring it until the chunk resolved
-   * would mean either awaiting a hook call documented to return `void` and never
-   * reject, or an effect watching `isUnavailable` — a second piece of tour
-   * lifecycle living outside `useWalkthrough`, to record something that is
-   * already true. `ZeroState.test.tsx` pins this ordering so it stays a decision.
+   * conditional on. Leaving the stored status alone when the runtime fails is a
+   * rule about never recording a REFUSAL the user did not make — `skipped` is
+   * the value that would cost them the checklist — and `active` is not one: it
+   * starts nothing on a later login (the hook has no auto-start at all), it
+   * keeps the checklist reads enabled exactly as `pending` does, and it is the
+   * same value a successful tour would have written. Deferring it until the
+   * chunk resolved would mean either awaiting a hook call documented to return
+   * `void` and never reject, or an effect watching `isUnavailable` — a second
+   * piece of tour lifecycle living outside `useWalkthrough`, to record something
+   * that is already true. `ZeroState.test.tsx` pins this ordering so it stays a
+   * decision.
    *
    * With no id, `start()` runs the first item the checklist says is outstanding,
-   * which is simultaneously "begin" and "resume" (R5.6) — the zero-state has no
-   * step index to hand it and must never acquire one.
+   * which is simultaneously "begin" and "resume" — the zero-state has no step
+   * index to hand it and must never acquire one.
    *
    * No `params`: the sets that open on `/positions/$positionId` need the id of a
    * position the user has not created yet. `useWalkthrough` handles that by
@@ -179,8 +180,8 @@ export function ZeroState() {
     <div
       data-testid="onboarding-zero-state"
       // Single column at every width, capped so the prose keeps a readable
-      // measure on a desktop dashboard (R3.7). Nothing here has a minimum width,
-      // so there is nothing to overflow a 320px viewport.
+      // measure on a desktop dashboard. Nothing here has a minimum width, so
+      // there is nothing to overflow a 320px viewport.
       className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 sm:p-6"
     >
       <Card>
@@ -192,8 +193,8 @@ export function ZeroState() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 px-4 sm:px-6">
-          {/* R3.3. Both halves, plainly, before the user meets a form asking for
-              a starting balance. */}
+          {/* The not-connected statement. Both halves, plainly, before the user
+              meets a form asking for a starting balance. */}
           <p data-testid="zero-state-not-connected" className="text-sm text-muted-foreground">
             A Tradr account mirrors a real brokerage account: the same currency, the same starting
             balance, the same trades. It is not connected to your broker. Tradr never places or
@@ -232,10 +233,10 @@ export function ZeroState() {
             >
               Walk me through it
             </Button>
-            {/* R9.1 — sample data is offered ALONGSIDE creating a real account,
-                never instead of it, which is why it sits next to the primary
-                action, takes `outline` rather than the amber, and does not
-                replace anything.
+            {/* Sample data is offered ALONGSIDE creating a real account, never
+                instead of it, which is why it sits next to the primary action,
+                takes `outline` rather than the amber, and does not replace
+                anything.
                 NO `disabled` ATTRIBUTE ON THIS CONTROL, in flight or otherwise.
                 It spent a phase disabled while the seeder was unbuilt, and a
                 keyboard user never met it: `disabled` removes a control from the
@@ -259,17 +260,19 @@ export function ZeroState() {
             </Button>
           </div>
 
-          {/* R5.8 / Principle 4, and the two quieter cases alongside it. The tour
-              runtime is a lazy chunk, so it can 404 after a deploy, be blocked, or
-              simply be unreachable offline; `useWalkthrough` swallows that and
-              leaves the stored status alone — the user has not skipped anything —
-              which would otherwise leave this screen with a button that appears to
-              do nothing. The checklist still loading, and the checklist having been
-              dismissed, leave the same button in the same state for different
-              reasons, so all three say which one it is here rather than being
-              flattened into one vague sentence. `role="status"` because this
-              appears and disappears under the user, and every other part of the
-              screen — the primary action included — is untouched by any of it. */}
+          {/* A runtime that will not load is an ordinary outcome, not an
+              exception, and these are the two quieter cases alongside it. The
+              tour runtime is a lazy chunk, so it can 404 after a deploy, be
+              blocked, or simply be unreachable offline; `useWalkthrough`
+              swallows that and leaves the stored status alone — the user has not
+              skipped anything — which would otherwise leave this screen with a
+              button that appears to do nothing. The checklist still loading, and
+              the checklist having been dismissed, leave the same button in the
+              same state for different reasons, so all three say which one it is
+              here rather than being flattened into one vague sentence.
+              `role="status"` because this appears and disappears under the user,
+              and every other part of the screen — the primary action included —
+              is untouched by any of it. */}
           {guidanceNote !== null && (
             <p
               id={GUIDANCE_NOTE_ID}
@@ -299,14 +302,15 @@ export function ZeroState() {
       </Card>
 
       {/* Unconditional, both of them: this is what stops either fork being a
-          dead end (R3.2). The checklist reads its own state and handles its own
+          dead end. The checklist reads its own state and handles its own
           loading, dismissed and retired cases.
 
           The handler is WITHDRAWN when the runtime will not load, which is the
           same judgement the prop's own contract makes: no handler, no per-item
           buttons, and a "Start" that can only fail is not an affordance. The
-          checklist itself stays, with all four items and their labels — R5.8's
-          "fully functional" is about the list, not the shortcut into it. */}
+          checklist itself stays, with all four items and their labels — what a
+          failed runtime has to leave fully functional is the list, not the
+          shortcut into it. */}
       <ActivationChecklist onStartStep={isUnavailable ? undefined : beginGuided} />
 
       <p className="text-sm text-muted-foreground">

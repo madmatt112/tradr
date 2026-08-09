@@ -107,7 +107,7 @@ vi.mock('@/lib/telemetry/posthog', () => ({
 }));
 
 // A PROBE, not a stub. The coach mark's own behaviour is covered next to it;
-// what belongs HERE is the R7.5 wiring — that this page hands it the same
+// what belongs HERE is the wiring — that this page hands it the same
 // remaining-imports figure the disclosure above is computed from, so a user
 // whose lifetime allowance is spent is not introduced to a feature the commit
 // path will refuse. Rendering only when `available` makes that assertable
@@ -229,7 +229,8 @@ describe('ImportPage — remaining CSV imports before staging', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The coach mark is gated on the same figure (user-onboarding R7.5)
+// The coach mark is gated on the same remaining-imports figure as the
+// disclosure above
 // ---------------------------------------------------------------------------
 
 describe('ImportPage — coach-mark availability', () => {

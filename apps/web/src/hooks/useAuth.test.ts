@@ -46,9 +46,11 @@ afterEach(() => {
 
 // Clearing the query cache only drops server state. Anything module-scoped —
 // the guided walkthrough's session and its driver.js overlay are the live
-// example — survives it, and the next user on this tab would inherit it. The
-// announcement is what lets each owner drop its own without `useAuth` importing
-// any of them (user-onboarding R5.6).
+// example — survives it, and the next user on this tab would inherit it. That
+// state is module-scoped on purpose, so the walkthrough can survive a route
+// change and resume after a reload; the flip side is that nothing tears it down
+// when the session ends. The announcement is what lets each owner drop its own
+// without `useAuth` importing any of them.
 describe('useAuth — logging out announces the end of the session', () => {
   it('publishes auth:logout after the query cache is cleared', async () => {
     const qc = makeClient();

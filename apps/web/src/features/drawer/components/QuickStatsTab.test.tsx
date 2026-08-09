@@ -32,8 +32,8 @@ vi.mock('@/hooks/useNow', () => ({
   useNow: vi.fn(() => new Date('2026-05-27T12:00:00.000Z')),
 }));
 
-// The user's stored reporting timezone (user-onboarding R2.4) — the zone this
-// tab buckets by. `undefined` reproduces the in-flight window.
+// The user's stored reporting timezone — the zone this tab buckets by.
+// `undefined` reproduces the in-flight window.
 const timezoneState = vi.hoisted(() => ({ value: undefined as string | undefined }));
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => timezoneState.value,
@@ -376,7 +376,7 @@ describe('QuickStatsTab', () => {
 });
 
 // ---------------------------------------------------------------------------
-// user-onboarding R2.4 — bucket by the STORED reporting timezone.
+// Bucket by the user's STORED reporting timezone, never the browser's.
 // ---------------------------------------------------------------------------
 
 describe('QuickStatsTab — reporting timezone', () => {

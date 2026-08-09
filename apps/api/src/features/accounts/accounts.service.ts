@@ -52,8 +52,9 @@ export async function createAccount(
     brokerageId?: string | null;
     startingBalance?: string;
     timezone?: string;
-    // Omitted means no rule set (user-onboarding R1.1/R1.4). Bounds are
-    // CreateAccountSchema's job — never re-checked here.
+    // Omitted means no rule set, and the calculator then behaves exactly as it
+    // did before this column existed. Bounds are CreateAccountSchema's job —
+    // never re-checked here.
     defaultRiskPercent?: string;
   },
   // Routes pass `isAdmin` from AuthEnv — services never read Hono context
@@ -149,9 +150,9 @@ export async function editAccount(
   db: Database,
   id: string,
   userId: string,
-  // `defaultRiskPercent` omitted leaves the stored value untouched; an
-  // explicit null clears the rule back to unset (user-onboarding R1.1). The
-  // distinction is carried all the way to `.set()` — see updateAccount.
+  // `defaultRiskPercent` omitted leaves the stored value untouched; an explicit
+  // null clears the rule back to unset. The distinction is carried all the way
+  // to `.set()` — see updateAccount.
   data: Partial<{
     name: string;
     currency: string;

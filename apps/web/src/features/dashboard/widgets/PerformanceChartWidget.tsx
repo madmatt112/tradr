@@ -32,8 +32,8 @@ export interface PerformanceChartWidgetProps {
  *      (§K — the fix-up flows through the debounced layout state; NO separate PUT).
  *   2. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
  *   3. Compute {granularity, start, end} via `derivePresetRange(config.timeframe, ...)`
- *      anchored at the user's stored reporting timezone (`useUserTimezone`,
- *      user-onboarding R2.4 — NOT the browser's zone).
+ *      anchored at the user's stored reporting timezone (`useUserTimezone` —
+ *      NOT the browser's zone).
  *      The historyRange comes from the previous response's `currencyData.historyRange`
  *      (§B — first render bootstraps with `DEFAULT_CURRENCY_HISTORY_RANGE`).
  *   4. Fetch via `usePerformance`, passing `null` until the stored zone lands so

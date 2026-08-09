@@ -1,4 +1,4 @@
--- Users who predate onboarding start out already ONBOARDED (user-onboarding R3.6).
+-- Users who predate onboarding start out already ONBOARDED.
 --
 -- 0027 added `users.onboarding` as NOT NULL DEFAULT '{}' with no backfill, on
 -- the reasoning that '{}' parses to status 'pending' and 'pending' is "exactly
@@ -6,9 +6,9 @@
 -- everyone else: the fast default put EVERY pre-existing row at 'pending' too,
 -- including people who have been trading in Tradr for years.
 --
--- It matters because 'pending' is what the zero-state gate keys on. R3.6 says
--- the zero-state SHALL NOT reappear for a returning user who deletes their last
--- account — "a returning user with history is not an onboarding user" — and the
+-- It matters because 'pending' is what the zero-state gate keys on. The
+-- zero-state must not reappear for a returning user who deletes their last
+-- account — a returning user with history is not an onboarding user — and the
 -- gate implements that by retiring on status 'done'. But 'done' is only ever
 -- reached by completing all four checklist items, and item 2 needs
 -- `calculatorFirstUsedAt`, which nothing wrote before this feature existed. So
@@ -38,8 +38,8 @@
 --      cannot do this job: every row that exists when this runs was created
 --      before it, so `created_at < now()` marks the whole table, including
 --      someone who registered a minute before the deploy and is genuinely new.
---      History is the signal R3.6 itself names, and it separates the two
---      cleanly — a minute-old registration has none.
+--      History is the signal the rule itself turns on, and it separates the
+--      two cleanly — a minute-old registration has none.
 --
 --      A user with neither is not being wronged. They have no accounts and no
 --      positions, so the zero-state is the accurate screen for them whether
@@ -55,8 +55,8 @@
 --      and short-circuit on the first row. The positions arm is redundant today
 --      — positions.account_id is ON DELETE RESTRICT and the service refuses to
 --      delete an account that still has positions, so positions imply accounts
---      — but "has ever created a position" is half of what R3.6 means by
---      history, and stating it here means a future relaxation of that FK cannot
+--      — but "has ever created a position" is half of what history means here,
+--      and stating it explicitly means a future relaxation of that FK cannot
 --      quietly narrow this rule.
 --
 -- ADDITIVE AND ROLLING-DEPLOY SAFE: no DDL, and 'done' is a value the currently

@@ -451,8 +451,9 @@ describe('accounts', () => {
     expect([200, 400]).toContain(res.status);
   });
 
-  // 15b. Default risk percentage (user-onboarding R1.1/R1.5). Editable after
-  // creation, unlike startingBalance — it rewrites no history.
+  // 15b. Default risk percentage. Editable after creation, unlike
+  // startingBalance — it rewrites no history. The 400 cases below pin that its
+  // bounds are rejected server-side, not only in the form.
   it('creates an account with a defaultRiskPercent and returns it on read', async () => {
     const { cookie } = await registerAndGetCookie();
     const res = await authedRequest('POST', '/api/accounts', cookie, {

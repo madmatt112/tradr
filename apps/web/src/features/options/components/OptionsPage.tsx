@@ -10,7 +10,7 @@ export function OptionsPage() {
       <div>
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-bold">Options Tools</h1>
-          {/* R7.5 — no `available` gate, because there is no predicate to
+          {/* No `available` gate, because there is no predicate to
               consult: the Black-Scholes and OCC cards are pure client-side
               computation and are present in every deployment. The chain viewer
               IS gated (on the market-data key, which it reports as

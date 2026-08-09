@@ -20,7 +20,8 @@ vi.mock('sonner', () => ({
 }));
 
 // The real `lib/analytics` runs; only the vendor-facing capture is a double, so
-// the R8.2 tests below assert on the events the hook genuinely produces.
+// the completion-event tests below assert on the events the hook genuinely
+// produces.
 const captureClientEvent = vi.fn();
 vi.mock('@/lib/telemetry/posthog', () => ({
   captureClientEvent: (...args: unknown[]) => captureClientEvent(...args),
@@ -36,8 +37,8 @@ const aDemoAccount = { id: 'acct-demo', name: 'Sample account', isDemo: true } a
 
 /**
  * `accountId` defaults to the user's own account because that is the ordinary
- * case; the sample account's id is passed explicitly by the R4.8 tests, which
- * are the only ones the join changes the answer for.
+ * case; the sample account's id is passed explicitly by the sample-data tests,
+ * which are the only ones the join changes the answer for.
  */
 function aPosition(
   id: string,
@@ -107,7 +108,7 @@ function mockServer(server: {
   return { get, patch, snapshot };
 }
 
-/** The done-vector, in R4.1 presentation order: account, calculator, position, close. */
+/** The done-vector, in presentation order: account, calculator, position, close. */
 function doneVector(items: { id: string; done: boolean }[]) {
   return items.map((item) => [item.id, item.done] as const);
 }
@@ -181,7 +182,7 @@ describe('useOnboarding — derived checklist', () => {
   it('a user whose positions are ALL closed still ticks "log a position" and reaches allComplete', async () => {
     // The regression this test exists for: passing an open-only count would
     // leave item 3 unticked for this user forever, so allComplete could never
-    // become true and the checklist would never retire (R4.7).
+    // become true and the checklist would never retire.
     mockServer({
       accounts: [anAccount],
       positions: [aPosition('p1', 'closed'), aPosition('p2', 'closed')],
@@ -202,7 +203,7 @@ describe('useOnboarding — derived checklist', () => {
     expect(result.current.checklist!.allComplete).toBe(true);
   });
 
-  it('completes NOTHING on sample data, and leaves the checklist standing (R4.8)', async () => {
+  it('completes NOTHING on sample data, and leaves the checklist standing', async () => {
     // Asking to see the product populated is not creating an account, and it is
     // not logging or closing a trade either. The fixture seeds ten CLOSED
     // positions, so a count that took them at face value would tick items 3 and
@@ -223,7 +224,7 @@ describe('useOnboarding — derived checklist', () => {
 
     await waitFor(() => expect(result.current.checklist).toBeDefined());
 
-    // Still a checklist, not `null` — R4.8 keeps it visible through the demo.
+    // Still a checklist, not `null` — it stays visible through the demo.
     expect(result.current.checklist).not.toBeNull();
     // Item 2 is the calculator, which the seeder does not touch either way; it
     // is true here only because this fixture says the user used it themselves.
@@ -233,14 +234,14 @@ describe('useOnboarding — derived checklist', () => {
       ['position', false],
       ['close', false],
     ]);
-    // And so it cannot retire (R4.7) over trades the user never made.
+    // And so it cannot retire over trades the user never made.
     expect(result.current.checklist!.allComplete).toBe(false);
   });
 
   it('cannot reach allComplete on seeded data alone, even with the calculator used', async () => {
     // The retirement guard stated on its own: every item the fixture could
     // possibly speak to, plus the one write seeding does not make, still leaves
-    // the checklist un-retired (R4.7).
+    // the checklist un-retired.
     mockServer({
       accounts: [aDemoAccount],
       positions: [
@@ -365,8 +366,8 @@ function expensiveReadsOf(get: { mock: { calls: unknown[][] } }) {
 }
 
 describe('useOnboarding — the expensive reads are gated on the stored status', () => {
-  // A retired (R4.7) or dismissed (R4.5) user will not be shown a checklist, so
-  // fetching every account and every enriched position row to compute one is
+  // A retired or dismissed user will not be shown a checklist, so fetching
+  // every account and every enriched position row to compute one is
   // pure cost — and it is paid on every dashboard mount, forever, growing with
   // the user's history.
   it.each(['done', 'skipped'] as const)(
@@ -427,10 +428,10 @@ describe('useOnboarding — the expensive reads are gated on the stored status',
   );
 
   it('a dismissed user who RE-OPENS the checklist still gets a correct one', async () => {
-    // The reason gating on `skipped` is safe (R4.5): completion is derived and
-    // never stored (R4.2/R4.4), so going quiet loses nothing. Re-opening flips
-    // the status the gate reads, both reads fire, and the same counts produce
-    // the same answer they would have all along.
+    // The reason gating on `skipped` is safe: completion is derived and never
+    // stored, so going quiet loses nothing. Re-opening flips the status the
+    // gate reads, both reads fire, and the same counts produce the same answer
+    // they would have all along.
     const { get } = mockServer({
       accounts: [anAccount],
       positions: [aPosition('p1', 'closed'), aPosition('p2', 'open')],
@@ -576,8 +577,8 @@ describe('useOnboarding — no client-side progress', () => {
     });
 
     // Resumability across sessions and devices comes from re-deriving the
-    // checklist from the user's real data (R4.4). Any cached copy here would be
-    // a second source of truth that can only ever disagree with it.
+    // checklist from the user's real data. Any cached copy here would be a
+    // second source of truth that can only ever disagree with it.
     expect(setItem).not.toHaveBeenCalled();
   });
 });
@@ -618,9 +619,9 @@ describe('useOnboardingPatch — silent', () => {
   });
 });
 
-// --- per-item completion events (R8.2) --------------------------------------
+// --- per-item completion events ---------------------------------------------
 
-describe('useOnboarding — checklist completion events (R8.2)', () => {
+describe('useOnboarding — checklist completion events', () => {
   /**
    * The three reads again, but with the two lists swappable, so a test can move
    * the user's data under a mounted hook the way creating a position does.
@@ -726,8 +727,9 @@ describe('useOnboarding — checklist completion events (R8.2)', () => {
 
     await waitFor(() => expect(result.current[0].checklist).toBeDefined());
 
-    // The seeder's account and its ten closed positions, exactly as R4.8 leaves
-    // them: excluded from every count, so no item moves and nothing is reported.
+    // The seeder's account and its ten closed positions, exactly as the counts
+    // leave them: excluded from every one, so no item moves and nothing is
+    // reported.
     move({
       accounts: [aDemoAccount],
       positions: [
@@ -778,7 +780,7 @@ describe('useOnboarding — checklist completion events (R8.2)', () => {
     expect(completedItems()).toEqual(['calculator']);
   });
 
-  it('carries the item id and nothing else (R8.5)', async () => {
+  it('carries the item id and nothing else', async () => {
     const qc = makeQueryClient();
     const move = mockMovableServer({ accounts: [], positions: [] });
     const { result } = renderThreeCopies(qc);

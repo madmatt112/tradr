@@ -48,9 +48,9 @@ export function AccountList() {
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
 
-  // Sample data and real accounts are mutually exclusive (user-onboarding R9.6),
-  // and this is the only place in the app a second account can be started, so
-  // this is where "begins creating a real account" happens. The server refuses
+  // Sample data and real accounts are mutually exclusive, and this is the only
+  // place in the app a second account can be started, so this is where "begins
+  // creating a real account" happens. The server refuses
   // the create outright while sample data is present, so without this the user
   // would fill in the whole form and be told no; asking first, once, and
   // clearing the way is the difference between a rule and a wall.
@@ -204,7 +204,7 @@ export function AccountList() {
         account={editAccount}
       />
 
-      {/* R9.6 — confirm ONCE, then tear the sample data down, then open the form.
+      {/* Confirm ONCE, then tear the sample data down, then open the form.
           The teardown is what makes the create possible, so it runs first and the
           dialog opens on its success.
 

@@ -40,9 +40,10 @@ vi.mock('@/features/calculator/hooks/useBuyingPowerBasis', () => ({
 }));
 
 // The onboarding preference read + the fire-and-forget write that records
-// `calculatorFirstUsedAt` (user-onboarding R4.2's single named exception).
-// Mocked at the hook boundary so the form's own network assertions elsewhere
-// stay about the form, and so the stored timestamp is settable per test.
+// `calculatorFirstUsedAt` — the one piece of checklist progress that is stored
+// rather than derived. Mocked at the hook boundary so the form's own network
+// assertions elsewhere stay about the form, and so the stored timestamp is
+// settable per test.
 const onboarding = vi.hoisted(() => ({
   query: { current: { data: undefined } as Record<string, unknown> },
   patch: vi.fn(),
@@ -173,7 +174,7 @@ const CAD_ACCOUNT = { id: 'acc-cad', name: 'Maple Margin', currency: 'CAD', bala
 // A selected account whose balance is not yet derived (REQ-3.5) — no `balance`.
 const NO_BALANCE_ACCOUNT = { id: 'acc-nobal', name: 'Fresh', currency: 'USD' };
 
-// An account carrying its own risk rule (user-onboarding R1.2). The value is the
+// An account carrying its own default risk rule. The value is the
 // numeric(5,2)-NORMALISED string the API returns — a stored 1.5 comes back
 // '1.50' — so the prefill assertions expect that form, not what a user typed.
 const RULED_ACCOUNT = {
@@ -334,7 +335,7 @@ describe('CalculatorForm — risk-basis switching (REQ-1.3)', () => {
   });
 });
 
-describe('CalculatorForm — walkthrough anchors (user-onboarding R6.7)', () => {
+describe('CalculatorForm — walkthrough anchors', () => {
   // The walkthrough's steps are DATA and cannot match on markup structure, so
   // what each `data-tour` attribute wraps is a contract. The risk anchor sat on
   // the whole block, which put the account picker and both amount fields inside
@@ -923,7 +924,8 @@ describe('CalculatorForm — dollar basis account sourcing', () => {
 });
 
 // -----------------------------------------------------------------------------
-// Account default risk percentage (user-onboarding R1.2/R1.3/R1.4)
+// Account default risk percentage — the calculator reads the account's rule,
+// never writes to it, and leaves the field alone when there is no rule.
 //
 // RULED_ACCOUNT: $50,000 balance, a 1.50% rule. Entry $50 / stop $48 is $2 of
 // per-share risk, so the rule alone gives a $750 budget → 375 shares, and an
@@ -932,7 +934,7 @@ describe('CalculatorForm — dollar basis account sourcing', () => {
 // -----------------------------------------------------------------------------
 
 describe('CalculatorForm — account default risk prefill', () => {
-  it('prefills the risk percent from the account rule and sizes against it (R1.2)', async () => {
+  it('prefills the risk percent from the account rule and sizes against it', async () => {
     const user = userEvent.setup();
     setAccounts({ data: [RULED_ACCOUNT] });
     await mount();
@@ -954,7 +956,7 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(screen.getByText('375')).toBeTruthy();
   });
 
-  it('leaves the risk percent cleared for an account with no rule (R1.4)', async () => {
+  it('leaves the risk percent cleared for an account with no rule', async () => {
     const user = userEvent.setup();
     setAccounts({ data: [CAD_ACCOUNT] });
     await mount();
@@ -966,7 +968,7 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(input('Risk percent').value).toBe('');
   });
 
-  it('does not disturb a typed risk percent when the account has no rule (R1.4)', async () => {
+  it('does not disturb a typed risk percent when the account has no rule', async () => {
     // Every account predating the column has no rule, so this is the path every
     // existing user is on: selecting an account must behave exactly as it did.
     const user = userEvent.setup();
@@ -997,8 +999,8 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(input('Risk percent').value).toBe('1.50');
   });
 
-  it('overriding the prefilled percent changes only this calculation and issues NO request (R1.3)', async () => {
-    // The load-bearing assertion of R1.3: the prefill is a READ path. Every API
+  it('overriding the prefilled percent changes only this calculation and issues NO request', async () => {
+    // The load-bearing assertion here: the prefill is a READ path. Every API
     // call in the app goes through lib/api's single `fetch`, so a stubbed global
     // fetch catches a write-back however it were wired.
     const fetchSpy = vi.fn();
@@ -1039,7 +1041,7 @@ describe('CalculatorForm — account default risk prefill', () => {
   });
 });
 
-describe('CalculatorForm — first calculator use (user-onboarding R4.2 exception)', () => {
+describe('CalculatorForm — first calculator use (the one stored checklist fact)', () => {
   const dollarCalc = { 'Entry price': '50', 'Stop loss': '48', 'Dollar risk': '1000' };
 
   it('records calculatorFirstUsedAt on the first successful calculation, silently', async () => {

@@ -94,7 +94,8 @@ auth.post(
   validate('json', RegisterSchema),
   async (c) => {
     // `timezone` is optional and absent for every scripted or e2e registration
-    // that predates it; registerUser substitutes the default (R2.3).
+    // that predates it; registerUser substitutes the default rather than
+    // storing NULL, which is reserved for rows that predate the column.
     const { email, password, timezone } = c.req.valid('json');
     const { user, token } = await registerUser(email, password, timezone);
 

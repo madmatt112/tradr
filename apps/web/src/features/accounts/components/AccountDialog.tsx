@@ -224,17 +224,17 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
                 </SelectContent>
               </Select>
             </div>
-            {/* Trading-day timezone (R1/R9 amendment). Shown on create AND
-                edit — unlike starting balance this stays editable, since it
-                only affects subsequent trading-day evaluations. The option
-                list is the runtime's own IANA set (shared with the server-side
-                validator), so anything picked here always validates.
+            {/* Trading-day timezone. Shown on create AND edit — unlike
+                starting balance this stays editable, since it only affects
+                subsequent trading-day evaluations. The option list is the
+                runtime's own IANA set (shared with the server-side validator),
+                so anything picked here always validates.
 
                 The label names the boundary it governs, and the helper text
                 disclaims the reporting timezone, because this dialog is one of
-                the two places both zones are visible to the same user
-                (user-onboarding R2.8) — the other being the settings control
-                that disclaims this one in return. */}
+                only two places both zones are visible to the same user — the
+                other being the settings control, which disclaims this one in
+                return. */}
             <div className="space-y-2">
               <Label htmlFor="timezone">Trading-day timezone</Label>
               <Select
@@ -282,9 +282,9 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
                 )}
               </div>
             )}
-            {/* Default risk percentage (user-onboarding R1.1/R1.6). Shown on
-                create AND edit — unlike starting balance it rewrites no
-                history, it only seeds the position-size calculator. */}
+            {/* Default risk percentage. Shown on create AND edit — unlike
+                starting balance it rewrites no history, it only seeds the
+                position-size calculator. */}
             <div className="space-y-2">
               <Label htmlFor="defaultRiskPercent">Default risk %</Label>
               <Input
@@ -360,10 +360,10 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
               >
                 Cancel
               </Button>
-              {/* `data-tour` is the walkthrough's anchor (user-onboarding R6.1)
-                  and nothing else — the tour steps are data in
-                  features/onboarding/lib/steps and must not have to match on
-                  markup structure to find this button. */}
+              {/* `data-tour` is the walkthrough's anchor and nothing else —
+                  the tour steps are data in features/onboarding/lib/steps and
+                  must not have to match on markup structure to find this
+                  button. */}
               <Button
                 type="submit"
                 data-tour="account-submit"

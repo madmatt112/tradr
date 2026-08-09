@@ -3,17 +3,17 @@
 // Two suites in one file, on purpose.
 //
 // The first is about BEHAVIOUR — when the mark appears, what dismissing it
-// writes, and the two properties R7.3 and R7.6 are about, which are both
-// properties of things NOT happening (focus is not taken, the page is not
-// blocked, nothing renders while a tour runs). Those cannot be read off the
-// source, so they are exercised against a real Radix popover.
+// writes, and the two hardest properties to see, which are both properties of
+// things NOT happening (focus is not taken, the page is not blocked, nothing
+// renders while a tour runs). Those cannot be read off the source, so they are
+// exercised against a real Radix popover.
 //
-// The second is about COPY, and it is the R6.11 rule applied to the coach
-// marks: no mark may name a control that is not on the screen it points at.
-// Prose cannot be checked mechanically but the control labels inside it can, so
-// each one is looked up in the source of the surface that renders it. A rename
-// in `PositionDetail`, `DashboardHeader` or `CommitPanel` fails this file
-// rather than shipping a mark that describes a button nobody has.
+// The second is about COPY, and it is the walkthrough's own copy rule applied
+// to the coach marks: no mark may name a control that is not on the screen it
+// points at. Prose cannot be checked mechanically but the control labels inside
+// it can, so each one is looked up in the source of the surface that renders
+// it. A rename in `PositionDetail`, `DashboardHeader` or `CommitPanel` fails
+// this file rather than shipping a mark that describes a button nobody has.
 //
 // The hooks are faked. `useOnboarding.test.ts` already owns the round trip
 // (22 cases, including the singular-`coachMarkSeen` append and its
@@ -91,7 +91,7 @@ describe('CoachMark', () => {
     expect(mark()?.textContent).toContain('Bring your history in from a CSV');
   });
 
-  it('stays away once the surface is in the stored seen set (R7.2)', () => {
+  it('stays away once the surface is in the stored seen set', () => {
     seePreference(preference(['csv-import']));
     render(<CoachMark surface="csv-import" />);
     expect(mark()).toBeNull();
@@ -115,7 +115,7 @@ describe('CoachMark', () => {
     expect(mark()).toBeNull();
   });
 
-  it('renders nothing while a walkthrough is running (R7.6), and never mounts to do it', () => {
+  it('renders nothing while a walkthrough is running, and never mounts to do it', () => {
     mockRunning.mockReturnValue(true);
     render(<CoachMark surface="dashboard-widgets" />);
     // Not "hidden": absent. Nothing was painted for the tour's highlight to
@@ -124,12 +124,12 @@ describe('CoachMark', () => {
     expect(document.querySelector('[data-slot="coach-mark-anchor"]')).toBeNull();
   });
 
-  it('renders nothing when the caller reports the feature unavailable (R7.5)', () => {
+  it('renders nothing when the caller reports the feature unavailable', () => {
     render(<CoachMark surface="csv-import" available={false} />);
     expect(mark()).toBeNull();
   });
 
-  it('dismisses on "Got it", appending exactly one singular key and nothing else (R7.2)', async () => {
+  it('dismisses on "Got it", appending exactly one singular key and nothing else', async () => {
     const user = userEvent.setup();
     render(<CoachMark surface="position-partials" />);
 
@@ -139,7 +139,7 @@ describe('CoachMark', () => {
     expect(patchMutate).toHaveBeenCalledTimes(1);
     // SINGULAR, and the whole body. A `status` or a plural `coachMarksSeen`
     // here would make a coach mark into checklist state, which is the one thing
-    // R7.1 says these are not.
+    // these are not.
     expect(patchMutate).toHaveBeenCalledWith({ coachMarkSeen: 'position-partials' });
   });
 
@@ -153,7 +153,7 @@ describe('CoachMark', () => {
     expect(patchMutate).toHaveBeenCalledWith({ coachMarkSeen: 'options-tools' });
   });
 
-  it('does not take focus when it appears (R7.3)', () => {
+  it('does not take focus when it appears', () => {
     // The real sequence: the surface renders and the user starts working, THEN
     // the preference read lands and the mark appears. If it grabbed focus it
     // would take the caret out of the field mid-keystroke.
@@ -180,7 +180,7 @@ describe('CoachMark', () => {
     expect(document.activeElement).toBe(field);
   });
 
-  it('does not block the surface it describes, and clicking it through dismisses (R7.3)', async () => {
+  it('does not block the surface it describes, and clicking it through dismisses', async () => {
     const user = userEvent.setup();
     const onSurfaceClick = vi.fn();
     render(
@@ -202,15 +202,16 @@ describe('CoachMark', () => {
     // modal popover sets this to 'none'.
     expect(document.body.style.pointerEvents).not.toBe('none');
 
-    // AND THE CARD IS OUT OF THE POINTER PATH, which is the half of R7.3 this
-    // environment cannot otherwise reach. jsdom has no layout: nothing here
-    // overlaps anything, so the click below lands on the button whether or not
-    // an opaque popover is sitting on top of it in a real browser — which is
-    // exactly what happened, and what let the import page ship with its mark
-    // covering the account picker. This assertion pins the MECHANISM; the
-    // behaviour is pinned where geometry exists, in `e2e/tests/user-onboarding.
-    // spec.ts` ("a coach mark does not stand between the user and the control it
-    // describes"), which drives a real click at the covered control.
+    // AND THE CARD IS OUT OF THE POINTER PATH, which is the half of "does not
+    // block" this environment cannot otherwise reach. jsdom has no layout:
+    // nothing here overlaps anything, so the click below lands on the button
+    // whether or not an opaque popover is sitting on top of it in a real
+    // browser — which is exactly what happened, and what let the import page
+    // ship with its mark covering the account picker. This assertion pins the
+    // MECHANISM; the behaviour is pinned where geometry exists, in
+    // `e2e/tests/user-onboarding.spec.ts` ("a coach mark does not stand between
+    // the user and the control it describes"), which drives a real click at the
+    // covered control.
     expect(mark('position-partials')?.className).toContain('pointer-events-none');
 
     await user.click(screen.getByRole('button', { name: 'Add Fill' }));
@@ -219,7 +220,7 @@ describe('CoachMark', () => {
     expect(mark('position-partials')).toBeNull();
   });
 
-  it('leaves its own two controls clickable through the transparent card (R7.3)', () => {
+  it('leaves its own two controls clickable through the transparent card', () => {
     // The other side of `pointer-events-none`: opting the card out entirely
     // would take "Got it" and "Read more" out with it, and a prompt nobody can
     // acknowledge is not one-shot at all.
@@ -233,7 +234,7 @@ describe('CoachMark', () => {
     );
   });
 
-  it('carries its docs deep link through docsUrl(), in a new tab (R7.4, C11)', () => {
+  it('carries its docs deep link through docsUrl(), in a new tab', () => {
     render(<CoachMark surface="csv-import" />);
     const link = screen.getByRole('link', { name: 'Read more' });
     expect(link.getAttribute('href')).toBe(docsUrl('importHistory'));
@@ -245,8 +246,9 @@ describe('CoachMark', () => {
 });
 
 // ---------------------------------------------------------------------------
-// R6.11 applied to the coach marks: every control the copy names is a control
-// the surface actually renders, checked against that surface's source.
+// The walkthrough's copy rule applied to the coach marks: every control the
+// copy names is a control the surface actually renders, checked against that
+// surface's source.
 // ---------------------------------------------------------------------------
 
 describe('CoachMark copy is accurate against the shipped UI', () => {
@@ -313,7 +315,7 @@ describe('CoachMark copy is accurate against the shipped UI', () => {
   });
 
   it('omits the options-tools link ONLY because its docs page is still a stub', () => {
-    // The one mark with no "read more" (R7.4). When apps/docs grows a real
+    // The one mark with no "read more". When apps/docs grows a real
     // user-guide/options-tools page this test fails — that is the reminder to
     // add `docs: 'optionsTools'` to the catalog and the entry to DOCS.
     render(<CoachMark surface="options-tools" />);

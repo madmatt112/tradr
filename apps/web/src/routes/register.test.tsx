@@ -88,7 +88,9 @@ let resendResponse: () => Response;
 let fetchSpy: MockInstance | null = null;
 
 // ---- Browser-zone stub ------------------------------------------------------
-// register.tsx is the ONE place still allowed to detect the browser zone (R2.2).
+// register.tsx is the ONE place still allowed to detect the browser zone — it
+// seeds the new user's stored reporting timezone at sign-up, which is the only
+// moment there is nothing stored to read instead.
 // Only the ZERO-ARG call is that detection; calls carrying arguments are
 // delegated to the real implementation, because the shared
 // ReportingTimezoneField validator decides validity with
@@ -262,7 +264,7 @@ describe('register route', () => {
     });
   });
 
-  // ---- Reporting-timezone seeding (R2.2) ------------------------------------
+  // ---- Reporting-timezone seeding at registration ---------------------------
 
   it('case 5: sends the browser-detected reporting timezone in the registration payload', async () => {
     stubBrowserZone('Europe/London');

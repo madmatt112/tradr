@@ -269,12 +269,11 @@ export async function mockAppShell(page: Page): Promise<void> {
     route.fulfill(json({ status: 'done', coachMarksSeen: [] })),
   );
   // The sample-data notice is mounted in the AUTHENTICATED LAYOUT rather than on
-  // the dashboard (user-onboarding R9.4), so the accounts read behind it is now
-  // shell surface on every authenticated route, not just the ones with an
-  // accounts-shaped page. The list is the only thing that can answer "is any of
-  // this sample data", and the banner has to be able to answer it wherever the
-  // figures are shown — so this belongs here rather than being pushed back into
-  // the product.
+  // the dashboard, so the accounts read behind it is now shell surface on every
+  // authenticated route, not just the ones with an accounts-shaped page. The
+  // list is the only thing that can answer "is any of this sample data", and the
+  // banner has to be able to answer it wherever the figures are shown — so this
+  // belongs here rather than being pushed back into the product.
   //
   // Empty is the neutral answer: no sample account, so the banner renders
   // nothing and no spec sees a surface it was not written for. Specs that need
