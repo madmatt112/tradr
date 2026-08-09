@@ -54,7 +54,14 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '#name',
     route: '/dashboard',
     docs: 'gettingStarted',
-    waitForMs: 3000,
+    // THE WAIT COVERS A PERSON, NOT A RENDER, and that is why it is this long.
+    // The step before asks the user to open the account dialog, a gesture the
+    // app publishes nothing for, so `useWalkthrough` lets "Next" drive it — and
+    // pressing Next before opening the dialog is the ordinary thing to do, since
+    // the step says nothing about a button. A render-sized wait gave up three
+    // seconds later and ended the walkthrough on a field that was about to
+    // exist. It still ends cleanly for a dialog that is genuinely never opened.
+    waitForMs: 15000,
     title: 'Name',
     body:
       'Name the account after the brokerage account it mirrors. You pick it by this name every ' +

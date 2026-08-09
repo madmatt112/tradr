@@ -52,7 +52,25 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     target: '#symbol',
     route: '/positions',
     docs: 'positions',
-    waitForMs: 3000,
+    // THE WAIT COVERS A PERSON, NOT A RENDER, and that is why it is this long.
+    // The step before asks for a gesture the app publishes nothing for, so
+    // `useWalkthrough` lets "Next" drive it — and a user who presses Next before
+    // opening the dialog is asking for a field that arrives when they get round
+    // to it. A render-sized wait gives up while they are still reading, which
+    // ends the walkthrough on a target that was about to exist. It still ends
+    // cleanly for a dialog that is genuinely never opened.
+    waitForMs: 15000,
+    // BESIDE THE FORM, NEVER OVER IT. This one step describes four controls —
+    // Symbol, Side, Asset Type and Account — and waits for the user to fill in
+    // all of them, so the popover cannot sit where driver.js would put it by
+    // default. Below `#symbol` is exactly on top of Side, Asset Type and
+    // Account: at 1280x720 the popover covered all three, `elementFromPoint`
+    // returned the popover and a pointer never reached them. To the side it
+    // clears the dialog, which is the only placement that leaves every control
+    // this step names usable — which is the whole reason the highlighted
+    // control is left interactive in the first place.
+    side: 'right',
+    align: 'start',
     advanceOnAction: true,
     title: 'Symbol, side and account',
     body:

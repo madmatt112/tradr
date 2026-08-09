@@ -127,6 +127,16 @@ export const useWalkthroughStore = create<WalkthroughStoreState>(() => ({
 // renders from them, and putting them in the store would re-render every
 // consumer for a change no consumer can see.
 let activeSteps: WalkthroughStep[] = [];
+/**
+ * The values this session's parameterised routes need, as they stand NOW.
+ *
+ * Mutable for the whole of the session rather than fixed at `start()`, because
+ * the one value that matters most is not knowable then: the position set opens
+ * on `/positions` and finishes on the detail page of a position the user has not
+ * created yet. That id arrives on the event that advances the step, and
+ * `bindAdvance` merges it in — see the note there.
+ */
+let activeParams: Record<string, string> | undefined;
 let unsubscribers: (() => void)[] = [];
 let enginePromise: Promise<[TourEngineModule, StepsModule]> | null = null;
 
@@ -134,6 +144,7 @@ function endSession(): void {
   for (const off of unsubscribers) off();
   unsubscribers = [];
   activeSteps = [];
+  activeParams = undefined;
   useWalkthroughStore.setState(IDLE);
 }
 
@@ -227,26 +238,39 @@ async function loadRuntime(): Promise<[TourEngineModule, StepsModule] | null> {
  * Every other event on the bus — a position updated elsewhere, a fill deleted —
  * passes through without touching the tour.
  */
-function bindAdvance(
-  engine: TourEngineModule,
-  params: Record<string, string> | undefined,
-  navigate: NavigateFn,
-): void {
-  const advanceOn = (event: EventName) => (payload: { reason: string }) => {
+function bindAdvance(engine: TourEngineModule, navigate: NavigateFn): void {
+  const advanceOn = (event: EventName) => (payload: { reason: string; positionId?: string }) => {
     const { currentStep: step, stepIndex } = useWalkthroughStore.getState();
     if (!step?.advanceOnAction || step.target === undefined) return;
     const signal = ACTION_SIGNALS[step.target];
     if (signal?.event !== event || signal.reason !== payload.reason) return;
-    // BEFORE the tour moves, never after. A set can change screen mid-way — the
-    // close set ends on `/dashboard`, whose grid is the last thing it shows the
-    // user — and nothing else is going to put them there: the overlay is up, so
-    // the sidebar is not theirs to click. The engine's step-change callback is
-    // too late to do it from, because driver.js only calls it once it has
-    // RESOLVED the step's target, which for a target that never appears is after
-    // `waitForMs` has expired and the tour has already given up. Navigating here
-    // means the new route is mounting while that window is still open, exactly as
-    // it is for the first step of a set.
-    navigateBetweenSteps(step, activeSteps[stepIndex + 1], params, navigate);
+    // THE ROUTE VALUE THE NEXT STEP NEEDS ARRIVES ON THE EVENT, AND THERE IS
+    // NOWHERE ELSE IT COULD COME FROM. The position set's third step lives on
+    // `/positions/$positionId` — the page of the position the user made two
+    // steps ago — and nothing knew that id when the tour started, because the
+    // position did not exist. The bus already carries it: every publisher of
+    // `positions:cache-invalidate` names the row it is about. Folding it into
+    // the session's params here is what lets the navigation below work at all;
+    // without it the set stops dead on `/positions`, where the next step's
+    // target never appears, and steps 3 to 5 are unreachable.
+    //
+    // Merged rather than replaced, so a value the caller supplied for a
+    // DIFFERENT param survives, and so a later event about the same position
+    // is a no-op rather than a change.
+    if (payload.positionId !== undefined) {
+      activeParams = { ...activeParams, positionId: payload.positionId };
+    }
+    // BEFORE the tour moves, never after. A set can change screen mid-way —
+    // the close set ends on `/dashboard`, whose grid is the last thing it
+    // shows the user, and the position set moves onto the position that was
+    // just created — and nothing else is going to put them there: the overlay
+    // is up, so the sidebar is not theirs to click. The engine's step-change
+    // callback is too late to do it from, because driver.js only calls it once
+    // it has RESOLVED the step's target, which for a target that never appears
+    // is after `waitForMs` has expired and the tour has already given up.
+    // Navigating here means the new route is mounting while that window is
+    // still open, exactly as it is for the first step of a set.
+    navigateBetweenSteps(step, activeSteps[stepIndex + 1], activeParams, navigate);
     engine.advance();
   };
 
@@ -320,11 +344,15 @@ function navigateToStep(
  *
  * Most transitions do not. A set that stays on one route must not re-navigate to
  * it on every step — that would remount the screen under a dialog the previous
- * step just opened. And the one transition that does change route without this
- * is the position set's: `/positions` → `/positions/$positionId`, where the app
- * navigates itself the moment the position is created and the id is not
- * something the walkthrough was handed. `navigateToStep` declines that one on
- * its own, because the param it would need is missing.
+ * step just opened.
+ *
+ * The two that do are both changes of screen the WALKTHROUGH has to make,
+ * because the app makes neither: creating a position leaves the user on
+ * `/positions`, and closing one leaves them on the position. So this is the only
+ * thing carrying the position set onto `/positions/$positionId` and the close
+ * set onto `/dashboard`. It still declines a parameterised route it has no
+ * values for — `navigateToStep` sees to that — which is why `bindAdvance` folds
+ * the new position's id into the session's params before calling here.
  */
 function navigateBetweenSteps(
   from: WalkthroughStep,
@@ -345,7 +373,9 @@ function navigateBetweenSteps(
  * set that merely REACHES a parameterised route later — the position set, which
  * starts on `/positions` and follows the user to whatever position they just
  * created — must be left alone: handing it an id derived from the user's other
- * data would navigate them away from their new position onto an older one.
+ * data would navigate them away from their new position onto an older one. That
+ * set gets its id from the event that reports the create instead, which is the
+ * only source that names the right row.
  */
 function withOpeningParams(
   first: WalkthroughStep,
@@ -382,8 +412,11 @@ async function run(
   endSession();
 
   activeSteps = withObservableActionsOnly(set);
-  bindAdvance(engine, params, navigate);
-  navigateToStep(activeSteps[0], params, navigate);
+  // After `endSession()`, which clears them: these belong to the session being
+  // built, not to the one just torn down.
+  activeParams = params;
+  bindAdvance(engine, navigate);
+  navigateToStep(activeSteps[0], activeParams, navigate);
 
   useWalkthroughStore.setState({
     isRunning: true,
@@ -411,8 +444,12 @@ async function run(
     // "Next" back (tour-engine.ts, `isGatedStep`), which is exactly the move
     // that carries the close set from the position onto the dashboard when the
     // user exited only part of their position.
+    //
+    // Reads `activeParams` rather than closing over the value it had at
+    // `start()`, for the same reason `bindAdvance` writes to it: the id of the
+    // position a set moves onto is only known once the user has made it.
     onBeforeAdvance: (index) => {
-      navigateBetweenSteps(activeSteps[index], activeSteps[index + 1], params, navigate);
+      navigateBetweenSteps(activeSteps[index], activeSteps[index + 1], activeParams, navigate);
     },
     onStepChange: (index) => {
       useWalkthroughStore.setState({ stepIndex: index, currentStep: activeSteps[index] ?? null });

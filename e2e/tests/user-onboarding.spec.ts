@@ -241,6 +241,32 @@ const checklistItemLabel = (page: Page, id: string): Locator =>
   page.locator(`[data-checklist-item="${id}"] > span`).first();
 
 /**
+ * The position set's five step titles, in order, from
+ * `features/onboarding/lib/steps/position.ts`. It is the only set that changes
+ * screen onto a row the user creates while the tour is running.
+ */
+const POSITION_STEP_TITLES = [
+  'Log the position',
+  'Symbol, side and account',
+  'It starts as a draft',
+  'Open the position',
+  'That is a position logged',
+] as const;
+
+/**
+ * One labelled control inside a dialog, by the label above it.
+ *
+ * These are Radix selects, so the label is a sibling with no `htmlFor` and the
+ * trigger has no accessible name of its own — `getByLabel` cannot see them, and
+ * an index into "every combobox in the dialog" would silently move the moment a
+ * field is added. The label text is what the step copy names, so it is what the
+ * test asks for.
+ */
+function dialogSelect(dialog: Locator, label: string): Locator {
+  return dialog.locator(`div:has(> label:text-is("${label}")) > button[role="combobox"]`);
+}
+
+/**
  * The close set's three step titles, in order, from
  * `features/onboarding/lib/steps/close.ts`.
  */
@@ -347,6 +373,109 @@ test.describe('user onboarding', () => {
     // Item 1 ticked itself off the user's real data, no flag written.
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
     await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
+  });
+
+  // A TARGET THE USER HAS NOT MADE YET IS WAITED FOR, NOT GIVEN UP ON.
+  //
+  // The first step asks the user to open the account dialog, and that gesture
+  // publishes nothing the walkthrough can hear, so "Next" is what drives it.
+  // Pressing Next before opening the dialog is therefore the ordinary thing to
+  // do — the step names a button, not a Next — and it asks for `#name`, a field
+  // that does not exist yet. The wait behind that step used to be sized for a
+  // dialog already opening, so it expired while the user was still reading and
+  // ended the walkthrough on a field that was about to appear.
+  //
+  // The five-second pause is the assertion: it is longer than any render this
+  // screen does, so a tour still up after it is one that is genuinely waiting.
+  test('a step waits for a target the user has not created yet', async ({ page, request }) => {
+    const email = await registerUser(request, 'waitfor');
+    await loginViaUi(page, email);
+    await startWalkthrough(page);
+
+    await popoverNext(page).click();
+    await expect(popover(page)).toHaveCount(1);
+    await page.waitForTimeout(5_000);
+    await expect(popover(page)).toHaveCount(1);
+    // Still on the step that asked, because the tour has not moved — it is
+    // holding the window open for the control the next step needs.
+    await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[0]);
+
+    // And the moment the user does the thing, the tour is there.
+    await page.getByTestId('zero-state-create-account').click();
+    await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[1]);
+    await escapeTour(page);
+  });
+
+  // THE POSITION SET, END TO END — the set this suite never drove, which is how
+  // it shipped unfinishable. Creating the position leaves the user on
+  // `/positions` while step 3 lives on `/positions/$positionId`, so the target
+  // never appeared, the tour exited without a word, and the draft → open →
+  // closed lifecycle the set exists to teach was unreachable.
+  //
+  // Every control is operated with a REAL CLICK, never `force` and never the
+  // keyboard. That is the other half of this test: step 2 describes Symbol,
+  // Side, Asset Type and Account and waits for all four to be filled in, and its
+  // popover used to sit on top of the last three at 1280x720 — Playwright
+  // hit-tests before it dispatches, so an intercepted control fails here and
+  // passes any assertion made in jsdom, which has no layout to hit-test against.
+  test('the position set runs through draft and open to its last step', async ({
+    page,
+    request,
+  }) => {
+    const email = await registerUser(request, 'positionset');
+    await createAccount(request, 'Position account');
+    await loginViaUi(page, email);
+    await expect(page.getByTestId('activation-checklist')).toBeVisible();
+
+    await page.locator('[data-checklist-action="position"]').click();
+    await expect(page).toHaveURL(/\/positions$/);
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[0]);
+
+    // The gesture step 1 asks for, from the control it highlights.
+    await page.locator('[data-tour="position-new"]').click();
+    const dialog = page.getByRole('dialog', { name: 'New Position' });
+    await expect(dialog.locator('#symbol')).toBeVisible();
+    await popoverNext(page).click();
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[1]);
+
+    // The three controls the popover covered. Each click is the assertion.
+    await dialogSelect(dialog, 'Side').click({ timeout: 5_000 });
+    await page.getByRole('option', { name: 'Long' }).click();
+    await dialogSelect(dialog, 'Asset Type').click({ timeout: 5_000 });
+    await page.getByRole('option', { name: 'Stock' }).click();
+    await dialogSelect(dialog, 'Account').click({ timeout: 5_000 });
+    await page.getByRole('option', { name: 'Position account (USD)' }).click();
+    await dialog.locator('#symbol').click();
+    await dialog.locator('#symbol').fill('AAPL');
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+
+    // THE ASSERTION THIS TEST EXISTS FOR. The tour follows the position onto its
+    // own page, which nothing but the walkthrough was going to do.
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[2]);
+    await expect(page).toHaveURL(/\/positions\/[0-9a-f-]{36}/);
+
+    // Draft → open, through the two controls the remaining steps highlight.
+    await page.locator('[data-tour="position-add-fill"]').click();
+    await expect(page.getByLabel('Price')).toBeVisible();
+    await page.locator('#price').fill('150.00');
+    await page.locator('#quantity').fill('10');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[3]);
+
+    await page.locator('[data-tour="position-open"]').click();
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[4]);
+    await expect(popoverProgress(page)).toHaveText(`5 of ${POSITION_STEP_TITLES.length}`);
+
+    // "Done" finishes it, and item 3 ticks off the user's real data. The set
+    // ends on the position rather than the dashboard, so the checklist is read
+    // where it lives.
+    await popoverNext(page).click();
+    await expect(popover(page)).toHaveCount(0);
+    await page.goto('/dashboard');
+    await expect(checklistProgress(page)).toHaveText('2 of 4 complete');
+    await expect(checklistItemLabel(page, 'position')).toHaveText(/— completed$/);
+    const logged = (await (await request.get('/api/positions')).json()) as { status: string }[];
+    expect(logged.map((position) => position.status)).toEqual(['open']);
   });
 
   // A COMPLETE RUN OF THE SET THAT ENDS THE WALKTHROUGH, and the reason this

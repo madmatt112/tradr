@@ -402,12 +402,41 @@ describe('useWalkthrough — action-driven advance', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  // `/positions` → `/positions/$positionId`: the app navigates itself the moment
-  // the position is created, and the id is not something the walkthrough was
-  // handed, so it must not try.
-  it('leaves a route it has no values for to the app', async () => {
-    // Even with an open position on file. The position the user is logging is
-    // the one the app has just navigated them to, and it is not this one.
+  // `/positions` → `/positions/$positionId`, the position set's one change of
+  // screen. NOTHING ELSE MAKES IT: creating a position leaves the user on the
+  // list, so without this the set stops on `/positions`, the next step's target
+  // never appears and steps 3 to 5 are unreachable — which is what shipped.
+  //
+  // The id can only come from the event. It did not exist when the tour started,
+  // and the position the user is logging is not the one they already had open —
+  // so the fallback below must NOT be what is navigated to.
+  it('follows the user onto the position they just created', async () => {
+    positions = [{ id: 'pos-open', status: 'open' }];
+    await start('position');
+    navigate.mockClear();
+
+    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    act(() => {
+      eventBus.publish('positions:cache-invalidate', { reason: 'created', positionId: 'pos-new' });
+    });
+
+    expect(engine.advance).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/positions/$positionId',
+      params: { positionId: 'pos-new' },
+    });
+    // Before the tour moves, for the reason the close set needed it: the step's
+    // wait has to cover the route mounting, not start after it.
+    expect(navigate.mock.invocationCallOrder[0]).toBeLessThan(
+      engine.advance.mock.invocationCallOrder[0],
+    );
+  });
+
+  // And the guarantee that survives it: a parameterised route is never navigated
+  // to with values nobody supplied. An event that names no row leaves the tour
+  // where it is, which degrades to a clean `target-missing` rather than to a URL
+  // built out of a guess.
+  it('leaves a route it has no values for alone', async () => {
     positions = [{ id: 'pos-open', status: 'open' }];
     await start('position');
     navigate.mockClear();
@@ -418,6 +447,28 @@ describe('useWalkthrough — action-driven advance', () => {
     });
 
     expect(engine.advance).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // The rest of the position set stays on the page it just arrived at: an id
+  // carried in by the create must not make every later step re-navigate, which
+  // would remount the screen under the fill dialog the step before opened.
+  it('does not re-navigate once it is already on the position', async () => {
+    await start('position');
+    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    act(() => {
+      eventBus.publish('positions:cache-invalidate', { reason: 'created', positionId: 'pos-new' });
+    });
+    navigate.mockClear();
+
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-open"]'),
+    );
+    act(() => {
+      eventBus.publish('positions:cache-invalidate', { reason: 'opened', positionId: 'pos-new' });
+    });
+
+    expect(engine.advance).toHaveBeenCalledTimes(2);
     expect(navigate).not.toHaveBeenCalled();
   });
 
