@@ -176,11 +176,14 @@ describe('register route', () => {
     expect(screen.getByText('new@user.dev')).toBeTruthy();
     expect(router.state.location.pathname).toBe('/register');
 
-    // Simulate the focus refetch: the registration session is live, so the
-    // ['auth','me'] query flips from logged-out to an authenticated user.
+    // Simulate the session becoming visible to the app: registration auto-logs-in,
+    // so ['auth','me'] flips from logged-out to an authenticated user the moment
+    // anything asks — the focus refetch when the user tabs back from their mail
+    // client. Seeded straight into the cache rather than refetched because this
+    // page mounts no me-query of its own (SF-3, public-routes-cold-load.test.tsx).
     meUser = { id: 'u1', email: 'new@user.dev', isAdmin: false, emailVerified: false };
     await act(async () => {
-      await qc.refetchQueries({ queryKey: ['auth', 'me'] });
+      qc.setQueryData(['auth', 'me'], meUser);
     });
     // The flip really landed (isAuthenticated is now true)...
     expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u1' });

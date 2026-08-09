@@ -13,6 +13,36 @@ import {
 import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
+/**
+ * The login mutation ALONE, without the `['auth','me']` query `useAuth` mounts
+ * beside it.
+ *
+ * SF-3: /login is a public page, and a public page that mounts the me-query
+ * redirects itself away. A cold load has no session, so `GET /auth/me` answers
+ * 401 and `lib/api`'s global interception navigates to `/login?expired=true` —
+ * which on /login itself is a session-expired notice shown to a visitor who
+ * never had a session. The page that BEGINS a session may therefore only ask to
+ * begin one; it must not also ask whether one already exists.
+ *
+ * routes/__tests__/public-routes-cold-load.test.tsx enforces this.
+ */
+export function useLogin() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (credentials: { email: string; password: string }) =>
+      api.post<{ user: User }>('/auth/login', credentials),
+    onSuccess: (data) => {
+      // The one answer that means a session BEGAN rather than merely exists, so
+      // this is where the 401 interception is re-armed. Seeding the query below
+      // means its `queryFn` may not run again for this session, so the session
+      // start is declared from the answer that established it.
+      markSessionStarted();
+      queryClient.setQueryData(['auth', 'me'], data.user);
+    },
+  });
+}
+
 export function useAuth() {
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -40,18 +70,7 @@ export function useAuth() {
     retry: false,
   });
 
-  const loginMutation = useMutation({
-    mutationFn: (credentials: { email: string; password: string }) =>
-      api.post<{ user: User }>('/auth/login', credentials),
-    onSuccess: (data) => {
-      // The one answer that means a session BEGAN rather than merely exists, so
-      // this is where the 401 interception is re-armed. Seeding the query below
-      // means its `queryFn` may not run again for this session, so the session
-      // start is declared from the answer that established it.
-      markSessionStarted();
-      queryClient.setQueryData(['auth', 'me'], data.user);
-    },
-  });
+  const loginMutation = useLogin();
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
