@@ -83,6 +83,14 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     routeParams: ['positionId'],
     docs: 'positions',
     waitForMs: 5000,
+    // ABOVE THE BUTTON, NOT BESIDE IT, and for the reason the step before is
+    // beside the form rather than over it. What finishes this step is the Add
+    // button inside the fill dialog, and Add Fill sits at the right edge of the
+    // page, so driver.js's default placement puts the popover to its LEFT: at
+    // 1280x720 that reaches x=850 while the dialog runs to x=896, laying 21px of
+    // popover across Add and across the Notes field above it. Placed above, the
+    // popover stays clear of the dialog it just told the user to open.
+    side: 'top',
     advanceOnAction: true,
     title: 'It starts as a draft',
     body:

@@ -184,6 +184,39 @@ async function pressToTitle(page: Page, key: string, expected: string): Promise<
   await expect(popoverTitle(page)).toHaveText(expected);
 }
 
+/**
+ * THE POPOVER MUST NOT LIE ACROSS THE CONTROL ITS OWN STEP IS FINISHED BY, and
+ * a click cannot always tell you that it does.
+ *
+ * Playwright hit-tests the CENTRE of the box it is about to click, so a popover
+ * that covers a control's edge — but stops short of its middle — dispatches
+ * cleanly and the suite goes green over an overlap a user can see and can land
+ * a pointer in. That is exactly the state the two fill-dialog steps shipped in:
+ * the popover sat 21px across the Add button's right-hand end while its centre
+ * stayed 9px clear, so every real click here passed.
+ *
+ * Measuring the rectangles is what closes that gap. It fails on any intersection
+ * at all rather than on the one that happens to swallow a click, and it reports
+ * the overlap in pixels so the next person does not have to re-measure it.
+ */
+async function expectClearOfPopover(page: Page, control: Locator, what: string): Promise<void> {
+  const pop = await popover(page).boundingBox();
+  const box = await control.boundingBox();
+  if (pop === null || box === null) {
+    throw new Error(`${what}: the popover and the control must both be on screen to be measured`);
+  }
+  const dx = Math.min(pop.x + pop.width, box.x + box.width) - Math.max(pop.x, box.x);
+  const dy = Math.min(pop.y + pop.height, box.y + box.height) - Math.max(pop.y, box.y);
+  expect(
+    dx > 0 && dy > 0,
+    `the walkthrough popover overlaps ${what} by ${dx.toFixed(0)}x${dy.toFixed(0)}px ` +
+      `(popover x ${pop.x.toFixed(0)}–${(pop.x + pop.width).toFixed(0)}, ` +
+      `y ${pop.y.toFixed(0)}–${(pop.y + pop.height).toFixed(0)}; ` +
+      `control x ${box.x.toFixed(0)}–${(box.x + box.width).toFixed(0)}, ` +
+      `y ${box.y.toFixed(0)}–${(box.y + box.height).toFixed(0)})`,
+  ).toBe(false);
+}
+
 /** Escape out of the tour — also one press, for the same reason. */
 async function escapeTour(page: Page): Promise<void> {
   await page.keyboard.press('Escape');
@@ -457,6 +490,14 @@ test.describe('user onboarding', () => {
     // Draft → open, through the two controls the remaining steps highlight.
     await page.locator('[data-tour="position-add-fill"]').click();
     await expect(page.getByLabel('Price')).toBeVisible();
+    // The step highlights Add Fill, but what FINISHES it is the Add button in
+    // the dialog Add Fill opens, so that is the control the popover has to keep
+    // out of the way of.
+    await expectClearOfPopover(
+      page,
+      page.getByRole('button', { name: 'Add', exact: true }),
+      "the fill dialog's Add button, on 'It starts as a draft'",
+    );
     await page.locator('#price').fill('150.00');
     await page.locator('#quantity').fill('10');
     await page.getByRole('button', { name: 'Add', exact: true }).click();
@@ -509,6 +550,13 @@ test.describe('user onboarding', () => {
     // The exit, recorded from the control this step highlights.
     await page.locator('[data-tour="position-add-fill"]').click();
     await expect(page.getByLabel('Price')).toBeVisible();
+    // Same control, same dialog, same step shape as the position set's draft
+    // step — and it shipped with the same overlap, so it is measured here too.
+    await expectClearOfPopover(
+      page,
+      page.getByRole('button', { name: 'Add', exact: true }),
+      "the fill dialog's Add button, on 'Record the exit'",
+    );
     await page.getByRole('dialog').getByRole('combobox').click();
     await page.getByRole('option', { name: 'Exit' }).click();
     await page.locator('#price').fill('160.00');

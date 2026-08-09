@@ -51,6 +51,12 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     // `PositionDetail` renders skeletons until `usePosition` resolves. Without
     // this the tour exits `target-missing` before the position has loaded.
     waitForMs: 5000,
+    // ABOVE THE BUTTON, NOT BESIDE IT — the same placement, for the same reason,
+    // as the position set's draft step, which highlights this same control. The
+    // exit fill this step waits for is recorded in the fill dialog, and the
+    // default placement to the LEFT of Add Fill reaches x=850 at 1280x720 while
+    // the dialog runs to x=896, covering 21px of that dialog's Add button.
+    side: 'top',
     advanceOnAction: true,
     title: 'Record the exit',
     body:
