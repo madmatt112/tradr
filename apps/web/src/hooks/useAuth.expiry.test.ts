@@ -17,9 +17,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api, markSessionEnded, markSessionStarted, setRouter } from '@/lib/api';
 import { queryClient } from '@/lib/queryClient';
+import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
-import { useAuth } from './useAuth';
+import { useAuth, useRegister } from './useAuth';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -44,9 +45,9 @@ function ok(body: unknown) {
 /**
  * Every request answers 200 with the user until `expire()` is called.
  *
- * `POST /auth/login` is the exception and answers its own `{ user }` envelope
- * whatever the session state — logging in is how a session STARTS, so it cannot
- * be gated on one already being live.
+ * `POST /auth/login` and `POST /auth/register` are the exceptions and answer
+ * their own `{ user }` envelope whatever the session state — both are how a
+ * session STARTS, so neither can be gated on one already being live.
  */
 function stubNetwork() {
   let live = true;
@@ -54,7 +55,7 @@ function stubNetwork() {
     'fetch',
     vi.fn((input: RequestInfo | URL) =>
       Promise.resolve(
-        String(input).includes('/auth/login')
+        String(input).includes('/auth/login') || String(input).includes('/auth/register')
           ? ok({ user: A_USER })
           : live
             ? ok(A_USER)
@@ -102,6 +103,8 @@ afterEach(() => {
   vi.clearAllMocks();
   eventBus.__resetForTests();
   queryClient.clear();
+  localStorage.clear();
+  useDrawerStore.getState().reset();
   // The session flags in `lib/api` are module state and outlive the test. A
   // live session is the state every test below starts from, and declaring one
   // re-arms the latch as well, so this leaves the module where the next test
@@ -228,6 +231,62 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
 
     expect(onLogout.mock.calls.length - afterLogin).toBe(1);
     second.unmount();
+  });
+
+  // THE SAME, THROUGH /register. Expiry lands the user on /login, and /login
+  // links to /register — so the very next thing a user does after an expiry can
+  // be to create an account, on a tab whose interception has already been spent.
+  // `POST /auth/register` starts a session exactly as a login does, so it has to
+  // re-arm the latch exactly as a login does; without it the session they just
+  // created has no expiry handling at all for the rest of the page's life.
+  it('still announces the next expiry after a REGISTRATION, which starts a session too', async () => {
+    const network = stubNetwork();
+    const first = await signIn();
+    network.expire();
+    await anAuthedRequest();
+    first.unmount();
+    expect(onLogout).toHaveBeenCalledOnce();
+
+    network.restore();
+    const registration = renderHook(() => useRegister(), { wrapper });
+    await act(async () => {
+      await registration.result.current.mutateAsync({
+        email: 'new@user.dev',
+        password: 'pw',
+      });
+    });
+    // Registering announces too, as a teardown of whatever the tab held before
+    // it — counted from here for the same reason the login case above does.
+    const afterRegister = onLogout.mock.calls.length;
+
+    network.expire();
+    await anAuthedRequest();
+
+    expect(onLogout.mock.calls.length - afterRegister).toBe(1);
+    registration.unmount();
+  });
+
+  // The expiry path runs the SHARED teardown, so it drops the drawer as well —
+  // it used to drop only the query cache while the logout path dropped both,
+  // which is the drift that put all four paths on one function.
+  it('drops the drawer state as well: the stored key AND the live store', async () => {
+    const network = stubNetwork();
+    const session = await signIn();
+    localStorage.setItem(
+      DRAWER_STORAGE_KEY,
+      JSON.stringify({ isOpen: true, activeTab: 'quick-stats', version: 1 }),
+    );
+    useDrawerStore.setState({ isOpen: true, activeTab: 'quick-stats', legacyDetected: false });
+
+    network.expire();
+    await anAuthedRequest();
+
+    expect(localStorage.getItem(DRAWER_STORAGE_KEY)).toBeNull();
+    expect(useDrawerStore.getState()).toMatchObject({
+      isOpen: false,
+      activeTab: 'open-positions',
+    });
+    session.unmount();
   });
 
   // THE LOOP. `announceSessionExpired` empties the query cache, which leaves

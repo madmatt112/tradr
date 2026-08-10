@@ -41,6 +41,27 @@ describe('drawer.store', () => {
     expect(useDrawerStore.getState().activeTab).toBe('quick-stats');
   });
 
+  // The session teardown's half of the drawer: the store hydrates from
+  // localStorage once at import, so clearing the key without this leaves the
+  // previous user's drawer live in memory (lib/sessionTeardown).
+  it('reset() returns the store to what a fresh load with no stored state gives', () => {
+    useDrawerStore.setState({
+      isOpen: true,
+      activeTab: 'quick-stats',
+      // The latch exists to stop us overwriting a newer version's stored state,
+      // and the teardown has just removed that state — nothing left to protect.
+      legacyDetected: true,
+    });
+
+    useDrawerStore.getState().reset();
+
+    expect(useDrawerStore.getState()).toMatchObject({
+      isOpen: false,
+      activeTab: 'open-positions',
+      legacyDetected: false,
+    });
+  });
+
   it('writeDrawerState writes a v1 JSON object to localStorage', () => {
     writeDrawerState({ isOpen: true, activeTab: 'options-pricing' });
     const raw = localStorage.getItem(DRAWER_STORAGE_KEY);

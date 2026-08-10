@@ -25,7 +25,29 @@ export interface DrawerStoreState {
   close: () => void;
   toggle: () => void;
   setActiveTab: (tab: DrawerTab) => void;
+  /**
+   * Return the LIVE store to what a fresh page load with no stored state would
+   * produce. Used by the session teardown (`lib/sessionTeardown`).
+   *
+   * The store hydrates from localStorage exactly once, when this module is
+   * imported. Removing the stored key therefore does nothing to the values
+   * already in memory, and logging in is a client-side navigation rather than a
+   * page load: without this the next user on the tab keeps the last one's
+   * drawer, and their first change persists it straight back.
+   *
+   * `legacyDetected` resets too. It latches on a stored state written by a
+   * NEWER version of the app and exists to stop us overwriting it — and the
+   * teardown removes that very key, so by the time this runs there is nothing
+   * left to protect.
+   */
+  reset: () => void;
 }
+
+const DEFAULT_DRAWER_STATE: Pick<DrawerStoreState, 'isOpen' | 'activeTab' | 'legacyDetected'> = {
+  isOpen: false,
+  activeTab: 'open-positions',
+  legacyDetected: false,
+};
 
 function isDrawerTab(value: unknown): value is DrawerTab {
   return typeof value === 'string' && (DRAWER_TABS as readonly string[]).includes(value);
@@ -92,11 +114,11 @@ function computeInitialState(): Pick<DrawerStoreState, 'isOpen' | 'activeTab' | 
   const persisted = readDrawerState();
 
   if (persisted === null) {
-    return { isOpen: false, activeTab: 'open-positions', legacyDetected: false };
+    return { ...DEFAULT_DRAWER_STATE };
   }
 
   if ('_legacy' in persisted) {
-    return { isOpen: false, activeTab: 'open-positions', legacyDetected: true };
+    return { ...DEFAULT_DRAWER_STATE, legacyDetected: true };
   }
 
   return {
@@ -120,5 +142,6 @@ export const useDrawerStore = create<DrawerStoreState>((set) => {
       if (!isDrawerTab(tab)) return;
       set({ activeTab: tab });
     },
+    reset: () => set({ ...DEFAULT_DRAWER_STATE }),
   };
 });

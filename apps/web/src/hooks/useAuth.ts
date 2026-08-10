@@ -51,6 +51,41 @@ export function useLogin() {
   });
 }
 
+/**
+ * The registration mutation, and — like `useLogin` — nothing else.
+ *
+ * IT IS A LOGIN TOO. `POST /auth/register` swaps the session cookie
+ * unconditionally, so an already-signed-in visitor who reaches this form
+ * becomes a different user on the same tab, exactly as they would through
+ * /login. /register posted straight to `api` and so ran no teardown at all: the
+ * new account opened onto the previous user's cached rows, drawer and
+ * walkthrough. Same teardown, same order, same re-arm — this is the fourth
+ * caller of the one in `lib/sessionTeardown`, not a second copy of it.
+ *
+ * `markSessionStarted` matters most on the path that begins at an EXPIRY:
+ * expiry lands the user on /login, they click through to /register, and without
+ * the re-arm here the session they just created has no 401 interception left
+ * for the rest of the page's life (see `lib/api`'s `redirecting`).
+ *
+ * SF-3 applies here as it does to /login: this mounts no `['auth','me']` query,
+ * so /register still cold-loads without one
+ * (routes/__tests__/public-routes-cold-load.test.tsx).
+ */
+export function useRegister() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { email: string; password: string; timezone?: string }) =>
+      api.post<{ user: User }>('/auth/register', input),
+    onSuccess: (data) => {
+      clearClientSessionState(queryClient);
+      markSessionStarted();
+      // After the teardown, or the clear takes the new user out with the old.
+      queryClient.setQueryData(['auth', 'me'], data.user);
+    },
+  });
+}
+
 export function useAuth() {
   const queryClient = useQueryClient();
   const router = useRouter();

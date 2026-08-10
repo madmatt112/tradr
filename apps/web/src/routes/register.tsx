@@ -5,14 +5,13 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { RegisterSchema } from '@tradr/shared';
-import type { User } from '@tradr/shared';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useRegister } from '@/hooks/useAuth';
 import { useResendVerification } from '@/hooks/useResendVerification';
-import { api } from '@/lib/api';
 import { detectBrowserTimezone } from '@/lib/browserTimezone';
 
 // SF-3: this page is public and MUST NOT call useAuth() or mount the
@@ -22,6 +21,10 @@ import { detectBrowserTimezone } from '@/lib/browserTimezone';
 // landed on /login?expired=true, so the only way to reach this form was to click
 // through from /login and a new user sent a signup link could not sign up.
 // routes/__tests__/public-routes-cold-load.test.tsx enforces this.
+//
+// `useRegister` comes from the same module as `useAuth` and is not it: it is the
+// registration mutation alone, with no me-query beside it, exactly as `useLogin`
+// is on /login.
 
 const RegisterFormSchema = RegisterSchema.extend({
   confirmPassword: z.string(),
@@ -39,6 +42,7 @@ function RegisterPage() {
   // emailVerified false (D14 — configuredness learned from our own response).
   const [pendingEmail, setPendingEmail] = useState('');
   const { resend, info } = useResendVerification();
+  const registerAccount = useRegister();
 
   const {
     register,
@@ -96,7 +100,11 @@ function RegisterPage() {
     setApiError('');
     try {
       const detectedTimezone = detectBrowserTimezone();
-      const response = await api.post<{ user: User }>('/auth/register', {
+      // Through `useRegister`, never `api.post` directly: registering swaps the
+      // session cookie, so it has to run the same client-state teardown a login
+      // does or the new account opens onto the previous user's cache, drawer
+      // and walkthrough.
+      const response = await registerAccount.mutateAsync({
         email: data.email,
         password: data.password,
         // Spread, not `timezone: detectedTimezone ?? null` — see

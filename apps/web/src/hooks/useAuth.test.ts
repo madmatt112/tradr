@@ -5,7 +5,7 @@ import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api, markSessionConfirmed, markSessionEnded, markSessionStarted } from '@/lib/api';
-import { DRAWER_STORAGE_KEY } from '@/stores/drawer.store';
+import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
 import { useAuth, useLogin } from './useAuth';
@@ -43,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   eventBus.__resetForTests();
   localStorage.clear();
+  useDrawerStore.getState().reset();
   vi.clearAllMocks();
 });
 
@@ -175,6 +176,10 @@ describe('useLogin — a login begins from clean client state', () => {
     qc.setQueryData(['auth', 'me'], { id: 'u-1', email: 'a@example.com' });
     qc.setQueryData(['positions'], [{ id: 'p-1', symbol: 'AAPL' }]);
     localStorage.setItem(DRAWER_STORAGE_KEY, '{"isOpen":true,"activeTab":"quick-stats"}');
+    // The store hydrated from that key when its module was imported, and a
+    // login is a client-side navigation — nothing re-reads it — so the live
+    // values are the ones user B would actually see.
+    useDrawerStore.setState({ isOpen: true, activeTab: 'quick-stats', legacyDetected: false });
     const onLogout = vi.fn();
     eventBus.subscribe('auth:logout', onLogout);
 
@@ -185,6 +190,10 @@ describe('useLogin — a login begins from clean client state', () => {
 
     expect(qc.getQueryData(['positions'])).toBeUndefined();
     expect(localStorage.getItem(DRAWER_STORAGE_KEY)).toBeNull();
+    expect(useDrawerStore.getState()).toMatchObject({
+      isOpen: false,
+      activeTab: 'open-positions',
+    });
     expect(onLogout).toHaveBeenCalledOnce();
     // And the teardown ran BEFORE the seeding, or the clear would have taken
     // the incoming user out with the departing one.

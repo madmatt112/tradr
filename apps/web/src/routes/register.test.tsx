@@ -13,6 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import type { User } from '@tradr/shared';
 
+import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
+import { eventBus } from '@/stores/event-bus.store';
+
 import { Route as RegisterRoute } from './register';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -143,6 +146,9 @@ afterEach(() => {
   fetchSpy = null;
   intlSpy?.mockRestore();
   intlSpy = null;
+  eventBus.__resetForTests();
+  localStorage.clear();
+  useDrawerStore.getState().reset();
 });
 
 async function fillAndSubmit() {
@@ -321,5 +327,48 @@ describe('register route', () => {
 
     expect('timezone' in registerBody()).toBe(false);
     expect(screen.getByText('Check your email')).toBeTruthy();
+  });
+
+  // ---- Two users, one tab -----------------------------------------------
+
+  // REGISTERING IS ALSO A LOGIN. `POST /auth/register` swaps the session cookie
+  // whether or not one was already there, and /register no longer bounces an
+  // authenticated visitor away (SF-3 — a public page that mounts the me-query
+  // redirects itself away on a cold load). So a signed-in user can reach this
+  // form and create a second account, and the new account must not open onto
+  // the previous user's cached rows, drawer or walkthrough. Same teardown
+  // /login runs, not a second copy of it (lib/sessionTeardown).
+  it('case 9: registering on a tab someone else is signed in on begins from clean client state', async () => {
+    const { qc } = renderPage();
+
+    qc.setQueryData(['auth', 'me'], { id: 'u-prev', email: 'previous@user.dev' });
+    qc.setQueryData(['positions'], [{ id: 'p-1', symbol: 'AAPL' }]);
+    localStorage.setItem(
+      DRAWER_STORAGE_KEY,
+      JSON.stringify({ isOpen: true, activeTab: 'quick-stats', version: 1 }),
+    );
+    useDrawerStore.setState({ isOpen: true, activeTab: 'quick-stats', legacyDetected: false });
+    const onLogout = vi.fn();
+    eventBus.subscribe('auth:logout', onLogout);
+
+    await fillAndSubmit();
+    await waitFor(() => {
+      expect(screen.getByText('Check your email')).toBeTruthy();
+    });
+
+    // SERVER state.
+    expect(qc.getQueryData(['positions'])).toBeUndefined();
+    // STORED state, and the live store it seeded — the store hydrates once at
+    // module import, so the key alone is half the job.
+    expect(localStorage.getItem(DRAWER_STORAGE_KEY)).toBeNull();
+    expect(useDrawerStore.getState()).toMatchObject({
+      isOpen: false,
+      activeTab: 'open-positions',
+    });
+    // MODULE state, announced for each owner to drop its own.
+    expect(onLogout).toHaveBeenCalledOnce();
+    // And the teardown ran BEFORE the seeding, or the clear would have taken
+    // the incoming user out with the departing one.
+    expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u1' });
   });
 });
