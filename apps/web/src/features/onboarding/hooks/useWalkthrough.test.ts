@@ -40,6 +40,14 @@ vi.mock('@/features/positions/hooks/usePositions', () => ({
   usePositions: () => ({ data: positions }),
 }));
 
+// The accounts list, supplied directly for the same reason again. The
+// walkthrough reads it for one thing only — whether the screens two of the sets
+// open on are the ones the user is actually looking at.
+let accounts: { id: string }[] | undefined;
+vi.mock('@/features/accounts/hooks/useAccounts', () => ({
+  useAccounts: () => ({ data: accounts }),
+}));
+
 // `lib/analytics` is the REAL module here — only the vendor-facing capture is a
 // double. The interesting claims are about which events the walkthrough sends
 // and when, and stubbing the analytics module would assert nothing but that the
@@ -123,6 +131,7 @@ function eventsNamed(name: string): Record<string, unknown>[] {
 beforeEach(() => {
   checklist = aChecklist();
   positions = [];
+  accounts = [];
   started = null;
 });
 
@@ -312,6 +321,74 @@ describe('useWalkthrough — resume', () => {
     const result = await start();
 
     await waitFor(() => expect(result.current.itemId).toBe('close'));
+  });
+});
+
+// --- which sets can start from here -----------------------------------------
+//
+// A set whose first step targets a control that is not on screen exits
+// `target-missing` in silence, which is a button that did nothing. `canStart` is
+// what stops the checklist offering one, so these are about the four answers it
+// gives rather than about anything the engine does.
+
+describe('useWalkthrough — canStart', () => {
+  function canStartAll(): Record<ChecklistItemId, boolean> {
+    const { result } = renderHook(() => useWalkthrough());
+    const ids: ChecklistItemId[] = ['account', 'calculator', 'position', 'close'];
+    return Object.fromEntries(ids.map((id) => [id, result.current.canStart(id)])) as Record<
+      ChecklistItemId,
+      boolean
+    >;
+  }
+
+  it('offers the account set only while the zero-state is the screen the user is on', () => {
+    accounts = [];
+    expect(canStartAll().account).toBe(true);
+
+    // One account — of any kind, sample data included — and the dashboard shows
+    // the grid instead, so the button that set opens on is gone.
+    accounts = [{ id: 'acct-1' }];
+    expect(canStartAll().account).toBe(false);
+  });
+
+  it('offers the position set only once an account exists to book against', () => {
+    accounts = [];
+    expect(canStartAll().position).toBe(false);
+
+    accounts = [{ id: 'acct-1' }];
+    expect(canStartAll().position).toBe(true);
+  });
+
+  it('offers the close set only when there is an open position to open it on', () => {
+    positions = [{ id: 'pos-1', status: 'closed' }];
+    expect(canStartAll().close).toBe(false);
+
+    positions = [{ id: 'pos-1', status: 'open' }];
+    expect(canStartAll().close).toBe(true);
+  });
+
+  it('always offers the calculator set, which needs nothing of the user', () => {
+    accounts = [];
+    positions = [];
+    expect(canStartAll().calculator).toBe(true);
+  });
+
+  it('offers nothing that depends on an account count it does not have', () => {
+    accounts = undefined;
+    const answers = canStartAll();
+    expect(answers.account).toBe(false);
+    expect(answers.position).toBe(false);
+  });
+
+  // Completion is about the user's progress; `canStart` is about whether the
+  // screen the set opens on is there. A user who has logged a position can ask
+  // to be shown the calculator again.
+  it('is about the set, not about whether the item is ticked', () => {
+    checklist = aChecklist('account', 'calculator', 'position');
+    accounts = [{ id: 'acct-1' }];
+    const answers = canStartAll();
+    expect(answers.calculator).toBe(true);
+    expect(answers.position).toBe(true);
   });
 });
 

@@ -298,14 +298,44 @@ describe('ActivationChecklist — per-item action', () => {
     expect(onStartStep).toHaveBeenCalledWith('position');
   });
 
-  it('offers an action for every outstanding item and none for a completed one', () => {
+  // THE COMPLETED ITEM IS THE POINT OF THIS ONE. Its button used to be withdrawn
+  // on completion, which took the walkthrough's per-item door away at exactly
+  // the moment the user left the zero-state — the only other door — and left the
+  // later sets with no entry point at all. Guidance is repeatable; progress is
+  // what the tick is for.
+  it('offers an action for every item, a completed one included', () => {
     useHook({ checklist: checklistOf({ accountCount: 1 }), preference: preference('pending') });
     render(<ActivationChecklist onStartStep={vi.fn()} />);
 
     const actions = [...document.querySelectorAll('[data-checklist-action]')].map((el) =>
       el.getAttribute('data-checklist-action'),
     );
+    expect(actions).toEqual(['account', 'calculator', 'position', 'close']);
+  });
+
+  it('withholds the action for a set that cannot run from here', () => {
+    useHook({ checklist: checklistOf({ accountCount: 1 }), preference: preference('pending') });
+    render(<ActivationChecklist onStartStep={vi.fn()} canStartStep={(id) => id !== 'account'} />);
+
+    const actions = [...document.querySelectorAll('[data-checklist-action]')].map((el) =>
+      el.getAttribute('data-checklist-action'),
+    );
     expect(actions).toEqual(['calculator', 'position', 'close']);
+    // And the item itself is untouched: it is the shortcut that is unavailable,
+    // not the step.
+    expect(document.querySelectorAll('[data-checklist-item]').length).toBe(4);
+  });
+
+  // An icon with no accessible name is four unnamed buttons to a screen reader,
+  // one per row, and the word "Start" next to the item's own label read as a
+  // second label competing with it.
+  it('names the play button for a screen reader and shows only the icon', () => {
+    useHook({ checklist: checklistOf(), preference: preference('pending') });
+    render(<ActivationChecklist onStartStep={vi.fn()} />);
+
+    const action = screen.getByRole('button', { name: 'Start: Log a position' });
+    expect(action.textContent).toBe('');
+    expect(action.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('renders no dead buttons when no handler is supplied', () => {

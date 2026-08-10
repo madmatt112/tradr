@@ -130,7 +130,7 @@ function ChecklistSlot(): ReactElement {
   //
   // No params: `useWalkthrough` fills in the position a set needs from the
   // user's own data, which is the only place that knows it.
-  const { start, isUnavailable } = useWalkthrough();
+  const { start, canStart, isUnavailable } = useWalkthrough();
   const { setStatus } = useOnboarding();
   const beginGuided = useCallback(
     (itemId: ChecklistItemId) => {
@@ -147,8 +147,16 @@ function ChecklistSlot(): ReactElement {
     >
       {/* Withdrawn when the tour runtime will not load, exactly as the
           zero-state withdraws it: a "Start" with nothing behind it is a dead
-          control, and the checklist is useful without one. */}
-      <ActivationChecklist onStartStep={isUnavailable ? undefined : beginGuided} />
+          control, and the checklist is useful without one.
+
+          `canStart` withholds the same thing one set at a time. On THIS screen
+          the user has an account, so the account set's first step — the
+          zero-state's "Create my first account" — is a control this branch by
+          definition does not render. */}
+      <ActivationChecklist
+        onStartStep={isUnavailable ? undefined : beginGuided}
+        canStartStep={canStart}
+      />
     </div>
   );
 }

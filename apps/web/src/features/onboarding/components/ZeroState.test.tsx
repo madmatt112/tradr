@@ -88,6 +88,11 @@ function useHook(over: Partial<UseOnboardingResult> = {}): UseOnboardingResult {
 function useTour(over: Partial<UseWalkthroughResult> = {}): UseWalkthroughResult {
   const value: UseWalkthroughResult = {
     start: vi.fn(),
+    // Every set startable by default: which ones genuinely are is
+    // `useWalkthrough`'s own question and has its own tests. What belongs here
+    // is that this screen passes the answer through, which the case below pins
+    // by handing back a different one.
+    canStart: () => true,
     stop: vi.fn(),
     isRunning: false,
     isUnavailable: false,
@@ -291,7 +296,7 @@ describe('ZeroState — the checklist starts the walkthrough per item', () => {
     expect(hook.setStatus).toHaveBeenCalledWith('active');
   });
 
-  it('offers an action for each outstanding item and none for a completed one', () => {
+  it('offers an action for every item, a completed one included', () => {
     useHook({
       checklist: deriveChecklist({
         accountCount: 1,
@@ -305,7 +310,19 @@ describe('ZeroState — the checklist starts the walkthrough per item', () => {
       [...document.querySelectorAll('[data-checklist-action]')].map((el) =>
         el.getAttribute('data-checklist-action'),
       ),
-    ).toEqual(['calculator', 'position', 'close']);
+    ).toEqual(['account', 'calculator', 'position', 'close']);
+  });
+
+  it('withholds the action for a set the walkthrough says cannot run', () => {
+    useTour({ canStart: (id) => id === 'calculator' });
+    useHook();
+    render(<ZeroState />);
+
+    expect(
+      [...document.querySelectorAll('[data-checklist-action]')].map((el) =>
+        el.getAttribute('data-checklist-action'),
+      ),
+    ).toEqual(['calculator']);
   });
 });
 

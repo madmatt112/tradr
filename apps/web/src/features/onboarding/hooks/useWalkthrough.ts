@@ -53,6 +53,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
 
+import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { eventBus } from '@/stores/event-bus.store';
 import type { EventName } from '@/stores/events.types';
@@ -308,6 +309,56 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
   });
 }
 
+/**
+ * Whether a set can actually START from where the user's data has them.
+ *
+ * A set whose FIRST step targets a control that is not on screen — and that
+ * nothing is going to navigate to — waits out its `waitForMs` and exits
+ * `target-missing` without a word. To the user that is a button that did
+ * nothing, which is the failure this branch has already shipped twice. So the
+ * checklist ASKS before it offers a shortcut, and withholds the ones that cannot
+ * run rather than putting a dead control on screen.
+ *
+ * DATA DECIDES, NOT THE MOUNT SITE, so the two places the checklist is mounted
+ * need no rules of their own:
+ *
+ * - `account` opens on the zero-state's "Create my first account", and
+ *   `_auth.dashboard.tsx` renders that screen only while the accounts list is
+ *   EMPTY. The demo account counts here exactly as it counts for that gate:
+ *   seeding sample data takes the zero-state away, and this set's first target
+ *   with it — even though the checklist item stays outstanding, because sample
+ *   data completes nothing.
+ * - `position` opens on `[data-tour="position-new"]`, which `PositionList` tags
+ *   only on its enabled branch — the one it takes once an account exists.
+ * - `close` opens on `/positions/$positionId`, and the only id anyone has for
+ *   that route is the open position `useWalkthrough` falls back to. No open
+ *   position, no route to navigate to.
+ * - `calculator` has nothing that can be missing: `/calculator` renders its
+ *   fields for every user, which is why it is the one item a user with no
+ *   accounts can complete.
+ *
+ * An unknown account count (the read is disabled, in flight, or failed) answers
+ * "no" for both sets that depend on it. Withholding a shortcut that would have
+ * worked costs the user a click on the item's own screen; offering one that
+ * cannot costs them a walkthrough that silently never starts.
+ */
+function canStartSet(
+  itemId: ChecklistItemId,
+  accountCount: number | undefined,
+  hasOpenPosition: boolean,
+): boolean {
+  switch (itemId) {
+    case 'account':
+      return accountCount === 0;
+    case 'calculator':
+      return true;
+    case 'position':
+      return accountCount !== undefined && accountCount > 0;
+    case 'close':
+      return hasOpenPosition;
+  }
+}
+
 /** The first item the user has not done — the set to run, and the resume point. */
 export function nextIncompleteItem(
   checklist: Checklist | null | undefined,
@@ -499,6 +550,15 @@ export interface UseWalkthroughResult {
    * `isUnavailable` true and everything else exactly as it was.
    */
   start: (itemId?: ChecklistItemId, params?: Record<string, string>) => void;
+  /**
+   * Whether that item's set would actually run from the user's data as it
+   * stands — see `canStartSet`. A caller offering a per-item shortcut asks this
+   * first, so it never puts up a button behind which the tour would exit
+   * `target-missing` in silence. It is about the SET, not about the item's
+   * completion: a completed item whose set still runs is still startable, which
+   * is what makes the walkthrough repeatable.
+   */
+  canStart: (itemId: ChecklistItemId) => boolean;
   /** End the running walkthrough. A no-op when none is running. */
   stop: () => void;
   isRunning: boolean;
@@ -551,6 +611,18 @@ export function useWalkthrough(): UseWalkthroughResult {
     return open ? { positionId: open.id } : undefined;
   }, [positions]);
 
+  // The other half of "can this set run": how many accounts the user has, on the
+  // same terms the dashboard's zero-state gate reads it — the whole list, demo
+  // rows included. Same query key as the gate's own read and as `useOnboarding`'s
+  // above, and gated on the same condition as the positions observer, so this
+  // costs no extra request on either screen the checklist is mounted on.
+  const { data: accounts } = useAccounts({ enabled: checklist != null });
+  const hasOpenPosition = openPositionParams !== undefined;
+  const canStart = useCallback(
+    (itemId: ChecklistItemId) => canStartSet(itemId, accounts?.length, hasOpenPosition),
+    [accounts, hasOpenPosition],
+  );
+
   // What the funnel counts as "offered": there is a walkthrough behind the
   // button and the user could press it. Mounting this hook IS the offer — the
   // two things that mount it, `ZeroState` and the dashboard's checklist slot,
@@ -599,6 +671,7 @@ export function useWalkthrough(): UseWalkthroughResult {
 
   return {
     start,
+    canStart,
     stop,
     isRunning: state.isRunning,
     isUnavailable: state.isUnavailable,

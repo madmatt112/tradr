@@ -126,7 +126,7 @@ function guidanceGap(
 
 export function ZeroState() {
   const { setStatus, isSaving, checklist } = useOnboarding();
-  const { start, isUnavailable } = useWalkthrough();
+  const { start, canStart, isUnavailable } = useWalkthrough();
   const { seed, isPending: isSeeding } = useDemoAccount();
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
 
@@ -310,8 +310,16 @@ export function ZeroState() {
           buttons, and a "Start" that can only fail is not an affordance. The
           checklist itself stays, with all four items and their labels — what a
           failed runtime has to leave fully functional is the list, not the
-          shortcut into it. */}
-      <ActivationChecklist onStartStep={isUnavailable ? undefined : beginGuided} />
+          shortcut into it.
+
+          `canStart` is the same judgement made per SET rather than for all four
+          at once: from this screen the user has no accounts, so the two sets
+          that open on a position or on the positions list have no target to
+          open on. */}
+      <ActivationChecklist
+        onStartStep={isUnavailable ? undefined : beginGuided}
+        canStartStep={canStart}
+      />
 
       <p className="text-sm text-muted-foreground">
         {/* The docs live on their own host, so this is an <a>, not a router

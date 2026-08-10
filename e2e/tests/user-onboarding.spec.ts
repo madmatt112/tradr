@@ -265,10 +265,11 @@ const checklistProgress = (page: Page): Locator =>
  * One checklist item's LABEL — the span carrying its name and the screen-reader
  * completion text, not the whole row.
  *
- * The row also holds the per-item "Start" button, which renders for an item that
- * is outstanding and has a walkthrough behind it. Reading the row would put that
- * label after the completion text and defeat the `$` anchor the assertions below
- * are made of, for a reason that has nothing to do with completion.
+ * The row also holds the per-item play button, which renders for any item whose
+ * step set can run from the screen the user is on — completed or not. Reading
+ * the row would put that button's accessible name after the completion text and
+ * defeat the `$` anchor the assertions below are made of, for a reason that has
+ * nothing to do with completion.
  */
 const checklistItemLabel = (page: Page, id: string): Locator =>
   page.locator(`[data-checklist-item="${id}"] > span`).first();
@@ -720,13 +721,29 @@ test.describe('user onboarding', () => {
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
   });
 
-  test('a reload mid-walkthrough resumes from what the data says is outstanding', async ({
+  // RESUMING ONTO A LATER SET, DRIVEN THE WAY A USER WOULD DRIVE IT. This
+  // scenario used to re-enter the tour through the zero-state's "Walk me through
+  // it", because that was the only door there was — and the zero-state is gone
+  // the moment the user has an account, which is the moment the later sets
+  // become the outstanding work. So it proved the resume machinery and not the
+  // journey. The checklist's per-item play button is that journey, and this test
+  // now takes it: one item completed, a reload, and a later set one press away.
+  //
+  // The account is created over the API rather than through the tour: what is
+  // under test here starts AFTER the user has one, and the guided path that
+  // creates it is covered above.
+  test('a completed item and a reload still leave a later set one press away', async ({
     page,
     request,
   }) => {
     const email = await registerUser(request, 'resume');
+    await createAccount(request, 'Resume account');
     await loginViaUi(page, email);
-    await expect(page.getByTestId('activation-checklist')).toBeVisible();
+
+    // Past the zero-state, on the populated dashboard, with the checklist as the
+    // only way into a walkthrough — the state this whole test is about.
+    await expect(page.getByTestId('onboarding-zero-state')).toHaveCount(0);
+    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
 
     // Start a set OTHER than the first, off the checklist, so "where the user
     // was" and "what the data says is outstanding" are different answers.
@@ -763,31 +780,37 @@ test.describe('user onboarding', () => {
     await expect(page.locator('#entryPrice')).toBeVisible();
     await expect(popover(page)).toHaveCount(0);
 
-    // The item is ticked off the user's data, and its own shortcut goes with it
-    // — nothing here is a stored per-step flag.
+    // The item is ticked off the user's data — nothing here is a stored per-step
+    // flag — and the account set's button is gone, because the control its first
+    // step opens on belongs to a zero-state this user has left. An honest
+    // omission rather than a button that would start a tour and end it in
+    // silence three seconds later.
     await page.goto('/dashboard');
-    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
+    await expect(checklistProgress(page)).toHaveText('2 of 4 complete');
     await expect(checklistItemLabel(page, 'calculator')).toHaveText(/— completed$/);
-    await expect(page.locator('[data-checklist-action="calculator"]')).toHaveCount(0);
+    await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
+    await expect(page.locator('[data-checklist-action="account"]')).toHaveCount(0);
 
-    // Re-entering resumes by re-deriving the outstanding item from the user's
-    // data — no step index was ever stored, so it lands on the account set,
-    // which is what the checklist still says is outstanding. NOT the calculator
-    // set the user was in when they reloaded, and not the one they just
-    // completed.
-    //
-    // THE ACCOUNT SET IS AS FAR AS THIS CAN GO, and the reason is a property of
-    // the product rather than of the test: every way into a walkthrough lives on
-    // the zero-state, the zero-state renders only while the user has no
-    // accounts, and having no accounts is exactly what leaves item 1
-    // outstanding. So the first outstanding item is ALWAYS item 1 wherever the
-    // entry point exists, and resuming onto a later set — the calculator set,
-    // after an account is created — is unreachable from the UI as it stands.
-    await startWalkthrough(page);
-    await expect(popoverProgress(page)).toHaveText(`1 of ${ACCOUNT_STEP_TITLES.length}`);
+    // THE ASSERTION THIS TEST EXISTS FOR. A user who has completed an item
+    // reaches a LATER set through the UI, from the one control that is on
+    // screen — and it opens at the front of that set, on that set's own screen,
+    // because no step index was ever stored to land anywhere else.
+    await page.locator('[data-checklist-action="position"]').click();
+    await expect(page).toHaveURL(/\/positions$/);
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[0]);
+    await expect(popoverProgress(page)).toHaveText(`1 of ${POSITION_STEP_TITLES.length}`);
+    await escapeTour(page);
+
+    // And the item the user has already done keeps its own button: the
+    // walkthrough is guidance, which is worth repeating, not progress.
+    await page.goto('/dashboard');
+    await page.locator('[data-checklist-action="calculator"]').click();
+    await expect(page).toHaveURL(/\/calculator/);
+    await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
 
     await escapeTour(page);
-    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
+    await page.goto('/dashboard');
+    await expect(checklistProgress(page)).toHaveText('2 of 4 complete');
   });
 
   test('the unguided path leaves a usable checklist behind', async ({ page, request }) => {

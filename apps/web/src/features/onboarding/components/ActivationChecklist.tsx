@@ -9,9 +9,23 @@
 //
 // NOTHING COMPLETES ON SAMPLE DATA ALONE, and this file gets that for free: the
 // hook excludes the sample account and everything booked against it from the
-// counts it derives from — so nothing here strikes an item through, or
-// withdraws its guided-step button, for trades the user never made. Nothing
-// here knows demo data exists, and nothing here should.
+// counts it derives from — so nothing here strikes an item through for trades
+// the user never made. Nothing here knows demo data exists, and nothing here
+// should.
+//
+// EVERY ITEM CARRIES ITS OWN GUIDED-STEP BUTTON, COMPLETED ONES INCLUDED. The
+// walkthrough is guidance, not progress: a user who has logged a position may
+// still want to be shown the calculator, and an item that has been ticked is the
+// one they are most likely to want repeated. Withdrawing the button on
+// completion also made the later sets unreachable in practice — the first item
+// completes the moment the user has an account, which is the same moment the
+// zero-state (the walkthrough's other door) goes away.
+//
+// WHICH BUTTONS ARE OFFERED IS THE CALLER'S ANSWER, not this file's. A set whose
+// first step targets a control that is not on screen exits `target-missing` in
+// silence a few seconds after it starts, so `canStartStep` withholds those —
+// `useWalkthrough.canStartSet` is where that is decided, from the same data the
+// steps themselves depend on.
 //
 // THE THREE CHECKLIST VALUES ARE THREE DIFFERENT ANSWERS, and this component is
 // the reason the hook bothers to distinguish them:
@@ -64,7 +78,7 @@
 // The tick is doubled by an icon shape and by screen-reader text, so completion
 // never rests on colour alone.
 
-import { Circle, CircleCheck, RotateCcw, X } from 'lucide-react';
+import { Circle, CircleCheck, Play, RotateCcw, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -99,9 +113,20 @@ interface ActivationChecklistProps {
    * offer simply omits the prop.
    */
   onStartStep?: (id: ChecklistItemId) => void;
+  /**
+   * Whether that item's step set would actually run from where the user is —
+   * `useWalkthrough().canStart`, which both mount sites pass straight through.
+   *
+   * Omitted, every item gets a button, which is right for a caller whose
+   * `onStartStep` can always deliver. It is asked per item rather than per
+   * render because the answer differs by set: the account set opens on a control
+   * only the zero-state renders, and the close set on a position the user may
+   * not have open.
+   */
+  canStartStep?: (id: ChecklistItemId) => boolean;
 }
 
-export function ActivationChecklist({ onStartStep }: ActivationChecklistProps) {
+export function ActivationChecklist({ onStartStep, canStartStep }: ActivationChecklistProps) {
   const { checklist, preference, isError, isSaving, setStatus, dismiss } = useOnboarding();
 
   const allComplete = checklist?.allComplete === true;
@@ -219,17 +244,25 @@ export function ActivationChecklist({ onStartStep }: ActivationChecklistProps) {
               </span>
               {/* No primary (amber) action anywhere on this card. The checklist
                   is embedded in the zero-state, which carries the one primary
-                  action that view is allowed. */}
-              {!item.done && onStartStep && (
+                  action that view is allowed.
+
+                  A PLAY TRIANGLE, AND A NAME THE ICON DOES NOT CARRY. The row is
+                  a line of text and a tick; a word here read as a second label
+                  competing with the item's own. The icon says "this starts
+                  something" at a glance and `aria-label` says which — an icon
+                  alone would leave a screen reader with an unnamed button four
+                  times over, one per row. Same size and variant as the dismiss
+                  control in the header, so the card has one icon-button size. */}
+              {onStartStep && (canStartStep?.(item.id) ?? true) && (
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size="icon-sm"
                   className="shrink-0 cursor-pointer"
                   data-checklist-action={item.id}
                   aria-label={`Start: ${item.label}`}
                   onClick={() => onStartStep(item.id)}
                 >
-                  Start
+                  <Play aria-hidden="true" />
                 </Button>
               )}
             </li>
