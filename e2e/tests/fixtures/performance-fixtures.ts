@@ -174,6 +174,10 @@ export const SESSION_RESPONSE = {
  * takes precedence (Playwright matches routes in reverse registration order),
  * so a spec is free to override `/performance` (the boundary under test) or
  * `/users/me/display-currency` (ledger-balances) with its own handler.
+ *
+ * It FAILS CLOSED: anything under `/api/` that neither this helper nor the spec
+ * answers hits the backstop registered below and fails the test by name. See
+ * `failOnUnstubbedRequest`.
  */
 /**
  * The default dashboard layout a freshly-registered user receives from the
@@ -232,12 +236,49 @@ const DEFAULT_DASHBOARD_LAYOUT = {
   updatedAt: null,
 };
 
+/**
+ * The backstop that makes the list below a CONTRACT rather than a best effort.
+ *
+ * Registered first, so Playwright — which matches handlers in reverse
+ * registration order — reaches it only when neither `mockAppShell` nor the spec
+ * answered the request. It throws from inside the handler, which Playwright
+ * reports as a test error naming the method and path, and the request is never
+ * answered at all, so it cannot 401 and cannot trip the redirect to /login.
+ *
+ * That inversion is the point. Unstubbed used to mean a 401, a global redirect,
+ * and a spec that quietly went on testing the login page — an assertion about
+ * the PRESENCE of something still passes there, so the suite stayed green while
+ * testing nothing. Four separate debugging rounds on this branch started that
+ * way, each ending in one more stub; a fifth (`/api/symbols/quote-config`) was
+ * masked until the login bounce was removed. Adding stubs never fixed it,
+ * because the next author always reached a different endpoint. Failing closed
+ * does: the cost of a missing stub is now one named error at the request that
+ * needed it, paid by whoever mounts the new surface.
+ */
+async function failOnUnstubbedRequest(page: Page): Promise<void> {
+  await page.route('**/api/**', (route) => {
+    const request = route.request();
+    const { pathname, search } = new URL(request.url());
+    throw new Error(
+      `mockAppShell: unstubbed request ${request.method()} ${pathname}${search}\n` +
+        `Nothing answers it, so this test would otherwise have taken a 401 and been ` +
+        `redirected to /login mid-run.\n` +
+        `Fix: if the authenticated shell mounts this everywhere, add a stub to ` +
+        `mockAppShell (e2e/tests/fixtures/performance-fixtures.ts). If it belongs to the ` +
+        `route under test, register it in the spec AFTER the mockAppShell call.`,
+    );
+  });
+}
+
 export async function mockAppShell(page: Page): Promise<void> {
   const json = (body: unknown) => ({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify(body),
   });
+
+  // FIRST, so it is reached LAST — see the doc comment above.
+  await failOnUnstubbedRequest(page);
 
   await page.route('**/api/dashboard/layout', (route) =>
     route.fulfill(json(DEFAULT_DASHBOARD_LAYOUT)),
@@ -324,12 +365,7 @@ export async function mockAppShell(page: Page): Promise<void> {
   //
   // They are shell surface for the same reason the rest of this list is. Any
   // spec that navigates to /dashboard mounts all six widgets whether or not it
-  // is testing them, and one unmocked 401 does not merely blank a widget — the
-  // api client's global handler sends the whole app to /login, so the failure
-  // lands on some later assertion as "element not found" on a login form. That
-  // trap has now cost this branch four debugging rounds; the answer each time
-  // was another stub, and the stubs belong here rather than being rediscovered
-  // per spec.
+  // is testing them.
   //
   // Neutral answers: a zero total and no brokerages, so neither widget paints a
   // surface a spec was not written for.
