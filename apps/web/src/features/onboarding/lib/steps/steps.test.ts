@@ -105,6 +105,16 @@ describe('walkthrough step definitions', () => {
     expect(step.description.replace(/<a .*$/s, '').trim().length).toBeGreaterThan(20);
   });
 
+  // The account dialog's default-risk presets are labelled with the drawdown ten
+  // losing trades in a row would compound to, precisely so nobody has to be told
+  // which setting is the sensible one. `AccountDialog.test.tsx` guards the
+  // dialog's own copy against the adjective; the walkthrough narrates the same
+  // control, so a step that reintroduces it puts the word back on the screen the
+  // presets took it off.
+  it.each(allSteps)('%s does not call a setting conservative', (_name, step) => {
+    expect(step.description).not.toMatch(/conservative/i);
+  });
+
   // Every step deep-links to documentation, through docsUrl().
   it.each(allSteps)('%s carries exactly one docs link, built from docsUrl()', (_name, step) => {
     const hrefs = Array.from(step.description.matchAll(/href="([^"]+)"/g), (m) => m[1]);

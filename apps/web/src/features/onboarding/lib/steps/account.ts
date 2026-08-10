@@ -17,9 +17,13 @@
  * - Starting balance is creation-only: the field renders under `!isEdit`, and
  *   `UpdateAccountSchema` deliberately omits it because the shown balance is
  *   `startingBalance + SUM(ledger)` (`packages/shared/src/schemas/account.ts`).
- * - Default risk % is optional, strictly positive, at most 100 with two
- *   decimals, editable after creation, and read-only into the calculator —
- *   `CalculatorForm.seedRiskPercent` sets the form field and never writes back.
+ * - Default risk % is a group of preset buttons, not a free-text field:
+ *   `RISK_PRESETS` in `AccountDialog.tsx` is 1% / 2% / 3%, each labelled with
+ *   the drawdown ten losing trades in a row would compound to, plus a "No rule"
+ *   option whose value is `undefined`. `DEFAULT_RISK_PRESET` is '2' and seeds
+ *   CREATE only. It stays editable after creation, and is read-only into the
+ *   calculator — `CalculatorForm.seedRiskPercent` sets the form field only when
+ *   the account has a rule, and never writes back.
  * - An unset brokerage is valid (`brokerageId` is nullable, the select offers
  *   "None"); a set one is what joins `fee_schedules` in `positions.query.ts`.
  * - The reporting timezone is a separate per-user value, seeded at registration
@@ -106,8 +110,10 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     body:
       'The share of this account&rsquo;s balance you risk on a single trade. It prefills the ' +
       'position-size calculator, and you can override it on any one calculation without changing ' +
-      'the account. If you do not have a rule of your own yet, 3% is a conservative starting ' +
-      'point. Leave it empty to set no rule; you can add one later.',
+      'the account. Choose 1%, 2% or 3% — each one shows what ten losing trades in a row would ' +
+      'cost you — or No rule, which sets none and leaves the calculator&rsquo;s risk percent for ' +
+      'you to fill in each time. 2% is chosen for you, and unlike the starting balance you can ' +
+      'change it whenever you want.',
   },
   {
     target: '#brokerage',
