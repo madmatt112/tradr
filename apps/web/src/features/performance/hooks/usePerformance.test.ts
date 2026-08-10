@@ -39,15 +39,26 @@ Object.defineProperty(globalThis, 'Storage', {
 });
 
 import {
+  __resetInvalidTimezoneState,
+  clearRejectedTimezone,
+  isTimezoneRejected,
+  readRejectedTimezone,
+  recordRejectedTimezone,
+} from '@/lib/invalidTimezone';
+
+import {
   __resetUsePerformanceModuleState,
   handlePerformanceQueryError,
   isInvalidTimezoneError,
   performanceRetry,
 } from './usePerformance';
 
+const BAD_TZ = 'Foo/Bar';
+
 beforeEach(() => {
   storage.clear();
   __resetUsePerformanceModuleState();
+  __resetInvalidTimezoneState();
 });
 
 afterEach(() => {
@@ -82,27 +93,44 @@ describe('isInvalidTimezoneError', () => {
   });
 });
 
-describe('performanceRetry — at-most-one INVALID_TIMEZONE retry per session', () => {
-  it('two INVALID_TIMEZONE failures in one session yield exactly ONE retry total', () => {
+describe('performanceRetry — at-most-one INVALID_TIMEZONE retry per rejected zone', () => {
+  it('two INVALID_TIMEZONE failures for the same zone yield exactly ONE retry total', () => {
     const err = { error: { code: 'INVALID_TIMEZONE' } };
 
-    // Failure #1: first time the session has seen INVALID_TIMEZONE → retry once.
-    expect(performanceRetry(0, err)).toBe(true);
-    expect(sessionStorage.getItem('perf.invalid_tz_seen')).toBe('true');
+    // Failure #1: this zone has not been rejected before → retry once.
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(true);
+    expect(sessionStorage.getItem('perf.invalid_tz')).toBe(BAD_TZ);
 
     // The retried request fails again with INVALID_TIMEZONE: TanStack would
     // call the retry decision with failureCount=1. Either branch (>=1 OR
-    // session-flag) must refuse.
-    expect(performanceRetry(1, err)).toBe(false);
+    // already-rejected) must refuse.
+    expect(performanceRetry(1, err, BAD_TZ)).toBe(false);
 
-    // A *separate* mount in the same session also refuses (session flag).
-    expect(performanceRetry(0, err)).toBe(false);
+    // A *separate* mount asking for the same zone also refuses.
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(false);
+  });
+
+  it('a DIFFERENT zone still gets its own retry — the record is not session-wide', () => {
+    const err = { error: { code: 'INVALID_TIMEZONE' } };
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(true);
+
+    // The user corrected the preference and the new zone is also rejected: it
+    // must get its own single retry rather than inheriting the old zone's.
+    expect(performanceRetry(0, err, 'Baz/Qux')).toBe(true);
+    expect(readRejectedTimezone()).toBe('Baz/Qux');
+  });
+
+  it('refuses when the failing request carried no zone (the server rejected its own default)', () => {
+    const err = { error: { code: 'INVALID_TIMEZONE' } };
+    expect(performanceRetry(0, err, undefined)).toBe(false);
+    expect(performanceRetry(0, err, null)).toBe(false);
+    expect(readRejectedTimezone()).toBeNull();
   });
 
   it('does not retry non-INVALID_TIMEZONE errors', () => {
-    expect(performanceRetry(0, { error: { code: 'INTERNAL' } })).toBe(false);
-    expect(performanceRetry(0, { status: 500 })).toBe(false);
-    expect(performanceRetry(0, new Error('network down'))).toBe(false);
+    expect(performanceRetry(0, { error: { code: 'INTERNAL' } }, BAD_TZ)).toBe(false);
+    expect(performanceRetry(0, { status: 500 }, BAD_TZ)).toBe(false);
+    expect(performanceRetry(0, new Error('network down'), BAD_TZ)).toBe(false);
   });
 
   it('Safari private-mode: sessionStorage.setItem throws → fallback prevents retry storm', () => {
@@ -113,12 +141,12 @@ describe('performanceRetry — at-most-one INVALID_TIMEZONE retry per session', 
 
     const err = { error: { code: 'INVALID_TIMEZONE' } };
 
-    // First failure consumes the one allowed retry; flag set in module-local fallback.
-    expect(performanceRetry(0, err)).toBe(true);
+    // First failure consumes the one allowed retry; zone kept in the module-local fallback.
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(true);
     // Subsequent failures must refuse — even though sessionStorage cannot
-    // record the flag, the in-memory fallback does.
-    expect(performanceRetry(0, err)).toBe(false);
-    expect(performanceRetry(0, err)).toBe(false);
+    // record the zone, the in-memory fallback does.
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(false);
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(false);
 
     expect(setItemSpy).toHaveBeenCalled();
     // Warned exactly once across the storm.
@@ -135,9 +163,48 @@ describe('performanceRetry — at-most-one INVALID_TIMEZONE retry per session', 
     });
 
     const err = { error: { code: 'INVALID_TIMEZONE' } };
-    expect(performanceRetry(0, err)).toBe(true);
-    expect(performanceRetry(0, err)).toBe(false);
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(true);
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(false);
+    // Reads and writes must AGREE in this mode, or the banner describes a
+    // fallback the request did not make.
+    expect(isTimezoneRejected(BAD_TZ)).toBe(true);
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe('rejected-timezone record — lifecycle', () => {
+  it('clearRejectedTimezone re-arms the retry for the zone that was rejected', () => {
+    const err = { error: { code: 'INVALID_TIMEZONE' } };
+    recordRejectedTimezone(BAD_TZ);
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(false);
+
+    // What a reporting-timezone change does.
+    clearRejectedTimezone();
+    expect(readRejectedTimezone()).toBeNull();
+    expect(isTimezoneRejected(BAD_TZ)).toBe(false);
+    expect(performanceRetry(0, err, BAD_TZ)).toBe(true);
+  });
+
+  it('only the recorded zone is treated as rejected', () => {
+    recordRejectedTimezone(BAD_TZ);
+    expect(isTimezoneRejected(BAD_TZ)).toBe(true);
+    expect(isTimezoneRejected('Europe/London')).toBe(false);
+    expect(isTimezoneRejected(undefined)).toBe(false);
+  });
+
+  it('clearRejectedTimezone survives a storage that throws on removeItem', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    recordRejectedTimezone(BAD_TZ);
+    vi.spyOn(storage, 'removeItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    clearRejectedTimezone();
+    // The in-memory fallback is what the Safari-private path reads, so it must
+    // be cleared even when the storage write cannot be.
+    vi.spyOn(storage, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    expect(isTimezoneRejected(BAD_TZ)).toBe(false);
   });
 });
 

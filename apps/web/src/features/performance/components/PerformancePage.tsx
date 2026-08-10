@@ -3,6 +3,7 @@ import { Component, lazy, Suspense, type ReactNode } from 'react';
 import type { Granularity, PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
 
 import { Skeleton } from '@/components/ui/skeleton';
+import { isTimezoneRejected } from '@/lib/invalidTimezone';
 
 import { isInvalidTimezoneError, usePerformance } from '../hooks/usePerformance';
 import type { PerformancePreset } from '../utils/derivePresetRange';
@@ -18,22 +19,6 @@ import { StatsPanel } from './StatsPanel';
 import { TierWindowNotice } from './TierWindowNotice';
 import { TimeframeSelector } from './TimeframeSelector';
 import { WeekStartChangedBanner } from './WeekStartChangedBanner';
-
-const INVALID_TZ_SEEN_KEY = 'perf.invalid_tz_seen';
-
-/**
- * Read the session flag set by `performanceRetry` when it retried with `tz`
- * omitted. Used at the populated path to detect "retry succeeded → fell back
- * to UTC" so the informational `InvalidTimezoneBanner` can render alongside
- * the data. Try/catch handles Safari private mode where storage throws.
- */
-function readInvalidTzSeenSafe(): boolean {
-  try {
-    return sessionStorage.getItem(INVALID_TZ_SEEN_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Lazy chart import
@@ -218,17 +203,16 @@ export function PerformancePage({ params }: PerformancePageProps) {
   // The hook's retry policy already swapped to UTC on the first failure (and
   // the swap may itself succeed). We render the banner only when the request
   // ultimately failed with INVALID_TIMEZONE — signalling that even the UTC
-  // fallback did not resolve. `isSecondFailure` reflects the session flag the
-  // hook wrote on its first observation.
+  // fallback did not resolve.
+  //
+  // `isSecondFailure` asks the ONE question its copy claims: did the request
+  // that just failed omit `tz`? That is true exactly when this zone is the
+  // recorded rejected one — the same predicate the hook uses to decide whether
+  // to send `tz` — so the server was validating its own UTC default. A failure
+  // that still CARRIED the user's zone is a first failure, and gets the banner
+  // that names profile settings as the fix.
   if (isError && isInvalidTimezoneError(error)) {
-    let isSecondFailure = false;
-    try {
-      isSecondFailure = sessionStorage.getItem('perf.invalid_tz_seen') === 'true';
-    } catch {
-      // sessionStorage unavailable (Safari private mode) — treat as first
-      // failure; the banner is still informational.
-      isSecondFailure = false;
-    }
+    const isSecondFailure = isTimezoneRejected(params.tz);
     return (
       <div data-testid="performance-page" className="space-y-4">
         <InvalidTimezoneBanner isSecondFailure={isSecondFailure} />
@@ -260,10 +244,11 @@ export function PerformancePage({ params }: PerformancePageProps) {
 
   // REQ-5.6 — When the hook retried with `tz` omitted and the server fell
   // back to UTC, the request *succeeded* but the user's requested timezone
-  // was not honored. Detect that swap (session flag set AND server's
-  // resolved tz differs from the requested tz) so the populated/empty paths
-  // both render the informational banner.
-  const showUtcFallbackBanner = readInvalidTzSeenSafe() && params.tz !== resolvedTimezone;
+  // was not honored. Detect that swap (this zone is the recorded rejected one
+  // AND the server's resolved tz differs) so the populated/empty paths both
+  // render the informational banner — the one carrying the settings remedy.
+  // Once the zone is corrected the record clears, so the banner goes with it.
+  const showUtcFallbackBanner = isTimezoneRejected(params.tz) && params.tz !== resolvedTimezone;
 
   // The "in-timeframe-empty" branch only fires when global flags are
   // satisfied (the upstream branches own those cases) AND the active

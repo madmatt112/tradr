@@ -33,6 +33,7 @@ import { DEFAULT_REPORTING_TIMEZONE } from '@tradr/shared';
 
 import { api } from '@/lib/api';
 import { detectBrowserTimezone } from '@/lib/browserTimezone';
+import { clearRejectedTimezone } from '@/lib/invalidTimezone';
 
 export interface UserTimezoneResponse {
   timezone: string;
@@ -168,10 +169,13 @@ export function useReportingTimezoneBackfill(): void {
     void api
       .put<UserTimezoneResponse>('/users/me/timezone', { timezone: detected })
       .then(() => {
+        // Same reason as the mutation below: a stored zone is a new zone to
+        // ask for, so a rejection recorded against the old one must not keep
+        // stripping `tz` from performance requests.
+        clearRejectedTimezone();
         queryClient.invalidateQueries({ queryKey: ['users', 'me', 'timezone'] });
-        // Same reason as the mutation below: the bucketed figures carry the
-        // zone inside their key, so the entries cut in the substituted default
-        // have to go.
+        // The bucketed figures carry the zone inside their key, so the entries
+        // cut in the substituted default have to go.
         queryClient.invalidateQueries({ queryKey: ['performance'] });
       })
       .catch(() => {
@@ -200,6 +204,11 @@ export function useUserTimezoneMutation() {
     mutationFn: (timezone: string) =>
       api.put<UserTimezoneResponse>('/users/me/timezone', { timezone }),
     onSuccess: () => {
+      // Drop any recorded INVALID_TIMEZONE rejection first. The record is what
+      // makes performance requests omit `tz`; leaving a rejection for the zone
+      // the user just moved away from would strand the tab on UTC no matter
+      // how many times they corrected the preference.
+      clearRejectedTimezone();
       queryClient.invalidateQueries({ queryKey: ['users', 'me', 'timezone'] });
       queryClient.invalidateQueries({ queryKey: ['performance'] });
       toast.success('Reporting timezone updated');

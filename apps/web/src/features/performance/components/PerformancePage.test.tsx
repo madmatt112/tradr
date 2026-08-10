@@ -95,6 +95,7 @@ vi.mock('../hooks/usePerformance', async () => {
   };
 });
 
+import { __resetInvalidTimezoneState, recordRejectedTimezone } from '@/lib/invalidTimezone';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 
 import { ChartChunkStaleBanner } from './ChartChunkStaleBanner';
@@ -190,6 +191,7 @@ beforeEach(() => {
   useQueryMock.mockReset();
   vi.mocked(captureClientEvent).mockClear();
   sessionStorage.clear();
+  __resetInvalidTimezoneState();
   tierData.current = undefined;
 });
 
@@ -465,8 +467,10 @@ describe('PerformancePage — INVALID_TIMEZONE error path', () => {
     unmount(container, root);
   });
 
-  it('flips InvalidTimezoneBanner into second-failure mode when session flag is set', () => {
-    sessionStorage.setItem('perf.invalid_tz_seen', 'true');
+  it('flips into second-failure mode only when THIS zone is the rejected one', () => {
+    // The request that failed had already dropped `tz`, so it was the server's
+    // own default that was rejected — which is exactly what the copy claims.
+    recordRejectedTimezone(PARAMS.tz);
     useQueryMock.mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -479,17 +483,39 @@ describe('PerformancePage — INVALID_TIMEZONE error path', () => {
     expect(banner?.getAttribute('data-second-failure')).toBe('true');
     unmount(container, root);
   });
+
+  it('keeps the settings remedy reachable when a DIFFERENT zone is the recorded one', () => {
+    // A rejection recorded against the zone the user has since left must not
+    // relabel a fresh failure as "the server rejected UTC as well" — this
+    // request still CARRIED the user's zone, so profile settings is the fix.
+    recordRejectedTimezone('Foo/Bar');
+    useQueryMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { error: { code: 'INVALID_TIMEZONE' } },
+    });
+    const { container, root } = mountWith(
+      <PerformancePage params={{ ...PARAMS, tz: 'Europe/London' }} />,
+    );
+    const banner = container.querySelector('[data-testid="invalid-timezone-banner"]');
+    expect(banner?.getAttribute('data-second-failure')).toBeNull();
+    expect(
+      container.querySelector('[data-testid="invalid-timezone-banner-settings-link"]'),
+    ).not.toBeNull();
+    unmount(container, root);
+  });
 });
 
 describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
   it('renders InvalidTimezoneBanner alongside data when the tz-omitted retry succeeded', async () => {
-    // The hook's retry policy wrote this flag before retrying with `tz` omitted.
-    sessionStorage.setItem('perf.invalid_tz_seen', 'true');
+    // The hook's retry policy recorded this zone before retrying with `tz` omitted.
+    const params: PerformanceQueryInput = { ...PARAMS, tz: 'Europe/London' };
+    recordRejectedTimezone(params.tz);
 
     // Request asked for a non-UTC tz; server resolved to UTC because the
     // retry omitted `tz`. Banner should render in first-failure mode (the
     // request succeeded, so the user sees the informational copy).
-    const params: PerformanceQueryInput = { ...PARAMS, tz: 'Europe/London' };
     useQueryMock.mockReturnValue({
       data: buildResponse({ resolvedTimezone: 'UTC' }),
       isLoading: false,
@@ -506,15 +532,47 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
     expect(banner).not.toBeNull();
     // First-failure mode: dismissible, no `data-second-failure` attribute.
     expect(banner?.getAttribute('data-second-failure')).toBeNull();
+    // The remedy this whole banner state exists to carry.
+    expect(
+      container.querySelector('[data-testid="invalid-timezone-banner-settings-link"]'),
+    ).not.toBeNull();
     // Data still renders alongside the banner.
     expect(container.querySelector('[data-testid="stats-panel"]')).not.toBeNull();
     unmount(container, root);
   });
 
+  it('still reaches the settings remedy when sessionStorage reads throw (Safari private)', async () => {
+    const params: PerformanceQueryInput = { ...PARAMS, tz: 'Europe/London' };
+    recordRejectedTimezone(params.tz);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Reads throw, so only the in-memory fallback knows the zone was rejected.
+    // Reading through a different accessor than the request used is what made
+    // this banner unreachable in this mode.
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    useQueryMock.mockReturnValue({
+      data: buildResponse({ resolvedTimezone: 'UTC' }),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    const { container, root } = mountWith(<PerformancePage params={params} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('[data-testid="invalid-timezone-banner-settings-link"]'),
+    ).not.toBeNull();
+    unmount(container, root);
+  });
+
   it('does NOT render InvalidTimezoneBanner when the requested tz matches resolved tz', async () => {
-    // Flag set but the request used the same tz the server resolved to —
+    // Zone recorded but the request used the same tz the server resolved to —
     // means the page recovered without the swap; no banner needed.
-    sessionStorage.setItem('perf.invalid_tz_seen', 'true');
+    recordRejectedTimezone(PARAMS.tz);
     useQueryMock.mockReturnValue({
       data: buildResponse({ resolvedTimezone: 'UTC' }),
       isLoading: false,
@@ -522,6 +580,27 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
       error: null,
     });
     const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="invalid-timezone-banner"]')).toBeNull();
+    unmount(container, root);
+  });
+
+  it('drops the banner once the rejection no longer names this zone', async () => {
+    // What the user sees after correcting the preference: the record was
+    // cleared, the sidebar re-seeded a new zone, and the UTC notice goes away
+    // instead of following them around for the rest of the tab session.
+    recordRejectedTimezone('Foo/Bar');
+    useQueryMock.mockReturnValue({
+      data: buildResponse({ resolvedTimezone: 'UTC' }),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    const { container, root } = mountWith(
+      <PerformancePage params={{ ...PARAMS, tz: 'Europe/London' }} />,
+    );
     await act(async () => {
       await Promise.resolve();
     });

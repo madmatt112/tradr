@@ -40,12 +40,11 @@ export function __resetInvalidTimezoneBannerState(): void {
 
 export interface InvalidTimezoneBannerProps {
   /**
-   * `true` when the request that just failed is the SECOND INVALID_TIMEZONE
-   * encounter in this browser session (the retry-storm path was already
-   * consumed by `usePerformance`). Source of truth: the same session flag
-   * that `usePerformance.performanceRetry` writes — read it via
-   * `readInvalidTzSeen()` exposure or, more simply, pass `seenBefore` from
-   * the composition site which already knows.
+   * `true` when the request that just failed had already dropped `tz` — so it
+   * was the server's OWN default that was rejected, not the user's zone.
+   * Source of truth: `isTimezoneRejected(params.tz)`, the same predicate
+   * `usePerformance` uses to decide whether to send `tz`, so the banner cannot
+   * claim a fallback the request did not actually make.
    *
    * On first failure: dismissible, with "dates shown in UTC" copy.
    * On second failure: NOT dismissible (per Design §Component 7).
@@ -63,7 +62,11 @@ export interface InvalidTimezoneBannerProps {
  * informational and dismissible. Changing the preference under Settings →
  * Profile is the fix, but it does not rewrite the `tz` already in this page's
  * URL — the copy therefore says to re-enter Performance from the sidebar,
- * which is what re-seeds the destination from the new preference.
+ * which is what re-seeds the destination from the new preference. That
+ * instruction stands on the URL alone: the rejection is recorded against the
+ * OLD zone and cleared when the preference is written, so arriving with the
+ * new zone sends it whether the navigation was a router transition or a full
+ * page load.
  *
  * Second failure (same session): the retry omitted `tz` entirely, so the
  * server validated its own default of `UTC` (`PerformanceQuerySchema`) and
@@ -108,8 +111,8 @@ export function InvalidTimezoneBanner({ isSecondFailure, className }: InvalidTim
             </p>
           ) : (
             <p>
-              We could not resolve your reporting timezone, so dates are shown in UTC for this
-              session. Change it in{' '}
+              We could not resolve your reporting timezone, so dates are shown in UTC until it is
+              corrected. Change it in{' '}
               <a
                 href="/settings/profile"
                 data-testid="invalid-timezone-banner-settings-link"

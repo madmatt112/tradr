@@ -96,9 +96,9 @@ test.describe('Performance page — keyboard accessibility', () => {
     page,
   }) => {
     // Co-display path: the populated response with `tz` differing from the
-    // sessionStorage flag is the engaged-banner case. We seed the session flag
-    // before navigating and request a non-UTC tz so the populated render shows
-    // the banner via `showUtcFallbackBanner`.
+    // recorded rejected zone is the engaged-banner case. We record the zone the
+    // server rejected before navigating and request that same zone, so the
+    // populated render shows the banner via `showUtcFallbackBanner`.
     const populatedWithTzMismatch = {
       ...POPULATED_RESPONSE,
       resolvedTimezone: 'UTC',
@@ -107,7 +107,7 @@ test.describe('Performance page — keyboard accessibility', () => {
 
     await page.addInitScript(() => {
       try {
-        sessionStorage.setItem('perf.invalid_tz_seen', 'true');
+        sessionStorage.setItem('perf.invalid_tz', 'America/New_York');
       } catch {
         /* Safari private mode — banner won't render via this path. */
       }
@@ -151,7 +151,7 @@ test.describe('Performance page — keyboard accessibility', () => {
 
     await page.addInitScript(() => {
       try {
-        sessionStorage.setItem('perf.invalid_tz_seen', 'true');
+        sessionStorage.setItem('perf.invalid_tz', 'America/New_York');
       } catch {
         /* noop */
       }
