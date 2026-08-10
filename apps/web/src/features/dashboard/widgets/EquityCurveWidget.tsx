@@ -43,8 +43,10 @@ function EquityCurveWidget() {
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
   // to its empty state before the first fetch.
+  // `h-full`, not a fixed 320: the skeleton has to occupy the same box the
+  // chart will, or the widget scrolls while it loads and settles when it does.
   if (timezone === undefined || isLoading) {
-    return <Skeleton className="h-[320px] w-full" />;
+    return <Skeleton className="h-full w-full" />;
   }
 
   if (isError) {
@@ -71,8 +73,12 @@ function EquityCurveWidget() {
 
   // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; the all-time preset
   // this widget uses is clamped for enforced free users.
+  //
+  // `compact` for the same reason StatsSummaryWidget asks for it: this widget's
+  // height is pinned, and the notice comes out of the chart's share of it. The
+  // boxed Alert costs 66px plus a 12px stack gap; the one-line form costs 24px.
   const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" />
+    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
   ) : null;
 
   if (currencyData == null) {
@@ -84,10 +90,18 @@ function EquityCurveWidget() {
     );
   }
 
+  // `h-full` + a `flex-1` chart: the notice takes the height it needs and the
+  // chart takes the rest, whatever the widget's height happens to be. `min-h-0`
+  // is what lets the chart shrink below its content — without it a flex item
+  // refuses to go under `min-content` and the column overflows again.
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex h-full flex-col gap-3">
       {tierWindowNotice}
-      <EquityCurveChart series={currencyData.equityCurve} currency={currencyData.code} />
+      <EquityCurveChart
+        series={currencyData.equityCurve}
+        currency={currencyData.code}
+        className="min-h-0 flex-1"
+      />
     </div>
   );
 }

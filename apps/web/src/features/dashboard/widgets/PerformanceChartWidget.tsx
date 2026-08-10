@@ -86,8 +86,10 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
   // to its empty state before the first fetch.
+  // `h-full`, not a fixed 320: the skeleton has to occupy the same box the
+  // chart will, or the widget scrolls while it loads and settles when it does.
   if (timezone === undefined || isLoading) {
-    return <Skeleton className="h-[320px] w-full" />;
+    return <Skeleton className="h-full w-full" />;
   }
 
   if (isError) {
@@ -114,8 +116,12 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
 
   // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; rendered on the
   // empty branch too (a fully-pre-boundary window is a deliberate empty state).
+  //
+  // `compact` for the same reason StatsSummaryWidget asks for it: this widget's
+  // height is pinned, and the notice comes out of the chart's share of it. The
+  // boxed Alert costs 66px plus a 12px stack gap; the one-line form costs 24px.
   const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" />
+    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
   ) : null;
 
   if (currencyData == null) {
@@ -127,8 +133,13 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
     );
   }
 
+  // `h-full` + a `flex-1` chart: the notice and the timeframe buttons take the
+  // height they need and the chart takes the rest, whatever the widget's height
+  // happens to be. `min-h-0` is what lets the chart shrink below its content —
+  // without it a flex item refuses to go under `min-content` and the column
+  // overflows again.
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex h-full flex-col gap-3">
       {tierWindowNotice}
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
@@ -144,7 +155,7 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
           </Button>
         ))}
       </div>
-      <PerformanceBarChart series={currencyData.series} />
+      <PerformanceBarChart series={currencyData.series} className="min-h-0 flex-1" />
     </div>
   );
 }

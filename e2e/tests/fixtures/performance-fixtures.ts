@@ -177,32 +177,56 @@ export const SESSION_RESPONSE = {
  */
 /**
  * The default dashboard layout a freshly-registered user receives from the
- * server. Mirrors `DEFAULT_WIDGETS` (packages/shared/constants/dashboard-defaults.ts)
- * — six widgets on a 12-column grid, including `account-balances` which renders
- * `CrossCurrencyTotal`. Stable ids so the grid is deterministic across runs.
+ * server — six widgets on a 12-column grid, including `account-balances` which
+ * renders `CrossCurrencyTotal`. Stable ids so the grid is deterministic across
+ * runs.
+ *
+ * Mirrors `DEFAULT_WIDGETS` (packages/shared/src/constants/dashboard-defaults.ts),
+ * which is the source of truth — this package deliberately depends on no
+ * product code, so the geometry is copied and has to be re-copied when that
+ * file changes.
+ *
+ * It had already drifted: the copy below carried the pre-40px-unit values
+ * (`stats-summary` at h:1, under the h:2 minimum its own type declares, and
+ * six-column charts), so every spec leaning on the app shell rendered a layout
+ * no user has ever been served.
  */
 const DEFAULT_DASHBOARD_LAYOUT = {
   widgets: [
-    { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 },
+    { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 12, h: 6 },
     {
       id: '00000000-0000-4000-8000-000000000002',
       type: 'performance-chart',
       x: 0,
-      y: 1,
-      w: 6,
-      h: 2,
+      y: 6,
+      w: 8,
+      h: 12,
     },
     {
       id: '00000000-0000-4000-8000-000000000003',
       type: 'account-balances',
-      x: 6,
-      y: 1,
-      w: 6,
-      h: 2,
+      x: 8,
+      y: 6,
+      w: 4,
+      h: 12,
     },
-    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 0, y: 3, w: 6, h: 2 },
-    { id: '00000000-0000-4000-8000-000000000005', type: 'position-sizing', x: 6, y: 3, w: 6, h: 3 },
-    { id: '00000000-0000-4000-8000-000000000006', type: 'open-positions', x: 0, y: 6, w: 12, h: 2 },
+    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 0, y: 18, w: 8, h: 12 },
+    {
+      id: '00000000-0000-4000-8000-000000000005',
+      type: 'position-sizing',
+      x: 8,
+      y: 18,
+      w: 4,
+      h: 12,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000006',
+      type: 'open-positions',
+      x: 0,
+      y: 30,
+      w: 12,
+      h: 6,
+    },
   ],
   theme: 'light',
   updatedAt: null,

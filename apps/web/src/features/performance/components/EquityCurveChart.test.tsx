@@ -42,7 +42,7 @@ describe('EquityCurveChart', () => {
     expect(EquityCurveChart).toBeTypeOf('function');
   });
 
-  it('renders the outer chart container with the expected height/width', () => {
+  it('takes the height it is given rather than naming one', () => {
     const container = document.createElement('div');
     // Stub a non-zero size so Recharts ResponsiveContainer can mount.
     Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true });
@@ -56,7 +56,11 @@ describe('EquityCurveChart', () => {
 
     const wrapper = container.querySelector('[data-testid="equity-curve-chart"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.className).toContain('h-[320px]');
+    // `h-full`, and NO fixed pixel height. A hard-coded 320px is the wrong size
+    // in every container that is not 320px tall — inside the dashboard widget
+    // it was simply cut off. Callers with no height of their own pass one in.
+    expect(wrapper?.className).toContain('h-full');
+    expect(wrapper?.className).not.toMatch(/h-\[\d+px\]/);
     expect(wrapper?.className).toContain('w-full');
 
     act(() => {

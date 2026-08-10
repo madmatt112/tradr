@@ -12,6 +12,7 @@ import {
 import type { EquityCurvePoint } from '@tradr/shared';
 
 import { formatMoney } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 export interface EquityCurveChartProps {
   /**
@@ -22,6 +23,17 @@ export interface EquityCurveChartProps {
   series: ReadonlyArray<EquityCurvePoint>;
   /** Currency code (e.g., "USD") for tooltip formatting. */
   currency: string;
+  /**
+   * Sizing for the chart's outer box, which `ResponsiveContainer` measures.
+   *
+   * The default is `h-full` — the chart takes the height it is GIVEN. It used
+   * to hard-code `h-[320px]`, which made it the wrong size everywhere except
+   * the one container that happened to be 320px tall: inside the dashboard
+   * widget, whose body is 149px at the pinned default, 320px of chart was
+   * simply cut off, and it stayed cut off at every height a user could resize
+   * to. A caller that has no height of its own passes one here.
+   */
+  className?: string;
 }
 
 interface ChartDatum {
@@ -92,7 +104,7 @@ function EquityTooltip({ active, payload, currency }: EquityTooltipProps) {
  * (the boundary code would also live in the lazy chunk and so couldn't
  * catch its own load error).
  */
-export default function EquityCurveChart({ series, currency }: EquityCurveChartProps) {
+export default function EquityCurveChart({ series, currency, className }: EquityCurveChartProps) {
   // Recharts cannot plot decimal-strings — convert once for the line; keep
   // the decimal string on the datum so the tooltip uses the exact value.
   const data: ChartDatum[] = series.map((point) => ({
@@ -102,7 +114,7 @@ export default function EquityCurveChart({ series, currency }: EquityCurveChartP
   }));
 
   return (
-    <div data-testid="equity-curve-chart" className="h-[320px] w-full">
+    <div data-testid="equity-curve-chart" className={cn('h-full w-full', className)}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
           <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -127,7 +139,12 @@ export default function EquityCurveChart({ series, currency }: EquityCurveChartP
               style: { fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--font-mono)' },
             }}
             tickMargin={8}
-            width={64}
+            // `auto`, not the 64px this used to pin. A money tick is as wide as
+            // the figure demands — "$10,000.00" at 12px mono is ~72px — and a
+            // fixed 64 rendered it off the left edge of the SVG, so the axis
+            // read ".0,000.00". recharts measures the ticks and reserves what
+            // they need.
+            width="auto"
           />
           <Tooltip content={<EquityTooltip currency={currency} />} />
           <Line

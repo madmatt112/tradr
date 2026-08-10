@@ -357,7 +357,17 @@ export function PerformancePage({ params }: PerformancePageProps) {
 
       <ChartErrorBoundary>
         <Suspense fallback={<EquityCurveChartSkeleton />}>
-          <EquityCurveChart series={activeCurrency.equityCurve} currency={currencyCode} />
+          {/*
+            This page stacks the chart in normal flow, so nothing above it
+            gives the chart a height — it names its own, and 320px is the
+            figure `EquityCurveChartSkeleton` mirrors so the swap does not
+            move the page.
+          */}
+          <EquityCurveChart
+            series={activeCurrency.equityCurve}
+            currency={currencyCode}
+            className="h-[320px]"
+          />
         </Suspense>
       </ChartErrorBoundary>
 

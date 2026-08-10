@@ -17,8 +17,7 @@
 //
 // The enforced free tier renders TierWindowNotice in the SAME body, so it gets
 // its own case below. It is the reason the notice is `compact` there: boxed, it
-// clipped 69px at h=5 and would still clip 29px at h=6, the tallest span the
-// 24-row ceiling leaves this widget.
+// clipped 69px at h=5 and would still clip 29px at h=6.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
