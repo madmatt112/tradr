@@ -185,27 +185,6 @@ test.describe('Dashboard chart widgets — rendered height', () => {
         body: JSON.stringify(POPULATED_DASHBOARD_RESPONSE),
       }),
     );
-    // The other four default widgets fetch too, and they are NOT app-shell
-    // surface — `mockAppShell` covers the `_auth` layout, and nothing had ever
-    // pointed it at /dashboard before this file. Unmocked they reach the real
-    // API, which does not know the synthetic session, and a single 401 sends
-    // the whole app to /login: the symptom is "chart not found" on the login
-    // form, not an auth error.
-    //
-    // Neutral answers — neither widget is under test here, they only have to
-    // stop 401ing.
-    await page.route('**/api/dashboard/totals', (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        // Account Balances → CrossCurrencyTotal.
-        body: JSON.stringify({ displayCurrency: 'USD', total: '0.00' }),
-      }),
-    );
-    await page.route(/\/api\/brokerages(\?.*)?$/, (route) =>
-      // Open Positions → PositionList.
-      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
-    );
   });
 
   test('both charts are drawn at a legible height and nothing is cut off', async ({
@@ -295,7 +274,156 @@ test.describe('Dashboard chart widgets — rendered height', () => {
           `takes the leftover height; landing on the ${MIN_CHART_PX}px floor ` +
           `means it stopped sizing to its container`,
       ).toBeGreaterThan(MIN_CHART_PX);
-      expect(plotPx, 'the drawn plot fills the box it was given').toBe(chartPx);
+      // Fills the box, within a pixel. NOT `toBe(chartPx)`: the box is measured
+      // with `clientHeight` (an integer) and the svg off a bounding rect (a
+      // float), so a fractional layout height rounds the two apart for reasons
+      // that have nothing to do with this behaviour. A whole pixel of slack
+      // still catches every real failure — the ones that matter are 0px, or the
+      // 40-200px of a chart that stopped sizing to its container.
+      expect(
+        Math.abs(plotPx - chartPx),
+        `${type} draws ${plotPx}px inside a ${chartPx}px box — the plot should ` +
+          `fill the box it was given`,
+      ).toBeLessThanOrEqual(1);
     }
   });
+});
+
+/**
+ * The same measurement across the RANGE of heights a user can resize to.
+ *
+ * The floor that stopped the mobile collapse bought it with an overflow: a chart
+ * that will not shrink below `MIN_CHART_PX` inside a widget body that scrolls is
+ * clipped again the moment the widget is made shorter than the chart plus its
+ * chrome — and because the scrollbar takes no layout space, that is visually
+ * identical to the original defect. Measured at the old h=4 minimum: 203px of
+ * the performance chart and 159px of the equity curve simply not on screen.
+ *
+ * So the per-type minimum in `PerWidgetMinSize` rose to cover it, and this is
+ * what holds it there. Each case serves a saved layout at a chosen height and
+ * measures what the browser drew — including one BELOW the minimum, which a
+ * layout saved before the minimum rose can still contain.
+ */
+test.describe('Dashboard chart widgets — across the resize range', () => {
+  /**
+   * `PerWidgetMinSize` for the two chart widgets, in grid rows. Copied, like
+   * `MIN_CHART_PX` above — this package imports no product code.
+   *
+   * Derived there from the chart's floor plus the widget's chrome; if that
+   * derivation changes, these change with it and the `below the minimum` case is
+   * what fails first.
+   */
+  const MIN_ROWS = { 'performance-chart': 11, 'equity-curve': 9 } as const;
+
+  /**
+   * A saved layout holding just the two charts, each at its own height, at the
+   * minimum WIDTH (w=4). Narrow on purpose: the performance chart's timeframe
+   * strip wraps to two rows below about 350px of widget, so the wide form would
+   * not exercise the case the height bound has to cover.
+   */
+  function layoutAt(rows: { 'performance-chart': number; 'equity-curve': number }) {
+    return {
+      widgets: [
+        {
+          id: '00000000-0000-4000-8000-000000000002',
+          type: 'performance-chart',
+          x: 0,
+          y: 0,
+          w: 4,
+          h: rows['performance-chart'],
+        },
+        {
+          id: '00000000-0000-4000-8000-000000000004',
+          type: 'equity-curve',
+          x: 0,
+          y: rows['performance-chart'],
+          w: 4,
+          h: rows['equity-curve'],
+        },
+      ],
+      theme: 'light',
+      updatedAt: null,
+    };
+  }
+
+  const CASES = [
+    // Below the minimum — unreachable by resizing, but a layout SAVED before the
+    // minimum rose still holds it, and the read path returns saved geometry
+    // untouched. gridstack clamps `h` up to the item's `minH` on add, so this
+    // has to render like the minimum rather than clip.
+    {
+      label: 'below the minimum (a layout saved before it rose)',
+      rows: { 'performance-chart': 4, 'equity-curve': 4 },
+    },
+    { label: 'at the minimum', rows: MIN_ROWS },
+    // In between. The equity curve has room for one (9 → 12); the performance
+    // chart's minimum is one row under its default, so its "in between" is
+    // above the default instead.
+    {
+      label: 'between the minimum and the cap',
+      rows: { 'performance-chart': 16, 'equity-curve': 10 },
+    },
+    // The pinned default — both chart bands are 12 rows in DEFAULT_WIDGETS.
+    { label: 'at the pinned default', rows: { 'performance-chart': 12, 'equity-curve': 12 } },
+  ] as const;
+
+  for (const { label, rows } of CASES) {
+    test(`nothing is cut off ${label}`, async ({ page, isMobile }, testInfo) => {
+      test.skip(isMobile, 'Grid-only — the stacked fallback is not resizable.');
+
+      await mockAppShell(page);
+      await page.route('**/api/auth/me', (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(SESSION_RESPONSE),
+        }),
+      );
+      await page.route(/\/api\/performance(\?.*)?$/, (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(POPULATED_DASHBOARD_RESPONSE),
+        }),
+      );
+      // Registered after `mockAppShell`, so it wins.
+      await page.route('**/api/dashboard/layout', (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(layoutAt(rows)),
+        }),
+      );
+
+      await page.goto('/dashboard');
+      await expect(page.locator('[data-grid-mode="grid"]')).toBeVisible();
+
+      for (const { type, testId } of [
+        { type: 'performance-chart', testId: 'performance-bar-chart' },
+        { type: 'equity-curve', testId: 'equity-curve-chart' },
+      ] as const) {
+        const h = rows[type];
+        const { chartPx, plotPx, cardPx, clippedPx } = await measure(page, type, testId);
+        testInfo.annotations.push({
+          type: 'measured',
+          description: `${type} at h=${h}: plot ${plotPx}px in a ${chartPx}px box, card ${cardPx}px, clipped ${clippedPx}px`,
+        });
+
+        expect(
+          clippedPx,
+          `${type} at h=${h} overflows its widget body by ${clippedPx}px. The ` +
+            `chart will not draw below ${MIN_CHART_PX}px and the body scrolls, so ` +
+            `that much of it is off-screen with no scrollbar to say so — raise ` +
+            `PerWidgetMinSize['${type}'] (it is derived; check chartWidgetMinRows)`,
+        ).toBe(0);
+
+        // The plot is still drawn, at the floor or better — a widget that fits
+        // because its chart collapsed is not a pass.
+        expect(
+          plotPx,
+          `${type} at h=${h} draws a ${plotPx}px plot in a ${cardPx}px card`,
+        ).toBeGreaterThanOrEqual(MIN_CHART_PX);
+      }
+    });
+  }
 });

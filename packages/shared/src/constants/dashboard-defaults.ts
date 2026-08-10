@@ -49,6 +49,12 @@ export type DefaultWidgetSpec = {
 // notice) and the equity curve's to 389px (353px), around the 320px the
 // Performance page gives the same chart. See ChartWidget.height.test.tsx.
 //
+// 12 is also one row above the performance chart's derived MINIMUM (11), and
+// that row is what the free tier's clamped-window notice is paid out of: the
+// minimum reserves the chart's floor plus the widget's permanent chrome, and the
+// notice is neither. A default at the minimum would fit the plain state exactly
+// and clip the clamped one.
+//
 // Rows 0-35, every column covered, no overlap and no gap:
 //   0-5    stats-summary      x0-11
 //   6-17   performance-chart  x0-7   | account-balances  x8-11

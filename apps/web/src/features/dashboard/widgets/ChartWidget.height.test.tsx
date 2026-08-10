@@ -42,6 +42,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PerformanceResponse, WidgetPlacement } from '@tradr/shared';
 import { DEFAULT_WIDGETS } from '@tradr/shared/constants/dashboard-defaults';
+import {
+  BODY_PADDING_PX,
+  CARD_BORDER_PX,
+  CARD_HEADER_PX,
+  STACK_GAP_PX,
+  TIMEFRAME_ROW_PX,
+} from '@tradr/shared/constants/dashboard-geometry';
+import { PerWidgetMinSize } from '@tradr/shared/schemas/dashboard';
 
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
@@ -92,28 +100,13 @@ type DisplayCurrencyResult = ReturnType<typeof useDisplayCurrencyQuery>;
 
 // ---------------------------------------------------------------------------
 // Measured in chromium at 1440x900 against the real components and built CSS.
+//
+// The chrome figures are IMPORTED, not restated. `PerWidgetMinSize` is derived
+// from the same ones (a chart widget's minimum height is its chart's floor plus
+// its chrome, in rows), so a local copy here would let the arithmetic this file
+// pins and the bound the grid enforces disagree.
 // ---------------------------------------------------------------------------
 
-/** `<header>` of WidgetCard: a text-sm title at px-3 py-2 over a 1px border. */
-const CARD_HEADER_PX = 49;
-/** WidgetCard's own `border`, top and bottom, inside the gridstack cell. */
-const CARD_BORDER_PX = 2;
-/** `p-3` on WidgetCard's scroll body, top and bottom. */
-const BODY_PADDING_PX = 24;
-/** `gap-3` between the rows of each widget's column stack. */
-const STACK_GAP_PX = 12;
-/**
- * The timeframe buttons above the performance chart. `size="sm"` is `h-8`, and
- * the strip is `flex-wrap`, so this is TWO rows plus the `gap-2` between them —
- * not one row.
- *
- * One row was the assumption and it is wrong on real widths: the five buttons
- * wrap somewhere around 1100px of widget, which is inside the range a user can
- * resize an 8-column widget to and below the whole viewport on a laptop. The
- * arithmetic here has to hold in the worse of the two cases or it is not a
- * bound, so it budgets for the wrap: 32 + 8 + 32.
- */
-const TIMEFRAME_ROW_PX = 32 + 8 + 32;
 /**
  * The compact TierWindowNotice: one line of text-xs beside an h-6 upgrade CTA.
  * The boxed Alert the Performance page uses is 66px, and these widgets ask for
@@ -134,15 +127,28 @@ const NOTICE_PX = 24;
  */
 const MIN_CHART_PX = CHART_MIN_HEIGHT_PX;
 
-/** The pinned default body height, in px — what `body.clientHeight` reports. */
+/**
+ * Body height of a widget spanning `h` rows, in px — what `body.clientHeight`
+ * reports. A widget spanning `h` rows is `40h` of canvas less the 16px gridstack
+ * takes out of the cell, and WidgetCard spends its border and header out of that
+ * before its scroll body sees a pixel.
+ */
+function bodyPxAt(h: number): number {
+  return GRID_ROW_HEIGHT_PX * h - GRID_GAP_PX - CARD_BORDER_PX - CARD_HEADER_PX;
+}
+
+/** The pinned default body height, in px. */
 function pinnedBodyPx(type: 'performance-chart' | 'equity-curve'): { h: number; bodyPx: number } {
   const pinned = DEFAULT_WIDGETS.find((w) => w.type === type);
   const h = pinned?.h ?? 0;
-  // A widget spanning `h` rows is `40h` of canvas less the 16px gridstack takes
-  // out of the cell, and WidgetCard spends its border and header out of that
-  // before its scroll body sees a pixel.
-  return { h, bodyPx: GRID_ROW_HEIGHT_PX * h - GRID_GAP_PX - CARD_BORDER_PX - CARD_HEADER_PX };
+  return { h, bodyPx: bodyPxAt(h) };
 }
+
+/** What each widget stacks above its chart, in px. */
+const TOOLBAR_PX = {
+  'performance-chart': TIMEFRAME_ROW_PX + STACK_GAP_PX,
+  'equity-curve': 0,
+} as const;
 
 function mockPerformance({ clamped }: { clamped: boolean }): void {
   vi.mocked(usePerformance).mockReturnValue({
@@ -271,6 +277,49 @@ describe('chart widgets size to the body they are given', () => {
       chart?.className,
       `${which}'s chart must not pin a pixel height — that is what clipped it`,
     ).not.toMatch(/(^|\s)h-\[\d+px\]/);
+  });
+});
+
+describe('the per-widget MINIMUM leaves the chart its floor', () => {
+  // The default is not the size a user runs at — it is the size they start at.
+  // Every height between the minimum and the cap is reachable by dragging a
+  // resize handle, so the guarantee has to hold at the SHORTEST of them or it is
+  // not a guarantee: the chart cannot shrink below CHART_MIN_HEIGHT_PX and the
+  // body is `overflow-auto`, so a widget shorter than "floor + chrome" hides the
+  // bottom of the chart behind a scroller that takes no layout space. Measured
+  // in chromium at the old h=4 minimum: 203px of the performance chart and 159px
+  // of the equity curve simply not on screen.
+  it.each(['performance-chart', 'equity-curve'] as const)('%s', (which) => {
+    const h = PerWidgetMinSize[which].h;
+    const bodyPx = bodyPxAt(h);
+    const chartPx = bodyPx - BODY_PADDING_PX - TOOLBAR_PX[which];
+
+    expect(
+      chartPx,
+      `${which} may be resized down to h=${h} (${bodyPx}px of body), which ` +
+        `leaves the chart ${chartPx}px — under the ${MIN_CHART_PX}px floor, so ` +
+        `the chart overflows the body and is silently scrolled off. Raise the ` +
+        `minimum in PerWidgetMinSize (it is derived — check chartWidgetMinRows)`,
+    ).toBeGreaterThanOrEqual(MIN_CHART_PX);
+
+    // …and not a row taller than it has to be. A minimum that over-reserves
+    // takes vertical resizing away from the user for nothing, and at some point
+    // meets the pinned default and removes it entirely.
+    expect(
+      bodyPxAt(h - 1) - BODY_PADDING_PX - TOOLBAR_PX[which],
+      `${which}'s minimum h=${h} is one row taller than its content needs`,
+    ).toBeLessThan(MIN_CHART_PX);
+  });
+
+  // The pinned default has to stay ABOVE the minimum, or "resize it shorter" is
+  // not an operation the widget offers at all.
+  it.each(['performance-chart', 'equity-curve'] as const)('%s can still be shrunk', (which) => {
+    const { h } = pinnedBodyPx(which);
+    expect(
+      PerWidgetMinSize[which].h,
+      `${which} is pinned to h=${h} and cannot be resized below ` +
+        `h=${PerWidgetMinSize[which].h}`,
+    ).toBeLessThan(h);
   });
 });
 

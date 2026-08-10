@@ -318,4 +318,23 @@ export async function mockAppShell(page: Page): Promise<void> {
   // Anchored on the collection so it does not swallow `/accounts/:id`,
   // `/accounts/demo` or `/accounts/writable`, which are separate handlers.
   await page.route(/\/api\/accounts(\?.*)?$/, (route) => route.fulfill(json([])));
+  // The remaining two reads behind the DEFAULT DASHBOARD's six widgets:
+  // `/dashboard/totals` for Account Balances (CrossCurrencyTotal) and
+  // `/brokerages` for Open Positions (PositionList).
+  //
+  // They are shell surface for the same reason the rest of this list is. Any
+  // spec that navigates to /dashboard mounts all six widgets whether or not it
+  // is testing them, and one unmocked 401 does not merely blank a widget — the
+  // api client's global handler sends the whole app to /login, so the failure
+  // lands on some later assertion as "element not found" on a login form. That
+  // trap has now cost this branch four debugging rounds; the answer each time
+  // was another stub, and the stubs belong here rather than being rediscovered
+  // per spec.
+  //
+  // Neutral answers: a zero total and no brokerages, so neither widget paints a
+  // surface a spec was not written for.
+  await page.route('**/api/dashboard/totals', (route) =>
+    route.fulfill(json({ displayCurrency: 'USD', total: '0.00' })),
+  );
+  await page.route(/\/api\/brokerages(\?.*)?$/, (route) => route.fulfill(json([])));
 }
