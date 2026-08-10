@@ -5,6 +5,7 @@
 // in place.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -179,6 +180,20 @@ function fieldValue(label: string): string {
   return (screen.getByLabelText(label) as HTMLInputElement | HTMLSelectElement).value;
 }
 
+/**
+ * A default-risk option button, found by the start of its accessible name. Each
+ * carries two lines — the percentage and what ten losing trades cost — so the
+ * accessible name is the pair, and anchoring on `^` keeps `1%` from matching a
+ * stored `1.50%` option.
+ */
+function riskOption(label: RegExp): HTMLButtonElement {
+  return screen.getByRole('button', { name: label }) as HTMLButtonElement;
+}
+
+function riskSelected(label: RegExp): boolean {
+  return riskOption(label).getAttribute('aria-pressed') === 'true';
+}
+
 function submitCreate(): void {
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'IBKR Main' } });
   fireEvent.click(screen.getByRole('button', { name: 'Create' }));
@@ -278,21 +293,66 @@ describe('AccountDialog — TIER_LIMIT_ACCOUNTS mapping', () => {
 // Default risk percentage — the optional per-account rule that seeds the
 // position-size calculator.
 describe('AccountDialog — default risk %', () => {
-  it('offers the field with its explanation and a conservative hint on create', () => {
+  it('offers 1/2/3% presets labelled with their cost, 2% selected, and no free-text field', () => {
     renderDialog();
 
-    const input = screen.getByLabelText('Default risk %') as HTMLInputElement;
-    expect(input.placeholder).toBe('3');
+    // The presets ARE the control — there is no percentage to type any more.
+    expect(screen.queryByRole('textbox', { name: /default risk/i })).toBeNull();
+
+    expect(riskSelected(/^2%/)).toBe(true);
+    expect(riskSelected(/^1%/)).toBe(false);
+    expect(riskSelected(/^3%/)).toBe(false);
+
+    // Consequences, not adjectives: 1 − 0.99^10, 0.98^10, 0.97^10.
+    expect(riskOption(/^1%/).textContent).toContain('10 losses: -10%');
+    expect(riskOption(/^2%/).textContent).toContain('10 losses: -18%');
+    expect(riskOption(/^3%/).textContent).toContain('10 losses: -26%');
+
     expect(
       screen.getByText(/share of this account's balance you risk on a single trade/i),
     ).toBeTruthy();
-    expect(screen.getByText(/3% is a conservative starting point/i)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/conservative/i);
   });
 
-  it('submits an empty field as undefined, never an empty string', async () => {
+  it('submits the 2% default on create when no preset is touched', async () => {
     createMutateAsync.mockResolvedValue({ id: 'new' });
     renderDialog();
 
+    submitCreate();
+
+    await waitFor(() => expect(createMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createMutateAsync.mock.calls[0][0]).toMatchObject({ defaultRiskPercent: '2' });
+  });
+
+  it('submits the chosen preset on create', async () => {
+    createMutateAsync.mockResolvedValue({ id: 'new' });
+    renderDialog();
+
+    fireEvent.click(riskOption(/^1%/));
+    expect(riskSelected(/^1%/)).toBe(true);
+    expect(riskSelected(/^2%/)).toBe(false);
+    submitCreate();
+
+    await waitFor(() => expect(createMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createMutateAsync.mock.calls[0][0]).toMatchObject({ defaultRiskPercent: '1' });
+  });
+
+  it('selects a preset from the keyboard', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    riskOption(/^3%/).focus();
+    await user.keyboard('{Enter}');
+
+    expect(riskSelected(/^3%/)).toBe(true);
+    expect(riskSelected(/^2%/)).toBe(false);
+  });
+
+  it('submits no rule as undefined, never an empty string', async () => {
+    createMutateAsync.mockResolvedValue({ id: 'new' });
+    renderDialog();
+
+    fireEvent.click(riskOption(/^No rule/));
     submitCreate();
 
     await waitFor(() => expect(createMutateAsync).toHaveBeenCalledTimes(1));
@@ -301,38 +361,54 @@ describe('AccountDialog — default risk %', () => {
     expect(sent).not.toHaveProperty('defaultRiskPercent', '');
   });
 
-  it('submits the entered percentage on create', async () => {
-    createMutateAsync.mockResolvedValue({ id: 'new' });
-    renderDialog();
+  it('selects the matching preset for a stored value in its normalised form', () => {
+    renderDialog(vi.fn(), makeAccount({ defaultRiskPercent: '2.00' }));
 
-    fireEvent.change(screen.getByLabelText('Default risk %'), { target: { value: '1.5' } });
-    submitCreate();
-
-    await waitFor(() => expect(createMutateAsync).toHaveBeenCalledTimes(1));
-    expect(createMutateAsync.mock.calls[0][0]).toMatchObject({ defaultRiskPercent: '1.5' });
+    // '2.00' is the 2% preset, not a fourth option.
+    expect(riskSelected(/^2%/)).toBe(true);
+    expect(screen.queryByRole('button', { name: /^2\.00%/ })).toBeNull();
   });
 
-  it('blocks submit and renders the schema message for an out-of-range value', async () => {
-    renderDialog();
-
-    fireEvent.change(screen.getByLabelText('Default risk %'), { target: { value: '101' } });
-    submitCreate();
-
-    await waitFor(() => expect(screen.getByText(/percentage above 0 and up to 100/i)).toBeTruthy());
-    expect(createMutateAsync).not.toHaveBeenCalled();
-  });
-
-  it('prefills the field from the account on edit, in the stored normalised form', () => {
-    renderDialog(vi.fn(), makeAccount({ defaultRiskPercent: '1.50' }));
-
-    expect((screen.getByLabelText('Default risk %') as HTMLInputElement).value).toBe('1.50');
-  });
-
-  it('sends an explicit null when the field is emptied on edit, so the rule clears', async () => {
+  // Every percentage was typeable before the presets existed, and 3% was the
+  // shipped default — so a real account can store something the presets do not
+  // offer. It has to be shown as what it is, and survive an untouched save.
+  it('keeps a stored non-preset value as its own selected option and writes it back unchanged', async () => {
     updateMutateAsync.mockResolvedValue({ id: 'a' });
     renderDialog(vi.fn(), makeAccount({ defaultRiskPercent: '1.50' }));
 
-    fireEvent.change(screen.getByLabelText('Default risk %'), { target: { value: '' } });
+    expect(riskSelected(/^1\.50%/)).toBe(true);
+    expect(riskOption(/^1\.50%/).textContent).toContain('current setting');
+    expect(riskSelected(/^1%/)).toBe(false);
+    expect(riskSelected(/^2%/)).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateMutateAsync).toHaveBeenCalledTimes(1));
+    const { data } = updateMutateAsync.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data.defaultRiskPercent).toBe('1.50');
+  });
+
+  // An account predating the column stores nothing. Seeding the create default
+  // here would write a rule the user never chose.
+  it('opens an account with no rule on No rule, and saving does not invent one', async () => {
+    updateMutateAsync.mockResolvedValue({ id: 'a' });
+    renderDialog(vi.fn(), makeAccount());
+
+    expect(riskSelected(/^No rule/)).toBe(true);
+    expect(riskSelected(/^2%/)).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateMutateAsync).toHaveBeenCalledTimes(1));
+    const { data } = updateMutateAsync.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data.defaultRiskPercent).toBeNull();
+  });
+
+  it('sends an explicit null when No rule is chosen on edit, so the rule clears', async () => {
+    updateMutateAsync.mockResolvedValue({ id: 'a' });
+    renderDialog(vi.fn(), makeAccount({ defaultRiskPercent: '1.50' }));
+
+    fireEvent.click(riskOption(/^No rule/));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(updateMutateAsync).toHaveBeenCalledTimes(1));
@@ -364,7 +440,7 @@ describe('AccountDialog — default risk %', () => {
     );
 
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('IBKR Main');
-    expect((screen.getByLabelText('Default risk %') as HTMLInputElement).value).toBe('1.50');
+    expect(riskSelected(/^1\.50%/)).toBe(true);
 
     // Saving an untouched edit must not clear the rule it just displayed.
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -373,11 +449,11 @@ describe('AccountDialog — default risk %', () => {
     expect(data.defaultRiskPercent).toBe('1.50');
   });
 
-  it('sends the edited percentage on edit', async () => {
+  it('sends the newly chosen preset on edit', async () => {
     updateMutateAsync.mockResolvedValue({ id: 'a' });
     renderDialog(vi.fn(), makeAccount({ defaultRiskPercent: '1.50' }));
 
-    fireEvent.change(screen.getByLabelText('Default risk %'), { target: { value: '2' } });
+    fireEvent.click(riskOption(/^2%/));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(updateMutateAsync).toHaveBeenCalledTimes(1));
@@ -471,6 +547,6 @@ describe('AccountDialog — re-seeding on open', () => {
     expect(fieldValue('Trading-day timezone')).toBe('Asia/Tokyo');
     expect(fieldValue('Brokerage')).toBe(BROKERAGE_B);
     expect(fieldValue('Name')).toBe('Prop Firm');
-    expect(fieldValue('Default risk %')).toBe('2.00');
+    expect(riskSelected(/^2%/)).toBe(true);
   });
 });

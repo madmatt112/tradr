@@ -38,6 +38,29 @@ import { getAccountErrorCode, useCreateAccount, useUpdateAccount } from '../hook
 
 const NONE_SENTINEL = '__none__';
 
+// Default-risk presets. The second line is the CONSEQUENCE of the setting
+// rather than an adjective for it: ten losing trades in a row compound to
+// 1 − 0.99^10 = 9.6%, 1 − 0.98^10 = 18.3% and 1 − 0.97^10 = 26.3% of the
+// account. Naming the cost is the point — "conservative" is an argument, a
+// drawdown is a fact.
+const RISK_PRESETS = [
+  { value: '1', label: '1%', note: '10 losses: -10%' },
+  { value: '2', label: '2%', note: '10 losses: -18%' },
+  { value: '3', label: '3%', note: '10 losses: -26%' },
+] as const;
+
+// Selected on create. NOT applied on edit: an account that stores no rule keeps
+// storing none, because seeding a preset there would write a setting the user
+// never chose the next time they saved anything else in this dialog.
+const DEFAULT_RISK_PRESET = '2';
+
+interface RiskOption {
+  /** `undefined` is the "no rule" option — the same absence an empty field meant. */
+  value: string | undefined;
+  label: string;
+  note: string;
+}
+
 interface AccountDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -74,8 +97,11 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
     timezone: account?.timezone ?? DEFAULT_ACCOUNT_TIMEZONE,
     // The column is numeric(5,2), so the API hands back a normalised decimal
     // string ('1.5' stored comes back as '1.50'). Null means no rule is set,
-    // which the form expresses as an empty field.
-    defaultRiskPercent: account?.defaultRiskPercent ?? undefined,
+    // which the form expresses as the "No rule" option.
+    //
+    // The 2% preset seeds CREATE only. On edit the stored value is the truth,
+    // including its absence.
+    defaultRiskPercent: account ? (account.defaultRiskPercent ?? undefined) : DEFAULT_RISK_PRESET,
   });
 
   const form = useForm<CreateAccountInput>({
@@ -103,6 +129,34 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
 
   const selectedBrokerageId = form.watch('brokerageId');
   const selectedCurrency = form.watch('currency');
+  const riskValue = form.watch('defaultRiskPercent');
+
+  // A stored rule that is not one of the presets — every value was typeable
+  // before this control existed, and 3% was the old default — gets an option of
+  // its own, showing the figure actually stored. Without it the group would
+  // render with nothing selected and the first save would quietly replace the
+  // user's setting with a preset.
+  const storedRisk = account?.defaultRiskPercent ?? null;
+  const customRisk =
+    storedRisk && !RISK_PRESETS.some((p) => Number(p.value) === Number(storedRisk))
+      ? storedRisk
+      : null;
+  const riskOptions: RiskOption[] = [
+    ...RISK_PRESETS,
+    ...(customRisk
+      ? [{ value: customRisk, label: `${customRisk}%`, note: 'current setting' }]
+      : []),
+    // Absence stays reachable: the calculator seeds its risk percent only from
+    // an account that HAS a rule, and clearing one is a documented action the
+    // API models as an explicit null.
+    { value: undefined, label: 'No rule', note: 'set it per calculation' },
+  ];
+  // Numeric comparison, because the API normalises to numeric(5,2): a stored
+  // '1.00' is the 1% preset, not a fourth option.
+  const isRiskSelected = (value: string | undefined) =>
+    value === undefined
+      ? riskValue === undefined
+      : riskValue !== undefined && Number(riskValue) === Number(value);
 
   // Determine the select value: real UUID or sentinel for none
   const selectValue = selectedBrokerageId ?? NONE_SENTINEL;
@@ -284,24 +338,42 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
             )}
             {/* Default risk percentage. Shown on create AND edit — unlike
                 starting balance it rewrites no history, it only seeds the
-                position-size calculator. */}
+                position-size calculator.
+
+                `#defaultRiskPercent` is the walkthrough's anchor for this
+                field (features/onboarding/lib/steps/account.ts targets it by
+                id), so it stays on the group now that the input is gone. */}
             <div className="space-y-2">
-              <Label htmlFor="defaultRiskPercent">Default risk %</Label>
-              <Input
+              <Label id="defaultRiskPercentLabel">Default risk %</Label>
+              <div
                 id="defaultRiskPercent"
-                inputMode="decimal"
-                placeholder="3"
-                {...form.register('defaultRiskPercent', {
-                  // Empty field means "no rule set" — the schema only accepts a
-                  // decimal string or undefined, never ''.
-                  setValueAs: (v: unknown) =>
-                    typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined,
+                role="group"
+                aria-labelledby="defaultRiskPercentLabel"
+                className="flex flex-wrap gap-2"
+              >
+                {riskOptions.map((option) => {
+                  const selected = isRiskSelected(option.value);
+                  return (
+                    <Button
+                      key={option.value ?? NONE_SENTINEL}
+                      type="button"
+                      variant={selected ? 'default' : 'outline'}
+                      aria-pressed={selected}
+                      className="h-auto flex-col gap-0.5 px-3 py-2 cursor-pointer"
+                      onClick={() =>
+                        form.setValue('defaultRiskPercent', option.value, { shouldValidate: true })
+                      }
+                    >
+                      <span>{option.label}</span>
+                      <span className="text-xs font-normal opacity-80">{option.note}</span>
+                    </Button>
+                  );
                 })}
-              />
+              </div>
               <p className="text-sm text-muted-foreground">
                 The share of this account&apos;s balance you risk on a single trade — it prefills
-                the position-size calculator, and you can override it on any one calculation. If you
-                don&apos;t have a rule of your own yet, 3% is a conservative starting point.
+                the position-size calculator, and you can override it on any one calculation. The
+                second figure is what ten losing trades in a row would cost.
               </p>
               {form.formState.errors.defaultRiskPercent && (
                 <p className="text-sm text-destructive">
