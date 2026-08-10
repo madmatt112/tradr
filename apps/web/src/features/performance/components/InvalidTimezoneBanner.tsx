@@ -57,11 +57,19 @@ export interface InvalidTimezoneBannerProps {
 /**
  * Banner shown when the server rejects the requested IANA timezone.
  *
- * First failure: the hook's retry already swapped in UTC; the banner is
- * informational and dismissible. Second failure (same session): the stored
- * reporting timezone (`useUserTimezone`) is repeatedly rejected →
- * non-dismissible because nothing on this page resolves it; the preference is
- * changed under Settings → Profile.
+ * First failure: the request carried the stored reporting timezone
+ * (`useUserTimezone`, seeded into the URL by the sidebar) and the server
+ * rejected it; the hook's retry already swapped in UTC, so the banner is
+ * informational and dismissible. Changing the preference under Settings →
+ * Profile is the fix, but it does not rewrite the `tz` already in this page's
+ * URL — the copy therefore says to re-enter Performance from the sidebar,
+ * which is what re-seeds the destination from the new preference.
+ *
+ * Second failure (same session): the retry omitted `tz` entirely, so the
+ * server validated its own default of `UTC` (`PerformanceQuerySchema`) and
+ * rejected THAT. The user's preference is not what failed, so profile settings
+ * cannot resolve it — the copy says plainly that it is a server-side problem.
+ * Non-dismissible, and deliberately offers no action.
  */
 export function InvalidTimezoneBanner({ isSecondFailure, className }: InvalidTimezoneBannerProps) {
   const [dismissed, setDismissed] = useState<boolean>(() =>
@@ -93,8 +101,15 @@ export function InvalidTimezoneBanner({ isSecondFailure, className }: InvalidTim
         </AlertTitle>
         <AlertDescription>
           {isSecondFailure ? (
-            <>
-              Your reporting timezone is not recognized by the server. Change it in{' '}
+            <p>
+              We retried without your reporting timezone and the server rejected UTC as well, so
+              this is a problem on the server rather than something your settings can fix. Try again
+              later, or contact support if it persists.
+            </p>
+          ) : (
+            <p>
+              We could not resolve your reporting timezone, so dates are shown in UTC for this
+              session. Change it in{' '}
               <a
                 href="/settings/profile"
                 data-testid="invalid-timezone-banner-settings-link"
@@ -102,10 +117,8 @@ export function InvalidTimezoneBanner({ isSecondFailure, className }: InvalidTim
               >
                 profile settings
               </a>
-              , or contact support.
-            </>
-          ) : (
-            'We could not resolve your reporting timezone, so dates are shown in UTC for this session.'
+              , then reopen Performance from the sidebar to apply it.
+            </p>
           )}
         </AlertDescription>
       </div>
