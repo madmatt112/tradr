@@ -25,17 +25,23 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 // `useOnboarding` has its own 22 tests. What matters here is only what the
 // checklist SAYS, so it is supplied directly — that keeps these tests about the
 // walkthrough rather than about three composed queries.
+//
+// ONLY THE HOOK IS REPLACED. `selectOwnRows` — the checklist's own rule for which
+// rows are the user's — comes through untouched, because the whole claim of the
+// sample-data case below is that `canStart` decides on that rule rather than on
+// a second one written next to it.
 let checklist: Checklist | null | undefined;
 const setStatus = vi.fn();
 const dismiss = vi.fn();
-vi.mock('./useOnboarding', () => ({
+vi.mock('./useOnboarding', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./useOnboarding')>()),
   useOnboarding: () => ({ checklist, setStatus, dismiss }),
 }));
 
 // The positions list, supplied directly for the same reason. The walkthrough
 // reads it for exactly one thing — which position the close set opens on — and
 // the real hook would need a QueryClient and a fetch to say so.
-let positions: { id: string; status: string }[] | undefined;
+let positions: { id: string; status: string; accountId?: string }[] | undefined;
 vi.mock('@/features/positions/hooks/usePositions', () => ({
   usePositions: () => ({ data: positions }),
 }));
@@ -43,7 +49,7 @@ vi.mock('@/features/positions/hooks/usePositions', () => ({
 // The accounts list, supplied directly for the same reason again. The
 // walkthrough reads it for one thing only — whether the screens two of the sets
 // open on are the ones the user is actually looking at.
-let accounts: { id: string }[] | undefined;
+let accounts: { id: string; isDemo?: boolean }[] | undefined;
 vi.mock('@/features/accounts/hooks/useAccounts', () => ({
   useAccounts: () => ({ data: accounts }),
 }));
@@ -234,6 +240,16 @@ describe('useWalkthrough — start and exit', () => {
     });
   });
 
+  it('never falls back onto a position the sample account owns', async () => {
+    accounts = [{ id: 'demo-acct', isDemo: true }];
+    positions = [{ id: 'demo-open', status: 'open', accountId: 'demo-acct' }];
+    await start('close');
+
+    // There is nowhere to open it: the only open position is the fixture's, and
+    // closing that completes nothing the checklist can see.
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('prefers the caller`s own position over the one it would have found', async () => {
     positions = [{ id: 'pos-open', status: 'open' }];
     await start('close', { positionId: 'pos-asked-for' });
@@ -365,6 +381,45 @@ describe('useWalkthrough — canStart', () => {
 
     positions = [{ id: 'pos-1', status: 'open' }];
     expect(canStartAll().close).toBe(true);
+  });
+
+  // THE SAMPLE-DATA STATE, WHICH IS A STATE THE CHECKLIST ALREADY HAS AN OPINION
+  // ABOUT. Everything on screen belongs to the fixture, and the checklist counts
+  // none of it, so a tour over those rows would end with the item exactly as
+  // unticked as it started and nothing to tell the user why. `canStart` says so
+  // too, from the same selector the counts come from.
+  it('offers no set that would run over sample data and complete nothing', () => {
+    accounts = [{ id: 'demo-acct', isDemo: true }];
+    positions = [
+      { id: 'demo-open', status: 'open', accountId: 'demo-acct' },
+      { id: 'demo-closed', status: 'closed', accountId: 'demo-acct' },
+    ];
+
+    const answers = canStartAll();
+    // Logging a position would book it against the sample account, and closing
+    // one of the fixture's trades is not closing one of the user's.
+    expect(answers.position).toBe(false);
+    expect(answers.close).toBe(false);
+    // The account set is withheld for its own separate reason — the zero-state
+    // it opens on is gone the moment ANY account exists, sample or not — which
+    // leaves the calculator as this user's one guided entry point until they
+    // remove the sample data or create an account of their own.
+    expect(answers.account).toBe(false);
+    expect(answers.calculator).toBe(true);
+  });
+
+  // The same two sets, once the rows are the user's. Nothing about the demo
+  // account being absent is what decides it — having their own data is.
+  it('offers both again once the user has rows of their own', () => {
+    accounts = [{ id: 'demo-acct', isDemo: true }, { id: 'acct-1' }];
+    positions = [
+      { id: 'demo-open', status: 'open', accountId: 'demo-acct' },
+      { id: 'pos-open', status: 'open', accountId: 'acct-1' },
+    ];
+
+    const answers = canStartAll();
+    expect(answers.position).toBe(true);
+    expect(answers.close).toBe(true);
   });
 
   it('always offers the calculator set, which needs nothing of the user', () => {

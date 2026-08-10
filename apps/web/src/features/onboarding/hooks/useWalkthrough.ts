@@ -62,7 +62,7 @@ import { emitOnboardingEvent } from '../lib/analytics';
 import type { ChecklistItemId, Checklist } from '../lib/derive-checklist';
 import type { WalkthroughStep } from '../lib/steps';
 
-import { useOnboarding } from './useOnboarding';
+import { selectOwnRows, useOnboarding } from './useOnboarding';
 
 type TourEngineModule = typeof import('../lib/tour-engine');
 type StepsModule = typeof import('../lib/steps');
@@ -329,33 +329,60 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
  *   with it — even though the checklist item stays outstanding, because sample
  *   data completes nothing.
  * - `position` opens on `[data-tour="position-new"]`, which `PositionList` tags
- *   only on its enabled branch — the one it takes once an account exists.
+ *   only on its enabled branch — the one it takes once an account exists. It
+ *   needs an account the user OWNS, for the reason below.
  * - `close` opens on `/positions/$positionId`, and the only id anyone has for
- *   that route is the open position `useWalkthrough` falls back to. No open
- *   position, no route to navigate to.
+ *   that route is the open position `useWalkthrough` falls back to — which is
+ *   one of the user's own, for the same reason. No open position of theirs, no
+ *   route to navigate to.
  * - `calculator` has nothing that can be missing: `/calculator` renders its
  *   fields for every user, which is why it is the one item a user with no
  *   accounts can complete.
  *
- * An unknown account count (the read is disabled, in flight, or failed) answers
- * "no" for both sets that depend on it. Withholding a shortcut that would have
- * worked costs the user a click on the item's own screen; offering one that
- * cannot costs them a walkthrough that silently never starts.
+ * "RUNS" MEANS "GETS THE USER SOMEWHERE", SO SAMPLE DATA DOES NOT COUNT FOR THE
+ * TWO SETS THAT END IN A ROW BEING WRITTEN. The checklist excludes the sample
+ * account and everything booked against it from completion — deliberately, so
+ * clicking "Add sample data" cannot tick items for trades the user never made —
+ * and these answers have to mean the same thing by "the user's data" or they
+ * hand out buttons that lead nowhere. A user with sample data and nothing else
+ * pressing `position` would be walked through logging a position against the
+ * demo account, and `close` through closing one of the fixture's rows: guidance
+ * followed to the end, and the item still unticked afterwards with nothing on
+ * screen to say why. That is worse than the button being absent, so both are
+ * withheld until the user has a real account (`position`) and a real open
+ * position (`close`). The sample state is the one the user leaves by removing
+ * the sample data or creating an account — either takes the demo rows away and
+ * both buttons come back with something behind them.
+ *
+ * The `account` answer is the one place the demo account still counts, and that
+ * is not an inconsistency: that set is gated on a SCREEN existing, not on a row
+ * being written, and the screen it opens on is gone the moment any account
+ * exists.
+ *
+ * An unknown count (the read is disabled, in flight, or failed) answers "no" for
+ * every set that depends on it. Withholding a shortcut that would have worked
+ * costs the user a click on the item's own screen; offering one that cannot
+ * costs them a walkthrough that silently never starts.
  */
-function canStartSet(
-  itemId: ChecklistItemId,
-  accountCount: number | undefined,
-  hasOpenPosition: boolean,
-): boolean {
+interface StartableFrom {
+  /** Every account, the demo one included — the zero-state gate's own read. */
+  accountCount: number | undefined;
+  /** Accounts the user created themselves, on the checklist's terms. */
+  ownAccountCount: number | undefined;
+  /** One of the user's own positions is open — not one of the fixture's. */
+  hasOwnOpenPosition: boolean;
+}
+
+function canStartSet(itemId: ChecklistItemId, from: StartableFrom): boolean {
   switch (itemId) {
     case 'account':
-      return accountCount === 0;
+      return from.accountCount === 0;
     case 'calculator':
       return true;
     case 'position':
-      return accountCount !== undefined && accountCount > 0;
+      return from.ownAccountCount !== undefined && from.ownAccountCount > 0;
     case 'close':
-      return hasOpenPosition;
+      return from.hasOwnOpenPosition;
   }
 }
 
@@ -606,21 +633,40 @@ export function useWalkthrough(): UseWalkthroughResult {
   // same cache entry, so this observer costs no extra request. An explicit
   // `params` from the caller always wins; this is only the fallback.
   const { data: positions } = usePositions(undefined, { enabled: checklist != null });
-  const openPositionParams = useMemo(() => {
-    const open = positions?.find((position) => position.status === 'open');
-    return open ? { positionId: open.id } : undefined;
-  }, [positions]);
 
-  // The other half of "can this set run": how many accounts the user has, on the
-  // same terms the dashboard's zero-state gate reads it — the whole list, demo
-  // rows included. Same query key as the gate's own read and as `useOnboarding`'s
-  // above, and gated on the same condition as the positions observer, so this
-  // costs no extra request on either screen the checklist is mounted on.
+  // The accounts list, on the same terms the dashboard's zero-state gate reads
+  // it — the whole thing, demo row included. Same query key as the gate's own
+  // read and as `useOnboarding`'s, and gated on the same condition as the
+  // positions observer, so this costs no extra request on either screen the
+  // checklist is mounted on.
   const { data: accounts } = useAccounts({ enabled: checklist != null });
-  const hasOpenPosition = openPositionParams !== undefined;
+
+  // THE USER'S OWN ROWS, FROM THE CHECKLIST'S OWN SELECTOR. `canStartSet` has to
+  // mean by "the user's data" exactly what completion means by it, and reusing
+  // `selectOwnRows` is what makes that true by construction rather than by two
+  // filters happening to agree. `undefined` until BOTH reads have landed: which
+  // positions belong to the sample account is not knowable from the positions
+  // list alone, and a half-answer here would offer buttons for one render.
+  const own = useMemo(
+    () => (accounts && positions ? selectOwnRows(accounts, positions) : undefined),
+    [accounts, positions],
+  );
+
+  // The fallback comes from the same filtered list, so the close set can never
+  // open on one of the fixture's positions: closing that would teach the user
+  // the right gesture and tick nothing.
+  const openPositionParams = useMemo(() => {
+    const open = own?.ownPositions.find((position) => position.status === 'open');
+    return open ? { positionId: open.id } : undefined;
+  }, [own]);
+
+  const hasOwnOpenPosition = openPositionParams !== undefined;
+  const ownAccountCount = own?.ownAccounts.length;
+  const accountCount = accounts?.length;
   const canStart = useCallback(
-    (itemId: ChecklistItemId) => canStartSet(itemId, accounts?.length, hasOpenPosition),
-    [accounts, hasOpenPosition],
+    (itemId: ChecklistItemId) =>
+      canStartSet(itemId, { accountCount, ownAccountCount, hasOwnOpenPosition }),
+    [accountCount, ownAccountCount, hasOwnOpenPosition],
   );
 
   // What the funnel counts as "offered": there is a walkthrough behind the

@@ -142,6 +142,52 @@ export function useOnboardingPatch(options?: { silent?: boolean }) {
   });
 }
 
+/**
+ * The user's OWN rows: the sample account, and everything booked against it,
+ * removed.
+ *
+ * NOTHING THE SEEDER WROTE COMPLETES ANYTHING, and this pair of filters is the
+ * whole of that rule. Asking to see the product populated is not creating an
+ * account, and it is not logging or closing a trade either: the fixture seeds
+ * ten CLOSED positions, so counting them would tick "Log a position" and "Close
+ * it and see the stats" the instant the user clicked "Add sample data" — telling
+ * them they had recorded trades they never made, striking the two items through,
+ * and taking away the guided-step buttons that would have taught them how.
+ * Completion is grounded in the USER's actual data, and "any route to an item"
+ * means routes the user takes, not a server-side fixture.
+ *
+ * Which rows are the demo's is READ FROM THE FLAG, never inferred from "there is
+ * exactly one account" — the same rule `useDemoAccount` follows. Mutual
+ * exclusion between sample and real data is enforced on the server, in another
+ * file, for another reason, and a count that quietly leaned on it would start
+ * believing the wrong thing the moment it moved. Positions carry `accountId`, so
+ * the join is the flag on the account they are booked against and needs no extra
+ * read.
+ *
+ * EXPORTED BECAUSE A SECOND CALLER ASKS THE SAME QUESTION. `useWalkthrough`
+ * decides which per-item walkthrough buttons the checklist may offer, and a set
+ * whose tour would run over sample rows completes nothing here — so it has to
+ * mean by "the user's data" exactly what this means, from the same code rather
+ * than from a second filter written the same way today. `deriveChecklist`
+ * deliberately never learns that sample data exists, so this is where the rule
+ * lives for everyone.
+ *
+ * Structurally typed on the two fields it reads, so a caller holding a narrower
+ * row than `Account`/`Position` needs no cast.
+ */
+export function selectOwnRows<
+  A extends { id: string; isDemo?: boolean },
+  P extends { accountId: string },
+>(accounts: A[], positions: P[]): { ownAccounts: A[]; ownPositions: P[] } {
+  const demoAccountIds = new Set(
+    accounts.filter((account) => account.isDemo).map((account) => account.id),
+  );
+  return {
+    ownAccounts: accounts.filter((account) => !account.isDemo),
+    ownPositions: positions.filter((position) => !demoAccountIds.has(position.accountId)),
+  };
+}
+
 export interface UseOnboardingResult {
   /**
    * The derived checklist. Three distinct values, and a consumer must branch on
@@ -211,35 +257,13 @@ export function useOnboarding(): UseOnboardingResult {
     if (!preference) return undefined;
     if (!checklistNeeded) return null;
     if (!accounts || !positions) return undefined;
-    // NOTHING THE SEEDER WROTE COMPLETES ANYTHING, and this pair of filters is
-    // the whole of that rule. Asking to see the product populated is not
-    // creating an account, and it is not logging or closing a trade either: the
-    // fixture seeds ten CLOSED positions, so counting them would tick "Log a
-    // position" and "Close it and see the stats" the instant the user clicked
-    // "Add sample data" — telling them they had recorded trades they never
-    // made, striking the two items through, and taking away the guided-step
-    // buttons that would have taught them how. Completion is grounded in the
-    // USER's actual data, and "any route to an item" means routes the user
-    // takes, not a server-side fixture.
-    //
-    // Which rows are the demo's is READ FROM THE FLAG, never inferred from
-    // "there is exactly one account" — the same rule `useDemoAccount` follows.
-    // Mutual exclusion between sample and real data is enforced on the server,
-    // in another file, for another reason, and a count that quietly leaned on
-    // it would start believing the wrong thing the moment it moved. Positions
-    // carry `accountId`, so the join is the flag on the account they are booked
-    // against and needs no extra read.
-    //
-    // With item 1 already excluded, `allComplete` cannot become true on seeded
-    // data alone, so the checklist cannot retire itself over trades the user
-    // never made. `deriveChecklist` deliberately never learns that sample data
-    // exists, so this caller is the only place that can get it right.
-    const demoAccountIds = new Set(
-      accounts.filter((account) => account.isDemo).map((account) => account.id),
-    );
-    const ownPositions = positions.filter((p) => !demoAccountIds.has(p.accountId));
+    // NOTHING THE SEEDER WROTE COMPLETES ANYTHING — `selectOwnRows` above is the
+    // whole of that rule, and the reasoning for it lives there. With item 1
+    // already excluded, `allComplete` cannot become true on seeded data alone,
+    // so the checklist cannot retire itself over trades the user never made.
+    const { ownAccounts, ownPositions } = selectOwnRows(accounts, positions);
     const counts = {
-      account: accounts.filter((account) => !account.isDemo).length,
+      account: ownAccounts.length,
       position: ownPositions.length,
       close: ownPositions.filter((p) => p.status === 'closed').length,
     };
