@@ -17,7 +17,7 @@
  * - Starting balance is creation-only: the field renders under `!isEdit`, and
  *   `UpdateAccountSchema` deliberately omits it because the shown balance is
  *   `startingBalance + SUM(ledger)` (`packages/shared/src/schemas/account.ts`).
- * - Default risk % is a group of preset buttons, not a free-text field:
+ * - Default risk % is a fixed set of options you pick one of, not a free-text field:
  *   `RISK_PRESETS` in `AccountDialog.tsx` is 1% / 2% / 3%, each labelled with
  *   the drawdown ten losing trades in a row would compound to, plus a "No rule"
  *   option whose value is `undefined`. `DEFAULT_RISK_PRESET` is '2' and seeds
