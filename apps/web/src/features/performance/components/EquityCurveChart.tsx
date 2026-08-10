@@ -11,6 +11,7 @@ import {
 
 import type { EquityCurvePoint } from '@tradr/shared';
 
+import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import { formatMoney } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -32,6 +33,11 @@ export interface EquityCurveChartProps {
    * widget, whose body is 149px at the pinned default, 320px of chart was
    * simply cut off, and it stayed cut off at every height a user could resize
    * to. A caller that has no height of its own passes one here.
+   *
+   * "Takes the height it is GIVEN" cuts both ways, which is why the chart also
+   * carries `CHART_MIN_HEIGHT_PX` as a floor of its own — see that constant. A
+   * caller does not have to supply one, and a `flex-1` caller must NOT override
+   * it with `min-h-0`.
    */
   className?: string;
 }
@@ -114,8 +120,16 @@ export default function EquityCurveChart({ series, currency, className }: Equity
   }));
 
   return (
-    <div data-testid="equity-curve-chart" className={cn('h-full w-full', className)}>
-      <ResponsiveContainer width="100%" height="100%">
+    <div
+      data-testid="equity-curve-chart"
+      // The floor goes on BOTH boxes, and as a style rather than a class so no
+      // caller's `className` can merge it away. On the wrapper it keeps the box
+      // and the drawn plot the same size at every container height; on the
+      // ResponsiveContainer it is the one recharts can actually measure.
+      style={{ minHeight: CHART_MIN_HEIGHT_PX }}
+      className={cn('h-full w-full', className)}
+    >
+      <ResponsiveContainer width="100%" height="100%" minHeight={CHART_MIN_HEIGHT_PX}>
         <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
           <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
           <XAxis

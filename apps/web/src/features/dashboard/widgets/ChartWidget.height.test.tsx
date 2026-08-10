@@ -25,6 +25,17 @@
 //
 // The pixel constants are measured off a real chromium render at 1440x900;
 // jsdom cannot supply them.
+//
+// AND THAT IS THIS FILE'S CEILING. It is arithmetic over measured constants and
+// class-name assertions — it can tell you the numbers add up, never that the
+// browser agreed. The next defect walked straight through it: the container-
+// sizing fix said `min-h-0`, which in the stacked mobile grid — where
+// `WidgetCard` has no determinate height at all — resolved to a 0px chart and a
+// 73px empty widget, on every touch device, with this file green.
+//
+// The measurement that can see that lives in `e2e/tests/dashboard-chart-height.spec.ts`
+// and runs on both the `chromium` and `Mobile Chrome` projects. Anything about
+// RENDERED height belongs there, not here.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +44,7 @@ import type { PerformanceResponse, WidgetPlacement } from '@tradr/shared';
 import { DEFAULT_WIDGETS } from '@tradr/shared/constants/dashboard-defaults';
 
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
+import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import { usePerformance } from '@/features/performance/hooks/usePerformance';
 
 import { GRID_GAP_PX, GRID_ROW_HEIGHT_PX } from '../grid.constants';
@@ -90,8 +102,18 @@ const CARD_BORDER_PX = 2;
 const BODY_PADDING_PX = 24;
 /** `gap-3` between the rows of each widget's column stack. */
 const STACK_GAP_PX = 12;
-/** The timeframe buttons above the performance chart: `size="sm"` is `h-8`. */
-const TIMEFRAME_ROW_PX = 32;
+/**
+ * The timeframe buttons above the performance chart. `size="sm"` is `h-8`, and
+ * the strip is `flex-wrap`, so this is TWO rows plus the `gap-2` between them —
+ * not one row.
+ *
+ * One row was the assumption and it is wrong on real widths: the five buttons
+ * wrap somewhere around 1100px of widget, which is inside the range a user can
+ * resize an 8-column widget to and below the whole viewport on a laptop. The
+ * arithmetic here has to hold in the worse of the two cases or it is not a
+ * bound, so it budgets for the wrap: 32 + 8 + 32.
+ */
+const TIMEFRAME_ROW_PX = 32 + 8 + 32;
 /**
  * The compact TierWindowNotice: one line of text-xs beside an h-6 upgrade CTA.
  * The boxed Alert the Performance page uses is 66px, and these widgets ask for
@@ -105,8 +127,12 @@ const NOTICE_PX = 24;
  * still be a chart rather than a strip. Below it the y-axis falls to three ticks
  * and the signed data labels start colliding with the date ticks — at the 105px
  * the old h=6 default left, they overlapped outright.
+ *
+ * The same number the charts now enforce for themselves as `CHART_MIN_HEIGHT_PX`
+ * — imported rather than restated, so the default height and the chart's own
+ * floor cannot drift apart.
  */
-const MIN_CHART_PX = 240;
+const MIN_CHART_PX = CHART_MIN_HEIGHT_PX;
 
 /** The pinned default body height, in px — what `body.clientHeight` reports. */
 function pinnedBodyPx(type: 'performance-chart' | 'equity-curve'): { h: number; bodyPx: number } {
@@ -219,22 +245,32 @@ describe('chart widgets size to the body they are given', () => {
         `content and overflows the widget body again`,
     ).toContain('h-full');
 
-    // `flex-1` takes what the notice and any toolbar leave; `min-h-0` is what
-    // lets it go BELOW its content size, which is the whole point — a flex item
-    // without it refuses to shrink past min-content and the column overflows.
+    // `flex-1` takes what the notice and any toolbar leave.
+    expect(chart?.className, `${which}'s chart must take the leftover height (flex-1)`).toContain(
+      'flex-1',
+    );
+
+    // …and it must NOT carry `min-h-0`. That is the second defect, in one class:
+    // a flex item's `min-height: auto` is its min-content height, which the
+    // chart supplies as CHART_MIN_HEIGHT_PX, and `min-h-0` throws that floor
+    // away. Where the parent has a height to divide, the two are
+    // indistinguishable — the chart gets 345px either way. Where it does not,
+    // which is every touch device (the stacked grid renders WidgetCard with no
+    // determinate height), "shrink as far as you like" means zero: both charts
+    // rendered at 0px and the equity curve widget was a 73px empty strip.
     expect(
       chart?.className,
-      `${which}'s chart must take the leftover height (flex-1) and be allowed ` +
-        `to shrink into it (min-h-0)`,
-    ).toContain('flex-1');
-    expect(chart?.className).toContain('min-h-0');
+      `${which}'s chart must not zero out its own floor with min-h-0 — in the ` +
+        `mobile stack there is no height to divide and it collapses to 0px`,
+    ).not.toMatch(/(^|\s)min-h-0(\s|$)/);
 
     // A fixed pixel height is the original defect. It clips at every container
-    // height that is not exactly that number, including every saved layout.
+    // height that is not exactly that number, including every saved layout. (A
+    // `min-h-*` floor is a different thing and is allowed — hence the anchor.)
     expect(
       chart?.className,
       `${which}'s chart must not pin a pixel height — that is what clipped it`,
-    ).not.toMatch(/h-\[\d+px\]/);
+    ).not.toMatch(/(^|\s)h-\[\d+px\]/);
   });
 });
 

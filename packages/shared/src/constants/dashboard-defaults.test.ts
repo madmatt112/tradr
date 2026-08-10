@@ -104,10 +104,19 @@ describe('row-unit migration invariants (double y and h)', () => {
     }
   });
 
-  it('keeps a migrated layout inside the new bounds', () => {
+  it('keeps every migrated height inside the bound the schema enforces', () => {
+    // `h` only. `y + h` was asserted here too, and that constraint does not
+    // exist: `WidgetPlacementSchema` caps `h` and leaves `y` unbounded, the
+    // `widgets` column is plain jsonb with no check, and `DashboardGrid`
+    // deliberately leaves gridstack's whole-canvas `maxRow` unset — a layout
+    // reaching row 36 saves and reloads intact. Doubling `y` can therefore push
+    // a tall saved layout past GRID_MAX_ROWS, and that is not a migration
+    // failure; asserting otherwise pinned a rule the system does not have and
+    // would fail on a legitimate input. (The same assertion was removed from
+    // the DEFAULT_WIDGETS bound above, where the default layout now ends at
+    // row 36 itself.)
     for (const r of oldLayout.map(double)) {
       expect(r.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
-      expect(r.y + r.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
     }
   });
 

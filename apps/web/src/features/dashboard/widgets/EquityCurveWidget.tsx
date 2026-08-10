@@ -2,6 +2,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
+import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import EquityCurveChart from '@/features/performance/components/EquityCurveChart';
 import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
 import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
@@ -43,10 +44,12 @@ function EquityCurveWidget() {
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
   // to its empty state before the first fetch.
-  // `h-full`, not a fixed 320: the skeleton has to occupy the same box the
-  // chart will, or the widget scrolls while it loads and settles when it does.
+  // `h-full` down to the chart's own floor, not a fixed 320: the skeleton has to
+  // occupy the same box the chart will, or the widget scrolls while it loads and
+  // settles when it does — and in the stacked mobile grid, where `h-full` alone
+  // resolves to nothing, an unfloored skeleton is an invisible one.
   if (timezone === undefined || isLoading) {
-    return <Skeleton className="h-full w-full" />;
+    return <Skeleton className="h-full w-full" style={{ minHeight: CHART_MIN_HEIGHT_PX }} />;
   }
 
   if (isError) {
@@ -91,16 +94,26 @@ function EquityCurveWidget() {
   }
 
   // `h-full` + a `flex-1` chart: the notice takes the height it needs and the
-  // chart takes the rest, whatever the widget's height happens to be. `min-h-0`
-  // is what lets the chart shrink below its content — without it a flex item
-  // refuses to go under `min-content` and the column overflows again.
+  // chart takes the rest, whatever the widget's height happens to be.
+  //
+  // `flex-1` with NO min-height override is deliberate, and it is what makes one
+  // set of classes cover both grid paths. A flex item's default
+  // `min-height: auto` is its min-content height, which the chart now supplies
+  // as `CHART_MIN_HEIGHT_PX` — so the chart shrinks into a short widget down to
+  // its legibility floor and no further, and in the stacked mobile grid, where
+  // WidgetCard has no determinate height and `h-full` resolves to auto all the
+  // way down, that floor is what stops the chart being 0px (this widget was a
+  // 73px empty strip).
+  //
+  // It was `min-h-0`, which reads as "shrink as far as you like" — and against a
+  // container with no height at all, as far as you like is nothing.
   return (
     <div className="flex h-full flex-col gap-3">
       {tierWindowNotice}
       <EquityCurveChart
         series={currencyData.equityCurve}
         currency={currencyData.code}
-        className="min-h-0 flex-1"
+        className="flex-1"
       />
     </div>
   );
