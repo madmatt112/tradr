@@ -7,7 +7,6 @@ import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayC
 import { usePerformance } from '@/features/performance/hooks/usePerformance';
 import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
 import { usePositions } from '@/features/positions/hooks/usePositions';
-import { useNow } from '@/hooks/useNow';
 import { formatCurrency } from '@/lib/format';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,10 +25,6 @@ vi.mock('@/features/performance/hooks/usePerformance', () => ({
 
 vi.mock('@/features/positions/hooks/usePositions', () => ({
   usePositions: vi.fn(),
-}));
-
-vi.mock('@/hooks/useNow', () => ({
-  useNow: vi.fn(() => new Date('2026-05-27T12:00:00.000Z')),
 }));
 
 // The user's stored reporting timezone — the zone this tab buckets by.
@@ -128,8 +123,6 @@ beforeEach(() => {
   vi.mocked(useDisplayCurrencyQuery).mockReset();
   vi.mocked(usePerformance).mockReset();
   vi.mocked(usePositions).mockReset();
-  vi.mocked(useNow).mockReset();
-  vi.mocked(useNow).mockReturnValue(new Date('2026-05-27T12:00:00.000Z'));
   timezoneState.value = 'America/New_York';
 });
 
