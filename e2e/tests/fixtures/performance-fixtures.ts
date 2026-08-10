@@ -238,6 +238,17 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route('**/api/users/me/buying-power-basis', (route) =>
     route.fulfill(json({ basis: 'cash' })),
   );
+  // Read by the same CalculatorForm as the basis above, so it is app-shell
+  // surface for the same reason and fails the same way unmocked — the
+  // /login redirect, landing on whichever assertion runs next.
+  //
+  // `false` is the neutral answer, and it matches the shape of the real route
+  // (symbols.handler.ts `quoteConfigHandler`): the platform quote provider is
+  // unconfigured, so the pull-last-price affordance never paints and no spec
+  // sees a control it was not written for.
+  await page.route('**/api/symbols/quote-config', (route) =>
+    route.fulfill(json({ stockQuoteConfigured: false })),
+  );
   // The reporting timezone is read on every authenticated view — the auth
   // layout, the sidebar, and each P&L-bucketing surface — so it is app-shell
   // surface too, and unmocked it fails the same way the note above describes.
