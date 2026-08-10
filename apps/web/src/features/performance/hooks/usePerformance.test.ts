@@ -192,6 +192,24 @@ describe('rejected-timezone record — lifecycle', () => {
     expect(isTimezoneRejected(undefined)).toBe(false);
   });
 
+  it('clearRejectedTimezone wins when removeItem throws but reads still succeed', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    recordRejectedTimezone(BAD_TZ);
+    // Only the write side fails here. Reads keep working and prefer
+    // sessionStorage, which still holds the zone the clear could not remove —
+    // so without the staleness guard the clear is silently a no-op and the tab
+    // stays pinned to the tz-omitted fallback for the rest of the session.
+    vi.spyOn(storage, 'removeItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+
+    clearRejectedTimezone();
+
+    expect(storage.getItem('perf.invalid_tz')).toBe(BAD_TZ);
+    expect(readRejectedTimezone()).toBeNull();
+    expect(isTimezoneRejected(BAD_TZ)).toBe(false);
+  });
+
   it('clearRejectedTimezone survives a storage that throws on removeItem', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     recordRejectedTimezone(BAD_TZ);

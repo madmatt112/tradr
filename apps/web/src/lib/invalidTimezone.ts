@@ -15,10 +15,11 @@
 // A zone that is not the recorded one is always sent, so a corrected preference
 // takes effect on the next request — no page reload involved.
 //
-// It lives in `lib/` rather than inside the performance feature because two
-// unrelated callers need it: the performance query (which reads and writes it)
-// and the reporting-timezone preference (which clears it). A feature module
-// cannot own state a global preference hook has to reset.
+// It lives in `lib/` rather than inside the performance feature because three
+// unrelated callers need it: the performance query (which reads and writes it),
+// the route loader that prefetches that query (which reads it), and the
+// reporting-timezone preference (which clears it). A feature module cannot own
+// state a global preference hook has to reset.
 
 const REJECTED_TZ_KEY = 'perf.invalid_tz';
 
@@ -26,6 +27,13 @@ const REJECTED_TZ_KEY = 'perf.invalid_tz';
 // must agree in that mode or the UI disagrees with the request it is
 // describing, so BOTH sides consult this fallback.
 let rejectedTzFallback: string | null = null;
+// Reads prefer sessionStorage because it survives a reload, but that preference
+// is only safe while sessionStorage is in step with us. A write that throws
+// leaves the previous value behind — a failed `removeItem` in particular would
+// let reads keep returning the very zone the clear was meant to forget, which
+// is the session-sticky fallback this module exists to end. Once a write fails,
+// the in-memory record is the only truthful one.
+let rejectedTzStorageStale = false;
 let storageWarned = false;
 
 function warnStorageOnce(err: unknown): void {
@@ -36,11 +44,13 @@ function warnStorageOnce(err: unknown): void {
 
 /** The IANA zone the server most recently rejected, or `null`. */
 export function readRejectedTimezone(): string | null {
-  try {
-    const stored = sessionStorage.getItem(REJECTED_TZ_KEY);
-    if (stored) return stored;
-  } catch (err) {
-    warnStorageOnce(err);
+  if (!rejectedTzStorageStale) {
+    try {
+      const stored = sessionStorage.getItem(REJECTED_TZ_KEY);
+      if (stored) return stored;
+    } catch (err) {
+      warnStorageOnce(err);
+    }
   }
   return rejectedTzFallback;
 }
@@ -55,8 +65,10 @@ export function recordRejectedTimezone(tz: string): void {
   rejectedTzFallback = tz;
   try {
     sessionStorage.setItem(REJECTED_TZ_KEY, tz);
+    rejectedTzStorageStale = false;
   } catch (err) {
     warnStorageOnce(err);
+    rejectedTzStorageStale = true;
   }
 }
 
@@ -69,13 +81,16 @@ export function clearRejectedTimezone(): void {
   rejectedTzFallback = null;
   try {
     sessionStorage.removeItem(REJECTED_TZ_KEY);
+    rejectedTzStorageStale = false;
   } catch (err) {
     warnStorageOnce(err);
+    rejectedTzStorageStale = true;
   }
 }
 
 /** Test seam — clears the module-local fallback so test runs are isolated. */
 export function __resetInvalidTimezoneState(): void {
   rejectedTzFallback = null;
+  rejectedTzStorageStale = false;
   storageWarned = false;
 }

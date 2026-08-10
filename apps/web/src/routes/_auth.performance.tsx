@@ -6,6 +6,7 @@ import { PerformanceQuerySchema } from '@tradr/shared/schemas/performance';
 
 import { PerformancePage } from '@/features/performance/components/PerformancePage';
 import { api } from '@/lib/api';
+import { isTimezoneRejected } from '@/lib/invalidTimezone';
 import { queryClient } from '@/lib/queryClient';
 
 // ---- Shared query options --------------------------------------------------
@@ -19,7 +20,12 @@ function buildPath(params: PerformanceQueryInput): string {
   q.set('granularity', params.granularity);
   q.set('start', params.start);
   q.set('end', params.end);
-  q.set('tz', params.tz);
+  // Same rejected-zone record the hook reads, via the same predicate — a second
+  // reader with its own idea of "rejected" is the bug this record was built to
+  // end. Without this the prefetch re-sends a zone the server has already
+  // refused, so every navigation to Performance opens with a request we know
+  // fails. Omitting `tz` lets the server fall back to its own default.
+  if (!isTimezoneRejected(params.tz)) q.set('tz', params.tz);
   if (params.currency) q.set('currency', params.currency);
   return `/performance?${q.toString()}`;
 }
