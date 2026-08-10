@@ -494,7 +494,11 @@ describe('CalculatorForm — percent results + buying-power flag (REQ-4)', () =>
 // user has not finished filling in.
 describe('CalculatorForm — zero-size explanation', () => {
   const EXPLANATION = /does not cover one share\/contract at this stop distance/;
-  const REMEDIES = /Move the stop closer to entry, pick a lower-priced instrument, or risk more/;
+  // Only the two terms the formula actually has: the stop distance (divisor)
+  // and the risk budget (dividend). Instrument price is not a term in
+  // `floor(risk ÷ (perUnitRisk × multiplier))`, so it must not be offered as a
+  // way out — following it would leave the size at zero.
+  const REMEDIES = /Move the stop closer to entry, or risk more/;
 
   it('explains the zero and names the ways out in the dollar basis', async () => {
     await mount();
@@ -507,6 +511,8 @@ describe('CalculatorForm — zero-size explanation', () => {
 
     await screen.findByText(EXPLANATION, undefined, { timeout: 2000 });
     expect(screen.getByText(REMEDIES)).toBeTruthy();
+    // Every remedy offered has to be one that moves the result.
+    expect(screen.queryByText(/lower-priced instrument/i)).toBeNull();
     expect(screen.queryByText('Position Sizing')).toBeNull();
   });
 

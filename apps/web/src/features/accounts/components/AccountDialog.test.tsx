@@ -4,7 +4,7 @@
 // to an inline banner with the upgrade path, and stays open so the remedy is
 // in place.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -181,17 +181,26 @@ function fieldValue(label: string): string {
 }
 
 /**
- * A default-risk option button, found by the start of its accessible name. Each
- * carries two lines — the percentage and what ten losing trades cost — so the
+ * A default-risk radio, found by the start of its accessible name. Each carries
+ * two lines — the percentage and what ten losing trades cost — so the
  * accessible name is the pair, and anchoring on `^` keeps `1%` from matching a
  * stored `1.50%` option.
  */
-function riskOption(label: RegExp): HTMLButtonElement {
-  return screen.getByRole('button', { name: label }) as HTMLButtonElement;
+function riskOption(label: RegExp): HTMLInputElement {
+  return screen.getByRole('radio', { name: label }) as HTMLInputElement;
+}
+
+/** The button-styled `<label>` the radio sits inside — where the text lives. */
+function riskOptionBox(label: RegExp): HTMLElement {
+  return riskOption(label).closest('label') as HTMLElement;
 }
 
 function riskSelected(label: RegExp): boolean {
-  return riskOption(label).getAttribute('aria-pressed') === 'true';
+  return riskOption(label).checked;
+}
+
+function riskGroup(): HTMLElement {
+  return screen.getByRole('radiogroup', { name: 'Default risk %' });
 }
 
 function submitCreate(): void {
@@ -304,9 +313,9 @@ describe('AccountDialog — default risk %', () => {
     expect(riskSelected(/^3%/)).toBe(false);
 
     // Consequences, not adjectives: 1 − 0.99^10, 0.98^10, 0.97^10.
-    expect(riskOption(/^1%/).textContent).toContain('10 losses: -10%');
-    expect(riskOption(/^2%/).textContent).toContain('10 losses: -18%');
-    expect(riskOption(/^3%/).textContent).toContain('10 losses: -26%');
+    expect(riskOptionBox(/^1%/).textContent).toContain('10 losses: -10%');
+    expect(riskOptionBox(/^2%/).textContent).toContain('10 losses: -18%');
+    expect(riskOptionBox(/^3%/).textContent).toContain('10 losses: -26%');
 
     expect(
       screen.getByText(/share of this account's balance you risk on a single trade/i),
@@ -337,12 +346,54 @@ describe('AccountDialog — default risk %', () => {
     expect(createMutateAsync.mock.calls[0][0]).toMatchObject({ defaultRiskPercent: '1' });
   });
 
-  it('selects a preset from the keyboard', async () => {
+  // The options are mutually exclusive, so they have to reach assistive tech as
+  // one choice among several — a radiogroup naming its selected value — rather
+  // than as four independent `aria-pressed` toggles.
+  it('exposes the presets as one named radio group, not independent toggles', () => {
+    renderDialog();
+
+    const group = riskGroup();
+    // The walkthrough anchors on this id (onboarding/lib/steps/account.ts).
+    expect(group.id).toBe('defaultRiskPercent');
+    expect(within(group).getAllByRole('radio')).toHaveLength(4);
+    // No toggle semantics anywhere in the group, and no leftover buttons.
+    expect(group.querySelector('[aria-pressed]')).toBeNull();
+    expect(within(group).queryAllByRole('button')).toHaveLength(0);
+    // Repo rule: every button-like element carries cursor-pointer.
+    for (const radio of within(group).getAllByRole('radio')) {
+      expect(radio.closest('label')?.className).toContain('cursor-pointer');
+    }
+  });
+
+  // A radio group is one tab stop and moves with the arrow keys — different
+  // from the button row it replaced, where every option was its own tab stop
+  // and Enter/Space activated it.
+  it('moves between options with the arrow keys and is a single tab stop', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    riskOption(/^2%/).focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(riskSelected(/^3%/)).toBe(true);
+    expect(riskSelected(/^2%/)).toBe(false);
+    expect(document.activeElement).toBe(riskOption(/^3%/));
+
+    await user.keyboard('{ArrowLeft}');
+    expect(riskSelected(/^2%/)).toBe(true);
+    expect(riskSelected(/^3%/)).toBe(false);
+
+    // Tab leaves the group entirely rather than stepping to the next option.
+    await user.tab();
+    expect(riskGroup().contains(document.activeElement)).toBe(false);
+  });
+
+  it('selects the focused option with Space', async () => {
     const user = userEvent.setup();
     renderDialog();
 
     riskOption(/^3%/).focus();
-    await user.keyboard('{Enter}');
+    await user.keyboard(' ');
 
     expect(riskSelected(/^3%/)).toBe(true);
     expect(riskSelected(/^2%/)).toBe(false);
@@ -366,7 +417,8 @@ describe('AccountDialog — default risk %', () => {
 
     // '2.00' is the 2% preset, not a fourth option.
     expect(riskSelected(/^2%/)).toBe(true);
-    expect(screen.queryByRole('button', { name: /^2\.00%/ })).toBeNull();
+    expect(screen.queryByRole('radio', { name: /^2\.00%/ })).toBeNull();
+    expect(within(riskGroup()).getAllByRole('radio')).toHaveLength(4);
   });
 
   // Every percentage was typeable before the presets existed, and 3% was the
@@ -377,7 +429,7 @@ describe('AccountDialog — default risk %', () => {
     renderDialog(vi.fn(), makeAccount({ defaultRiskPercent: '1.50' }));
 
     expect(riskSelected(/^1\.50%/)).toBe(true);
-    expect(riskOption(/^1\.50%/).textContent).toContain('current setting');
+    expect(riskOptionBox(/^1\.50%/).textContent).toContain('current setting');
     expect(riskSelected(/^1%/)).toBe(false);
     expect(riskSelected(/^2%/)).toBe(false);
 

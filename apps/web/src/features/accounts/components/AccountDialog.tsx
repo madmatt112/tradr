@@ -16,7 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -33,6 +33,7 @@ import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
 import { useBrokerages } from '@/features/brokerages/hooks/useBrokerages';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 import { getAccountErrorCode, useCreateAccount, useUpdateAccount } from '../hooks/useAccounts';
 
@@ -340,33 +341,53 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
                 starting balance it rewrites no history, it only seeds the
                 position-size calculator.
 
+                Exactly one option applies at a time, so this is a radio group
+                and not a row of independent toggles: native radios carry that
+                meaning themselves — one tab stop, arrow keys between options,
+                and an announced "n of m" — where `aria-pressed` would describe
+                four unrelated switches. The `<legend>` names the group the
+                same way, natively, so there is no floating `<label>` pointing
+                at no control.
+
                 `#defaultRiskPercent` is the walkthrough's anchor for this
                 field (features/onboarding/lib/steps/account.ts targets it by
                 id), so it stays on the group now that the input is gone. */}
-            <div className="space-y-2">
-              <Label id="defaultRiskPercentLabel">Default risk %</Label>
-              <div
-                id="defaultRiskPercent"
-                role="group"
-                aria-labelledby="defaultRiskPercentLabel"
-                className="flex flex-wrap gap-2"
-              >
+            <fieldset id="defaultRiskPercent" role="radiogroup" className="space-y-2">
+              <legend className="text-sm leading-none font-medium select-none">
+                Default risk %
+              </legend>
+              <div className="flex flex-wrap gap-2">
                 {riskOptions.map((option) => {
                   const selected = isRiskSelected(option.value);
                   return (
-                    <Button
+                    // The radio itself is visually hidden rather than removed:
+                    // it stays the focusable, keyboard-operable control, and
+                    // the label it sits inside is what gets the button look —
+                    // including the focus ring, which has to follow the input's
+                    // focus since the input cannot show one of its own.
+                    <label
                       key={option.value ?? NONE_SENTINEL}
-                      type="button"
-                      variant={selected ? 'default' : 'outline'}
-                      aria-pressed={selected}
-                      className="h-auto flex-col gap-0.5 px-3 py-2 cursor-pointer"
-                      onClick={() =>
-                        form.setValue('defaultRiskPercent', option.value, { shouldValidate: true })
-                      }
+                      className={cn(
+                        buttonVariants({ variant: selected ? 'default' : 'outline' }),
+                        'h-auto flex-col gap-0.5 px-3 py-2 cursor-pointer',
+                        'has-[:focus-visible]:border-ring has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50',
+                      )}
                     >
+                      <input
+                        type="radio"
+                        name="defaultRiskPercent"
+                        className="sr-only"
+                        value={option.value ?? NONE_SENTINEL}
+                        checked={selected}
+                        onChange={() =>
+                          form.setValue('defaultRiskPercent', option.value, {
+                            shouldValidate: true,
+                          })
+                        }
+                      />
                       <span>{option.label}</span>
                       <span className="text-xs font-normal opacity-80">{option.note}</span>
-                    </Button>
+                    </label>
                   );
                 })}
               </div>
@@ -380,7 +401,7 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
                   {form.formState.errors.defaultRiskPercent.message}
                 </p>
               )}
-            </div>
+            </fieldset>
             <div className="space-y-2">
               <Label htmlFor="brokerage">Brokerage</Label>
               <Select

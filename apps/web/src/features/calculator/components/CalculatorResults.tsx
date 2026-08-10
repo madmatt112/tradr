@@ -47,10 +47,14 @@ function Money({ value, currency }: { value: string; currency: string }) {
  * when `floor(risk ÷ (perUnitRisk × multiplier)) === 0` — the risk budget (a
  * typed dollar risk, or `balance × riskPercent ÷ 100`) is smaller than the
  * entry-to-stop distance on ONE share, or on 100 of them in options mode. That
- * arithmetic is what the three remedies come from: the stop distance is the
- * divisor, a lower-priced instrument shrinks it, and the budget is the
- * dividend. It never fires on a half-filled form — the caller only computes a
- * result once the trade prices and exactly one risk basis are complete.
+ * arithmetic is what the two remedies come from, and it is the whole of it: the
+ * stop distance is the divisor and the risk budget is the dividend, so those are
+ * the only two terms a user can move. The instrument's price is NOT one of them
+ * — a cheaper stock with the same entry-to-stop distance sizes identically — so
+ * offering it as a way out would send the user off to change something that
+ * cannot change the answer. It never fires on a half-filled form — the caller
+ * only computes a result once the trade prices and exactly one risk basis are
+ * complete.
  */
 function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
   switch (status) {
@@ -65,7 +69,7 @@ function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
       // would read as a bug.
       return 'Available buying power cannot fund one share/contract at this entry price.';
     default:
-      return 'The amount at risk does not cover one share/contract at this stop distance, so the size rounds down to zero. Move the stop closer to entry, pick a lower-priced instrument, or risk more.';
+      return 'The amount at risk does not cover one share/contract at this stop distance, so the size rounds down to zero. Move the stop closer to entry, or risk more.';
   }
 }
 
