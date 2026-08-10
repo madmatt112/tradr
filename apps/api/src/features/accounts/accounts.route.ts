@@ -9,6 +9,7 @@ import { captureServerEvent } from '@/lib/posthog';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 
+import { seedDemoAccount } from './accounts.demo';
 import { countPositionsByAccount } from './accounts.query';
 import {
   listAccounts,
@@ -31,6 +32,13 @@ const accounts = new Hono<AuthEnv>();
 accounts.use(authMiddleware);
 
 const ParamSchema = z.object({ id: z.string().uuid() });
+
+// The delete query. `cascade=demo` asks for the sample-data teardown; whether it
+// happens is decided by the account's stored flag, not by this. Spelled as a
+// named value rather than a boolean so that a client guessing at `?cascade=true`
+// means nothing at all, and so the parameter reads as the one thing it can ask
+// for rather than as a general-purpose switch.
+const DeleteQuerySchema = z.object({ cascade: z.literal('demo').optional() });
 
 accounts.get('/', async (c) => {
   const userId = c.get('userId');
@@ -63,6 +71,14 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *       enabled and the user is a non-admin Free user at the account cap, the create is
  *       refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass
  *       through unchanged.
+ *
+ *
+ *       While the sample account exists the create is refused with `409
+ *       DEMO_ACCOUNT_EXISTS` instead: sample and real data are mutually exclusive, because
+ *       every aggregate scopes by currency and not by account. That check runs BEFORE the
+ *       plan cap, so a Free user holding sample data is told to remove it rather than to
+ *       upgrade — the sample account occupies their one slot. Remove it with
+ *       `DELETE /api/accounts/{id}?cascade=demo` and retry.
  *     tags: [Accounts]
  *     requestBody:
  *       required: true
@@ -94,10 +110,10 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *                   here — there is no rule to clear on create.
  *                 example: '1.00'
  *     responses:
- *       201: { description: The created account. }
+ *       201: { description: 'The created account, with `isDemo: false`.' }
  *       400: { description: Validation error. }
  *       403: { description: TIER_LIMIT_ACCOUNTS (account cap reached on the current plan) or FORBIDDEN (cross-user brokerage). }
- *       409: { description: Duplicate account name. }
+ *       409: { description: DEMO_ACCOUNT_EXISTS (sample data present — remove it and retry) or CONFLICT (duplicate account name). }
  */
 accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
   const userId = c.get('userId');
@@ -105,6 +121,45 @@ accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
   const data = c.req.valid('json');
   const account = await createAccount(db, userId, data, { isAdmin });
   captureServerEvent('account_created', { distinctId: userId });
+  return c.json(account, 201);
+});
+
+/**
+ * @swagger
+ * /api/accounts/demo:
+ *   post:
+ *     summary: Add sample data.
+ *     description: >
+ *       Authed. Creates one flagged sample account for the current user, seeded with a
+ *       fixed set of trades — closed, open and planned — driven through the normal
+ *       position lifecycle so realized P&L and its ledger entries are derived exactly as
+ *       they are for real trades. The fixture is identical on every run, so support,
+ *       the documentation screenshots and the end-to-end tests all describe the same
+ *       figures.
+ *
+ *
+ *       Refused with `409` when the user already has an account. Sample figures are kept
+ *       out of real ones by keeping sample and real data mutually exclusive, so there is
+ *       no supported state in which both exist. Seeding is all-or-nothing: a failure
+ *       leaves no account behind, and a retry is safe.
+ *
+ *
+ *       Available identically to self-hosted and hosted deployments — it needs no
+ *       optional integration configured.
+ *
+ *
+ *       Every account read — the list, the detail and this response — carries a boolean
+ *       `isDemo`, which is `true` on the sample account and `false` on every real one.
+ *       That is how a client identifies the sample account to label or remove it; it is
+ *       server-set and cannot be sent in on create or update.
+ *     tags: [Accounts]
+ *     responses:
+ *       201: { description: 'The created sample account, with `isDemo: true`.' }
+ *       409: { description: The user already has an account. }
+ */
+accounts.post('/demo', async (c) => {
+  const userId = c.get('userId');
+  const account = await seedDemoAccount(db, userId);
   return c.json(account, 201);
 });
 
@@ -185,11 +240,11 @@ accounts.put('/writable', validate('json', SetWritableAccountSchema), async (c) 
  *                   `null` clears the rule back to unset.
  *                 example: '1.00'
  *     responses:
- *       200: { description: The updated account. }
+ *       200: { description: 'The updated account. `isDemo` is server-set and unchanged by this call.' }
  *       400: { description: Validation error (includes an unknown IANA timezone). }
  *       403: { description: FORBIDDEN (cross-user brokerage). }
  *       404: { description: Account not found. }
- *       409: { description: Duplicate account name, or currency change while positions exist. }
+ *       409: { description: 'Duplicate account name, or currency change while positions exist.' }
  */
 accounts.put(
   '/:id',
@@ -204,12 +259,60 @@ accounts.put(
   },
 );
 
-accounts.delete('/:id', validate('param', ParamSchema), async (c) => {
-  const userId = c.get('userId');
-  const { id } = c.req.valid('param');
-  await removeAccount(db, id, userId);
-  captureServerEvent('account_deleted', { distinctId: userId });
-  return c.body(null, 204);
-});
+/**
+ * @swagger
+ * /api/accounts/{id}:
+ *   delete:
+ *     summary: Delete an account.
+ *     description: >
+ *       Authed. Refused with `409` when the account holds positions — deleting one would
+ *       take its trading history with it.
+ *
+ *
+ *       `?cascade=demo` asks instead for the sample-account teardown: the account and every
+ *       position, fill and ledger entry booked against it, removed together in one
+ *       transaction, leaving nothing orphaned behind. It is a request and not an
+ *       authorisation — the server decides from the account's own stored sample-data flag,
+ *       so the same call against a real account holding positions is refused with `409`
+ *       exactly as it is without the parameter. Nothing a client sends can reach the flag.
+ *
+ *
+ *       Teardown is idempotent: repeating it against a sample account that has already been
+ *       removed answers `204`, so two tabs pressing the same button settle on the same
+ *       state. That applies only to the caller's own former sample account; every other
+ *       unknown id is a `404`, as is any account belonging to another user.
+ *     tags: [Accounts]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: cascade
+ *         required: false
+ *         schema: { type: string, enum: [demo] }
+ *         description: >
+ *           `demo` requests the sample-account teardown. Any other value is a `400`.
+ *     responses:
+ *       204: { description: 'Deleted, or already torn down.' }
+ *       400: { description: 'Validation error (a non-uuid id, or an unrecognised cascade value).' }
+ *       404: { description: Account not found (or not owned by the user). }
+ *       409: { description: The account has positions and no cascade applies. }
+ */
+accounts.delete(
+  '/:id',
+  validate('param', ParamSchema),
+  validate('query', DeleteQuerySchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { id } = c.req.valid('param');
+    const { cascade } = c.req.valid('query');
+    const deleted = await removeAccount(db, id, userId, { cascade: cascade === 'demo' });
+    // Not on the idempotent repeat: that call deleted nothing, and an event
+    // saying otherwise would count one teardown twice.
+    if (deleted) captureServerEvent('account_deleted', { distinctId: userId });
+    return c.body(null, 204);
+  },
+);
 
 export default accounts;

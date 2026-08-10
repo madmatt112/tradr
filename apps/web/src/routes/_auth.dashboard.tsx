@@ -18,8 +18,11 @@ import { GRID_COLUMNS } from '@/features/dashboard/grid.constants';
 import { useDashboardLayout } from '@/features/dashboard/hooks/useDashboardLayout';
 import { findFirstSlot } from '@/features/dashboard/layout';
 import { ActivationChecklist } from '@/features/onboarding/components/ActivationChecklist';
+import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { ZeroState } from '@/features/onboarding/components/ZeroState';
-import { useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
+import { useOnboarding, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
+import { useWalkthrough } from '@/features/onboarding/hooks/useWalkthrough';
+import type { ChecklistItemId } from '@/features/onboarding/lib/derive-checklist';
 import { useAuth } from '@/hooks/useAuth';
 
 /**
@@ -86,10 +89,9 @@ function ReadOnlyDefaultLayout(): ReactElement {
  * skeleton while its derived reads are in flight, and the skeleton is SHORTER
  * than the card that replaces it — so on the primary screen the widget grid
  * dropped by the difference, once per load, for every user still mid-onboarding.
- * The design system forbids exactly that ("no layout jump between loading →
- * empty → loaded", visual-design R4.4). The checklist itself is correct and is
- * left alone; the geometry is the mount site's problem, and this is the mount
- * site.
+ * The design system forbids exactly that — no layout jump between loading,
+ * empty and loaded. The checklist itself is correct and is left alone; the
+ * geometry is the mount site's problem, and this is the mount site.
  *
  * THE RESERVATION IS DRIVEN BY WHAT ACTUALLY RENDERED, via `:has()` on the
  * skeleton's own test id, rather than by re-deciding here which users get a
@@ -114,12 +116,47 @@ function ReadOnlyDefaultLayout(): ReactElement {
  * space between the header and the grid that was not there before.
  */
 function ChecklistSlot(): ReactElement {
+  // THE WALKTHROUGH'S OTHER DOOR, and without it items 2-4 had none. `ZeroState`
+  // wires the checklist's per-item "Start" to the walkthrough, but a user leaves
+  // the zero-state the instant they create their first account — which is the
+  // instant "size a trade", "log a position" and "close it" become the
+  // outstanding work. Their step sets shipped and nothing could open them.
+  //
+  // The two lines below are `ZeroState.beginGuided`, for the same reason it
+  // gives: the status write is the opt-in record ("this user asked to be
+  // guided"), and it belongs at the door rather than in `useWalkthrough`, which
+  // deliberately writes no onboarding state at all. Choosing one item off the
+  // checklist is the same choice made about one step instead of four.
+  //
+  // No params: `useWalkthrough` fills in the position a set needs from the
+  // user's own data, which is the only place that knows it.
+  const { start, canStart, isUnavailable } = useWalkthrough();
+  const { setStatus } = useOnboarding();
+  const beginGuided = useCallback(
+    (itemId: ChecklistItemId) => {
+      setStatus('active');
+      start(itemId);
+    },
+    [setStatus, start],
+  );
+
   return (
     <div
       data-slot="activation-checklist-slot"
       className="empty:hidden has-data-[testid=activation-checklist-loading]:min-h-[238px]"
     >
-      <ActivationChecklist />
+      {/* Withdrawn when the tour runtime will not load, exactly as the
+          zero-state withdraws it: a "Start" with nothing behind it is a dead
+          control, and the checklist is useful without one.
+
+          `canStart` withholds the same thing one set at a time. On THIS screen
+          the user has an account, so the account set's first step — the
+          zero-state's "Create my first account" — is a control this branch by
+          definition does not render. */}
+      <ActivationChecklist
+        onStartStep={isUnavailable ? undefined : beginGuided}
+        canStartStep={canStart}
+      />
     </div>
   );
 }
@@ -131,7 +168,7 @@ function DashboardPage(): ReactElement {
   const { data, isLoading, isError, refetch, flushPending, scheduleLayoutWrite } = layout;
 
   // ===========================================================================
-  // THE ZERO-STATE GATE (Req 3.1, 3.4, 3.6).
+  // THE ZERO-STATE GATE.
   //
   // A user with no accounts gets a screen that tells them what to do instead of
   // six widgets that are each individually empty for a different reason.
@@ -154,7 +191,7 @@ function DashboardPage(): ReactElement {
   // ===========================================================================
   const onboardingQuery = useOnboardingQuery();
   const preference = onboardingQuery.data;
-  // `done` ONLY. `skipped` is an R4.5 dismissal of the CHECKLIST, not of
+  // `done` ONLY. `skipped` is a dismissal of the CHECKLIST, not of
   // onboarding: a skipped user with no accounts still has nothing to look at,
   // and the zero-state is where `ActivationChecklist` — hence the product's only
   // "Reopen setup checklist" control — is mounted. Retiring on `skipped` would
@@ -311,8 +348,8 @@ function DashboardPage(): ReactElement {
     );
   }
 
-  // Zero state — takes precedence over the empty layout below (Req 3.5), and
-  // sits behind isLoading/isError so neither of those branches changes.
+  // Zero state — takes precedence over the empty layout below, and sits behind
+  // isLoading/isError so neither of those branches changes.
   //
   // NO FLASH IN EITHER DIRECTION, which is the whole reason this is three
   // conditions and not one. Deciding early would be wrong both ways: `accounts`
@@ -332,25 +369,27 @@ function DashboardPage(): ReactElement {
     if (preference === undefined || accounts === undefined) {
       return <DashboardSkeleton />;
     }
-    // Req 3.4 needs nothing extra: `useCreateAccount` invalidates ['accounts'],
-    // this observer refetches, and the next render falls through to the grid.
+    // Leaving this screen on the first account needs nothing extra:
+    // `useCreateAccount` invalidates ['accounts'], this observer refetches, and
+    // the next render falls through to the grid — no reload, no manual swap.
     if (accounts.length === 0) {
       return <ZeroState />;
     }
   }
 
   // ===========================================================================
-  // THE CHECKLIST'S HOME ON EVERY OTHER PATH (R4.5, R4.7).
+  // THE CHECKLIST'S HOME ON EVERY OTHER PATH.
   //
   // `ZeroState` composes `ActivationChecklist` itself, so the zero-state branch
   // above needs nothing — and must not double-mount it. But the zero-state is
   // the ONLY screen the checklist had, and a user leaves it the instant they
   // create their first account. That is precisely when items 2-4 (size a trade,
   // log a position, close it) become the outstanding work, when the "Reopen
-  // setup checklist" row R4.5 depends on would otherwise be unreachable, and
-  // when R4.7's retirement — which is what finally switches `useOnboarding`'s
-  // two expensive gated reads off for good — would never get a chance to fire.
-  // So both remaining branches mount it.
+  // setup checklist" row that keeps a dismissal recoverable would otherwise be
+  // unreachable, and when the retirement that fires on the fourth completed
+  // item — which is what finally switches `useOnboarding`'s two expensive gated
+  // reads off for good — would never get a chance to fire. So both remaining
+  // branches mount it.
   //
   // UNCONDITIONALLY, and that is safe because the component answers for every
   // state itself: nothing for a retired (`done`) user, nothing while the stored
@@ -370,8 +409,9 @@ function DashboardPage(): ReactElement {
   // NO SECOND PRIMARY ACTION. The checklist carries no amber of its own by
   // design, so the one primary each of these views is allowed stays where it is
   // — "Use the default layout" below, and nothing on the populated dashboard.
-  // `onStartStep` is deliberately NOT passed: the walkthrough is Phase E, and a
-  // per-item "Start" button with nothing behind it is a dead control.
+  // The per-item "Start" buttons `ChecklistSlot` now wires are ghost-variant and
+  // change none of that; they were left unwired only while the walkthrough
+  // itself was still to be built.
   // ===========================================================================
 
   // Empty
@@ -417,14 +457,27 @@ function DashboardPage(): ReactElement {
   const placedTypes = widgets.map((w) => w.type);
   return (
     <div className="space-y-4">
-      <DashboardHeader
-        placedTypes={placedTypes}
-        onAdd={handleAdd}
-        onResetLayout={() => {
-          void handleUseDefaultLayout();
-        }}
-        resetBusy={defaultBusy}
-      />
+      {/* THE COACH MARK RIDES WITH THE HEADER, and only on this branch. Widget
+          management is what the mark describes — Add Widget, the per-card menu,
+          drag and resize, Reset layout — and all of it is on screen here and
+          only here. The empty branch has no cards to arrange and no Reset
+          layout button, and the zero-state above returns before either. A mark
+          also has to stay off a surface the deployment does not offer, but
+          there is no deployment gate to consult here: the grid is local layout
+          state persisted per user, configured nowhere. */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1">
+          <DashboardHeader
+            placedTypes={placedTypes}
+            onAdd={handleAdd}
+            onResetLayout={() => {
+              void handleUseDefaultLayout();
+            }}
+            resetBusy={defaultBusy}
+          />
+        </div>
+        <CoachMark surface="dashboard-widgets" />
+      </div>
       {/* Above the grid, below the page heading and its actions — see the note
           on the empty branch. */}
       <ChecklistSlot />

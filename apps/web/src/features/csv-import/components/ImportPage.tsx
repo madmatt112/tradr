@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
+import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { docsUrl } from '@/lib/docs';
 
 import { useCsvPreview } from '../hooks/useCsvPreview';
@@ -114,15 +115,28 @@ export function ImportPage() {
     preview.mutate({ file, request });
   }
 
-  // NOTE: the import timezone stays UTC by default (csv-import REQ-7.4) — it
-  // describes the CSV's own timestamps, not the user's reporting zone
-  // (user-onboarding R2.4), so it is deliberately NOT seeded from
-  // `useUserTimezone`. The mapper's selector is where it gets corrected.
+  // NOTE: the import timezone stays UTC by default — it describes the CSV's own
+  // timestamps, not the user's stored reporting zone, so it is deliberately NOT
+  // seeded from `useUserTimezone`. The mapper's selector is where it gets
+  // corrected.
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6">
       <div>
-        <h1 className="text-2xl font-semibold">Import trades from CSV</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold">Import trades from CSV</h1>
+          {/* The coach mark is gated on the SAME figure the disclosure
+              below is: a user whose plan's lifetime CSV imports are all spent
+              cannot import, and `csv-import.service.ts` refuses the commit, so
+              introducing the feature to them would be pointing at a door that
+              is shut. `undefined` while the tier read is in flight counts as
+              unavailable rather than available — better a mark one round trip
+              late than one that appears and is then withdrawn. */}
+          <CoachMark
+            surface="csv-import"
+            available={tierState !== undefined && csvRemaining !== 0}
+          />
+        </div>
         <p className="text-sm text-muted-foreground">
           Imports are additive — they add positions and fills to the target account. Fees come from
           the CSV unless no fees column is mapped.{' '}

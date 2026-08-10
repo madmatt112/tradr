@@ -13,6 +13,16 @@ import { WIDGET_DRAG_CANCEL_CLASS, WIDGET_DRAG_HANDLE_CLASS } from './WidgetCard
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/**
+ * The performance chart's minimum height, in rows — read, not written out.
+ *
+ * It is DERIVED (from the height its chart needs plus the widget's chrome), so a
+ * literal would go stale, and gridstack does not merely reject a shorter item:
+ * `addWidget` clamps `h` UP to `minH` and pushes whatever it now collides with.
+ * A fixture below the minimum therefore fails on geometry nobody wrote.
+ */
+const PERF_MIN_H = PerWidgetMinSize['performance-chart'].h;
+
 const W = (over: Partial<WidgetPlacement>): WidgetPlacement =>
   ({
     id: '00000000-0000-4000-8000-000000000001',
@@ -94,8 +104,8 @@ describe('toGridWidgets', () => {
   it('caps height per widget rather than capping the canvas', () => {
     // The schema bounds `h` at GRID_MAX_ROWS and leaves `y` unbounded, so the
     // cap belongs on the item as `maxH`. Were it the grid's `maxRow`, gridstack
-    // would box free placement into 24 rows total — with the default layout
-    // already reaching row 20. That the grid does not set `maxRow` is asserted
+    // would box free placement into 24 rows total — and the default layout is
+    // 36 rows tall. That the grid does not set `maxRow` is asserted
     // against the options it is built with, below.
     const widgets = Object.keys(PerWidgetMinSize).map((type, i) =>
       W({ id: `w${i}`, type: type as WidgetPlacement['type'] }),
@@ -129,7 +139,7 @@ describe('fromGridWidgets', () => {
         x: 0,
         y: 2,
         w: 8,
-        h: 4,
+        h: PERF_MIN_H,
         config: { timeframe: 'weekly' },
       }),
     ];
@@ -144,7 +154,7 @@ describe('fromGridWidgets', () => {
         x: 0,
         y: 2,
         w: 8,
-        h: 4,
+        h: PERF_MIN_H,
         config: { timeframe: 'weekly' },
       }),
     ];
@@ -353,6 +363,41 @@ describe('DashboardGrid — grid mount', () => {
     });
     container.remove();
   });
+
+  it('grows a saved widget that predates its minimum up to it', () => {
+    // No default can reach an existing layout. A user who shrank their
+    // performance chart to the old h=4 minimum — or had one doubled into that
+    // by migration 0021 — still has h=4 in the database, below what the chart
+    // needs, and the read path returns saved geometry untouched.
+    //
+    // gridstack is what reaches them: `addWidget` clamps `h` up to the item's
+    // `minH` (and pushes anything it now collides with), so the widget RENDERS
+    // at the safe height instead of hiding the bottom of its chart. The stale
+    // row in the database is rewritten by the first completed gesture.
+    installMatchMediaSpy({});
+    const scheduleLayoutWrite = vi.fn();
+    const legacy = [W({ id: 'b', type: 'performance-chart', x: 0, y: 0, w: 8, h: 4 })];
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <DashboardGrid
+          widgets={legacy}
+          onRemove={() => undefined}
+          scheduleLayoutWrite={scheduleLayoutWrite}
+        />,
+      );
+    });
+
+    expect(itemOf(gridOf(container), 'b').gridstackNode?.h).toBe(PERF_MIN_H);
+    // …and still no write on mount: the repair is not a reason to PUT on every
+    // dashboard visit.
+    expect(scheduleLayoutWrite).not.toHaveBeenCalled();
+
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
 });
 
 describe('DashboardGrid — gesture completion is the only write path', () => {
@@ -367,7 +412,7 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
         x: 0,
         y: 2,
         w: 8,
-        h: 4,
+        h: PERF_MIN_H,
         config: { timeframe: 'weekly' },
       }),
     ];
@@ -390,7 +435,8 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
     // is unambiguous. The move alone must not write. (Geometry is passed whole:
     // `update` defaults any side it is not given rather than keeping it, so a
     // partial `{x, y}` would silently reset `w`/`h` to 1.)
-    grid.update(itemA, { x: 0, y: 10, w: 12, h: 2 });
+    const emptyRow = 2 + PERF_MIN_H;
+    grid.update(itemA, { x: 0, y: emptyRow, w: 12, h: 2 });
     expect(scheduleLayoutWrite).not.toHaveBeenCalled();
 
     fireGesture(grid, 'dragstop', itemA);
@@ -407,7 +453,7 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
       id: 'a',
       type: 'stats-summary',
       x: 0,
-      y: 10,
+      y: emptyRow,
       w: 12,
       h: 2,
     });
@@ -417,17 +463,17 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
       x: 0,
       y: 2,
       w: 8,
-      h: 4,
+      h: PERF_MIN_H,
       config: { timeframe: 'weekly' },
     });
 
     // Shrink to exactly PerWidgetMinSize['performance-chart'] — the other half
     // of the same gotcha, where `save()` would drop BOTH `w` and `h`.
-    grid.update(itemOf(grid, 'b'), { x: 0, y: 2, w: 4, h: 4 });
+    grid.update(itemOf(grid, 'b'), { x: 0, y: 2, w: 4, h: PERF_MIN_H });
     fireGesture(grid, 'resizestop', itemOf(grid, 'b'));
     expect(scheduleLayoutWrite).toHaveBeenCalledTimes(2);
     const resized = scheduleLayoutWrite.mock.calls[1][0] as WidgetPlacement[];
-    expect(resized.find((widget) => widget.id === 'b')).toMatchObject({ w: 4, h: 4 });
+    expect(resized.find((widget) => widget.id === 'b')).toMatchObject({ w: 4, h: PERF_MIN_H });
 
     act(() => {
       root.unmount();

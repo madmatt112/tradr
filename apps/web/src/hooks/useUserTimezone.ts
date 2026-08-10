@@ -1,14 +1,15 @@
-// useUserTimezone — the one read of the user's STORED reporting timezone
-// (user-onboarding R2.4): the zone P&L is bucketed into by day, week and month.
-// It is not a display format — nothing renders a timestamp in it. Every surface
-// that buckets by day reads from here. Nothing outside `lib/browserTimezone.ts`
-// may call Intl.DateTimeFormat().resolvedOptions().timeZone — a per-device
-// guess is exactly what moves a trade between calendar days when the user opens
-// Tradr from another machine.
+// useUserTimezone — the one read of the user's STORED reporting timezone: the
+// zone P&L is bucketed into by day, week and month. It is not a display format
+// — nothing renders a timestamp in it. Every surface that buckets by day reads
+// from here. Nothing outside `lib/browserTimezone.ts` may call
+// Intl.DateTimeFormat().resolvedOptions().timeZone — a per-device guess is
+// exactly what moves a trade between calendar days when the user opens Tradr
+// from another machine.
 //
 // This is NOT the account trading-day timezone (accounts.timezone, default
-// America/New_York because that is where the US venues run). Neither is
-// derived from the other (R2.7).
+// America/New_York because that is where the US venues run). The two have
+// different defaults for different reasons and neither is derived from the
+// other.
 //
 // NO CLIENT-SIDE DEFAULT ON THE SUCCESS PATH. GET /api/users/me/timezone always
 // answers with a resolved zone — a NULL column (a row predating the migration)
@@ -125,15 +126,16 @@ function degradedTimezone(): string {
 }
 
 /**
- * The ONE-TIME backfill of a pre-migration row (R2.5). Mounted once, in the
+ * The ONE-TIME backfill of a pre-migration row. Mounted once, in the
  * authenticated layout.
  *
  * Every row that predates the column reads as the server default, `UTC` — but
  * before this preference existed those users were bucketed by their BROWSER
  * zone, so leaving them on UTC would silently move a New York trader's days by
- * four or five hours and shift trades across day boundaries. That is a bigger
- * change than the per-device behaviour ever caused, which is what R2.5 forbids.
- * So the first authenticated load stores the zone they were already using.
+ * four or five hours and shift trades across day boundaries. Resolving an unset
+ * row must not change a user's historical bucketing by MORE than the per-device
+ * behaviour already did, and that would. So the first authenticated load stores
+ * the zone they were already using.
  *
  *   - At most once per user: `stored: false` is the trigger, and a successful
  *     write makes it true forever. The ref additionally holds it to one attempt
@@ -179,8 +181,8 @@ export function useReportingTimezoneBackfill(): void {
   }, [data, queryClient]);
 }
 
-// Write the reporting timezone (R2.6). Mirrors useBuyingPowerBasisMutation's
-// shape — same PUT /api/users/me/<preference> convention, same toast handling.
+// Write the reporting timezone. Mirrors useBuyingPowerBasisMutation's shape —
+// same PUT /api/users/me/<preference> convention, same toast handling.
 //
 // TWO invalidations, and the second one is not redundant. The preference key
 // re-reads the stored zone, which is what every consumer of useUserTimezone()

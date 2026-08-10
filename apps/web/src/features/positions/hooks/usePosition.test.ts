@@ -268,6 +268,28 @@ describe('event-bus publication', () => {
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['performance'] });
   });
 
+  // The exit that leaves nothing open closes the position server-side, inside
+  // the same request. There is no second call to hang a 'closed' event off, so
+  // the response says it happened and this publishes it — otherwise the close
+  // that moved the account balance is invisible to every listener, including the
+  // walkthrough step that waits for exactly this signal.
+  it('useAddFill publishes "closed" as well when the fill closed the position', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ id: 'f1', positionClosed: true });
+    const publish = vi.spyOn(eventBus, 'publish');
+    const qc = newClient();
+
+    const { result } = renderHook(() => useAddFill('p5b'), { wrapper: makeWrapper(qc) });
+    await result.current.mutateAsync({ type: 'exit' } as never);
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+
+    // In the order it happened: the fill was recorded, and recording it closed
+    // the position.
+    expect(publish.mock.calls).toEqual([
+      ['positions:cache-invalidate', { reason: 'fill-added', positionId: 'p5b' }],
+      ['positions:cache-invalidate', { reason: 'closed', positionId: 'p5b' }],
+    ]);
+  });
+
   it('useUpdateFill publishes reason="fill-updated" and does NOT invalidate ["performance"]', async () => {
     vi.spyOn(api, 'put').mockResolvedValue({ id: 'f2' });
     const publish = vi.spyOn(eventBus, 'publish');

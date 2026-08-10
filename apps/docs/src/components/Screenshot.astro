@@ -1,0 +1,48 @@
+---
+// Docs convention — a screenshot that follows the reader's theme.
+//
+// The e2e capture spec writes every image in `src/assets/screenshots/` twice,
+// once per theme, as `<surface>-light.png` and `<surface>-dark.png`. This
+// component takes the surface name and picks the pair up itself, so a page that
+// shows five figures carries one import rather than eleven.
+//
+// Both images are emitted and CSS hides one (see docs.css). The hidden one is
+// `display: none`, which also takes it out of the accessibility tree, so the alt
+// text is announced once rather than twice.
+//
+// A name with no matching pair throws here. The site builds statically, so that
+// is a build failure rather than a hole a reader finds.
+//
+// Usage in .mdx:
+//   import Screenshot from '@/components/Screenshot.astro';
+//   <Screenshot name="accounts-list" alt="The accounts list." />
+import type { ImageMetadata } from 'astro';
+import { Image } from 'astro:assets';
+
+interface Props {
+  /** The surface name, without the theme suffix or the extension. */
+  name: string;
+  alt: string;
+}
+
+const { name, alt } = Astro.props;
+
+const screenshots = import.meta.glob<{ default: ImageMetadata }>(
+  '../assets/screenshots/*.png',
+  { eager: true },
+);
+
+function load(theme: 'light' | 'dark'): ImageMetadata {
+  const found = screenshots[`../assets/screenshots/${name}-${theme}.png`];
+  if (!found) {
+    throw new Error(
+      `Screenshot "${name}-${theme}.png" is not in src/assets/screenshots/. ` +
+        'Regenerate the images with e2e/tests/docs-screenshots.spec.ts, or fix the name.',
+    );
+  }
+  return found.default;
+}
+---
+
+<Image src={load('light')} alt={alt} class="screenshot screenshot--light" loading="lazy" />
+<Image src={load('dark')} alt={alt} class="screenshot screenshot--dark" loading="lazy" />

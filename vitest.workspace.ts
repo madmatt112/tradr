@@ -38,11 +38,12 @@ export default defineWorkspace([
         POSTHOG_API_KEY: '',
         POSTHOG_HOST: '',
         // Affirmative pin-off of every gated hosted-platform capability (REQ-1.6) — a
-        // stray ambient REDIS_URL / OBJECT_STORAGE_* / CORS / pooler var must NOT silently
-        // arm object storage, Redis, split-origin, or pooler-mode in CI. '' reads falsy /
-        // preprocesses to undefined via the isXConfigured predicates. The two enum vars
-        // (DB_TRANSACTION_POOLER, OBJECT_STORAGE_FORCE_PATH_STYLE) are pinned 'false', NOT
-        // '': z.enum().default() only fires on `undefined`, so '' fails the enum and would
+        // stray ambient REDIS_URL / OBJECT_STORAGE_* / CORS / pooler / FEATURE_GATING var
+        // must NOT silently arm object storage, Redis, split-origin, pooler-mode or plan
+        // gating in CI. '' reads falsy / preprocesses to undefined via the isXConfigured
+        // predicates. The three enum vars (DB_TRANSACTION_POOLER,
+        // OBJECT_STORAGE_FORCE_PATH_STYLE, FEATURE_GATING) are pinned 'false', NOT '':
+        // z.enum().default() only fires on `undefined`, so '' fails the enum and would
         // boot-crash envSchema.parse — 'false' is the genuine deactivated (off) value.
         REDIS_URL: '',
         DIRECT_DATABASE_URL: '',
@@ -54,6 +55,12 @@ export default defineWorkspace([
         OBJECT_STORAGE_SECRET_ACCESS_KEY: '',
         OBJECT_STORAGE_FORCE_PATH_STYLE: 'false',
         CORS_ALLOWED_ORIGINS: '',
+        // Plan gating is the premise the onboarding parity block states and then leans
+        // on (app.self-host-parity.test.ts): with it off there is no account cap, so the
+        // demo/real refusal proved there is the exclusion guard firing unaided. Left to
+        // the ambient environment that premise is only a hope, and the suites that DO
+        // exercise gating set config.FEATURE_GATING themselves and restore it after.
+        FEATURE_GATING: 'false',
         // Affirmative pin-off of the transactional-email surface (REQ-7.6) — a stray
         // ambient SMTP_HOST must not silently arm email in CI. '' ≡ absent for ALL
         // seven vars: preprocess vars map '' → undefined and the plain optional

@@ -39,6 +39,26 @@ vi.mock('@/features/calculator/hooks/useBuyingPowerBasis', () => ({
   useBuyingPowerBasisQuery: () => state.buyingPowerBasis.current,
 }));
 
+// The onboarding preference read + the fire-and-forget write that records
+// `calculatorFirstUsedAt` — the one piece of checklist progress that is stored
+// rather than derived. Mocked at the hook boundary so the form's own network
+// assertions elsewhere stay about the form, and so the stored timestamp is
+// settable per test.
+const onboarding = vi.hoisted(() => ({
+  query: { current: { data: undefined } as Record<string, unknown> },
+  patch: vi.fn(),
+  /** The options the form constructed the mutation with, last render. */
+  options: { current: undefined as { silent?: boolean } | undefined },
+}));
+
+vi.mock('@/features/onboarding/hooks/useOnboarding', () => ({
+  useOnboardingQuery: () => onboarding.query.current,
+  useOnboardingPatch: (options?: { silent?: boolean }) => {
+    onboarding.options.current = options;
+    return { mutate: onboarding.patch };
+  },
+}));
+
 // Stub the shadcn Select primitive as a native <select> so options are clickable
 // and onValueChange fires in jsdom (Radix's pointer-capture machinery is
 // browser-only). SelectValue → a placeholder <option> (so the loading/error
@@ -154,7 +174,7 @@ const CAD_ACCOUNT = { id: 'acc-cad', name: 'Maple Margin', currency: 'CAD', bala
 // A selected account whose balance is not yet derived (REQ-3.5) — no `balance`.
 const NO_BALANCE_ACCOUNT = { id: 'acc-nobal', name: 'Fresh', currency: 'USD' };
 
-// An account carrying its own risk rule (user-onboarding R1.2). The value is the
+// An account carrying its own default risk rule. The value is the
 // numeric(5,2)-NORMALISED string the API returns — a stored 1.5 comes back
 // '1.50' — so the prefill assertions expect that form, not what a user typed.
 const RULED_ACCOUNT = {
@@ -273,6 +293,12 @@ beforeEach(() => {
   setAccounts({ data: [] });
   state.brokerages.current = { data: [], isLoading: false, isError: false };
   state.buyingPowerBasis.current = { data: { basis: 'cash' } };
+  // A landed preference with the timestamp ABSENT — the state every test that
+  // reaches a result would fire the write from, so the write is live in all of
+  // them rather than only where it is the subject.
+  onboarding.query.current = { data: { status: 'pending', coachMarksSeen: [] } };
+  onboarding.patch.mockClear();
+  onboarding.options.current = undefined;
 });
 
 afterEach(() => {
@@ -306,6 +332,30 @@ describe('CalculatorForm — risk-basis switching (REQ-1.3)', () => {
     await switchBasis(user, 'Percent');
     expect(input('Balance').value).toBe('');
     expect(input('Risk percent').value).toBe('');
+  });
+});
+
+describe('CalculatorForm — walkthrough anchors', () => {
+  // The walkthrough's steps are DATA and cannot match on markup structure, so
+  // what each `data-tour` attribute wraps is a contract. The risk anchor sat on
+  // the whole block, which put the account picker and both amount fields inside
+  // the "Risk" step's highlight; and the amount step anchored to `#riskPercent`
+  // alone, which the Dollar basis never renders.
+  it('anchors the risk step to the basis tabs alone, and the amount step to whichever field the basis renders', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    const riskAnchor = document.querySelector('[data-tour="calculator-risk"]');
+    expect(riskAnchor).not.toBeNull();
+    expect(riskAnchor!.querySelectorAll('[role="tab"]')).toHaveLength(2);
+    expect(riskAnchor!.querySelector('[data-tour="calculator-account"]')).toBeNull();
+    expect(riskAnchor!.querySelector('#dollarRisk')).toBeNull();
+
+    // Exactly one amount field exists per basis, so the step's selector list
+    // resolves in both — never the `target-missing` that ends the tour.
+    expect(document.querySelector('#riskPercent, #dollarRisk')?.id).toBe('dollarRisk');
+    await switchBasis(user, 'Percent');
+    expect(document.querySelector('#riskPercent, #dollarRisk')?.id).toBe('riskPercent');
   });
 });
 
@@ -419,7 +469,7 @@ describe('CalculatorForm — percent results + buying-power flag (REQ-4)', () =>
       stop: '40',
       balance: '100',
       riskPercent: '1',
-      message: /insufficient for one share/,
+      message: /does not cover one share\/contract/,
       derived: 1,
     },
   ])(
@@ -435,6 +485,74 @@ describe('CalculatorForm — percent results + buying-power flag (REQ-4)', () =>
       expect(screen.getAllByText(fmtMoney(derived)).length).toBeGreaterThan(0);
     },
   );
+});
+
+// A size of zero is an outcome, not a blank. The condition is exactly
+// `floor(risk ÷ (perUnitRisk × multiplier)) === 0` in `calculateTrade` — the
+// risk budget is smaller than the entry-to-stop distance on one share — and the
+// explanation has to appear there and NOWHERE else, least of all on a form the
+// user has not finished filling in.
+describe('CalculatorForm — zero-size explanation', () => {
+  const EXPLANATION = /does not cover one share\/contract at this stop distance/;
+  // Only the two terms the formula actually has: the stop distance (divisor)
+  // and the risk budget (dividend). Instrument price is not a term in
+  // `floor(risk ÷ (perUnitRisk × multiplier))`, so it must not be named — a user
+  // who acted on it would still be looking at zero.
+  const LEVERS = /Size moves only with the stop distance and the amount at risk/;
+
+  it('explains the zero and names the two terms in the dollar basis', async () => {
+    await mount();
+
+    // $5 of risk against a $10 stop distance ⇒ floor(5 / 10) = 0 shares.
+    fill('Entry price', '50');
+    fill('Stop loss', '40');
+    fill('Dollar risk', '5');
+    fireEvent.blur(input('Dollar risk'));
+
+    await screen.findByText(EXPLANATION, undefined, { timeout: 2000 });
+    expect(screen.getByText(LEVERS)).toBeTruthy();
+    // The copy states the arithmetic; it must not instruct. Telling the smallest
+    // account on the platform to raise its risk setting is the one steer the
+    // default-risk presets exist to avoid, so no imperative to risk more.
+    expect(screen.queryByText(/risk more/i)).toBeNull();
+    // Every term named has to be one that moves the result.
+    expect(screen.queryByText(/lower-priced instrument/i)).toBeNull();
+    expect(screen.queryByText('Position Sizing')).toBeNull();
+  });
+
+  it('explains it in the percent basis, where the budget is derived', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    // 1% of 100 = $1 against a $10 stop distance ⇒ floor(1 / 10) = 0 shares.
+    await fillPercentBasis(user, { entry: '50', stop: '40', balance: '100', riskPercent: '1' });
+
+    await screen.findByText(EXPLANATION, undefined, { timeout: 2000 });
+  });
+
+  it('stays silent on an incomplete form — no risk basis is not a zero size', async () => {
+    await mount();
+
+    fill('Entry price', '50');
+    fill('Stop loss', '40');
+    fireEvent.blur(input('Stop loss'));
+
+    expect(screen.getByText('Enter trade parameters to see results')).toBeTruthy();
+    expect(screen.queryByText(EXPLANATION)).toBeNull();
+  });
+
+  it('stays silent when the same prices do size a position', async () => {
+    await mount();
+
+    // $50 against the same $10 stop ⇒ 5 shares, and nothing to explain.
+    fill('Entry price', '50');
+    fill('Stop loss', '40');
+    fill('Dollar risk', '50');
+    fireEvent.blur(input('Dollar risk'));
+
+    await screen.findByText('Position Sizing', undefined, { timeout: 2000 });
+    expect(screen.queryByText(EXPLANATION)).toBeNull();
+  });
 });
 
 describe('CalculatorForm — live-clear gate (D4, NFR Usability)', () => {
@@ -874,7 +992,8 @@ describe('CalculatorForm — dollar basis account sourcing', () => {
 });
 
 // -----------------------------------------------------------------------------
-// Account default risk percentage (user-onboarding R1.2/R1.3/R1.4)
+// Account default risk percentage — the calculator reads the account's rule,
+// never writes to it, and leaves the field alone when there is no rule.
 //
 // RULED_ACCOUNT: $50,000 balance, a 1.50% rule. Entry $50 / stop $48 is $2 of
 // per-share risk, so the rule alone gives a $750 budget → 375 shares, and an
@@ -883,7 +1002,7 @@ describe('CalculatorForm — dollar basis account sourcing', () => {
 // -----------------------------------------------------------------------------
 
 describe('CalculatorForm — account default risk prefill', () => {
-  it('prefills the risk percent from the account rule and sizes against it (R1.2)', async () => {
+  it('prefills the risk percent from the account rule and sizes against it', async () => {
     const user = userEvent.setup();
     setAccounts({ data: [RULED_ACCOUNT] });
     await mount();
@@ -905,7 +1024,7 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(screen.getByText('375')).toBeTruthy();
   });
 
-  it('leaves the risk percent cleared for an account with no rule (R1.4)', async () => {
+  it('leaves the risk percent cleared for an account with no rule', async () => {
     const user = userEvent.setup();
     setAccounts({ data: [CAD_ACCOUNT] });
     await mount();
@@ -917,7 +1036,7 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(input('Risk percent').value).toBe('');
   });
 
-  it('does not disturb a typed risk percent when the account has no rule (R1.4)', async () => {
+  it('does not disturb a typed risk percent when the account has no rule', async () => {
     // Every account predating the column has no rule, so this is the path every
     // existing user is on: selecting an account must behave exactly as it did.
     const user = userEvent.setup();
@@ -948,8 +1067,8 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(input('Risk percent').value).toBe('1.50');
   });
 
-  it('overriding the prefilled percent changes only this calculation and issues NO request (R1.3)', async () => {
-    // The load-bearing assertion of R1.3: the prefill is a READ path. Every API
+  it('overriding the prefilled percent changes only this calculation and issues NO request', async () => {
+    // The load-bearing assertion here: the prefill is a READ path. Every API
     // call in the app goes through lib/api's single `fetch`, so a stubbed global
     // fetch catches a write-back however it were wired.
     const fetchSpy = vi.fn();
@@ -978,9 +1097,119 @@ describe('CalculatorForm — account default risk prefill', () => {
     expect(screen.getByText('500')).toBeTruthy();
     expect(screen.queryByText('375')).toBeNull();
 
-    // …and NOT written back. No request of any kind left the form, and the
-    // account's stored rule is untouched.
+    // …and NOT written back. Nothing reached the network, and the account's
+    // stored rule is untouched. The one write this form does make — the
+    // onboarding `calculatorFirstUsedAt` timestamp — is mocked at its hook and
+    // is asserted here to carry nothing account-shaped.
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(RULED_ACCOUNT.defaultRiskPercent).toBe('1.50');
+    for (const [body] of onboarding.patch.mock.calls) {
+      expect(Object.keys(body as object)).toEqual(['calculatorFirstUsedAt']);
+    }
+  });
+});
+
+describe('CalculatorForm — first calculator use (the one stored checklist fact)', () => {
+  const dollarCalc = { 'Entry price': '50', 'Stop loss': '48', 'Dollar risk': '1000' };
+
+  it('records calculatorFirstUsedAt on the first successful calculation, silently', async () => {
+    const user = userEvent.setup();
+    await mount();
+    expect(onboarding.patch).not.toHaveBeenCalled();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).toHaveBeenCalledTimes(1);
+    const [body] = onboarding.patch.mock.calls[0] as [Record<string, string>];
+    // ONLY this key. The other three checklist items are derived from the
+    // user's real rows and must never acquire a flag alongside it.
+    expect(Object.keys(body)).toEqual(['calculatorFirstUsedAt']);
+    expect(new Date(body.calculatorFirstUsedAt).toISOString()).toBe(body.calculatorFirstUsedAt);
+    // Fire-and-forget: a failed write has nothing to tell a user who asked for
+    // a calculation, not for a checklist tick.
+    expect(onboarding.options.current).toEqual({ silent: true });
+  });
+
+  it('writes ONCE across repeated calculations, before the first write has landed', async () => {
+    // THE RACE THE SERVER VALUE CANNOT CLOSE. The recorded timestamp only
+    // reaches the preference read after the PATCH round-trips, so the fixture
+    // here deliberately never gains it — this is the whole in-flight window.
+    // A guard that only read the server value would fire again inside it.
+    const user = userEvent.setup();
+    await mount();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    // Recalculate: a different size, same run of the form.
+    fill('Dollar risk', '1200');
+    fireEvent.blur(input('Dollar risk'));
+    expect(await screen.findByText('600', undefined, { timeout: 2000 })).toBeTruthy();
+
+    // Then knock the form back out of a result and into one again, which is the
+    // ONLY thing that re-runs the recording effect at all — a re-render alone
+    // does not. Emptying the active-basis field closes the completeness gate.
+    fill('Dollar risk', '');
+    fireEvent.blur(input('Dollar risk'));
+    expect(
+      await screen.findByText('Enter trade parameters to see results', undefined, {
+        timeout: 2000,
+      }),
+    ).toBeTruthy();
+
+    fill('Dollar risk', '1000');
+    fireEvent.blur(input('Dollar risk'));
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('issues no request when the timestamp is already recorded', async () => {
+    onboarding.query.current = {
+      data: {
+        status: 'pending',
+        coachMarksSeen: [],
+        calculatorFirstUsedAt: '2026-08-01T10:00:00.000Z',
+      },
+    };
+    const user = userEvent.setup();
+    await mount();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).not.toHaveBeenCalled();
+  });
+
+  it('issues no request while the preference read is still in flight', async () => {
+    // Guessing here would move an existing timestamp: until the read lands we
+    // cannot tell a first use from a thousandth.
+    onboarding.query.current = { data: undefined };
+    const user = userEvent.setup();
+    await mount();
+
+    await results(user, 'Dollar', dollarCalc);
+    expect(await screen.findByText('500', undefined, { timeout: 2000 })).toBeTruthy();
+
+    expect(onboarding.patch).not.toHaveBeenCalled();
+  });
+
+  it('issues no request for a calculation that never succeeded', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    // Passes the schema, then throws inside calculateTrade — an error on screen
+    // and no result, which is not a use of the calculator to size a trade.
+    await results(user, 'Dollar', {
+      'Entry price': '50',
+      'Stop loss': '50',
+      'Dollar risk': '1000',
+    });
+    expect(
+      await screen.findByText(/Stop loss cannot equal entry price/i, undefined, { timeout: 2000 }),
+    ).toBeTruthy();
+
+    expect(onboarding.patch).not.toHaveBeenCalled();
   });
 });

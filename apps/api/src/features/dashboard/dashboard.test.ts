@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { BODY_LIMIT_BYTES } from '@tradr/shared';
+import { BODY_LIMIT_BYTES, PerWidgetMinSize } from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -93,7 +93,11 @@ function makeValidWidgets() {
       x: 0,
       y: 2,
       w: 6,
-      h: 4,
+      // Read from the schema's own minimum rather than written out: a chart
+      // widget's minimum height is derived from the height its chart needs, so
+      // a literal here goes stale the next time that changes and every case
+      // below starts failing on the fixture instead of on what it tests.
+      h: PerWidgetMinSize['performance-chart'].h,
     },
   ];
 }
@@ -429,7 +433,9 @@ describe('dashboard routes', () => {
         x: 0,
         y: 0,
         w: 6,
-        h: 2,
+        // Legal on its own — the only thing wrong with this layout is that it
+        // sits on top of the stats-summary above, which is what the case is for.
+        h: PerWidgetMinSize['performance-chart'].h,
       },
     ];
 

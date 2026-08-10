@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 
 import { PerWidgetMinSize, WidgetTypeSchema } from '@tradr/shared';
 
+import { GRID_COLUMNS, GRID_MAX_ROWS } from '../grid.constants';
+
 import { widgetRegistry } from './registry';
 
 describe('widgetRegistry', () => {
@@ -11,10 +13,15 @@ describe('widgetRegistry', () => {
     expect(fromRegistry).toEqual(fromSchema);
   });
 
-  it('defaultSize fits within the 12x6 grid for every entry', () => {
+  it('defaultSize stays inside the bounds WidgetPlacementSchema enforces', () => {
+    // `h <= 6` was the bound when a grid row was 80px tall. The row unit went to
+    // 40px (Req 1.10) and GRID_MAX_ROWS doubled with it; this assertion was left
+    // behind and only kept passing because no default had grown yet. It is the
+    // schema's `h: 1..GRID_MAX_ROWS` that a default has to satisfy — a default
+    // outside it would 400 on the first save.
     for (const def of Object.values(widgetRegistry)) {
-      expect(def.defaultSize.w).toBeLessThanOrEqual(12);
-      expect(def.defaultSize.h).toBeLessThanOrEqual(6);
+      expect(def.defaultSize.w).toBeLessThanOrEqual(GRID_COLUMNS);
+      expect(def.defaultSize.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
     }
   });
 

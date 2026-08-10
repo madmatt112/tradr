@@ -202,8 +202,8 @@ describe('PATCH /api/users/me/onboarding merges rather than replaces', () => {
   });
 
   it('makes a skipped checklist recoverable', async () => {
-    // R4.5: dismissal must be re-openable without support intervention, which
-    // is just another PATCH.
+    // Dismissal must be re-openable without support intervention, which is just
+    // another PATCH.
     const { cookie } = await registerAndGetCookie();
     await patchOnboarding(cookie, { status: 'skipped' });
     expect((await getOnboarding(cookie)).status).toBe('skipped');
@@ -287,7 +287,7 @@ describe('PATCH is safe under interleaved writes', () => {
     // Nothing ever removes a key, so an uncapped append is unbounded growth of
     // one row's jsonb by an authenticated client. Past the cap the append is a
     // no-op — a coach mark is a UI nicety, and the cap is an order of magnitude
-    // above the five surfaces R7.1 names.
+    // above the five surfaces that carry one.
     const { cookie, email } = await registerAndGetCookie();
     const full = Array.from({ length: MAX_COACH_MARKS_SEEN }, (_, i) => `mark-${i}`);
     await setStoredOnboarding(email, { coachMarksSeen: full });

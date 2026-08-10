@@ -64,7 +64,7 @@ brokeragesRouter.get('/', async (c) => {
  *         required: true
  *         schema: { type: string, format: uuid }
  *     responses:
- *       200: { description: The brokerage, including its fee schedule. }
+ *       200: { description: 'The brokerage, including its fee schedule.' }
  *       404: { description: No such brokerage for this user. }
  */
 brokeragesRouter.get('/:id', validate('param', ParamSchema), async (c) => {
@@ -206,7 +206,7 @@ brokeragesRouter.put(
  *       204: { description: Deleted. }
  *       403: { description: System brokerages cannot be deleted. }
  *       404: { description: No such brokerage for this user. }
- *       409: { description: Still assigned to one or more accounts, which are named in the message. }
+ *       409: { description: 'Still assigned to one or more accounts, which are named in the message.' }
  */
 brokeragesRouter.delete('/:id', validate('param', ParamSchema), async (c) => {
   const userId = c.get('userId');

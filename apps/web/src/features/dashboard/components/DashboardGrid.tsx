@@ -126,9 +126,9 @@ export function createGridOptions(): GridStackOptions {
     // `maxRow` is deliberately NOT set. The schema caps a widget's HEIGHT at
     // GRID_MAX_ROWS and leaves `y` unbounded; gridstack's `maxRow` is a
     // whole-canvas ceiling. Setting it would box free placement into 24 rows
-    // total, and the default layout already reaches row 20 — leaving four rows
-    // of headroom on a canvas meant to be open. The per-widget cap is expressed
-    // as `maxH` on each item instead (`toGridWidgets`).
+    // total — the default layout is 36 rows tall on its own, so the grid would
+    // refuse its own defaults. The per-widget cap is
+    // expressed as `maxH` on each item instead (`toGridWidgets`).
   };
 }
 

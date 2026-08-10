@@ -13,6 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import type { User } from '@tradr/shared';
 
+import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
+import { eventBus } from '@/stores/event-bus.store';
+
 import { Route as RegisterRoute } from './register';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -78,8 +81,6 @@ function jsonResponse(status: number, body: unknown) {
 
 // ---- Mutable fetch fixtures (rebound per test) ------------------------------
 
-// /auth/me payload: null = logged out (useAuth sees no user, no 401 involved).
-let meUser: User | null;
 // /auth/register 201 payload.
 let registered: User;
 // /auth/verify-email/resend response factory (fresh Response per call).
@@ -88,7 +89,9 @@ let resendResponse: () => Response;
 let fetchSpy: MockInstance | null = null;
 
 // ---- Browser-zone stub ------------------------------------------------------
-// register.tsx is the ONE place still allowed to detect the browser zone (R2.2).
+// register.tsx is the ONE place still allowed to detect the browser zone — it
+// seeds the new user's stored reporting timezone at sign-up, which is the only
+// moment there is nothing stored to read instead.
 // Only the ZERO-ARG call is that detection; calls carrying arguments are
 // delegated to the real implementation, because the shared
 // ReportingTimezoneField validator decides validity with
@@ -120,15 +123,16 @@ function registerBody(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  meUser = null;
   registered = { id: 'u1', email: 'new@user.dev', isAdmin: false, emailVerified: false };
   resendResponse = () => jsonResponse(200, { success: true });
 
+  // No `/auth/me` case on purpose: this page must not ask. Case 1 puts the
+  // session in the query cache directly instead, which is what the answer would
+  // have produced anyway and does not depend on the page requesting it.
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes('/auth/verify-email/resend')) return resendResponse();
     if (url.includes('/auth/register')) return jsonResponse(201, { user: registered });
-    if (url.includes('/auth/me')) return jsonResponse(200, meUser);
     throw new Error(`Unexpected fetch in test: ${url}`);
   });
 
@@ -142,6 +146,9 @@ afterEach(() => {
   fetchSpy = null;
   intlSpy?.mockRestore();
   intlSpy = null;
+  eventBus.__resetForTests();
+  localStorage.clear();
+  useDrawerStore.getState().reset();
 });
 
 async function fillAndSubmit() {
@@ -174,14 +181,34 @@ describe('register route', () => {
     expect(screen.getByText('new@user.dev')).toBeTruthy();
     expect(router.state.location.pathname).toBe('/register');
 
-    // Simulate the focus refetch: the registration session is live, so the
-    // ['auth','me'] query flips from logged-out to an authenticated user.
-    meUser = { id: 'u1', email: 'new@user.dev', isAdmin: false, emailVerified: false };
+    // Simulate the session becoming visible to the app: registration auto-logs-in,
+    // so ['auth','me'] flips from logged-out to an authenticated user the moment
+    // anything asks — the focus refetch when the user tabs back from their mail
+    // client. Seeded straight into the cache rather than refetched because this
+    // page mounts no me-query of its own (SF-3, public-routes-cold-load.test.tsx);
+    // seeding is also what makes this hold whether or not it ever mounts one,
+    // since `setQueryData` is the same flip either way.
+    const authedUser: User = {
+      id: 'u1',
+      email: 'new@user.dev',
+      isAdmin: false,
+      emailVerified: false,
+    };
     await act(async () => {
-      await qc.refetchQueries({ queryKey: ['auth', 'me'] });
+      qc.setQueryData(['auth', 'me'], authedUser);
     });
     // The flip really landed (isAuthenticated is now true)...
     expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u1' });
+
+    // GIVE ANY GUARD ITS CHANCE TO FIRE BEFORE ASSERTING NONE DID. An
+    // `isAuthenticated` redirect placed above the `pendingEmail` return is the
+    // regression this case exists to catch, and it lands a tick later than the
+    // render that triggers it — whether it navigates from an effect or renders
+    // `<Navigate>`. Asserting synchronously on the flip above sees the DOM
+    // before the navigation and passes either way, which is no test at all.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
 
     // ...and the state persisted: no navigate-away, state still rendered.
     expect(screen.getByText('Check your email')).toBeTruthy();
@@ -262,7 +289,7 @@ describe('register route', () => {
     });
   });
 
-  // ---- Reporting-timezone seeding (R2.2) ------------------------------------
+  // ---- Reporting-timezone seeding at registration ---------------------------
 
   it('case 5: sends the browser-detected reporting timezone in the registration payload', async () => {
     stubBrowserZone('Europe/London');
@@ -300,5 +327,48 @@ describe('register route', () => {
 
     expect('timezone' in registerBody()).toBe(false);
     expect(screen.getByText('Check your email')).toBeTruthy();
+  });
+
+  // ---- Two users, one tab -----------------------------------------------
+
+  // REGISTERING IS ALSO A LOGIN. `POST /auth/register` swaps the session cookie
+  // whether or not one was already there, and /register no longer bounces an
+  // authenticated visitor away (SF-3 — a public page that mounts the me-query
+  // redirects itself away on a cold load). So a signed-in user can reach this
+  // form and create a second account, and the new account must not open onto
+  // the previous user's cached rows, drawer or walkthrough. Same teardown
+  // /login runs, not a second copy of it (lib/sessionTeardown).
+  it('case 9: registering on a tab someone else is signed in on begins from clean client state', async () => {
+    const { qc } = renderPage();
+
+    qc.setQueryData(['auth', 'me'], { id: 'u-prev', email: 'previous@user.dev' });
+    qc.setQueryData(['positions'], [{ id: 'p-1', symbol: 'AAPL' }]);
+    localStorage.setItem(
+      DRAWER_STORAGE_KEY,
+      JSON.stringify({ isOpen: true, activeTab: 'quick-stats', version: 1 }),
+    );
+    useDrawerStore.setState({ isOpen: true, activeTab: 'quick-stats', legacyDetected: false });
+    const onLogout = vi.fn();
+    eventBus.subscribe('auth:logout', onLogout);
+
+    await fillAndSubmit();
+    await waitFor(() => {
+      expect(screen.getByText('Check your email')).toBeTruthy();
+    });
+
+    // SERVER state.
+    expect(qc.getQueryData(['positions'])).toBeUndefined();
+    // STORED state, and the live store it seeded — the store hydrates once at
+    // module import, so the key alone is half the job.
+    expect(localStorage.getItem(DRAWER_STORAGE_KEY)).toBeNull();
+    expect(useDrawerStore.getState()).toMatchObject({
+      isOpen: false,
+      activeTab: 'open-positions',
+    });
+    // MODULE state, announced for each owner to drop its own.
+    expect(onLogout).toHaveBeenCalledOnce();
+    // And the teardown ran BEFORE the seeding, or the clear would have taken
+    // the incoming user out with the departing one.
+    expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u1' });
   });
 });

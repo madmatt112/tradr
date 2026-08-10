@@ -162,6 +162,7 @@ export const SESSION_RESPONSE = {
  *   - GET  /positions[?status=open] (SideDrawer Open Positions / Recently Created tabs)
  *   - GET  /performance?…           (SideDrawer Quick Stats tab → usePerformance)
  *   - GET  /users/me/display-currency (SideDrawer Quick Stats tab)
+ *   - GET  /accounts                (DemoBanner → useDemoAccount → useAccounts)
  *
  * The fully-mocked specs (performance, ledger-balances) provide a synthetic
  * `/auth/me` session but do NOT serve these shell endpoints, so they fall
@@ -176,32 +177,56 @@ export const SESSION_RESPONSE = {
  */
 /**
  * The default dashboard layout a freshly-registered user receives from the
- * server. Mirrors `DEFAULT_WIDGETS` (packages/shared/constants/dashboard-defaults.ts)
- * — six widgets on a 12-column grid, including `account-balances` which renders
- * `CrossCurrencyTotal`. Stable ids so the grid is deterministic across runs.
+ * server — six widgets on a 12-column grid, including `account-balances` which
+ * renders `CrossCurrencyTotal`. Stable ids so the grid is deterministic across
+ * runs.
+ *
+ * Mirrors `DEFAULT_WIDGETS` (packages/shared/src/constants/dashboard-defaults.ts),
+ * which is the source of truth — this package deliberately depends on no
+ * product code, so the geometry is copied and has to be re-copied when that
+ * file changes.
+ *
+ * It had already drifted: the copy below carried the pre-40px-unit values
+ * (`stats-summary` at h:1, under the h:2 minimum its own type declares, and
+ * six-column charts), so every spec leaning on the app shell rendered a layout
+ * no user has ever been served.
  */
 const DEFAULT_DASHBOARD_LAYOUT = {
   widgets: [
-    { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 12, h: 1 },
+    { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 12, h: 6 },
     {
       id: '00000000-0000-4000-8000-000000000002',
       type: 'performance-chart',
       x: 0,
-      y: 1,
-      w: 6,
-      h: 2,
+      y: 6,
+      w: 8,
+      h: 12,
     },
     {
       id: '00000000-0000-4000-8000-000000000003',
       type: 'account-balances',
-      x: 6,
-      y: 1,
-      w: 6,
-      h: 2,
+      x: 8,
+      y: 6,
+      w: 4,
+      h: 12,
     },
-    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 0, y: 3, w: 6, h: 2 },
-    { id: '00000000-0000-4000-8000-000000000005', type: 'position-sizing', x: 6, y: 3, w: 6, h: 3 },
-    { id: '00000000-0000-4000-8000-000000000006', type: 'open-positions', x: 0, y: 6, w: 12, h: 2 },
+    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 0, y: 18, w: 8, h: 12 },
+    {
+      id: '00000000-0000-4000-8000-000000000005',
+      type: 'position-sizing',
+      x: 8,
+      y: 18,
+      w: 4,
+      h: 12,
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000006',
+      type: 'open-positions',
+      x: 0,
+      y: 30,
+      w: 12,
+      h: 6,
+    },
   ],
   theme: 'light',
   updatedAt: null,
@@ -237,6 +262,17 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route('**/api/users/me/buying-power-basis', (route) =>
     route.fulfill(json({ basis: 'cash' })),
   );
+  // Read by the same CalculatorForm as the basis above, so it is app-shell
+  // surface for the same reason and fails the same way unmocked — the
+  // /login redirect, landing on whichever assertion runs next.
+  //
+  // `false` is the neutral answer, and it matches the shape of the real route
+  // (symbols.handler.ts `quoteConfigHandler`): the platform quote provider is
+  // unconfigured, so the pull-last-price affordance never paints and no spec
+  // sees a control it was not written for.
+  await page.route('**/api/symbols/quote-config', (route) =>
+    route.fulfill(json({ stockQuoteConfigured: false })),
+  );
   // The reporting timezone is read on every authenticated view — the auth
   // layout, the sidebar, and each P&L-bucketing surface — so it is app-shell
   // surface too, and unmocked it fails the same way the note above describes.
@@ -267,4 +303,38 @@ export async function mockAppShell(page: Page): Promise<void> {
   await page.route('**/api/users/me/onboarding', (route) =>
     route.fulfill(json({ status: 'done', coachMarksSeen: [] })),
   );
+  // The sample-data notice is mounted in the AUTHENTICATED LAYOUT rather than on
+  // the dashboard, so the accounts read behind it is now shell surface on every
+  // authenticated route, not just the ones with an accounts-shaped page. The
+  // list is the only thing that can answer "is any of this sample data", and the
+  // banner has to be able to answer it wherever the figures are shown — so this
+  // belongs here rather than being pushed back into the product.
+  //
+  // Empty is the neutral answer: no sample account, so the banner renders
+  // nothing and no spec sees a surface it was not written for. Specs that need
+  // real accounts (ledger-balances) register their own handler AFTER this one
+  // and win, per the note above.
+  //
+  // Anchored on the collection so it does not swallow `/accounts/:id`,
+  // `/accounts/demo` or `/accounts/writable`, which are separate handlers.
+  await page.route(/\/api\/accounts(\?.*)?$/, (route) => route.fulfill(json([])));
+  // The remaining two reads behind the DEFAULT DASHBOARD's six widgets:
+  // `/dashboard/totals` for Account Balances (CrossCurrencyTotal) and
+  // `/brokerages` for Open Positions (PositionList).
+  //
+  // They are shell surface for the same reason the rest of this list is. Any
+  // spec that navigates to /dashboard mounts all six widgets whether or not it
+  // is testing them, and one unmocked 401 does not merely blank a widget — the
+  // api client's global handler sends the whole app to /login, so the failure
+  // lands on some later assertion as "element not found" on a login form. That
+  // trap has now cost this branch four debugging rounds; the answer each time
+  // was another stub, and the stubs belong here rather than being rediscovered
+  // per spec.
+  //
+  // Neutral answers: a zero total and no brokerages, so neither widget paints a
+  // surface a spec was not written for.
+  await page.route('**/api/dashboard/totals', (route) =>
+    route.fulfill(json({ displayCurrency: 'USD', total: '0.00' })),
+  );
+  await page.route(/\/api\/brokerages(\?.*)?$/, (route) => route.fulfill(json([])));
 }

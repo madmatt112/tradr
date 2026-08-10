@@ -14,7 +14,9 @@ import {
 
 import type { SeriesBucket } from '@tradr/shared';
 
+import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import { formatSigned, moneyDirection } from '@/lib/format';
+import { cn } from '@/lib/utils';
 
 export interface PerformanceBarChartProps {
   /**
@@ -23,6 +25,22 @@ export interface PerformanceBarChartProps {
    * decided by the sign of `parseFloat(netPnl)`.
    */
   series: ReadonlyArray<SeriesBucket>;
+  /**
+   * Sizing for the chart's outer box, which `ResponsiveContainer` measures.
+   *
+   * The default is `h-full` — the chart takes the height it is GIVEN. It used
+   * to hard-code `h-[320px]`, which made it the wrong size everywhere except
+   * the one container that happened to be 320px tall: inside the dashboard
+   * widget, whose body is 149px at the pinned default, 320px of chart was
+   * simply cut off, and it stayed cut off at every height a user could resize
+   * to. A caller that has no height of its own passes one here.
+   *
+   * "Takes the height it is GIVEN" cuts both ways, which is why the chart also
+   * carries `CHART_MIN_HEIGHT_PX` as a floor of its own — see that constant. A
+   * caller does not have to supply one, and a `flex-1` caller must NOT override
+   * it with `min-h-0`.
+   */
+  className?: string;
 }
 
 interface ChartDatum {
@@ -133,7 +151,7 @@ function extremeIndices(data: ReadonlyArray<ChartDatum>): Set<number> {
  * drawn zero baseline + signed Y-axis + signed data labels carry direction in
  * pure B&W. The tooltip is hover-only and does NOT count toward the B&W gate.
  */
-export default function PerformanceBarChart({ series }: PerformanceBarChartProps) {
+export default function PerformanceBarChart({ series, className }: PerformanceBarChartProps) {
   const data: ChartDatum[] = series.map((bucket) => ({
     bucketStart: bucket.bucketStart,
     netPnl: bucket.netPnl,
@@ -152,9 +170,23 @@ export default function PerformanceBarChart({ series }: PerformanceBarChartProps
   const stride = data.length > MAX_LABELS ? Math.ceil(data.length / MAX_LABELS) : 1;
 
   return (
-    <div data-testid="performance-bar-chart" className="h-[320px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+    <div
+      data-testid="performance-bar-chart"
+      // The floor goes on BOTH boxes, and as a style rather than a class so no
+      // caller's `className` can merge it away. On the wrapper it keeps the box
+      // and the drawn plot the same size at every container height; on the
+      // ResponsiveContainer it is the one recharts can actually measure.
+      style={{ minHeight: CHART_MIN_HEIGHT_PX }}
+      className={cn('h-full w-full', className)}
+    >
+      <ResponsiveContainer width="100%" height="100%" minHeight={CHART_MIN_HEIGHT_PX}>
+        {/*
+          20px of top margin, not 8: the signed data label for the max-gain bar
+          is drawn 4px ABOVE that bar's top edge, and the max bar's top edge IS
+          the top of the plot area — at 8px the label's ascenders were sheared
+          off by the SVG viewport. 20 clears an 11px glyph plus its 4px offset.
+        */}
+        <BarChart data={data} margin={{ top: 20, right: 16, left: 8, bottom: 8 }}>
           <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
           <XAxis
             dataKey="bucketStart"
@@ -181,7 +213,11 @@ export default function PerformanceBarChart({ series }: PerformanceBarChartProps
               style: { fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--font-mono)' },
             }}
             tickMargin={8}
-            width={64}
+            // `auto`, not a pinned 64px: a signed figure is as wide as the
+            // account is large, and anything past ~6 characters was drawn off
+            // the left edge of the SVG. recharts measures the ticks and
+            // reserves what they need.
+            width="auto"
           />
           {/* Drawn zero baseline — the hue-independent direction channel. */}
           <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.5} />

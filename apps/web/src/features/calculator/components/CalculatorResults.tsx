@@ -41,8 +41,23 @@ function Money({ value, currency }: { value: string; currency: string }) {
 
 /**
  * Human-readable message for a zero-position outcome, keyed on the machine
- * discriminator. Absent status ⇒ the pre-existing insufficient-risk message
- * (unchanged — the dollar-basis / insufficient-in-percent case).
+ * discriminator.
+ *
+ * Absent status ⇒ the insufficient-risk case, which `calculateTrade` reaches
+ * when `floor(risk ÷ (perUnitRisk × multiplier)) === 0` — the risk budget (a
+ * typed dollar risk, or `balance × riskPercent ÷ 100`) is smaller than the
+ * entry-to-stop distance on ONE share, or on 100 of them in options mode. The
+ * message states that arithmetic and stops: the stop distance is the divisor and
+ * the risk budget is the dividend, so those are the only two terms a user can
+ * move, and naming both without ranking them is the whole of what we can honestly
+ * say. It deliberately does NOT tell the user to risk more — whoever reads this
+ * is by construction the smallest-account user, and an imperative to raise their
+ * risk setting is exactly the steering the risk presets were designed to avoid.
+ * The instrument's price is NOT a term either — a cheaper stock with the same
+ * entry-to-stop distance sizes identically — so naming it would send the user off
+ * to change something that cannot change the answer. It never fires on a
+ * half-filled form — the caller only computes a result once the trade prices and
+ * exactly one risk basis are complete.
  */
 function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
   switch (status) {
@@ -57,7 +72,7 @@ function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
       // would read as a bug.
       return 'Available buying power cannot fund one share/contract at this entry price.';
     default:
-      return 'Dollar risk is insufficient for one share/contract at this stop distance';
+      return 'The amount at risk does not cover one share/contract at this stop distance, so the size rounds down to zero. Size moves only with the stop distance and the amount at risk.';
   }
 }
 
@@ -76,7 +91,14 @@ export function CalculatorResults({
   const hasAdjustedRR = result !== null && result.adjustedRiskRewardRatio !== undefined;
 
   return (
-    <div aria-live="polite" aria-atomic="true" className="min-h-[28rem] space-y-4">
+    // `data-tour` is the walkthrough's anchor for the output panel and carries
+    // no behaviour.
+    <div
+      aria-live="polite"
+      aria-atomic="true"
+      data-tour="calculator-results"
+      className="min-h-[28rem] space-y-4"
+    >
       {currency !== 'USD' && (
         <p className="text-sm text-muted-foreground">
           Balance is in {currency}; figures shown in {currency}, no conversion applied.

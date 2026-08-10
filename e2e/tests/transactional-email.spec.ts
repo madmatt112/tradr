@@ -248,18 +248,17 @@ test.describe('transactional-email', () => {
 
     const email = uniqueEmail('verify');
 
-    // Register through the REAL form — this spec owns the UI-register flow.
-    // A fresh logged-out page load of any useAuth page (register included)
-    // trips the api client's ONE-SHOT 401 interception: the me-query's 401
-    // replace-navigates to /login?expired=true (the same interception the
-    // Task 13 token pages dodge by never mounting useAuth). A direct
-    // goto('/register') therefore bounces to /login — so reach the form the
-    // way a logged-out user does: land on /login (consuming the one-shot
-    // redirect) and follow the Register link.
-    await page.goto('/login');
-    // (TanStack Router JSON-encodes the search value: expired=%22true%22.)
-    await expect(page).toHaveURL(/\/login\?expired=/);
-    await page.getByRole('link', { name: 'Register' }).click();
+    // Register through the REAL form — this spec owns the UI-register flow, and
+    // it enters it the way an emailed signup link does: a cold, logged-out load
+    // straight onto /register.
+    //
+    // That load used to bounce to /login?expired=true. /register mounted useAuth,
+    // and a logged-out me-query's 401 trips the api client's one-shot
+    // interception, so the form was reachable only by clicking Register from
+    // inside /login and this spec had to go the long way round. It no longer
+    // mounts it — the same reason the token pages never did (SF-3).
+    await page.goto('/register');
+    await expect(page).toHaveURL(/\/register$/);
     await expect(page.getByText('Create an account')).toBeVisible();
     await page.getByLabel('Email').fill(email);
     await page.getByLabel('Password', { exact: true }).fill(PASSWORD);

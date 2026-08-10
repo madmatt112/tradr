@@ -29,6 +29,10 @@ vi.mock('../hooks/usePosition', () => ({
 vi.mock('./FillDialog', () => ({ FillDialog: () => null }));
 vi.mock('./FillTable', () => ({ FillTable: () => null }));
 vi.mock('./PositionEditDialog', () => ({ PositionEditDialog: () => null }));
+// The Fills-header coach mark reads onboarding state through TanStack Query;
+// this file mounts bare, with no QueryClient. Its own suite covers it — this
+// file is about the double-fee warning.
+vi.mock('@/features/onboarding/components/CoachMark', () => ({ CoachMark: () => null }));
 
 import { PositionDetailView } from './PositionDetail';
 

@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { usePerformance } from '@/features/performance/hooks/usePerformance';
 import { usePositions } from '@/features/positions/hooks/usePositions';
-import { useNow } from '@/hooks/useNow';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,11 +18,8 @@ vi.mock('@/features/performance/hooks/usePerformance', () => ({
 vi.mock('@/features/positions/hooks/usePositions', () => ({
   usePositions: vi.fn(),
 }));
-vi.mock('@/hooks/useNow', () => ({
-  useNow: vi.fn(() => new Date('2026-05-27T12:00:00.000Z')),
-}));
-// The stored reporting timezone (user-onboarding R2.4) is a useQuery; a fixed
-// zone keeps this suite about P&L rendering, not the bucketing window.
+// The user's stored reporting timezone is a useQuery; a fixed zone keeps this
+// suite about P&L rendering, not the bucketing window.
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => 'America/New_York',
 }));
@@ -111,10 +107,6 @@ function numericIn(container: HTMLElement, testid: string): HTMLElement {
     .querySelector(`[data-testid="${testid}"]`)!
     .querySelector('[data-testid="numeric"]') as HTMLElement;
 }
-
-beforeEach(() => {
-  vi.mocked(useNow).mockReturnValue(new Date('2026-05-27T12:00:00.000Z'));
-});
 
 afterEach(() => {
   vi.clearAllMocks();

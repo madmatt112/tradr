@@ -65,7 +65,8 @@ describe('UserTimezoneSchema', () => {
 });
 
 describe('RegisterSchema.timezone', () => {
-  // Scripted registrations and the existing e2e helpers post without it (R2.3).
+  // Scripted registrations and the existing e2e helpers post without it, and an
+  // absent value falls back to a server-side default.
   it('is optional — registering without it still parses', () => {
     const result = RegisterSchema.safeParse(baseRegister);
     expect(result.success).toBe(true);

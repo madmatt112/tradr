@@ -36,11 +36,32 @@ describe('dashboard-defaults', () => {
     }
   });
 
-  it('every entry fits within GRID_MAX_ROWS', () => {
+  it('every entry is within the height bound the schema enforces', () => {
+    // GRID_MAX_ROWS bounds a widget's HEIGHT and nothing else: the schema caps
+    // `h` and leaves `y` unbounded (`WidgetPlacementSchema`), and DashboardGrid
+    // deliberately leaves gridstack's whole-canvas `maxRow` unset. `y + h` was
+    // asserted against it too, which read as a canvas ceiling that does not
+    // exist — the layout merely happened to end at row 24 while both charts
+    // were 6 rows tall, and 24 rows is 960px against a 900px viewport, so the
+    // page has always scrolled anyway.
     for (const entry of DEFAULT_WIDGETS) {
       expect(entry.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
-      expect(entry.y + entry.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
     }
+  });
+
+  it('covers every row it spans, with no gap and nothing past column 11', () => {
+    // The defaults are a solid block: a hole in it reads as a widget that
+    // failed to load, and a widget past column 11 fails the schema's
+    // `x + w <= 12` refinement on the first save.
+    const lastRow = Math.max(...DEFAULT_WIDGETS.map((d) => d.y + d.h));
+    const covered = new Set<string>();
+    for (const d of DEFAULT_WIDGETS) {
+      expect(d.x + d.w).toBeLessThanOrEqual(12);
+      for (let y = d.y; y < d.y + d.h; y++) {
+        for (let x = d.x; x < d.x + d.w; x++) covered.add(`${x},${y}`);
+      }
+    }
+    expect(covered.size).toBe(lastRow * 12);
   });
 });
 
@@ -83,10 +104,19 @@ describe('row-unit migration invariants (double y and h)', () => {
     }
   });
 
-  it('keeps a migrated layout inside the new bounds', () => {
+  it('keeps every migrated height inside the bound the schema enforces', () => {
+    // `h` only. `y + h` was asserted here too, and that constraint does not
+    // exist: `WidgetPlacementSchema` caps `h` and leaves `y` unbounded, the
+    // `widgets` column is plain jsonb with no check, and `DashboardGrid`
+    // deliberately leaves gridstack's whole-canvas `maxRow` unset — a layout
+    // reaching row 36 saves and reloads intact. Doubling `y` can therefore push
+    // a tall saved layout past GRID_MAX_ROWS, and that is not a migration
+    // failure; asserting otherwise pinned a rule the system does not have and
+    // would fail on a legitimate input. (The same assertion was removed from
+    // the DEFAULT_WIDGETS bound above, where the default layout now ends at
+    // row 36 itself.)
     for (const r of oldLayout.map(double)) {
       expect(r.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
-      expect(r.y + r.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
     }
   });
 

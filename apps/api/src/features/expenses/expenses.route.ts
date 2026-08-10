@@ -49,7 +49,7 @@ type AuthEnv = {
  *           type: string
  *           enum: [data_subscription, platform_fee, software, education, hardware, other]
  *         description: { type: string }
- *         amount: { type: string, description: Positive decimal, at most 4 fractional digits. }
+ *         amount: { type: string, description: 'Positive decimal, at most 4 fractional digits.' }
  *         currency: { type: string, minLength: 3, maxLength: 3 }
  *         occurredAt: { type: string, format: date }
  *         notes: { type: string, nullable: true }
@@ -209,13 +209,13 @@ expensesRouter.post('/expenses', validate('json', CreateExpenseInputSchema), asy
  *             properties:
  *               category: { type: string, enum: [data_subscription, platform_fee, software, education, hardware, other] }
  *               description: { type: string, minLength: 1, maxLength: 200 }
- *               amount: { type: string, description: Positive decimal, at most 4 fractional digits. }
+ *               amount: { type: string, description: 'Positive decimal, at most 4 fractional digits.' }
  *               currency: { type: string, minLength: 3, maxLength: 3 }
  *               occurredAt: { type: string, format: date }
  *               notes: { type: string, maxLength: 5000, nullable: true }
  *     responses:
  *       200: { description: The updated expense. }
- *       400: { description: Validation error, or an unknown field. }
+ *       400: { description: 'Validation error, or an unknown field.' }
  *       404: { description: No such expense for this user. }
  */
 expensesRouter.patch(

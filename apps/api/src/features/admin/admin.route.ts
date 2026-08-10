@@ -78,7 +78,7 @@ const UsersQuerySchema = z.object({
  *       errors.
  *     tags: [Admin]
  *     responses:
- *       200: { description: AdminStats — totals, activeUsers, positions, revenue. }
+ *       200: { description: 'AdminStats — totals, activeUsers, positions, revenue.' }
  *       401: { description: Not authenticated. }
  *       403: { description: ADMIN_REQUIRED — authenticated but not an admin. }
  *       429: { description: Admin rate limit reached (60 / 60 s per user). }
@@ -224,8 +224,8 @@ adminRouter.patch(
  *         name: to
  *         schema: { type: string, format: date-time }
  *     responses:
- *       200: { description: AdminUsage — period, totals, series, topUsers, revenue. }
- *       400: { description: VALIDATION_ERROR — malformed datetimes, from > to, or range > 366 days. }
+ *       200: { description: 'AdminUsage — period, totals, series, topUsers, revenue.' }
+ *       400: { description: 'VALIDATION_ERROR — malformed datetimes, from > to, or range > 366 days.' }
  *       401: { description: Not authenticated. }
  *       403: { description: ADMIN_REQUIRED — authenticated but not an admin. }
  *       429: { description: Admin rate limit reached (60 / 60 s per user). }

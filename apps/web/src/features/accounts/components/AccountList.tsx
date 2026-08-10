@@ -33,6 +33,7 @@ import {
 import { writabilityRestricted } from '@/features/billing/tier-usage';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
+import { useDemoAccount } from '@/features/onboarding/hooks/useDemoAccount';
 
 import { useAccounts, useDeleteAccount, useSetWritableAccount } from '../hooks/useAccounts';
 
@@ -46,6 +47,25 @@ export function AccountList() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
+
+  // Sample data and real accounts are mutually exclusive, and this is the only
+  // place in the app a second account can be started, so this is where "begins
+  // creating a real account" happens. The server refuses
+  // the create outright while sample data is present, so without this the user
+  // would fill in the whole form and be told no; asking first, once, and
+  // clearing the way is the difference between a rule and a wall.
+  const { isDemoPresent, teardown, isPending: isTearingDown } = useDemoAccount();
+  const [demoConfirmOpen, setDemoConfirmOpen] = useState(false);
+  const [demoTeardownFailed, setDemoTeardownFailed] = useState(false);
+
+  function beginCreate(): void {
+    setEditAccount(null);
+    if (isDemoPresent) {
+      setDemoConfirmOpen(true);
+      return;
+    }
+    setDialogOpen(true);
+  }
 
   // Writability designation (plan-tiers D18/REQ-6.6): badges + the
   // make-writable action appear only while the restriction is active
@@ -74,13 +94,7 @@ export function AccountList() {
     <>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Accounts</h1>
-        <Button
-          className="cursor-pointer"
-          onClick={() => {
-            setEditAccount(null);
-            setDialogOpen(true);
-          }}
-        >
+        <Button className="cursor-pointer" onClick={beginCreate}>
           New Account
         </Button>
       </div>
@@ -189,6 +203,80 @@ export function AccountList() {
         }}
         account={editAccount}
       />
+
+      {/* Confirm ONCE, then tear the sample data down, then open the form.
+          The teardown is what makes the create possible, so it runs first and the
+          dialog opens on its success.
+
+          THE DIALOG STAYS OPEN UNTIL THE TEARDOWN SETTLES, and that is the whole
+          point of the `preventDefault`. Radix closes an `AlertDialogAction` on
+          activation, so the confirmation used to disappear while the request was
+          still in flight — leaving nothing on screen to say anything was
+          happening, and "New Account" live again underneath it. A second click
+          re-opened this dialog and fired a second teardown: the data survives,
+          because teardown is idempotent server-side, but the user is shown the
+          same destructive confirmation twice for one action, which teaches them
+          the first one did not take. Held open, there is no second entrance.
+
+          A FAILURE IS SAID HERE, not only in the toast the hook raises. The
+          request can reject partway; before this, that left the user with a
+          closed dialog, no form, and a toast they may have missed — the state
+          they started in with no explanation in it. Now the confirmation is
+          still up, says what happened, and the same button is the retry. */}
+      <AlertDialog
+        open={demoConfirmOpen}
+        onOpenChange={(open) => {
+          if (open) return;
+          // Escape, the overlay and Cancel all arrive here. None of them may
+          // close a confirmation whose action is still running.
+          if (isTearingDown) return;
+          setDemoConfirmOpen(false);
+          setDemoTeardownFailed(false);
+        }}
+      >
+        <AlertDialogContent data-testid="demo-teardown-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove the sample data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your own accounts and the sample account cannot both exist, so creating an account
+              removes the sample account and every trade in it. You can add sample data again once
+              you have no accounts of your own.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {demoTeardownFailed && (
+            <p role="alert" data-testid="demo-teardown-error" className="text-sm text-destructive">
+              The sample data could not be removed, so your account has not been created. Try again.
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              className="cursor-pointer"
+              aria-disabled={isTearingDown || undefined}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="cursor-pointer aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              aria-disabled={isTearingDown || undefined}
+              onClick={(event) => {
+                // Hold the dialog open across the request; Radix would close it.
+                event.preventDefault();
+                if (isTearingDown) return;
+                setDemoTeardownFailed(false);
+                teardown({
+                  onSuccess: () => {
+                    setDemoConfirmOpen(false);
+                    setDialogOpen(true);
+                  },
+                  onError: () => setDemoTeardownFailed(true),
+                });
+              }}
+            >
+              {isTearingDown ? 'Removing…' : 'Remove and continue'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>

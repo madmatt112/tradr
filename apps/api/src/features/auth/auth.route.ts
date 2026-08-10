@@ -94,7 +94,8 @@ auth.post(
   validate('json', RegisterSchema),
   async (c) => {
     // `timezone` is optional and absent for every scripted or e2e registration
-    // that predates it; registerUser substitutes the default (R2.3).
+    // that predates it; registerUser substitutes the default rather than
+    // storing NULL, which is reserved for rows that predate the column.
     const { email, password, timezone } = c.req.valid('json');
     const { user, token } = await registerUser(email, password, timezone);
 
@@ -451,8 +452,8 @@ userPreferencesRouter.get('/users/me/onboarding', async (c) => {
  *                   keys.
  *                 example: partial-close
  *     responses:
- *       200: { description: The merged onboarding preference, in the same shape as the GET. }
- *       400: { description: Unknown field, empty body, or an invalid status or timestamp. }
+ *       200: { description: 'The merged onboarding preference, in the same shape as the GET.' }
+ *       400: { description: 'Unknown field, empty body, or an invalid status or timestamp.' }
  *       401: { description: Authentication required. }
  */
 userPreferencesRouter.patch(

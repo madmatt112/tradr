@@ -98,6 +98,21 @@ export const FillSchema = z.object({
   createdAt: z.string(),
 });
 
+/**
+ * The body of a successful `POST /positions/{id}/fills` — the created fill,
+ * plus whether adding it closed the position.
+ *
+ * The flag is not decoration. An exit that balances the entered quantity closes
+ * the position by itself, server-side, in the same transaction as the fill; a
+ * client handed only the fill cannot tell that apart from a partial exit, and
+ * would go on showing an open position whose balance has already moved. Saying
+ * so in the response is what lets a caller react to the state change that
+ * actually happened rather than infer one.
+ */
+export const CreatedFillSchema = FillSchema.extend({
+  positionClosed: z.boolean(),
+});
+
 export const CreateFillSchema = z.object({
   type: z.enum(['entry', 'exit']),
   price: z.string().refine((v) => !isNaN(Number(v)) && Number(v) >= 0, {
@@ -227,6 +242,7 @@ export type UpdatePositionInput = z.infer<typeof UpdatePositionSchema>;
 export type ReopenPositionInput = z.infer<typeof ReopenPositionSchema>;
 export type Position = z.infer<typeof PositionSchema>;
 export type Fill = z.infer<typeof FillSchema>;
+export type CreatedFill = z.infer<typeof CreatedFillSchema>;
 export type CreateFillInput = z.infer<typeof CreateFillSchema>;
 export type UpdateFillInput = z.infer<typeof UpdateFillSchema>;
 export type PositionListItem = z.infer<typeof PositionListItemSchema>;

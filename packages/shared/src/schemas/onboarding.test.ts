@@ -57,7 +57,9 @@ describe('OnboardingStateSchema', () => {
     },
   );
 
-  // The single named R4.2 exception, and a timestamp rather than a flag.
+  // The single named exception to deriving completion from the user's data, and
+  // a timestamp rather than a flag: the calculator writes nothing else to the
+  // database, so its checklist item has no other trace to derive from.
   it.each(['2026-08-06T04:12:00.000Z', '2026-01-01T00:00:00Z'])(
     'accepts the ISO timestamp %s for calculatorFirstUsedAt',
     (calculatorFirstUsedAt) => {
@@ -101,8 +103,9 @@ describe('OnboardingStateSchema', () => {
     }
   });
 
-  // R4.2 / design.md: per-item completion is derived from real data, never
-  // stored. A stray flag must not survive into the parsed state.
+  // Per-item completion is DERIVED from the user's real data and never stored,
+  // so a stray flag must not survive into the parsed state — one that did could
+  // disagree with the data, and nothing reconciles the two.
   it('strips a per-item completion flag if one is ever written', () => {
     const result = OnboardingStateSchema.safeParse({ accountCreated: true, positionLogged: true });
     expect(result.success).toBe(true);

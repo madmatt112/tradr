@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
-// user-onboarding R2.4 — this widget must bucket by the user's STORED
-// reporting timezone. It used to read `Intl.DateTimeFormat().resolvedOptions()
-// .timeZone` at render time, so the same account showed different daily and
-// weekly figures from a second machine, a VPN, or a trip abroad.
+// This widget must bucket by the user's STORED reporting timezone. It used to
+// read `Intl.DateTimeFormat().resolvedOptions().timeZone` at render time, so
+// the same account showed different daily and weekly figures from a second
+// machine, a VPN, or a trip abroad.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -10,9 +10,10 @@ export interface EquityCurveChartSkeletonProps {
  * container dimensions so the surrounding layout doesn't shift when the
  * lazy chunk resolves.
  *
- * The chart renders inside a `ResponsiveContainer` set to width 100% and
- * a fixed height of 320px (see `EquityCurveChart`). This skeleton mirrors
- * that height exactly so there is no layout jank on swap.
+ * The chart takes the height its caller gives it. Its only user here is
+ * `PerformancePage`, which asks for 320px; this skeleton mirrors that number
+ * so there is no layout jank on swap. The dashboard widget uses neither — it
+ * sizes the chart to the widget body and has its own full-height skeleton.
  */
 export function EquityCurveChartSkeleton({ className }: EquityCurveChartSkeletonProps) {
   return (

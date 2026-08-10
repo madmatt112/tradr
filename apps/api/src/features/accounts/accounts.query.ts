@@ -111,8 +111,15 @@ export function findAccountsByUser(db: Database | Transaction, userId: string) {
       brokerageId: accounts.brokerageId,
       brokerageName: brokerages.name,
       // NULL means no rule set — the calculator then behaves exactly as it did
-      // before this column existed (user-onboarding R1.4).
+      // before this column existed.
       defaultRiskPercent: accounts.defaultRiskPercent,
+      // Projected so a client can say WHICH account is the sample one rather
+      // than inferring it from "there is exactly one account". Mutual exclusion
+      // makes that inference true today, but it is an invariant enforced
+      // elsewhere, and a banner that quietly depends on it would start naming
+      // the wrong account the day it moved. This flag is read-only on the way
+      // out: nothing a client sends can set it.
+      isDemo: accounts.isDemo,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -136,8 +143,11 @@ export function findAccountById(db: Database | Transaction, id: string, userId: 
       timezone: accounts.timezone,
       brokerageId: accounts.brokerageId,
       brokerageName: brokerages.name,
-      // NULL means no rule set (user-onboarding R1.4) — see findAccountsByUser.
+      // NULL means no rule set — see findAccountsByUser.
       defaultRiskPercent: accounts.defaultRiskPercent,
+      // The sample-data flag — see findAccountsByUser. Also carried here so the
+      // account this endpoint returns after seeding identifies itself.
+      isDemo: accounts.isDemo,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -162,6 +172,11 @@ export function insertAccount(
     startingBalance?: string;
     timezone?: string;
     defaultRiskPercent?: string | null;
+    // Only the sample-data seeder passes this. It is never derived from request
+    // input: the column decides whether an account may be deleted along with
+    // everything booked against it, so a client that could set it could talk
+    // its way past the guard protecting a real account.
+    isDemo?: boolean;
   },
 ) {
   return tx.insert(accounts).values(data).returning();
@@ -199,6 +214,179 @@ export function deleteAccount(tx: Transaction, id: string, userId: string) {
     .delete(accounts)
     .where(and(eq(accounts.id, id), eq(accounts.userId, userId)))
     .returning();
+}
+
+/**
+ * One owned account's stored sample-data flag, without the balance LATERALs the
+ * full projection carries — the delete path needs to know what kind of account
+ * it is holding, not what it is worth.
+ *
+ * `undefined` is the same answer for an account belonging to somebody else as
+ * for one that never existed, which is what keeps a deletion attempt from
+ * doubling as an existence check.
+ */
+export async function selectOwnedAccountDemoFlag(
+  db: Database | Transaction,
+  id: string,
+  userId: string,
+): Promise<{ id: string; isDemo: boolean } | undefined> {
+  const rows = await db
+    .select({ id: accounts.id, isDemo: accounts.isDemo })
+    .from(accounts)
+    .where(and(eq(accounts.id, id), eq(accounts.userId, userId)))
+    .limit(1);
+  return rows[0];
+}
+
+/**
+ * Serialize this user's account-set changes against each other.
+ *
+ * Sample data and real accounts are mutually exclusive, and the rule is
+ * enforced by two halves that each READ what the other WRITES — creation looks
+ * for a sample account, seeding counts accounts. Under READ COMMITTED neither
+ * read can see the other transaction's uncommitted account row, so both halves
+ * pass and both commit: the user ends up holding sample data alongside a real
+ * account. Nothing filters the sample account out of any aggregate, by design,
+ * so invented trades are then blended into the user's own totals with nothing
+ * left to tell them apart — that half of the damage does not come back. The
+ * display currency the seed latched is the milder half: teardown declines to
+ * return it while a real account survives, but the user can set their own from
+ * the profile settings whenever they like, so it is an annoyance rather than a
+ * trap. The aggregates are what this lock is really protecting.
+ *
+ * The user row is the natural mutex: it is the one row both paths already
+ * touch, one per user, and locking it costs a single indexed read. Raw
+ * row-lock-in-`sql` idiom per `admin.query.ts`.
+ *
+ * `FOR NO KEY UPDATE`, and the strength is chosen — do not "tighten" it to
+ * `FOR UPDATE`. Two holders of `FOR NO KEY UPDATE` still conflict, so the two
+ * account-change paths serialize exactly as they would under `FOR UPDATE`, and
+ * that is this lock's entire job. What `FOR UPDATE` adds is a conflict with
+ * `FOR KEY SHARE` — the lock every insert into a table with a foreign key to
+ * `users` takes on that user's row, some two dozen tables, `sessions` among
+ * them. Under `FOR UPDATE` an ordinary login for this user waited out the whole
+ * seed; under `FOR NO KEY UPDATE` it does not wait at all. The mutual exclusion
+ * is not weakened by that: neither strength lets a second account change slip
+ * past.
+ *
+ * HELD TO COMMIT, deliberately, and the seed's quarter-second is the price —
+ * paid by this user's other account changes, and by nothing else.
+ * Releasing it any earlier — as a session-level advisory lock could — would
+ * close nothing: the competing read is an ordinary SELECT, so it cannot see the
+ * account row until the writer commits, whether or not a lock is still held.
+ * Serialization has to span the write and its commit or it is only a narrower
+ * window.
+ *
+ * Both paths take this before reading anything about the other, so it is also
+ * the whole of the lock ordering: one lock, one row, always first.
+ */
+export async function lockUserForAccountChange(tx: Transaction, userId: string): Promise<void> {
+  await tx.execute(sql`SELECT id FROM users WHERE id = ${userId} FOR NO KEY UPDATE`);
+}
+
+/**
+ * Does this user hold the sample account? Existence only — the creation guard
+ * needs to know whether sample data is present, not which account carries it.
+ *
+ * Reads the stored flag, like every other decision that turns on it. Backed by
+ * `accounts_user_id_idx`, and stopped at the first row.
+ */
+export async function userHasDemoAccount(
+  db: Database | Transaction,
+  userId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql<number>`1` })
+    .from(accounts)
+    .where(and(eq(accounts.userId, userId), eq(accounts.isDemo, true)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Every ledger row booked against an account. Runs before the account itself is
+ * deleted: that reference is restricted, so a row left here stops the delete
+ * rather than being orphaned by it.
+ */
+export function deleteLedgerEntriesByAccount(tx: Transaction, accountId: string) {
+  return tx.delete(ledgerEntries).where(eq(ledgerEntries.accountId, accountId));
+}
+
+/**
+ * Every position in an account. Their fills go with them — that reference
+ * cascades — and the account's own restricted reference means this must run
+ * before the account is deleted too.
+ */
+export function deletePositionsByAccount(tx: Transaction, accountId: string) {
+  return tx.delete(positions).where(eq(positions.accountId, accountId));
+}
+
+/** Return the materialized display currency to unset, as it is for a user with no account. */
+export function clearDisplayCurrency(tx: Transaction, userId: string) {
+  return tx
+    .update(users)
+    .set({ displayCurrency: null, updatedAt: new Date() })
+    .where(eq(users.id, userId));
+}
+
+// ---------------------------------------------------------------------------
+// The sample-account marker: `users.onboarding -> 'demo'`
+//
+// A small record of the sample account that OUTLIVES the account row, which is
+// the entire reason it is not stored on the account. Teardown needs two facts
+// that stop being derivable the moment the rows are gone: which account was the
+// sample one, and whether seeding it is what set the user's display currency.
+//
+// It rides in the existing onboarding jsonb rather than taking a column of its
+// own, and it is deliberately NOT part of the onboarding schema in
+// `@tradr/shared`. That schema describes the user's onboarding PREFERENCE — what
+// the onboarding endpoints read and write — and this is neither; it is internal
+// bookkeeping shared between the seed and its inverse. The column carries it
+// safely on both counts: unknown keys are stripped when the preference is read,
+// so the marker never reaches the API, and the preference merge rewrites only
+// the keys it names, so a preference update cannot destroy it.
+// ---------------------------------------------------------------------------
+
+export interface DemoMarker {
+  /**
+   * The sample account's id. Kept after teardown, so a teardown repeated
+   * against an account that is already gone can succeed silently without that
+   * success ever being available for an id that was never the user's.
+   */
+  accountId: string;
+  /**
+   * True only when seeding is what materialized `users.display_currency`. Once
+   * the column has a value nothing distinguishes a currency the sample data set
+   * from one the user's own first account set, so teardown cannot work it out
+   * afterwards — it has to be recorded at the moment it happens.
+   */
+  latchedDisplayCurrency?: boolean;
+}
+
+export async function selectDemoMarker(
+  db: Database | Transaction,
+  userId: string,
+): Promise<DemoMarker | undefined> {
+  const rows = await db
+    .select({ demo: sql<DemoMarker | null>`${users.onboarding} -> 'demo'` })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return rows[0]?.demo ?? undefined;
+}
+
+export function setDemoMarker(tx: Transaction, userId: string, marker: DemoMarker) {
+  // Concatenation replaces the whole `demo` key and leaves every other key as
+  // found — the same shape the onboarding preference merge uses, for the same
+  // reason: a rolling deploy must not have one container overwrite keys another
+  // wrote.
+  return tx
+    .update(users)
+    .set({
+      onboarding: sql`${users.onboarding} || ${JSON.stringify({ demo: marker })}::jsonb`,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
 }
 
 // ---------------------------------------------------------------------------

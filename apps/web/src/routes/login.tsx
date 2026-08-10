@@ -9,10 +9,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useAuth } from '@/hooks/useAuth';
+import { useLogin } from '@/hooks/useAuth';
+
+// SF-3: this page is public and MUST NOT call useAuth() or mount the
+// ['auth','me'] query — the api client's global 401 interception would answer a
+// logged-out visitor's cold load by navigating to /login?expired=true, so the
+// page would greet them with a session-expired notice for a session they never
+// had. useLogin is the login mutation without that query.
 
 function LoginPage() {
-  const { isLoading, isAuthenticated, login } = useAuth();
+  const login = useLogin();
   const navigate = useNavigate();
   const [apiError, setApiError] = useState('');
   const expired = new URLSearchParams(window.location.search).get('expired');
@@ -24,19 +30,6 @@ function LoginPage() {
   } = useForm<LoginInput>({
     resolver: zodResolver(LoginSchema),
   });
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (isAuthenticated) {
-    navigate({ to: '/dashboard' });
-    return null;
-  }
 
   const onSubmit = async (data: LoginInput) => {
     setApiError('');

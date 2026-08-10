@@ -25,6 +25,24 @@ if (typeof globalThis.window !== 'undefined' && typeof window.matchMedia !== 'fu
   });
 }
 
+// jsdom v29 does NOT implement the CSS namespace object. @testing-library/user-event
+// calls CSS.escape to find the rest of a radio group by name when an arrow key moves
+// between options, so without this any radiogroup keyboard test throws. Escapes every
+// character outside the identifier-safe set; a leading digit (legal in an attribute
+// value, illegal at the start of a CSS identifier) is not handled, because no name in
+// this app starts with one.
+if (typeof globalThis.window !== 'undefined' && typeof window.CSS?.escape !== 'function') {
+  Object.defineProperty(window, 'CSS', {
+    writable: true,
+    configurable: true,
+    value: {
+      ...window.CSS,
+      escape: (value: string) =>
+        String(value).replace(/[^a-zA-Z0-9_\u00a0-\uffff-]/g, (char) => `\\${char}`),
+    },
+  });
+}
+
 // jsdom v29 does NOT implement BroadcastChannel. Node 18+ provides a global
 // BroadcastChannel (worker_threads) whose dispatchEvent rejects jsdom's MessageEvent
 // (cross-realm Event class identity). Unconditionally override with a stub so the

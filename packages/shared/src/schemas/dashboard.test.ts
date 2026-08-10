@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
+import { CHART_MIN_HEIGHT_PX, GRID_ROW_HEIGHT_PX } from '../constants/dashboard-geometry';
+
 import {
   DashboardLayoutResponseSchema,
   GRID_MAX_ROWS,
+  PerWidgetMinSize,
   PutDashboardLayoutRequestSchema,
   WidgetPlacementSchema,
 } from './dashboard';
@@ -20,14 +23,30 @@ const UUID_F = '66666666-6666-4666-8666-666666666666';
 const UUID_G = '77777777-7777-4777-8777-777777777777';
 
 // Canonical six-widget default layout that satisfies all refinements.
+//
+// The two chart bands are tall because their minimums are: a chart widget may
+// not be shorter than its chart's floor plus its own chrome (PerWidgetMinSize is
+// derived, not chosen), so the heights here are read from that rather than
+// written out — otherwise this fixture goes stale the next time the chart's
+// chrome changes and every "accepts" case below fails for the wrong reason.
+const PERF_H = PerWidgetMinSize['performance-chart'].h;
+const EQUITY_H = PerWidgetMinSize['equity-curve'].h;
+
 function canonicalWidgets() {
   return [
     { id: UUID_A, type: 'stats-summary' as const, x: 0, y: 0, w: 12, h: 2 },
-    { id: UUID_B, type: 'performance-chart' as const, x: 0, y: 2, w: 6, h: 6 },
-    { id: UUID_C, type: 'equity-curve' as const, x: 0, y: 8, w: 6, h: 4 },
+    { id: UUID_B, type: 'performance-chart' as const, x: 0, y: 2, w: 6, h: PERF_H },
+    { id: UUID_C, type: 'equity-curve' as const, x: 0, y: 2 + PERF_H, w: 6, h: EQUITY_H },
     { id: UUID_D, type: 'account-balances' as const, x: 6, y: 2, w: 6, h: 4 },
     { id: UUID_E, type: 'position-sizing' as const, x: 6, y: 6, w: 6, h: 6 },
-    { id: UUID_F, type: 'open-positions' as const, x: 0, y: 12, w: 12, h: 4 },
+    {
+      id: UUID_F,
+      type: 'open-positions' as const,
+      x: 0,
+      y: 2 + PERF_H + EQUITY_H,
+      w: 12,
+      h: 4,
+    },
   ];
 }
 
@@ -128,6 +147,25 @@ describe('PutDashboardLayoutRequestSchema refinements', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // 7b. the chart minimums reserve room for the chart itself
+  it.each(['performance-chart', 'equity-curve'] as const)(
+    'rejects %s one row below its derived minimum height',
+    (type) => {
+      const min = PerWidgetMinSize[type].h;
+      const at = (h: number) =>
+        WidgetPlacementSchema.safeParse({ id: UUID_A, type, x: 0, y: 0, w: 8, h }).success;
+
+      expect(at(min)).toBe(true);
+      expect(at(min - 1)).toBe(false);
+      // The bound exists because the CONTENT has a floor: the chart will not
+      // draw shorter than CHART_MIN_HEIGHT_PX and the widget body is
+      // `overflow-auto`, so anything below this hides the bottom of the plot
+      // behind a scroller that takes no layout space — indistinguishable from
+      // the hard-coded-height clipping it replaced.
+      expect(min * GRID_ROW_HEIGHT_PX).toBeGreaterThan(CHART_MIN_HEIGHT_PX);
+    },
+  );
 
   // 8. overlapping rectangles via checkNoOverlap
   it('rejects two overlapping placements (checkNoOverlap)', () => {

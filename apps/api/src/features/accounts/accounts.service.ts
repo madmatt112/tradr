@@ -17,6 +17,7 @@ function isPgError(err: unknown): err is PgError {
   return typeof err === 'object' && err !== null && 'code' in err;
 }
 
+import { teardownDemoAccount, wasDemoAccount } from './accounts.demo';
 import {
   findAccountsByUser,
   findAccountById,
@@ -26,7 +27,10 @@ import {
   countPositionsByAccount,
   accountHasLedgerEntries,
   countAccountsByUser,
+  lockUserForAccountChange,
+  selectOwnedAccountDemoFlag,
   setWritableAccountId,
+  userHasDemoAccount,
 } from './accounts.query';
 
 export async function listAccounts(db: Database, userId: string) {
@@ -48,8 +52,9 @@ export async function createAccount(
     brokerageId?: string | null;
     startingBalance?: string;
     timezone?: string;
-    // Omitted means no rule set (user-onboarding R1.1/R1.4). Bounds are
-    // CreateAccountSchema's job — never re-checked here.
+    // Omitted means no rule set, and the calculator then behaves exactly as it
+    // did before this column existed. Bounds are CreateAccountSchema's job —
+    // never re-checked here.
     defaultRiskPercent?: string;
   },
   // Routes pass `isAdmin` from AuthEnv — services never read Hono context
@@ -57,6 +62,38 @@ export async function createAccount(
   gate: { isAdmin: boolean },
 ) {
   return withTransaction(db, async (tx) => {
+    // Before reading anything about the user's account set, and for the whole
+    // of this transaction. The seeder takes the same lock on the same row, so
+    // the two cannot both look at a set the other is midway through changing —
+    // see `lockUserForAccountChange` for why an unserialized read of it lets
+    // the refusal below pass while sample data is being created.
+    await lockUserForAccountChange(tx, userId);
+
+    // Sample data and real accounts are mutually exclusive, and this is that
+    // rule's creation half — the seeding half lives with the seeder. It is the
+    // whole of what keeps invented figures out of real ones: the dashboard
+    // widgets, the equity curve and the performance pages scope by currency and
+    // pass no account filter at all, so a sample account sitting alongside a
+    // real one would blend its trades into the user's own totals with nothing
+    // to separate them again. That is why the answer here is a refusal rather
+    // than a filter added to each of those queries.
+    //
+    // It carries its own code so the client can offer to remove the sample data
+    // and retry, instead of reporting a bare conflict the user cannot act on.
+    //
+    // Deliberately ahead of the plan cap below, and the order is the point. The
+    // sample account occupies an account slot, so a Free user who accepted the
+    // offer of sample data is already at the cap; checked the other way round
+    // they would be told to upgrade to escape data they were invited to try,
+    // and the offer to remove it would never be reached.
+    if (await userHasDemoAccount(tx, userId)) {
+      throw new AppError(
+        409,
+        'DEMO_ACCOUNT_EXISTS',
+        'Remove the sample data before creating an account.',
+      );
+    }
+
     // L1 creation cap (plan-tiers D9, REQ-6.1). Admin / gating-off pass
     // through with zero behaviour change ({ enforced: false } does no DB
     // read). Indexed count(*); the concurrent-overshoot posture is accepted
@@ -113,9 +150,9 @@ export async function editAccount(
   db: Database,
   id: string,
   userId: string,
-  // `defaultRiskPercent` omitted leaves the stored value untouched; an
-  // explicit null clears the rule back to unset (user-onboarding R1.1). The
-  // distinction is carried all the way to `.set()` — see updateAccount.
+  // `defaultRiskPercent` omitted leaves the stored value untouched; an explicit
+  // null clears the rule back to unset. The distinction is carried all the way
+  // to `.set()` — see updateAccount.
   data: Partial<{
     name: string;
     currency: string;
@@ -178,10 +215,49 @@ export async function setWritableAccount(db: Database, userId: string, accountId
   return { writableAccountId: accountId };
 }
 
-export async function removeAccount(db: Database, id: string, userId: string) {
+/**
+ * Delete an account.
+ *
+ * There are two paths through here, and which one runs is decided by the stored
+ * row, never by the request. `cascade` is the caller ASKING for the sample-data
+ * teardown — the one-click removal of an account together with every position,
+ * fill and ledger row booked against it — and asking is not permission. The
+ * account's own demo flag, read from the database on the line below, is the
+ * permission. The two are separate on purpose: a cascade asked for on a real
+ * account simply falls through to the ordinary path and meets the same guard it
+ * always has, and deleting the request from this function, or inverting it,
+ * would not change that. Nothing a client can send reaches the flag.
+ *
+ * Ownership is unchanged and orthogonal: an account belonging to somebody else
+ * is not found, exactly as before, so no request shape can make it a deletion or
+ * even an existence check.
+ *
+ * Returns whether anything was actually deleted, which is false only on the
+ * idempotent repeat below.
+ */
+export async function removeAccount(
+  db: Database,
+  id: string,
+  userId: string,
+  options: { cascade?: boolean } = {},
+): Promise<boolean> {
   return withTransaction(db, async (tx) => {
-    const existing = await findAccountById(tx, id, userId);
-    if (existing.length === 0) throw new NotFoundError('Account', id);
+    const existing = await selectOwnedAccountDemoFlag(tx, id, userId);
+
+    if (!existing) {
+      // Tearing down sample data that is already gone is the state the caller
+      // asked for, so it succeeds — two tabs racing on the same button settle on
+      // the same answer instead of one of them showing an error. Limited to an
+      // id the user's own marker names; every other id, another user's included,
+      // is the 404 it has always been.
+      if (options.cascade && (await wasDemoAccount(tx, userId, id))) return false;
+      throw new NotFoundError('Account', id);
+    }
+
+    if (existing.isDemo && options.cascade) {
+      await teardownDemoAccount(tx, userId, id);
+      return true;
+    }
 
     const [{ count }] = await countPositionsByAccount(tx, id);
     if (count > 0) {
@@ -189,5 +265,6 @@ export async function removeAccount(db: Database, id: string, userId: string) {
     }
 
     await deleteAccount(tx, id, userId);
+    return true;
   });
 }

@@ -1,10 +1,10 @@
 import { ReportingTimezoneField } from '@tradr/shared';
 
 /**
- * The app's ONLY browser timezone detection (user-onboarding R2.2/R2.5). Every
- * render-time read of the reporting zone goes through `useUserTimezone`
- * instead, because a per-device guess is what moves a trade between calendar
- * days when the user opens Tradr elsewhere.
+ * The app's ONLY browser timezone detection. Every render-time read of the
+ * reporting zone goes through `useUserTimezone` instead, because a per-device
+ * guess is what moves a trade between calendar days when the user opens Tradr
+ * elsewhere.
  *
  * It has exactly three callers, all of them writes or last resorts, never a
  * render-time bucketing input:

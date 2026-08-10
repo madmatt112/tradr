@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils';
 // `validateSearch` requires `granularity`, `start`, and `end`; the sidebar
 // is the entry point so it has to seed sensible defaults. We use the
 // `monthly` preset (12m window) anchored at the user's STORED reporting
-// timezone (user-onboarding R2.4).
+// timezone.
 //
 // `tz` is a parameter rather than something this function derives: it comes
 // from `useUserTimezone()`, and a hook cannot be read from module scope. The
@@ -58,7 +58,8 @@ export function Sidebar() {
   // window. `undefined` until the preference query settles — and unlike the
   // widgets there is no query here to disable, only a destination to seed, so
   // the item is inert until there is a correct destination. Linking with the
-  // browser's zone (or a client-side 'UTC') is the defect R2.4 removes.
+  // browser's zone (or a client-side 'UTC') is exactly the per-device bucketing
+  // the stored preference exists to replace.
   const timezone = useUserTimezone();
   // Badge data: error/loading mean no `data`, so the badge is simply absent
   // (REQ-5(a)(5)) — the hook's `retry: false` keeps failures quiet.

@@ -1,6 +1,6 @@
 -- The user's REPORTING timezone — the zone P&L is bucketed into by day, week and
--- month (user-onboarding R2). It is not a display format: nothing renders a
--- timestamp in it. See users.schema.ts.
+-- month. It is not a display format: nothing renders a timestamp in it. See
+-- users.schema.ts.
 --
 -- This is NOT accounts.timezone. That one is the account's trading-day boundary
 -- and defaults to America/New_York because that is where NYSE, NASDAQ and NYSE
@@ -8,7 +8,7 @@
 -- registration. Neither is derived from the other.
 --
 -- Nullable with no backfill and no default: NULL marks a pre-migration row and
--- is resolved at read time (R2.5), so no existing row is altered. No CHECK
--- enumerating zones — validity is decided by resolveTimezone, and a hardcoded
--- list would reject legitimate Etc/* zones.
+-- is resolved at read time, so no existing row is altered. No CHECK enumerating
+-- zones — validity is decided by resolveTimezone, and a hardcoded list would
+-- reject legitimate Etc/* zones.
 ALTER TABLE "users" ADD COLUMN "timezone" varchar(64);

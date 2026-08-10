@@ -248,7 +248,7 @@ accountingRouter.get('/exchange-rates', async (c) => {
  *               effectiveDate: { type: string, format: date }
  *     responses:
  *       201: { description: The stored rate. }
- *       400: { description: Validation error, or baseCurrency equal to quoteCurrency. }
+ *       400: { description: 'Validation error, or baseCurrency equal to quoteCurrency.' }
  */
 accountingRouter.post(
   '/exchange-rates',

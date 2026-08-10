@@ -5,8 +5,7 @@
         "description": "A cost of trading that is not a per-fill commission.",
         "properties": {
           "amount": {
-            "at most 4 fractional digits.": null,
-            "description": "Positive decimal",
+            "description": "Positive decimal, at most 4 fractional digits.",
             "type": "string"
           },
           "category": {
@@ -118,7 +117,7 @@
   "paths": {
     "/api/accounts": {
       "post": {
-        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass through unchanged.\n",
+        "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass through unchanged.\n\nWhile the sample account exists the create is refused with `409 DEMO_ACCOUNT_EXISTS` instead: sample and real data are mutually exclusive, because every aggregate scopes by currency and not by account. That check runs BEFORE the plan cap, so a Free user holding sample data is told to remove it rather than to upgrade — the sample account occupies their one slot. Remove it with `DELETE /api/accounts/{id}?cascade=demo` and retry.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -164,7 +163,7 @@
         },
         "responses": {
           "201": {
-            "description": "The created account."
+            "description": "The created account, with `isDemo: false`."
           },
           "400": {
             "description": "Validation error."
@@ -173,10 +172,27 @@
             "description": "TIER_LIMIT_ACCOUNTS (account cap reached on the current plan) or FORBIDDEN (cross-user brokerage)."
           },
           "409": {
-            "description": "Duplicate account name."
+            "description": "DEMO_ACCOUNT_EXISTS (sample data present — remove it and retry) or CONFLICT (duplicate account name)."
           }
         },
         "summary": "Create an account.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
+    "/api/accounts/demo": {
+      "post": {
+        "description": "Authed. Creates one flagged sample account for the current user, seeded with a fixed set of trades — closed, open and planned — driven through the normal position lifecycle so realized P&L and its ledger entries are derived exactly as they are for real trades. The fixture is identical on every run, so support, the documentation screenshots and the end-to-end tests all describe the same figures.\n\nRefused with `409` when the user already has an account. Sample figures are kept out of real ones by keeping sample and real data mutually exclusive, so there is no supported state in which both exist. Seeding is all-or-nothing: a failure leaves no account behind, and a retry is safe.\n\nAvailable identically to self-hosted and hosted deployments — it needs no optional integration configured.\n\nEvery account read — the list, the detail and this response — carries a boolean `isDemo`, which is `true` on the sample account and `false` on every real one. That is how a client identifies the sample account to label or remove it; it is server-set and cannot be sent in on create or update.\n",
+        "responses": {
+          "201": {
+            "description": "The created sample account, with `isDemo: true`."
+          },
+          "409": {
+            "description": "The user already has an account."
+          }
+        },
+        "summary": "Add sample data.",
         "tags": [
           "Accounts"
         ]
@@ -222,6 +238,50 @@
       }
     },
     "/api/accounts/{id}": {
+      "delete": {
+        "description": "Authed. Refused with `409` when the account holds positions — deleting one would take its trading history with it.\n\n`?cascade=demo` asks instead for the sample-account teardown: the account and every position, fill and ledger entry booked against it, removed together in one transaction, leaving nothing orphaned behind. It is a request and not an authorisation — the server decides from the account's own stored sample-data flag, so the same call against a real account holding positions is refused with `409` exactly as it is without the parameter. Nothing a client sends can reach the flag.\n\nTeardown is idempotent: repeating it against a sample account that has already been removed answers `204`, so two tabs pressing the same button settle on the same state. That applies only to the caller's own former sample account; every other unknown id is a `404`, as is any account belonging to another user.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "`demo` requests the sample-account teardown. Any other value is a `400`.\n",
+            "in": "query",
+            "name": "cascade",
+            "required": false,
+            "schema": {
+              "enum": [
+                "demo"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, or already torn down."
+          },
+          "400": {
+            "description": "Validation error (a non-uuid id, or an unrecognised cascade value)."
+          },
+          "404": {
+            "description": "Account not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "The account has positions and no cascade applies."
+          }
+        },
+        "summary": "Delete an account.",
+        "tags": [
+          "Accounts"
+        ]
+      },
       "put": {
         "description": "Authed. All fields optional. `startingBalance` is deliberately absent — it is creation-only. `timezone` IS editable: it changes only subsequent trading-day evaluations and rewrites no history, and `defaultRiskPercent` is editable for the same reason.\n",
         "parameters": [
@@ -274,7 +334,7 @@
         },
         "responses": {
           "200": {
-            "description": "The updated account."
+            "description": "The updated account. `isDemo` is server-set and unchanged by this call."
           },
           "400": {
             "description": "Validation error (includes an unknown IANA timezone)."
@@ -286,8 +346,7 @@
             "description": "Account not found."
           },
           "409": {
-            "description": "Duplicate account name",
-            "or currency change while positions exist.": null
+            "description": "Duplicate account name, or currency change while positions exist."
           }
         },
         "summary": "Update an account.",
@@ -301,10 +360,7 @@
         "description": "Admin-gated (403 `ADMIN_REQUIRED` for non-admins) and per-user rate limited (60 / 60 s). Returns total users, \"Active now\" users (still-valid sessions in the last 30 min — `activeUsersWindowMinutes` is serialized for honest labeling), positions by status, and revenue as micro-USD integer strings: `allTime` and the reversal-attributed UTC `currentMonth`, with the pinned `basis: 'purchased-credit-volume'`. An empty instance returns well-formed zeros, never errors.\n",
         "responses": {
           "200": {
-            "activeUsers": null,
-            "description": "AdminStats — totals",
-            "positions": null,
-            "revenue.": null
+            "description": "AdminStats — totals, activeUsers, positions, revenue."
           },
           "401": {
             "description": "Not authenticated."
@@ -345,16 +401,10 @@
         ],
         "responses": {
           "200": {
-            "description": "AdminUsage — period",
-            "revenue.": null,
-            "series": null,
-            "topUsers": null,
-            "totals": null
+            "description": "AdminUsage — period, totals, series, topUsers, revenue."
           },
           "400": {
-            "description": "VALIDATION_ERROR — malformed datetimes",
-            "from > to": null,
-            "or range > 366 days.": null
+            "description": "VALIDATION_ERROR — malformed datetimes, from > to, or range > 366 days."
           },
           "401": {
             "description": "Not authenticated."
@@ -705,12 +755,7 @@
             "description": "The image bytes."
           },
           "404": {
-            "description": "Not found",
-            "non-image": null,
-            "not owned": null,
-            "or object gone.": null,
-            "out of range": null,
-            "unrecoverable": null
+            "description": "Not found, not owned, out of range, non-image, unrecoverable, or object gone."
           },
           "503": {
             "description": "Object storage temporarily unreachable (OBJECT_UNREACHABLE)."
@@ -965,9 +1010,7 @@
             "description": "Request body exceeds the byte-cap floor (PAYLOAD_TOO_LARGE)."
           },
           "429": {
-            "description": "Stream in progress",
-            "or rate limit.": null,
-            "retry-while-in-flight": null
+            "description": "Stream in progress, retry-while-in-flight, or rate limit."
           },
           "500": {
             "description": "Provider-key decryption failure."
@@ -1360,8 +1403,7 @@
         },
         "responses": {
           "200": {
-            "description": "The updated key (ProviderKeyListItem",
-            "no key material).": null
+            "description": "The updated key (ProviderKeyListItem, no key material)."
           },
           "400": {
             "description": "Validation error."
@@ -1656,8 +1698,7 @@
             "description": "{ success: true } — password rewritten, all sessions revoked, no session cookie set."
           },
           "400": {
-            "description": "Validation error",
-            "or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body).": null
+            "description": "Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body)."
           },
           "429": {
             "description": "Rate limit reached (IP-keyed)."
@@ -1821,8 +1862,7 @@
             "description": "{ success: true } — account marked email-verified, token consumed."
           },
           "400": {
-            "description": "Validation error",
-            "or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body).": null
+            "description": "Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown — one generic body)."
           },
           "429": {
             "description": "Rate limit reached (IP-keyed)."
@@ -2130,8 +2170,7 @@
             "description": "No such brokerage for this user."
           },
           "409": {
-            "description": "Still assigned to one or more accounts",
-            "which are named in the message.": null
+            "description": "Still assigned to one or more accounts, which are named in the message."
           }
         },
         "summary": "Delete a brokerage.",
@@ -2153,8 +2192,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The brokerage",
-            "including its fee schedule.": null
+            "description": "The brokerage, including its fee schedule."
           },
           "404": {
             "description": "No such brokerage for this user."
@@ -2421,8 +2459,7 @@
             "description": "Not authenticated."
           },
           "503": {
-            "description": "CHANGELOG_UNAVAILABLE (empty cache",
-            "upstream down).": null
+            "description": "CHANGELOG_UNAVAILABLE (empty cache, upstream down)."
           }
         },
         "summary": "List published release notes with the viewer's last-viewed floor.",
@@ -2622,8 +2659,7 @@
             "description": "The saved layout."
           },
           "400": {
-            "description": "Validation error",
-            "or a body containing neither widgets nor theme.": null
+            "description": "Validation error, or a body containing neither widgets nor theme."
           },
           "413": {
             "description": "PAYLOAD_TOO_LARGE — the request body exceeds the limit."
@@ -2779,8 +2815,7 @@
             "description": "The stored rate."
           },
           "400": {
-            "description": "Validation error",
-            "or baseCurrency equal to quoteCurrency.": null
+            "description": "Validation error, or baseCurrency equal to quoteCurrency."
           }
         },
         "summary": "Add or update an exchange rate.",
@@ -3268,8 +3303,7 @@
               "schema": {
                 "properties": {
                   "amount": {
-                    "at most 4 fractional digits.": null,
-                    "description": "Positive decimal",
+                    "description": "Positive decimal, at most 4 fractional digits.",
                     "type": "string"
                   },
                   "category": {
@@ -3314,8 +3348,7 @@
             "description": "The updated expense."
           },
           "400": {
-            "description": "Validation error",
-            "or an unknown field.": null
+            "description": "Validation error, or an unknown field."
           },
           "404": {
             "description": "No such expense for this user."
@@ -3560,13 +3593,7 @@
             "description": "The performance response. When the free-tier lookback floor clamped the requested window it carries the additive optional `tierWindow: { clamped: true, effectiveStart: ISO date-time, lookbackMonths: integer }` field; a window entirely before the floor yields empty series, still marked.\n"
           },
           "400": {
-            "bucket count over cap": null,
-            "description": "Validation error (invalid timezone",
-            "end beyond today + 1 day": null,
-            "invalid dates": null,
-            "start before 2000-01-01": null,
-            "start not before end": null,
-            "unsupported currency) — identical on every tier.": null
+            "description": "Validation error (invalid timezone, invalid dates, start before 2000-01-01, start not before end, end beyond today + 1 day, bucket count over cap, unsupported currency) — identical on every tier."
           },
           "401": {
             "description": "Not authenticated."
@@ -3759,12 +3786,10 @@
             "description": "Validation error (e.g. an invalid option symbol or plan price)."
           },
           "404": {
-            "description": "Position not found (or not owned)",
-            "or the target account not found.": null
+            "description": "Position not found (or not owned), or the target account not found."
           },
           "409": {
-            "description": "A restricted field (symbol/side/assetType/accountId) was changed on a non-draft position",
-            "or an asset-type change was attempted.": null
+            "description": "A restricted field (symbol/side/assetType/accountId) was changed on a non-draft position, or an asset-type change was attempted."
           }
         },
         "summary": "Update a position.",
@@ -3837,7 +3862,58 @@
         },
         "responses": {
           "201": {
-            "description": "The created fill."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "fees": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "filledAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "notes": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "positionClosed": {
+                      "type": "boolean"
+                    },
+                    "positionId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "entry",
+                        "exit"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The created fill, plus `positionClosed` — true when this was the exit that balanced the entered quantity, which closes the position in the same transaction.\n"
           },
           "400": {
             "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."
@@ -3846,8 +3922,7 @@
             "description": "No such position for this user."
           },
           "409": {
-            "description": "The position is closed",
-            "or an exit fill was sent to a position that is still a draft.": null
+            "description": "The position is closed, or an exit fill was sent to a position that is still a draft."
           }
         },
         "summary": "Add a fill to a position.",
@@ -3887,9 +3962,7 @@
             "description": "No such position or fill for this user."
           },
           "409": {
-            "description": "The position is closed",
-            "or removing it would leave exit fills unbacked.": null,
-            "the fill is the last remaining entry": null
+            "description": "The position is closed, the fill is the last remaining entry, or removing it would leave exit fills unbacked."
           }
         },
         "summary": "Delete a fill.",
@@ -4014,8 +4087,7 @@
             "description": "Position not found (or not owned by the user)."
           },
           "409": {
-            "description": "The position is not closed",
-            "or its open day (in the account timezone) differs from the reopen day.": null
+            "description": "The position is not closed, or its open day (in the account timezone) differs from the reopen day."
           }
         },
         "summary": "Reopen a same-day closed position.",
@@ -4390,13 +4462,10 @@
         },
         "responses": {
           "200": {
-            "description": "The merged onboarding preference",
-            "in the same shape as the GET.": null
+            "description": "The merged onboarding preference, in the same shape as the GET."
           },
           "400": {
-            "description": "Unknown field",
-            "empty body": null,
-            "or an invalid status or timestamp.": null
+            "description": "Unknown field, empty body, or an invalid status or timestamp."
           },
           "401": {
             "description": "Authentication required."

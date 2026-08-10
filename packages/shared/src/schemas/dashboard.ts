@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+import {
+  chartWidgetMinRows,
+  STACK_GAP_PX,
+  TIMEFRAME_ROW_PX,
+} from '../constants/dashboard-geometry';
+
 export const WidgetTypeSchema = z.enum([
   'stats-summary',
   'open-positions',
@@ -25,13 +31,24 @@ export const GRID_MAX_ROWS = 24;
 // row unit (Req 1.11). Leaving them at the 80px values would have halved every
 // effective minimum — a chart could be shrunk to half the height the spec
 // intends. Widths are unaffected; columns did not change.
+//
+// THE TWO CHART MINIMUMS ARE COMPUTED, NOT CHOSEN. Their content has a floor of
+// its own (`CHART_MIN_HEIGHT_PX`) and the widget body scrolls, so any minimum
+// below "floor + the widget's own chrome" lets a user resize the bottom of the
+// chart out of sight — no scrollbar takes layout space, so it looks exactly
+// like the hard-coded-height clipping this replaced. Measured in chromium, the
+// old h=4 hid 203px of the performance chart and 159px of the equity curve.
+// `chartWidgetMinRows` derives both from the same floor constant the charts
+// enforce for themselves, so the pair cannot drift.
 export const PerWidgetMinSize: Record<WidgetType, { w: number; h: number }> = {
   'stats-summary': { w: 4, h: 2 },
   'open-positions': { w: 4, h: 4 },
-  'performance-chart': { w: 4, h: 4 },
+  // Pays for its timeframe strip and the gap under it out of the same body.
+  'performance-chart': { w: 4, h: chartWidgetMinRows(TIMEFRAME_ROW_PX + STACK_GAP_PX) },
   'account-balances': { w: 3, h: 4 },
   'position-sizing': { w: 3, h: 6 },
-  'equity-curve': { w: 4, h: 4 },
+  // No toolbar — the chart is the whole body.
+  'equity-curve': { w: 4, h: chartWidgetMinRows(0) },
 };
 
 export const WidgetPlacementSchema = z

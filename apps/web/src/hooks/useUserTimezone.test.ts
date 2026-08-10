@@ -229,7 +229,7 @@ describe('useUserTimezone when the read fails outright', () => {
   });
 });
 
-// ---- One-time backfill (R2.5) -----------------------------------------------
+// ---- One-time backfill of a pre-migration row -------------------------------
 // Every row predating the column reads as the server default `UTC`, but those
 // users were previously bucketed by their BROWSER zone. Left alone, a New York
 // trader's days would silently shift four or five hours on deploy.

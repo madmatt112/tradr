@@ -174,9 +174,9 @@ export function handlePerformanceQueryError(
 /**
  * `params` is `null` while the caller is still waiting on a value it must not
  * guess — today that is the user's stored reporting timezone
- * (user-onboarding R2.4, `useUserTimezone`). A `null` disables the query
- * outright rather than firing one bucketed by a zone the user never chose, and
- * it means there is no placeholder tz that could leak into a request.
+ * (`useUserTimezone`). A `null` disables the query outright rather than firing
+ * one bucketed by a zone the user never chose, and it means there is no
+ * placeholder tz that could leak into a request.
  */
 export function usePerformance(params: PerformanceQueryInput | null) {
   const queryClient = useQueryClient();

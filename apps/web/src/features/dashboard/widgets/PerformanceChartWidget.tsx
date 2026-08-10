@@ -6,15 +6,12 @@ import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
+import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import PerformanceBarChart from '@/features/performance/components/PerformanceBarChart';
 import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
-import { usePerformance } from '@/features/performance/hooks/usePerformance';
+import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { useTimeframeSelection } from '@/features/performance/hooks/useTimeframeSelection';
-import {
-  DEFAULT_CURRENCY_HISTORY_RANGE,
-  derivePresetRange,
-  type PerformancePreset,
-} from '@/features/performance/utils/derivePresetRange';
+import { type PerformancePreset } from '@/features/performance/utils/derivePresetRange';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 import { widgetRegistry } from './registry';
@@ -36,8 +33,8 @@ export interface PerformanceChartWidgetProps {
  *      (§K — the fix-up flows through the debounced layout state; NO separate PUT).
  *   2. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
  *   3. Compute {granularity, start, end} via `derivePresetRange(config.timeframe, ...)`
- *      anchored at the user's stored reporting timezone (`useUserTimezone`,
- *      user-onboarding R2.4 — NOT the browser's zone).
+ *      anchored at the user's stored reporting timezone (`useUserTimezone` —
+ *      NOT the browser's zone).
  *      The historyRange comes from the previous response's `currencyData.historyRange`
  *      (§B — first render bootstraps with `DEFAULT_CURRENCY_HISTORY_RANGE`).
  *   4. Fetch via `usePerformance`, passing `null` until the stored zone lands so
@@ -70,43 +67,18 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
   const timezone = useUserTimezone();
-  const defaultWeekStart = 1 as const;
 
-  // Derive the query window. On first render we have no response, so the
+  // Derive the query window. The first request has no response to read, so the
   // historyRange falls back to DEFAULT_CURRENCY_HISTORY_RANGE (§B). Once the
-  // response lands we re-derive with the currency's real historyRange and
-  // resolved week-start (Design §10.4 cycle-prevention note).
-  // `derivePresetRange` resolves calendar boundaries through `Intl`, so it
-  // cannot run before the stored zone is known.
-  const performanceQueryBootstrap = timezone
-    ? derivePresetRange(
-        config.timeframe,
-        DEFAULT_CURRENCY_HISTORY_RANGE,
-        new Date(),
-        timezone,
-        defaultWeekStart,
-      )
-    : null;
-
-  const performanceQuery = usePerformance(
-    timezone && performanceQueryBootstrap
-      ? {
-          granularity: performanceQueryBootstrap.granularity,
-          start: performanceQueryBootstrap.start,
-          end: performanceQueryBootstrap.end,
-          tz: timezone,
-          ...(displayCurrency ? { currency: displayCurrency } : {}),
-        }
-      : null,
-  );
+  // response lands `usePresetPerformance` re-derives with the currency's real
+  // historyRange and resolved week-start (Design §10.4 cycle-prevention note).
+  const { query: performanceQuery, currencyData } = usePresetPerformance({
+    preset: config.timeframe,
+    timezone,
+    currency: displayCurrency,
+  });
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
-
-  // §A — currencies is an ARRAY: use find(), not record-style indexing.
-  const currencyData =
-    displayCurrency != null
-      ? (response?.currencies.find((c) => c.code === displayCurrency) ?? null)
-      : null;
 
   const { options, handleChange } = useTimeframeSelection(config.timeframe, (next) => {
     onUpdateConfig({ timeframe: next });
@@ -115,8 +87,12 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
   // to its empty state before the first fetch.
+  // `h-full` down to the chart's own floor, not a fixed 320: the skeleton has to
+  // occupy the same box the chart will, or the widget scrolls while it loads and
+  // settles when it does — and in the stacked mobile grid, where `h-full` alone
+  // resolves to nothing, an unfloored skeleton is an invisible one.
   if (timezone === undefined || isLoading) {
-    return <Skeleton className="h-[320px] w-full" />;
+    return <Skeleton className="h-full w-full" style={{ minHeight: CHART_MIN_HEIGHT_PX }} />;
   }
 
   if (isError) {
@@ -143,8 +119,12 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
 
   // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; rendered on the
   // empty branch too (a fully-pre-boundary window is a deliberate empty state).
+  //
+  // `compact` for the same reason StatsSummaryWidget asks for it: this widget's
+  // height is pinned, and the notice comes out of the chart's share of it. The
+  // boxed Alert costs 66px plus a 12px stack gap; the one-line form costs 24px.
   const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" />
+    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
   ) : null;
 
   if (currencyData == null) {
@@ -156,8 +136,22 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
     );
   }
 
+  // `h-full` + a `flex-1` chart: the notice and the timeframe buttons take the
+  // height they need and the chart takes the rest, whatever the widget's height
+  // happens to be.
+  //
+  // `flex-1` with NO min-height override is deliberate, and it is what makes one
+  // set of classes cover both grid paths. A flex item's default
+  // `min-height: auto` is its min-content height, which the chart now supplies
+  // as `CHART_MIN_HEIGHT_PX` — so the chart shrinks into a short widget down to
+  // its legibility floor and no further, and in the stacked mobile grid, where
+  // WidgetCard has no determinate height and `h-full` resolves to auto all the
+  // way down, that floor is what stops the chart being 0px.
+  //
+  // It was `min-h-0`, which reads as "shrink as far as you like" — and against a
+  // container with no height at all, as far as you like is nothing.
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex h-full flex-col gap-3">
       {tierWindowNotice}
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
@@ -173,7 +167,7 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
           </Button>
         ))}
       </div>
-      <PerformanceBarChart series={currencyData.series} />
+      <PerformanceBarChart series={currencyData.series} className="flex-1" />
     </div>
   );
 }

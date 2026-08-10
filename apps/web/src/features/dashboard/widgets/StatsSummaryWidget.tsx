@@ -6,11 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
-import { usePerformance } from '@/features/performance/hooks/usePerformance';
-import {
-  DEFAULT_CURRENCY_HISTORY_RANGE,
-  derivePresetRange,
-} from '@/features/performance/utils/derivePresetRange';
+import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { formatProfitFactor } from '@/features/performance/utils/formatPerformance';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
@@ -26,10 +22,12 @@ interface StatTile {
  * Data flow:
  *   1. Resolve `displayCurrency` from `useDisplayCurrencyQuery()`.
  *   2. Compute {start, end} via `derivePresetRange('all-time', historyRange, ...)`
- *      anchored at the user's stored reporting timezone (`useUserTimezone`,
- *      user-onboarding R2.4 — NOT the browser's zone).
+ *      anchored at the user's stored reporting timezone (`useUserTimezone` —
+ *      NOT the browser's zone).
  *      On first render `historyRange = DEFAULT_CURRENCY_HISTORY_RANGE` (§B);
- *      once the response lands we use the currency entry's `historyRange`.
+ *      once the response lands `usePresetPerformance` re-derives the window
+ *      from the currency entry's real `historyRange`, so "all-time" reaches the
+ *      account's earliest close instead of stopping at the current month.
  *   3. Fetch via `usePerformance({ granularity: 'year', start, end, tz, currency })`,
  *      passing `null` until the stored zone lands so nothing is bucketed by a guess.
  *   4. Pick the currency entry via `response.currencies.find(c => c.code === displayCurrency)`
@@ -39,45 +37,18 @@ function StatsSummaryWidget() {
   const { data: displayCurrencyData } = useDisplayCurrencyQuery();
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
-  // The user's STORED reporting timezone (user-onboarding R2.4) — `undefined`
-  // until that query settles. Week-start is the bootstrap value; once a
-  // response lands we prefer its `resolvedWeekStartDay`.
+  // The user's STORED reporting timezone, not the browser's — `undefined`
+  // until that query settles.
   const timezone = useUserTimezone();
-  const defaultWeekStart = 1 as const;
 
-  // -------- First-render bootstrap ----------
-  // We don't yet have a response, so we can't read historyRange from it. Use
-  // DEFAULT_CURRENCY_HISTORY_RANGE. `derivePresetRange` resolves calendar
-  // boundaries through `Intl`, so it cannot run before the zone is known.
-  const bootstrapRange = timezone
-    ? derivePresetRange(
-        'all-time',
-        DEFAULT_CURRENCY_HISTORY_RANGE,
-        new Date(),
-        timezone,
-        defaultWeekStart,
-      )
-    : null;
-
-  const performanceQuery = usePerformance(
-    timezone && bootstrapRange
-      ? {
-          granularity: 'year',
-          start: bootstrapRange.start,
-          end: bootstrapRange.end,
-          tz: timezone,
-          ...(displayCurrency ? { currency: displayCurrency } : {}),
-        }
-      : null,
-  );
+  const { query: performanceQuery, currencyData } = usePresetPerformance({
+    preset: 'all-time',
+    timezone,
+    currency: displayCurrency,
+    granularity: 'year',
+  });
 
   const { data: response, isLoading, isError, error, refetch } = performanceQuery;
-
-  // §A — currencies is an ARRAY: use find(), not record-style indexing.
-  const currencyData =
-    displayCurrency != null
-      ? (response?.currencies.find((c) => c.code === displayCurrency) ?? null)
-      : null;
 
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
@@ -121,8 +92,12 @@ function StatsSummaryWidget() {
 
   // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; the all-time preset
   // this widget uses is clamped for enforced free users.
+  //
+  // `compact` because this widget's height is pinned: the notice and the tiles
+  // share one fixed body, and the boxed Alert (66px + 12px gap) does not fit
+  // beside them at any row span the default layout can afford.
   const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" />
+    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
   ) : null;
 
   if (currencyData == null || stats == null || (!stats.hasWins && !stats.hasLosses)) {

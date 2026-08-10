@@ -5,16 +5,26 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import { RegisterSchema } from '@tradr/shared';
-import type { User } from '@tradr/shared';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useAuth } from '@/hooks/useAuth';
+import { useRegister } from '@/hooks/useAuth';
 import { useResendVerification } from '@/hooks/useResendVerification';
-import { api } from '@/lib/api';
 import { detectBrowserTimezone } from '@/lib/browserTimezone';
+
+// SF-3: this page is public and MUST NOT call useAuth() or mount the
+// ['auth','me'] query — the api client's global 401 interception would redirect
+// a logged-out visitor to /login before the form renders. It did: a cold load of
+// /register (a bookmark, a refresh, an emailed signup link) 401'd on /auth/me and
+// landed on /login?expired=true, so the only way to reach this form was to click
+// through from /login and a new user sent a signup link could not sign up.
+// routes/__tests__/public-routes-cold-load.test.tsx enforces this.
+//
+// `useRegister` comes from the same module as `useAuth` and is not it: it is the
+// registration mutation alone, with no me-query beside it, exactly as `useLogin`
+// is on /login.
 
 const RegisterFormSchema = RegisterSchema.extend({
   confirmPassword: z.string(),
@@ -26,13 +36,13 @@ const RegisterFormSchema = RegisterSchema.extend({
 type RegisterFormInput = z.infer<typeof RegisterFormSchema>;
 
 function RegisterPage() {
-  const { isLoading, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [apiError, setApiError] = useState('');
   // Check-your-email state flag: the registered address, set on a 201 with
   // emailVerified false (D14 — configuredness learned from our own response).
   const [pendingEmail, setPendingEmail] = useState('');
   const { resend, info } = useResendVerification();
+  const registerAccount = useRegister();
 
   const {
     register,
@@ -42,10 +52,10 @@ function RegisterPage() {
     resolver: zodResolver(RegisterFormSchema),
   });
 
-  // SF-4: checked BEFORE the isAuthenticated guard below — registration
-  // auto-logs-in, so the default QueryClient's focus refetch flips the
-  // me-query to success the moment the user tabs to their mail client and
-  // back; without this ordering the guard would destroy the state. The
+  // SF-4: registration auto-logs-in, so this state has to survive the user
+  // tabbing away to their mail client and back. It does, because nothing on this
+  // page watches the session: there is no me-query to flip to success on the
+  // focus refetch and no authenticated guard to navigate away when it does. The
   // "Continue to dashboard" button is the only exit.
   if (pendingEmail) {
     return (
@@ -86,24 +96,15 @@ function RegisterPage() {
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (isAuthenticated) {
-    navigate({ to: '/dashboard' });
-    return null;
-  }
-
   const onSubmit = async (data: RegisterFormInput) => {
     setApiError('');
     try {
       const detectedTimezone = detectBrowserTimezone();
-      const response = await api.post<{ user: User }>('/auth/register', {
+      // Through `useRegister`, never `api.post` directly: registering swaps the
+      // session cookie, so it has to run the same client-state teardown a login
+      // does or the new account opens onto the previous user's cache, drawer
+      // and walkthrough.
+      const response = await registerAccount.mutateAsync({
         email: data.email,
         password: data.password,
         // Spread, not `timezone: detectedTimezone ?? null` — see

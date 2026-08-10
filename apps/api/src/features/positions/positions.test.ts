@@ -639,6 +639,44 @@ describe('positions', () => {
     expect((await res.json()).status).toBe('open');
   });
 
+  // The auto-close is a second state change riding on the fill request, and the
+  // response is the only place a client can learn it happened: there is no
+  // separate close call to notice. A caller handed the fill alone cannot tell a
+  // closing exit from a partial one.
+  it('reports the auto-close in the response to the fill that caused it', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createTestPosition(cookie, account.id);
+
+    const entry = await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    expect(entry.positionClosed).toBe(false);
+    await openTestPosition(cookie, pos.id, '2025-01-01T00:00:00Z');
+
+    const partial = await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '120',
+      quantity: '4',
+      filledAt: '2025-01-02T00:00:00Z',
+    });
+    expect(partial.positionClosed).toBe(false);
+
+    const balancing = await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '120',
+      quantity: '6',
+      filledAt: '2025-01-03T00:00:00Z',
+    });
+    expect(balancing.positionClosed).toBe(true);
+    // And it is the same answer the position itself gives.
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect((await res.json()).status).toBe('closed');
+  });
+
   // The auto-close must never reject the fill it rides on: `POST /open` with no
   // body stamps openedAt as now, so a journalled backdated exit predates it.
   it('clamps the auto-close to openedAt when the final exit predates it', async () => {

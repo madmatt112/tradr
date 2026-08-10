@@ -20,11 +20,11 @@ export const LoginSchema = z.object({
 export const RegisterSchema = z.object({
   email: z.string().email().trim().toLowerCase(),
   password: z.string().min(8).max(72),
-  // Browser-detected reporting timezone (user-onboarding R2.2). OPTIONAL and
-  // must stay that way: scripted registrations and the existing e2e helpers
-  // post without it, and an absent value falls back to a defined default
-  // server-side rather than being stored as null-and-guessed-later (R2.3).
-  // Not the account trading-day timezone — see schemas/user.ts.
+  // Browser-detected reporting timezone. OPTIONAL and must stay that way:
+  // scripted registrations and the existing e2e helpers post without it, and
+  // an absent value falls back to a defined default server-side rather than
+  // being stored as null-and-guessed-later. Not the account trading-day
+  // timezone — see schemas/user.ts.
   timezone: ReportingTimezoneField.optional(),
 });
 

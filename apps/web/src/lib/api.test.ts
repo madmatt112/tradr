@@ -107,6 +107,144 @@ describe('api request error handling', () => {
   });
 });
 
+// A session that expires ends just as completely as one the user logged out of,
+// and the state that has to go with it is the same state — the walkthrough's
+// module-scoped session and its overlay, the onboarding funnel's completion
+// baseline. `queryClient.clear()` never runs on this path, and neither did the
+// announcement that drops the rest, so the next user on the tab inherited both.
+describe('session expiry announces the end of the session', () => {
+  async function importFresh() {
+    vi.resetModules();
+    const mod = await import('./api');
+    const navigate = vi.fn();
+    mod.setRouter({ navigate });
+    const { eventBus } = await import('../stores/event-bus.store');
+    const onLogout = vi.fn();
+    eventBus.subscribe('auth:logout', onLogout);
+    return { ...mod, onLogout, navigate };
+  }
+
+  function stub401() {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('publishes auth:logout when a 401 ends a live session', async () => {
+    stub401();
+    const { api, markSessionStarted, onLogout } = await importFresh();
+    markSessionStarted();
+
+    await expect(api.get('/positions')).rejects.toThrow('Unauthorized');
+
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  // The other half of the teardown, and the half nothing else can do here: on
+  // the explicit logout `useAuth` clears the cache itself, but an expiry has no
+  // component guaranteed to be mounted. A surviving `['auth', 'me']` is a user
+  // the next mount of /login reads as signed in.
+  it('drops the cached identity along with the session', async () => {
+    stub401();
+    const { api, markSessionStarted } = await importFresh();
+    const { queryClient } = await import('./queryClient');
+    queryClient.setQueryData(['auth', 'me'], { id: 'u-1' });
+    markSessionStarted();
+
+    await expect(api.get('/positions')).rejects.toThrow('Unauthorized');
+
+    expect(queryClient.getQueryData(['auth', 'me'])).toBeUndefined();
+  });
+
+  it('says nothing for the 401 a logged-out visitor gets', async () => {
+    // The me-query on a fresh /login load. No session ended, because there was
+    // none — announcing here would be a teardown of nobody's state, and it would
+    // burn the one-shot interception that the real expiry needs.
+    stub401();
+    const { api, onLogout } = await importFresh();
+
+    await expect(api.get('/auth/me')).rejects.toThrow('Unauthorized');
+
+    expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  it('leaves the explicit logout path to useAuth, which publishes its own', async () => {
+    stub401();
+    const { api, markSessionStarted, setIsLoggingOut, onLogout } = await importFresh();
+    markSessionStarted();
+    setIsLoggingOut(true);
+
+    // POST /auth/logout can itself 401 when the session was already gone.
+    await expect(api.post('/auth/logout')).rejects.toBeTruthy();
+
+    expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  it('announces one termination once, however many requests were in flight', async () => {
+    stub401();
+    const { api, markSessionStarted, onLogout } = await importFresh();
+    markSessionStarted();
+
+    await Promise.allSettled([api.get('/positions'), api.get('/accounts'), api.get('/perf')]);
+
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  // THE LATCH IS ALSO WHAT BOUNDS THE REDIRECT. The interception sends the user
+  // to /login, and anything that answers that by navigating back on a session
+  // that has already ended is round one of a cycle; one navigation per
+  // termination is what stops it. /login itself no longer answers — it mounts no
+  // me-query and guards on nothing — but the bound is not its to keep. Only a
+  // confirmed session start re-arms the latch, so no amount of remounting and
+  // 401ing can re-open it.
+  it('navigates once per termination, whatever 401s afterwards', async () => {
+    stub401();
+    const { api, markSessionStarted, onLogout, navigate } = await importFresh();
+    markSessionStarted();
+
+    await expect(api.get('/positions')).rejects.toThrow('Unauthorized');
+    // Every pass the bounce would have made, if it were still making them.
+    for (let i = 0; i < 3; i++) {
+      await expect(api.get('/auth/me')).rejects.toBeTruthy();
+      await expect(api.get('/positions')).rejects.toBeTruthy();
+    }
+
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  it('re-arms the one-shot interception when a new session begins', async () => {
+    // The latch coalesces one termination's burst of 401s; it is not meant to
+    // disable the interception for the life of the page. A logged-out landing on
+    // /login consumes it, and without the re-arm the session logged into next
+    // would expire in silence.
+    stub401();
+    const { api, markSessionStarted, onLogout } = await importFresh();
+
+    await expect(api.get('/auth/me')).rejects.toThrow('Unauthorized');
+    expect(onLogout).not.toHaveBeenCalled();
+
+    markSessionStarted();
+    await expect(api.get('/positions')).rejects.toThrow('Unauthorized');
+
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  it('announceSessionExpired is idempotent, so a second caller adds nothing', async () => {
+    // Two paths call it — this module's interception and the CSV preview's,
+    // which does its own 401 handling around a multipart POST.
+    const { markSessionStarted, announceSessionExpired, onLogout } = await importFresh();
+    markSessionStarted();
+
+    announceSessionExpired();
+    announceSessionExpired();
+
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+});
+
 describe('resolveApiUrl', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

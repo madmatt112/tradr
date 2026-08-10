@@ -81,47 +81,101 @@ describe('EventBusBridge', () => {
     unmount();
   });
 
-  it('invalidates performance only on reason=fill-added', () => {
-    const { qc, unmount } = mountBridge();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
+  // Every fill mutation runs the ledger fill hook server-side, which posts the
+  // realized-P&L delta as it happens. A PARTIAL exit therefore moves the derived
+  // account balance without ever closing the position, so these three must
+  // refresh exactly what a full exit refreshes.
+  it.each(['fill-added', 'fill-updated', 'fill-deleted'] as const)(
+    'invalidates accounts, dashboard totals, and performance on reason=%s',
+    (reason) => {
+      const { qc, unmount } = mountBridge();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
 
-    eventBus.publish('positions:cache-invalidate', { reason: 'fill-added' });
+      eventBus.publish('positions:cache-invalidate', { reason });
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(invalidatedKeys(spy)).toEqual([['performance']]);
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(invalidatedKeys(spy)).toEqual([
+        ['accounts'],
+        ['dashboard', 'totals'],
+        ['performance'],
+      ]);
 
-    unmount();
-  });
-
-  it('invalidates performance only on reason=fill-updated', () => {
-    const { qc, unmount } = mountBridge();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
-
-    eventBus.publish('positions:cache-invalidate', { reason: 'fill-updated' });
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(invalidatedKeys(spy)).toEqual([['performance']]);
-
-    unmount();
-  });
-
-  it('invalidates performance only on reason=fill-deleted', () => {
-    const { qc, unmount } = mountBridge();
-    const spy = vi.spyOn(qc, 'invalidateQueries');
-
-    eventBus.publish('positions:cache-invalidate', { reason: 'fill-deleted' });
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(invalidatedKeys(spy)).toEqual([['performance']]);
-
-    unmount();
-  });
+      unmount();
+    },
+  );
 
   it('invalidates nothing on reason=created (draft create is a no-op)', () => {
     const { qc, unmount } = mountBridge();
     const spy = vi.spyOn(qc, 'invalidateQueries');
 
     eventBus.publish('positions:cache-invalidate', { reason: 'created' });
+
+    expect(spy).not.toHaveBeenCalled();
+
+    unmount();
+  });
+
+  it('refreshes every derived surface when sample data is seeded', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    // A whole account's worth of positions, fills and ledger rows appears in
+    // one call, so the dashboard, the lists and performance are all stale at
+    // once — and the seeding hook names none of these keys.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'demo-seeded' });
+
+    expect(invalidatedKeys(spy)).toEqual([
+      ['accounts'],
+      ['positions'],
+      ['dashboard', 'totals'],
+      ['performance'],
+    ]);
+
+    unmount();
+  });
+
+  it('refreshes the same surfaces when sample data is removed', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    eventBus.publish('accounts:cache-invalidate', { reason: 'demo-removed' });
+
+    expect(invalidatedKeys(spy)).toEqual([
+      ['accounts'],
+      ['positions'],
+      ['dashboard', 'totals'],
+      ['performance'],
+    ]);
+
+    unmount();
+  });
+
+  it('refreshes the same surfaces when a CSV import is committed', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    // A commit writes a batch of positions and fills in one transaction, and the
+    // fills post realized P&L — so the balance-derived surfaces are stale too,
+    // not just the positions list.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'csv-imported' });
+
+    expect(invalidatedKeys(spy)).toEqual([
+      ['accounts'],
+      ['positions'],
+      ['dashboard', 'totals'],
+      ['performance'],
+    ]);
+
+    unmount();
+  });
+
+  it('invalidates nothing on an account create', () => {
+    const { qc, unmount } = mountBridge();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    // `useCreateAccount` invalidates its own queries; this event exists for the
+    // walkthrough's advance-on-action step, not for cache work.
+    eventBus.publish('accounts:cache-invalidate', { reason: 'created' });
 
     expect(spy).not.toHaveBeenCalled();
 

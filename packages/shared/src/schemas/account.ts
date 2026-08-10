@@ -46,15 +46,15 @@ const timezone = z
     { message: 'Must be a valid IANA timezone name' },
   );
 
-// Default risk percentage (user-onboarding R1): the share of the account
-// balance risked per trade, seeding the calculator's `riskPercent` input.
-// Bounded to the accounts.default_risk_percent numeric(5,2) column (≤3 integer
-// digits, ≤2 fractional) AND to the 0–100 range the calculator's own
-// `riskPercent` already uses (`positiveDecimal(100)`, schemas/calculator.ts).
-// That module's helper is deliberately not reused: it bounds magnitude only
-// and would accept `3.14159`, which the numeric(5,2) column would silently
-// round. The whitespace rejection mirrors `startingBalance` above — Number("
-// 3 ") passes a bounds check but new Decimal("  3  ") throws server-side.
+// Default risk percentage: the share of the account balance risked per trade,
+// seeding the calculator's `riskPercent` input. Bounded to the
+// accounts.default_risk_percent numeric(5,2) column (≤3 integer digits, ≤2
+// fractional) AND to the 0–100 range the calculator's own `riskPercent`
+// already uses (`positiveDecimal(100)`, schemas/calculator.ts). That module's
+// helper is deliberately not reused: it bounds magnitude only and would accept
+// `3.14159`, which the numeric(5,2) column would silently round. The
+// whitespace rejection mirrors `startingBalance` above — Number("  3  ")
+// passes a bounds check but new Decimal("  3  ") throws server-side.
 //
 // Unlike startingBalance this IS editable after creation (it appears in
 // UpdateAccountSchema): it seeds a form field and rewrites no history.
@@ -125,6 +125,11 @@ export const AccountSchema = z.object({
   // moves with the market. `cash + positionValue === balance` always.
   cash: z.string().optional(),
   positionValue: z.string().optional(),
+  // True on the disposable sample account and on nothing else. Server-set and
+  // read-only: it is absent from both CreateAccountSchema and
+  // UpdateAccountSchema, so no request can claim it. `.optional()` for the same
+  // reason as `balance` above — existing fixtures build accounts without it.
+  isDemo: z.boolean().optional(),
 });
 
 export type CreateAccountInput = z.infer<typeof CreateAccountSchema>;

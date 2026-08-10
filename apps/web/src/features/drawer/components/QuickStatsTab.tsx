@@ -1,18 +1,11 @@
-import { useMemo } from 'react';
-
 import type { PositionListItem } from '@tradr/shared';
 
 import { Numeric } from '@/components/Numeric';
 import { Alert } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
-import { usePerformance } from '@/features/performance/hooks/usePerformance';
-import {
-  DEFAULT_CURRENCY_HISTORY_RANGE,
-  derivePresetRange,
-} from '@/features/performance/utils/derivePresetRange';
+import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { usePositions } from '@/features/positions/hooks/usePositions';
-import { useNow } from '@/hooks/useNow';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 function openNotional(positions: PositionListItem[], displayCurrency: string): number {
@@ -52,44 +45,36 @@ function SkeletonValue({ slug }: { slug: string }) {
  * QuickStatsTab — Side-drawer tab summarising 4 headline metrics for the
  * user's display currency: Win Rate, Avg Win, Avg Loss, Open Notional.
  *
- * Uses a single `usePerformance` call (all-time window) plus `usePositions`
- * for the Open Notional sum. All four cards share a unified loading
- * predicate; errors render a single Alert spanning the grid.
+ * Uses a single all-time `usePresetPerformance` call plus `usePositions` for
+ * the Open Notional sum. All four cards share a unified loading predicate;
+ * errors render a single Alert spanning the grid.
+ *
+ * The window goes through `usePresetPerformance` rather than a local
+ * `derivePresetRange` for the reason that hook exists: the first request is
+ * necessarily built with `DEFAULT_CURRENCY_HISTORY_RANGE`, whose null
+ * `earliestClosedAt` yields the CURRENT MONTH, and a tab that stopped there
+ * showed an em-dash for Win Rate, Avg Win and Avg Loss to anyone whose closes
+ * all predate this month — on the 1st, everyone. The hook latches the
+ * `historyRange` the response reports and re-derives from it, clamped to `now`
+ * so a future-dated close cannot push `start` past `end`.
  */
 export function QuickStatsTab() {
   const { data: displayCurrencyData, isLoading: isDisplayCurrencyLoading } =
     useDisplayCurrencyQuery();
   const displayCurrency = displayCurrencyData?.currency ?? null;
 
-  const now = useNow(60_000);
-  // The user's STORED reporting timezone (user-onboarding R2.4), `undefined`
+  // The user's STORED reporting timezone, not the browser's — `undefined`
   // until that query settles. `derivePresetRange` resolves calendar boundaries
-  // through `Intl`, so it cannot run before the zone is known.
+  // through `Intl`, so the hook holds the query at `null` until it lands.
   const timezone = useUserTimezone();
-  const range = useMemo(
-    () =>
-      timezone
-        ? derivePresetRange('all-time', DEFAULT_CURRENCY_HISTORY_RANGE, now, timezone, 1)
-        : null,
-    [now, timezone],
-  );
 
-  const performanceQuery = usePerformance(
-    timezone && range
-      ? {
-          granularity: range.granularity,
-          start: range.start,
-          end: range.end,
-          tz: timezone,
-          ...(displayCurrency ? { currency: displayCurrency } : {}),
-        }
-      : null,
-  );
+  const { query: performanceQuery, currencyData: currencyEntry } = usePresetPerformance({
+    preset: 'all-time',
+    timezone,
+    currency: displayCurrency,
+  });
+
   const positionsQuery = usePositions({ status: 'open' });
-
-  const currencyEntry = displayCurrency
-    ? performanceQuery.data?.currencies.find((c) => c.code === displayCurrency)
-    : undefined;
 
   // `timezone === undefined` joins the predicate for the same reason
   // `displayCurrency === null` already does: the performance query is disabled
@@ -127,7 +112,7 @@ export function QuickStatsTab() {
   const showEmptyCopy =
     !isLoading &&
     performanceQuery.data !== undefined &&
-    currencyEntry === undefined &&
+    currencyEntry === null &&
     displayCurrency !== null;
 
   return (

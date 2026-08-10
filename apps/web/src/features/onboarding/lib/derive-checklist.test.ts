@@ -1,7 +1,7 @@
 // @vitest-environment node
 //
 // node, NOT jsdom: deriveChecklist takes primitives and returns data, so the
-// highest-value unit test in this spec must not need a browser to run. If a
+// highest-value unit test in the feature must not need a browser to run. If a
 // change to the module makes this file need jsdom, the module has stopped being
 // pure and that is the bug.
 
@@ -11,7 +11,7 @@ import { type ChecklistInput, type ChecklistItemId, deriveChecklist } from './de
 
 const USED_AT = '2026-08-06T12:00:00.000Z';
 
-/** Build an input from the four completion signals, in R4.1 order. */
+/** Build an input from the four completion signals, in checklist order. */
 function inputFor(signals: [boolean, boolean, boolean, boolean]): ChecklistInput {
   const [account, calculator, position, close] = signals;
   return {
@@ -27,7 +27,7 @@ function doneFlags(input: ChecklistInput): boolean[] {
 }
 
 describe('deriveChecklist — shape', () => {
-  it('returns exactly the four R4.1 items, in order, with stable ids and labels', () => {
+  it('returns exactly the four items, in order, with stable ids and labels', () => {
     const { items } = deriveChecklist(inputFor([false, false, false, false]));
 
     expect(items).toHaveLength(4);
@@ -40,7 +40,7 @@ describe('deriveChecklist — shape', () => {
     ]);
   });
 
-  it('keeps the ids stable regardless of completion state — task 24 joins on them', () => {
+  it('keeps the ids stable regardless of completion state — the step sets join on them', () => {
     const ids: ChecklistItemId[] = ['account', 'calculator', 'position', 'close'];
 
     expect(deriveChecklist(inputFor([true, true, true, true])).items.map((i) => i.id)).toEqual(ids);
@@ -53,8 +53,7 @@ describe('deriveChecklist — shape', () => {
 describe('deriveChecklist — truth table', () => {
   // All 16 combinations of the four signals. Each item answers only its own
   // question, so every combination is a legitimate state — including the
-  // out-of-order ones (R4.3). The `allComplete` column is the R4.7 retirement
-  // flag.
+  // out-of-order ones. The `allComplete` column is the retirement flag.
   const table: {
     name: string;
     signals: [boolean, boolean, boolean, boolean];
@@ -126,7 +125,7 @@ describe('deriveChecklist — truth table', () => {
     expect(new Set(table.map((row) => row.signals.join(','))).size).toBe(16);
   });
 
-  it('is only allComplete when all four are — one gap is enough to keep it alive (R4.7)', () => {
+  it('is only allComplete when all four are — one gap is enough to keep it alive', () => {
     const complete = table.filter((row) => row.allComplete);
 
     expect(complete).toHaveLength(1);
@@ -134,7 +133,7 @@ describe('deriveChecklist — truth table', () => {
   });
 });
 
-describe('deriveChecklist — count derivation (R4.2, R4.3)', () => {
+describe('deriveChecklist — count derivation', () => {
   it('treats zero as incomplete and any positive count as complete', () => {
     expect(
       doneFlags({ accountCount: 0, positionsEverCreatedCount: 0, closedPositionCount: 0 }),
@@ -147,10 +146,10 @@ describe('deriveChecklist — count derivation (R4.2, R4.3)', () => {
     ).toEqual([true, false, true, true]);
   });
 
-  it('derives from the counts alone — provenance is not an input (R4.3)', () => {
+  it('derives from the counts alone — provenance is not an input', () => {
     // Two users with identical counts: one typed every position in by hand, the
     // other imported a CSV. There is no field here that could tell them apart,
-    // which is exactly the property R4.3 asks for.
+    // which is exactly the point — completion is reachable by any route.
     const counts = { accountCount: 1, positionsEverCreatedCount: 12, closedPositionCount: 12 };
 
     expect(deriveChecklist(counts)).toEqual(deriveChecklist({ ...counts }));
@@ -168,9 +167,9 @@ describe('deriveChecklist — count derivation (R4.2, R4.3)', () => {
   it('keeps item 3 ticked once every position has been closed', () => {
     // positionsEverCreatedCount counts positions ever created, NOT open ones.
     // A user who has closed all 4 of their positions has still logged a
-    // position, so item 3 stays ticked and the checklist can retire (R4.7). If
-    // a caller ever passed an open-only count here, this user would show 0 and
-    // item 3 would un-tick itself — the reason the field is named as it is.
+    // position, so item 3 stays ticked and the checklist can retire. If a caller
+    // ever passed an open-only count here, this user would show 0 and item 3
+    // would un-tick itself — the reason the field is named as it is.
     const allClosed = {
       accountCount: 1,
       positionsEverCreatedCount: 4,
@@ -182,7 +181,7 @@ describe('deriveChecklist — count derivation (R4.2, R4.3)', () => {
     expect(deriveChecklist(allClosed).allComplete).toBe(true);
   });
 
-  it('leaves item 1 incomplete while only demo data is present (R4.8)', () => {
+  it('leaves item 1 incomplete while only demo data is present', () => {
     // Demo seeding is not creating an account, so the account count the caller
     // passes excludes it and item 1 stays open. Nothing in here needs to know
     // about demo data — it only ever sees the number it is given.
@@ -192,7 +191,7 @@ describe('deriveChecklist — count derivation (R4.2, R4.3)', () => {
   });
 });
 
-describe('deriveChecklist — calculator timestamp (the single R4.2 exception)', () => {
+describe('deriveChecklist — calculator timestamp (the one item with no rows behind it)', () => {
   const counts = { accountCount: 0, positionsEverCreatedCount: 0, closedPositionCount: 0 };
 
   it('is incomplete when the key is absent — the API omits it rather than nulling it', () => {

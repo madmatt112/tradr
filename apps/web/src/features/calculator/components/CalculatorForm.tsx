@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
 import {
@@ -35,6 +35,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { useBrokerages } from '@/features/brokerages/hooks/useBrokerages';
 import { useBuyingPowerBasisQuery } from '@/features/calculator/hooks/useBuyingPowerBasis';
+import { useOnboardingPatch, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
 import { OptionsChainViewer } from '@/features/options/components/OptionsChainViewer';
 import type { OptionContract } from '@/features/options/hooks/useOptionsChain';
 import { useStockQuote } from '@/hooks/useStockQuote';
@@ -116,6 +117,27 @@ export function CalculatorForm() {
   const buyingPowerBasisQuery = useBuyingPowerBasisQuery();
   const capBasis = buyingPowerBasisQuery.data?.basis ?? 'cash';
 
+  // THE SINGLE NAMED EXCEPTION TO "checklist completion is derived, never
+  // stored". The other three items read the user's real rows; the calculator is
+  // stateless and writes nothing, so "size a trade in the calculator" has no
+  // data trace unless this one timestamp is recorded. It is a fact about the
+  // user ("first used the calculator at T"), not a per-step flag — it is
+  // written once and never reconciled against anything. NOTHING ELSE about
+  // onboarding may be written from this form, and no other checklist item may
+  // acquire a flag like it.
+  const onboardingQuery = useOnboardingQuery();
+  // Silent: this write is not something the user asked for, so its failure has
+  // nothing to tell them. See useOnboardingPatch.
+  const { mutate: patchOnboarding } = useOnboardingPatch({ silent: true });
+  // WRITE-ONCE, AND THE SERVER VALUE ALONE CANNOT ENFORCE IT. The recorded
+  // timestamp only reaches `onboardingQuery.data` once the PATCH has round-
+  // tripped; two calculations inside that window would both read it as absent
+  // and both write. This ref closes on the very render that fires the request,
+  // so it covers the in-flight gap that the server value cannot. It is
+  // deliberately not persisted anywhere — on a later mount the stored timestamp
+  // is the guard, which is what keeps the request from ever repeating.
+  const calculatorUseRecorded = useRef(false);
+
   const values = watch();
   const direction = values.direction;
   const mode = values.mode;
@@ -166,6 +188,31 @@ export function CalculatorForm() {
       error = e instanceof Error ? e.message : 'Calculation error';
     }
   }
+
+  // A SUCCESSFUL CALCULATION IS `result !== null` — a non-throwing
+  // `calculateTrade` behind the gate above. That is the same condition
+  // `CalculatorResults` renders numbers on, and it is the only notion of
+  // success this form has: there is no submit, the form computes on render, and
+  // a throw leaves `result` null with `error` set.
+  const hasResult = result !== null;
+  const onboarding = onboardingQuery.data;
+
+  // FIRE AND FORGET. In an effect, so it is off the calculation's path
+  // entirely: the numbers above are already rendered by the time this
+  // dispatches, and the mutation is silent, so a failed write shows the user
+  // nothing. Nor is it retried within this mount — the ref latches BEFORE the
+  // mutation is sent, and the mutation's own retry count is TanStack's default
+  // of 0 — so checklist item 2 stays unticked until the next time this form
+  // mounts.
+  useEffect(() => {
+    if (!hasResult || calculatorUseRecorded.current) return;
+    // Until the preference read lands we cannot tell a first use from a
+    // thousandth, and writing on a guess would move an existing timestamp.
+    // Absent, not null, when unset — test with `undefined`.
+    if (!onboarding || onboarding.calculatorFirstUsedAt !== undefined) return;
+    calculatorUseRecorded.current = true;
+    patchOnboarding({ calculatorFirstUsedAt: new Date().toISOString() });
+  }, [hasResult, onboarding, patchOnboarding]);
 
   // An account-sourced figure ⇒ the account's currency; else USD (D9). No longer
   // gated on the percent basis: the dollar basis can now source an account too,
@@ -250,13 +297,13 @@ export function CalculatorForm() {
     setValue('feeSchedule', parsed, { shouldValidate: true });
   };
 
-  // Seed the risk percent from the account's own rule (user-onboarding R1.2), at
-  // the two points that already re-seed `balance`. READ PATH ONLY — the account
-  // is never written back to from here (R1.3): a risk percent typed on one
-  // calculation is that calculation's, and the stored rule is unchanged.
+  // Seed the risk percent from the account's own rule, at the two points that
+  // already re-seed `balance`. READ PATH ONLY — the account is never written
+  // back to from here: a risk percent typed on one calculation is that
+  // calculation's, and the stored rule is unchanged.
   //
-  // Only when a rule EXISTS. An account without one deliberately leaves the field
-  // exactly as it found it (R1.4) rather than clearing it the way an absent
+  // Only when a rule EXISTS. An account without one deliberately leaves the
+  // field exactly as it found it rather than clearing it the way an absent
   // `balance` clears the balance — every account predating the column has no
   // rule, so clearing would wipe a percent the user typed before picking their
   // account and change today's behaviour for every existing user.
@@ -313,8 +360,12 @@ export function CalculatorForm() {
   // balance to size against; in the dollar basis it supplies only the cap figure
   // and the display currency, because a dollar risk is typed directly and a
   // `balance` set here would be a second, contradictory risk basis.
+  // `data-tour` on this block and on the risk-basis tabs below are the
+  // walkthrough's anchors. Neither the account picker nor the risk basis exposes
+  // a stable id of its own — the picker's trigger is rebuilt per query state —
+  // and the steps are data, so they cannot match on structure.
   const accountPicker = (
-    <div className="space-y-2 pt-2">
+    <div className="space-y-2 pt-2" data-tour="calculator-account">
       <Label>Account</Label>
       {accountsQuery.isLoading ? (
         <Select disabled>
@@ -516,7 +567,11 @@ export function CalculatorForm() {
 
         <div className="space-y-2">
           <Label>Risk</Label>
-          <Tabs value={riskBasis} onValueChange={handleRiskBasisChange}>
+          {/* `data-tour` sits on the BASIS CHOOSER, not on the block: the block
+              also holds the balance/risk fields and the account picker, so the
+              walkthrough's "Risk" step would otherwise highlight three separate
+              controls and point at none of them. */}
+          <Tabs data-tour="calculator-risk" value={riskBasis} onValueChange={handleRiskBasisChange}>
             <TabsList>
               <TabsTrigger value="dollar" className="cursor-pointer">
                 Dollar

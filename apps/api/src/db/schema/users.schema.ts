@@ -24,17 +24,16 @@ export const users = pgTable(
     // existing rows as verified, D10). Registration always writes the value explicitly.
     emailVerified: boolean('email_verified').notNull().default(true),
     displayCurrency: varchar('display_currency', { length: 3 }),
-    // The user's REPORTING timezone (user-onboarding R2): the zone P&L is bucketed
-    // into by day, week and month. It is not a display format — nothing renders a
-    // timestamp in it. NOT the same thing as accounts.timezone,
-    // which is the account's *trading-day boundary* and defaults to America/New_York
-    // because that is where NYSE, NASDAQ and NYSE Arca run. This one is seeded from
-    // the browser at registration and follows the person, not the market. Neither is
-    // derived from the other (R2.7).
+    // The user's REPORTING timezone: the zone P&L is bucketed into by day, week and
+    // month. It is not a display format — nothing renders a timestamp in it. NOT the
+    // same thing as accounts.timezone, which is the account's *trading-day boundary*
+    // and defaults to America/New_York because that is where NYSE, NASDAQ and NYSE
+    // Arca run. This one is seeded from the browser at registration and follows the
+    // person, not the market. Neither is derived from the other.
     // Nullable with no backfill: NULL marks a pre-migration row and is resolved at
-    // read time by resolveTimezone (R2.5). No CHECK constraint enumerating zones —
-    // validity is decided by resolveTimezone, and a hardcoded list would reject
-    // legitimate Etc/* zones.
+    // read time by resolveTimezone. No CHECK constraint enumerating zones — validity
+    // is decided by resolveTimezone, and a hardcoded list would reject legitimate
+    // Etc/* zones.
     timezone: varchar('timezone', { length: 64 }),
     taxJurisdiction: varchar('tax_jurisdiction', { length: 8 }),
     theme: varchar('theme', { length: 8 }).notNull().default('system'),
@@ -56,13 +55,14 @@ export const users = pgTable(
     // (the advisor_default_persona_id precedent above).
     writableAccountId: uuid('writable_account_id'),
     changelogViewedAt: timestamp('changelog_viewed_at', { withTimezone: true }),
-    // Onboarding PREFERENCE (user-onboarding R4.6): walkthrough status, the
-    // first-calculator-use timestamp, and the set of coach marks already seen.
-    // PREFERENCE ONLY — checklist item completion is DERIVED from the user's
-    // real data (account/position/closed-position counts) and is never stored
-    // here (R4.2). calculatorFirstUsedAt is the single named exception, and it
-    // is a timestamp recording a fact, not a per-item completion flag: the
-    // calculator writes nothing else, so item 2 has no other data trace.
+    // Onboarding PREFERENCE: walkthrough status, the first-calculator-use
+    // timestamp, and the set of coach marks already seen. PREFERENCE ONLY —
+    // checklist item completion is DERIVED from the user's real data
+    // (account/position/closed-position counts) and is never stored here, so
+    // it cannot disagree with reality or need repair. calculatorFirstUsedAt is
+    // the single named exception, and it is a timestamp recording a fact, not
+    // a per-item completion flag: the calculator writes nothing else, so item
+    // 2 has no other data trace.
     // One jsonb column rather than three scalars because coachMarksSeen is a
     // growing set that would otherwise need its own table for a UI preference
     // — the dashboard_layouts.widgets precedent.
