@@ -41,6 +41,24 @@ export function isApiCrossOrigin(): boolean {
   }
 }
 
+/**
+ * Whether the user is deliberately ending this session — which is a claim about
+ * the WHOLE logout, not just the `POST /auth/logout` request.
+ *
+ * IT GUARDS THE NAVIGATION, NOT ONLY THE ANNOUNCEMENT. `hasSession` below stops
+ * a deliberate logout being ANNOUNCED as an expiry; nothing stopped it being
+ * REDIRECTED as one, and the redirect is what carries `?expired=true` onto
+ * /login. The logout tears the client state down, and tearing it down empties
+ * the query cache while the authenticated surfaces are still mounted — so every
+ * one of them refetches on the spot and every one of those refetches 401s,
+ * because the session really is over. This used to be cleared before that
+ * teardown ran, so the first of those 401s navigated to `/login?expired=true`
+ * and told a user who had just clicked Log out that their session had expired.
+ *
+ * So it is only cleared by a session BEGINNING (`markSessionStarted`) or by a
+ * fresh page load, which resets this module anyway. Between the click and the
+ * next login there is nothing left on this tab that could expire.
+ */
 export let isLoggingOut = false;
 
 export function setIsLoggingOut(value: boolean) {
@@ -124,6 +142,11 @@ export function markSessionConfirmed(): void {
 export function markSessionStarted(): void {
   hasSession = true;
   redirecting = false;
+  // And whatever logout came before it is over: there is a session on this tab
+  // again, so the next 401 is an expiry to be handled rather than the wake of a
+  // deliberate sign-out. This is the only thing that reopens the interception
+  // after a logout — see `isLoggingOut`.
+  isLoggingOut = false;
 }
 
 /**

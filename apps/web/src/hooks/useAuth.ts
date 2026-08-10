@@ -121,7 +121,14 @@ export function useAuth() {
       return api.post('/auth/logout');
     },
     onSettled: () => {
-      setIsLoggingOut(false);
+      // `isLoggingOut` is deliberately NOT cleared here. The teardown below
+      // empties the query cache with the authenticated surfaces still mounted,
+      // so they all refetch and all of those refetches 401 — after this
+      // callback has returned. Clearing the flag first put those 401s back
+      // through the interception, which redirected to `/login?expired=true` and
+      // reported a deliberate logout as an expiry. The next login clears it
+      // (`markSessionStarted`), and so does a page load.
+      //
       // The session is over on this path too, so a later 401 must not be read
       // as a second one ending — the teardown below already announced it.
       markSessionEnded();

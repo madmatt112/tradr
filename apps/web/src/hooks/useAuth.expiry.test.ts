@@ -74,6 +74,26 @@ function stubNetwork() {
 }
 
 /**
+ * The network a DELIBERATE logout looks like: everything answers until
+ * `POST /auth/logout` lands, and nothing does afterwards — which is exactly what
+ * the server does, and exactly what every refetch the logout's own teardown
+ * provokes will run into.
+ */
+function stubNetworkEndingOnLogout() {
+  let live = true;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes('/auth/logout')) {
+        live = false;
+        return Promise.resolve(ok({}));
+      }
+      return Promise.resolve(live ? ok(A_USER) : new Response('', { status: 401 }));
+    }),
+  );
+}
+
+/**
  * The network an endpoint-scoped 401 looks like: `/auth/me` keeps answering, and
  * one feature endpoint does not. Nothing about the SESSION has changed, which is
  * the whole point — this is the shape that turned the expiry teardown into a
@@ -321,6 +341,30 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
 
     expect(onLogout).toHaveBeenCalledOnce();
     expect(interceptNavigate).toHaveBeenCalledOnce();
+  });
+
+  // A LOGOUT IS NOT AN EXPIRY, and the 401s it produces are its own. The
+  // teardown empties the cache while the dashboard is still mounted, so every
+  // observer refetches and every refetch 401s a moment later — after the logout
+  // handler has returned. Those 401s used to reach the interception and
+  // navigate to `/login?expired=true`, so the user who had just clicked Log out
+  // was told their session had expired. The guard has to cover the NAVIGATION
+  // for the whole logout, not just the announcement.
+  it('does not report a deliberate logout as an expiry', async () => {
+    stubNetworkEndingOnLogout();
+    const session = await signIn();
+
+    await act(async () => {
+      await session.result.current.logout.mutateAsync();
+    });
+    // The refetch storm the teardown set off, arriving after the logout handler
+    // returned — the window the flag has to stay shut across.
+    await anAuthedRequest();
+
+    expect(interceptNavigate).not.toHaveBeenCalled();
+    // And the teardown still ran: this is a logout, announced as one.
+    expect(onLogout).toHaveBeenCalledOnce();
+    session.unmount();
   });
 
   it('says nothing for the 401 a logged-out visitor gets', async () => {
