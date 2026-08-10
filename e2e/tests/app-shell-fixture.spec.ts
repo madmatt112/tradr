@@ -1,6 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
-import { mockAppShell, PERF_URL, SESSION_RESPONSE } from './fixtures/performance-fixtures';
+import { mockAppShell, PERF_URL, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
 
 /**
  * Coverage for `mockAppShell` itself (e2e/tests/fixtures/performance-fixtures.ts).
@@ -90,5 +90,39 @@ test.describe('mockAppShell', () => {
 
     await page.goto('/dashboard');
     await page.waitForURL(/\/login/, { timeout: 20_000 });
+  });
+
+  test('fails the test when the unstubbed request comes after the last await', async ({ page }) => {
+    // Also SUPPOSED to fail, and for a reason the test above cannot cover.
+    //
+    // The backstop's throw is only reported while the spec is awaiting
+    // something. A request the app fires after the spec's last await — a
+    // debounce, a widget fetching once its grid has mounted — used to throw
+    // into nothing: measured, teardown began 3ms after the body returned and a
+    // stray 50ms later was never even issued, so the suite stayed green with a
+    // missing stub. That is the same silent pass this file exists to prevent,
+    // reached by timing rather than by a missing stub.
+    //
+    // The body below is written to PASS in that world: it schedules one
+    // unstubbed request for after it has returned and asserts nothing. What
+    // fails it now is teardown — the fixture settles, the request lands, the
+    // backstop records it, and the recorded list is asserted empty. Take either
+    // half away and this reports "Expected to fail, but passed".
+    test.fail();
+
+    await mockAppShell(page);
+    await mockSession(page);
+
+    await page.goto('/dashboard');
+    await expect(page.getByTestId('drawer-topbar')).toBeVisible();
+
+    // Stands in for the endpoint the fixture does not know about yet, asked for
+    // late. `evaluate` returns as soon as the timer is set, so the request
+    // leaves the page after this test body has finished.
+    await page.evaluate(() => {
+      window.setTimeout(() => {
+        void fetch('/api/__unstubbed-after-last-await');
+      }, 200);
+    });
   });
 });

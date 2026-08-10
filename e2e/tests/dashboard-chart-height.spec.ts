@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
-import { mockAppShell, SESSION_RESPONSE } from './fixtures/performance-fixtures';
+import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
 
 /**
  * Rendered height of the two dashboard chart widgets, on BOTH grid paths.

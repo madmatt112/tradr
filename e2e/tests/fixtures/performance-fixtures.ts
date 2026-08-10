@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { test as base, expect, type Page } from '@playwright/test';
 
 /**
  * Static performance API fixtures used by the e2e specs. Kept in one place so
@@ -177,7 +177,15 @@ export const SESSION_RESPONSE = {
  *
  * It FAILS CLOSED: anything under `/api/` that neither this helper nor the spec
  * answers hits the backstop registered below and fails the test by name. See
- * `failOnUnstubbedRequest`.
+ * `failOnUnstubbedRequest`. Specs must import `test` from this module for that
+ * to hold — the teardown half of the check is a fixture on it.
+ *
+ * One way to defeat it, worth knowing: a spec handler that calls
+ * `route.continue()` for the requests it does not want. `continue()` abandons
+ * the handler chain and goes to the real network, so those requests never reach
+ * the backstop and fail open to a 401 and the /login bounce all over again. Use
+ * `route.fallback()`, which hands the request to the next matching handler —
+ * this helper's stubs, and failing those, the backstop.
  */
 /**
  * The default dashboard layout a freshly-registered user receives from the
@@ -237,13 +245,18 @@ const DEFAULT_DASHBOARD_LAYOUT = {
 };
 
 /**
+ * Every unstubbed request the backstop saw, per page. Read by the `test`
+ * exported below in teardown — see `failOnUnstubbedRequest`.
+ */
+const unstubbedRequests = new WeakMap<Page, string[]>();
+
+/**
  * The backstop that makes the list below a CONTRACT rather than a best effort.
  *
  * Registered first, so Playwright — which matches handlers in reverse
  * registration order — reaches it only when neither `mockAppShell` nor the spec
- * answered the request. It throws from inside the handler, which Playwright
- * reports as a test error naming the method and path, and the request is never
- * answered at all, so it cannot 401 and cannot trip the redirect to /login.
+ * answered the request. The request is never answered at all, so it cannot 401
+ * and cannot trip the redirect to /login.
  *
  * That inversion is the point. Unstubbed used to mean a 401, a global redirect,
  * and a spec that quietly went on testing the login page — an assertion about
@@ -254,13 +267,34 @@ const DEFAULT_DASHBOARD_LAYOUT = {
  * because the next author always reached a different endpoint. Failing closed
  * does: the cost of a missing stub is now one named error at the request that
  * needed it, paid by whoever mounts the new surface.
+ *
+ * The violation is reported TWICE, because one report alone is not enough:
+ *
+ *  1. It throws. Playwright surfaces a throw from a route handler as a test
+ *     error naming the method and path, which points straight at the missing
+ *     stub — but ONLY while the test is awaiting something. A request the app
+ *     fires after the spec's last await (a debounce, a deferred widget fetch)
+ *     throws into nothing and the test passes, silently, which is the very
+ *     failure this backstop exists to end. Measured: a stray request issued
+ *     50ms after the last await was dropped entirely.
+ *  2. It records the violation first. The `test` exported below waits out a
+ *     settle window and then asserts that record is empty, so the verdict does
+ *     not depend on anything having been awaited when the throw fired. The
+ *     throw names the request the moment it happens; the recorded list is what
+ *     survives if nothing was listening.
  */
 async function failOnUnstubbedRequest(page: Page): Promise<void> {
+  const seen: string[] = [];
+  unstubbedRequests.set(page, seen);
+
   await page.route('**/api/**', (route) => {
     const request = route.request();
     const { pathname, search } = new URL(request.url());
+    const violation = `${request.method()} ${pathname}${search}`;
+    // Record BEFORE throwing: the throw may go nowhere, this cannot.
+    seen.push(violation);
     throw new Error(
-      `mockAppShell: unstubbed request ${request.method()} ${pathname}${search}\n` +
+      `mockAppShell: unstubbed request ${violation}\n` +
         `Nothing answers it, so this test would otherwise have taken a 401 and been ` +
         `redirected to /login mid-run.\n` +
         `Fix: if the authenticated shell mounts this everywhere, add a stub to ` +
@@ -269,6 +303,60 @@ async function failOnUnstubbedRequest(page: Page): Promise<void> {
     );
   });
 }
+
+/**
+ * How long teardown lets the page keep talking before it reads the record.
+ *
+ * Teardown starts ~3ms after the test body's last await returns (measured), and
+ * the app does not stop asking for things when the spec stops looking: the
+ * dashboard grid re-persists its layout on a 300ms debounce, and a widget's
+ * fetch can leave well after the assertion that mounted it passed. Without a
+ * window, a stray request 50ms late was missed entirely — the test ended before
+ * the browser had issued it, so there was nothing to record and nothing to
+ * throw into either.
+ *
+ * 500ms clears the longest deferral the app shell has (the 300ms debounce) with
+ * margin, paid once per test that installs the shell. It is a bound, not a
+ * proof: a request the app defers longer than this is still beyond what a
+ * per-test teardown can see. Widen it if a shell surface starts asking later.
+ */
+const UNSTUBBED_SETTLE_MS = 500;
+
+/**
+ * `test` for every spec that uses `mockAppShell` — plain Playwright `test` plus
+ * an automatic teardown check that no request reached the backstop.
+ *
+ * It is a fixture rather than an `afterEach` each spec has to remember, because
+ * remembering is exactly what fails: the whole point of the backstop is that
+ * the NEXT author, mounting a surface nobody has thought of yet, gets told. A
+ * check they have to opt into is one they can leave out.
+ *
+ * Specs import `test` from here and keep importing `expect` from
+ * `@playwright/test`.
+ */
+export const test = base.extend<{ appShellContract: void }>({
+  appShellContract: [
+    async ({ page }, use) => {
+      await use();
+
+      // No record means the spec never installed the shell, so there is no
+      // contract to check and no settle to pay for.
+      const seen = unstubbedRequests.get(page);
+      if (!seen) return;
+
+      if (!page.isClosed()) await page.waitForTimeout(UNSTUBBED_SETTLE_MS);
+
+      expect(
+        seen,
+        'mockAppShell: the app made requests nothing stubbed. Each one would have ' +
+          '401d and bounced the spec to /login. Add a stub to mockAppShell ' +
+          '(e2e/tests/fixtures/performance-fixtures.ts) if the authenticated shell ' +
+          'mounts it everywhere, or register it in the spec AFTER the mockAppShell call.',
+      ).toEqual([]);
+    },
+    { auto: true },
+  ],
+});
 
 export async function mockAppShell(page: Page): Promise<void> {
   const json = (body: unknown) => ({
