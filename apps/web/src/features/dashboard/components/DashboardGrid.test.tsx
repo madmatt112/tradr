@@ -95,7 +95,7 @@ describe('toGridWidgets', () => {
     // The schema bounds `h` at GRID_MAX_ROWS and leaves `y` unbounded, so the
     // cap belongs on the item as `maxH`. Were it the grid's `maxRow`, gridstack
     // would box free placement into 24 rows total — with the default layout
-    // already reaching row 20. That the grid does not set `maxRow` is asserted
+    // already filling rows 0-23. That the grid does not set `maxRow` is asserted
     // against the options it is built with, below.
     const widgets = Object.keys(PerWidgetMinSize).map((type, i) =>
       W({ id: `w${i}`, type: type as WidgetPlacement['type'] }),

@@ -92,8 +92,12 @@ function StatsSummaryWidget() {
 
   // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; the all-time preset
   // this widget uses is clamped for enforced free users.
+  //
+  // `compact` because this widget's height is pinned: the notice and the tiles
+  // share one fixed body, and the boxed Alert (66px + 12px gap) does not fit
+  // beside them at any row span the default layout can afford.
   const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" />
+    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
   ) : null;
 
   if (currencyData == null || stats == null || (!stats.hasWins && !stats.hasLosses)) {

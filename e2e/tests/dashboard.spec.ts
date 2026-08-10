@@ -419,7 +419,7 @@ test.describe('Dashboard — desktop', () => {
     const target = before.get('open-positions');
     expect(target, 'default layout contains open-positions').toBeDefined();
 
-    // Open Positions is the bottom-most widget in DEFAULT_WIDGETS (y 14, h 6),
+    // Open Positions is the bottom-most widget in DEFAULT_WIDGETS (y 18, h 6),
     // so dragging it DOWN moves it into empty canvas with nothing to collide
     // with — no push, so any change to another widget can only be compaction.
     const card = page.locator('section[data-widget-type="open-positions"]');
