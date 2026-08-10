@@ -56,10 +56,10 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * That split is what keeps the guide's curation from being undone. The refresh
  * workflow stages the published directory wholesale, so anything written there
  * is proposed for commit; before the split, a surface deliberately left out of
- * the repository came straight back on the next dispatch. The dashboard pair is
- * the live case. It passes its paint gate, but the Stats Summary widget
- * photographs blank at its pinned height, so the committed image would
- * misrepresent the product. `published: false` says that in the one file
+ * the repository came straight back on the next dispatch. The dashboard pair
+ * was the live case: it passed its paint gate, but the Stats Summary widget
+ * photographed blank at its pinned height, so the committed image would have
+ * misrepresented the product. `published: false` says that in the one file
  * someone changing the capture will read, and the workflow needs no rule of its
  * own.
  *
@@ -133,10 +133,14 @@ const SURFACES = [
   // detail view does not, so the guide embeds the worked example alone.
   { name: 'positions-list', published: false },
   { name: 'position-detail', published: true },
-  // Step 6 — see it on the dashboard. HELD: the Stats Summary widget
-  // photographs blank at its pinned height, and an image that shows the
-  // dashboard's headline numbers as empty misrepresents the product. Publish
-  // this pair once that widget photographs its figures.
+  // Step 6 — see it on the dashboard. HELD, but no longer for the original
+  // reason: the Stats Summary widget used to photograph blank because it was
+  // pinned to a height its own figures could not fit, and that is fixed — its
+  // default is now 5 rows, and the tiles measure 124px inside a 133px body.
+  // What remains is bookkeeping: publishing the pair means capturing it and
+  // adding a <Screenshot name="dashboard"> to the guide's step 6, and
+  // `Screenshot.astro` throws at build time for a name with no committed image.
+  // So flip this and regenerate in the SAME change, never one without the other.
   { name: 'dashboard', published: false },
   // Step 7 — ask the advisor. HELD: an untouched conversation pane is an empty
   // box, and the step is about credentials rather than a screen.

@@ -469,7 +469,7 @@ describe('CalculatorForm — percent results + buying-power flag (REQ-4)', () =>
       stop: '40',
       balance: '100',
       riskPercent: '1',
-      message: /insufficient for one share/,
+      message: /does not cover one share\/contract/,
       derived: 1,
     },
   ])(
@@ -485,6 +485,64 @@ describe('CalculatorForm — percent results + buying-power flag (REQ-4)', () =>
       expect(screen.getAllByText(fmtMoney(derived)).length).toBeGreaterThan(0);
     },
   );
+});
+
+// A size of zero is an outcome, not a blank. The condition is exactly
+// `floor(risk ÷ (perUnitRisk × multiplier)) === 0` in `calculateTrade` — the
+// risk budget is smaller than the entry-to-stop distance on one share — and the
+// explanation has to appear there and NOWHERE else, least of all on a form the
+// user has not finished filling in.
+describe('CalculatorForm — zero-size explanation', () => {
+  const EXPLANATION = /does not cover one share\/contract at this stop distance/;
+  const REMEDIES = /Move the stop closer to entry, pick a lower-priced instrument, or risk more/;
+
+  it('explains the zero and names the ways out in the dollar basis', async () => {
+    await mount();
+
+    // $5 of risk against a $10 stop distance ⇒ floor(5 / 10) = 0 shares.
+    fill('Entry price', '50');
+    fill('Stop loss', '40');
+    fill('Dollar risk', '5');
+    fireEvent.blur(input('Dollar risk'));
+
+    await screen.findByText(EXPLANATION, undefined, { timeout: 2000 });
+    expect(screen.getByText(REMEDIES)).toBeTruthy();
+    expect(screen.queryByText('Position Sizing')).toBeNull();
+  });
+
+  it('explains it in the percent basis, where the budget is derived', async () => {
+    const user = userEvent.setup();
+    await mount();
+
+    // 1% of 100 = $1 against a $10 stop distance ⇒ floor(1 / 10) = 0 shares.
+    await fillPercentBasis(user, { entry: '50', stop: '40', balance: '100', riskPercent: '1' });
+
+    await screen.findByText(EXPLANATION, undefined, { timeout: 2000 });
+  });
+
+  it('stays silent on an incomplete form — no risk basis is not a zero size', async () => {
+    await mount();
+
+    fill('Entry price', '50');
+    fill('Stop loss', '40');
+    fireEvent.blur(input('Stop loss'));
+
+    expect(screen.getByText('Enter trade parameters to see results')).toBeTruthy();
+    expect(screen.queryByText(EXPLANATION)).toBeNull();
+  });
+
+  it('stays silent when the same prices do size a position', async () => {
+    await mount();
+
+    // $50 against the same $10 stop ⇒ 5 shares, and nothing to explain.
+    fill('Entry price', '50');
+    fill('Stop loss', '40');
+    fill('Dollar risk', '50');
+    fireEvent.blur(input('Dollar risk'));
+
+    await screen.findByText('Position Sizing', undefined, { timeout: 2000 });
+    expect(screen.queryByText(EXPLANATION)).toBeNull();
+  });
 });
 
 describe('CalculatorForm — live-clear gate (D4, NFR Usability)', () => {

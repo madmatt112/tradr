@@ -41,8 +41,16 @@ function Money({ value, currency }: { value: string; currency: string }) {
 
 /**
  * Human-readable message for a zero-position outcome, keyed on the machine
- * discriminator. Absent status ⇒ the pre-existing insufficient-risk message
- * (unchanged — the dollar-basis / insufficient-in-percent case).
+ * discriminator.
+ *
+ * Absent status ⇒ the insufficient-risk case, which `calculateTrade` reaches
+ * when `floor(risk ÷ (perUnitRisk × multiplier)) === 0` — the risk budget (a
+ * typed dollar risk, or `balance × riskPercent ÷ 100`) is smaller than the
+ * entry-to-stop distance on ONE share, or on 100 of them in options mode. That
+ * arithmetic is what the three remedies come from: the stop distance is the
+ * divisor, a lower-priced instrument shrinks it, and the budget is the
+ * dividend. It never fires on a half-filled form — the caller only computes a
+ * result once the trade prices and exactly one risk basis are complete.
  */
 function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
   switch (status) {
@@ -57,7 +65,7 @@ function nonSizingMessage(status: CalculatorOutput['sizingStatus']): string {
       // would read as a bug.
       return 'Available buying power cannot fund one share/contract at this entry price.';
     default:
-      return 'Dollar risk is insufficient for one share/contract at this stop distance';
+      return 'The amount at risk does not cover one share/contract at this stop distance, so the size rounds down to zero. Move the stop closer to entry, pick a lower-priced instrument, or risk more.';
   }
 }
 
