@@ -20,11 +20,19 @@
 // here reads or writes onboarding state at all — see `useWalkthroughLauncher`,
 // which is the hook that property lives in.
 //
-// TWO OF THE SETS NEED THE USER TO ACT, AND ONE NEEDS A POSITION. The position
-// and close sets contain steps that only move on once the real thing has been
-// done, and the close set opens on a position this component has no way to
-// name. Neither is special-cased: a set that cannot carry on stops and says so,
-// which is the tour's own behaviour everywhere else it happens.
+// TWO OF THE SETS NEED THE USER TO ACT, AND THAT IS NOT THE SAME AS A BUTTON
+// THAT CANNOT BEGIN. The position and close sets contain steps that only move on
+// once the real thing has been done — creating the position, recording the exit
+// fill — and a tour that waits for the user is the tour working. That is left
+// alone here.
+//
+// What is NOT left alone is a set with nothing to open on. The close set starts
+// on one of the user's open positions and this component knows of none, so it
+// used to navigate nowhere and disappear; the account set is a tour of the
+// welcome screen, which is gone for good once an account exists. `start()` now
+// resolves the first from the user's own rows and answers for the second in
+// words — see `useWalkthroughLauncher`. Both happen at the CLICK, so this card
+// still asks the server nothing to render.
 
 import { Play } from 'lucide-react';
 

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import type {
@@ -28,14 +28,28 @@ export function getAccountErrorCode(err: unknown): string | undefined {
 }
 
 /**
+ * The list as a query DEFINITION rather than a subscription.
+ *
+ * `useAccounts` is built on it, so a caller that needs the list ONCE — in
+ * response to a click, without mounting a hook that would fetch on render —
+ * reads the same cache entry through the same fetcher rather than a second copy
+ * of the key that could drift from this one.
+ */
+export function accountsListQuery() {
+  return queryOptions({
+    queryKey: ['accounts', 'list'],
+    queryFn: () => api.get<Account[]>('/accounts'),
+  });
+}
+
+/**
  * `options.enabled` lets a caller that may not need the list at all skip the
  * request entirely; omitted, it fetches as before. A disabled query reports
  * `data: undefined`, `isLoading: false` and `isError: false`.
  */
 export function useAccounts(options?: { enabled?: boolean }) {
-  return useQuery<Account[]>({
-    queryKey: ['accounts', 'list'],
-    queryFn: () => api.get<Account[]>('/accounts'),
+  return useQuery({
+    ...accountsListQuery(),
     enabled: options?.enabled,
   });
 }

@@ -55,6 +55,11 @@ vi.mock('./useOnboarding', async (importOriginal) => ({
 let positions: { id: string; status: string; accountId?: string }[] | undefined;
 vi.mock('@/features/positions/hooks/usePositions', () => ({
   usePositions: () => ({ data: positions }),
+  // The launcher's click-time read reaches for the query DEFINITION rather than
+  // the hook. Nothing in this file drives that path — `WalkthroughLauncher.test`
+  // does, against a real QueryClient — but the export has to exist for the
+  // module under test to import it.
+  positionsListQuery: () => ({ queryKey: ['positions', 'list', undefined], queryFn: () => [] }),
 }));
 
 // The accounts list, supplied directly for the same reason again. The
@@ -63,6 +68,7 @@ vi.mock('@/features/positions/hooks/usePositions', () => ({
 let accounts: { id: string; isDemo?: boolean }[] | undefined;
 vi.mock('@/features/accounts/hooks/useAccounts', () => ({
   useAccounts: () => ({ data: accounts }),
+  accountsListQuery: () => ({ queryKey: ['accounts', 'list'], queryFn: () => [] }),
 }));
 
 // `lib/analytics` is the REAL module here — only the vendor-facing capture is a
@@ -453,7 +459,27 @@ describe('useWalkthrough — the tour says why it stopped', () => {
     expect(why.textContent).toContain('the walkthrough cannot take that step for you');
     // Both ways out, said plainly.
     expect(why.textContent).toContain('carry on without it');
-    expect(why.textContent).toContain('start it again from the setup checklist');
+    expect(why.textContent).toContain('start it again whenever you want from Settings → Help');
+  });
+
+  /**
+   * THE WAY BACK IN HAS TO STILL BE THERE WHEN THEY GET THERE.
+   *
+   * This notice used to send the reader to the setup checklist, which is the one
+   * surface in the product that goes away for good: it retires the moment all
+   * four items are complete, and a user replaying a set from settings has by
+   * definition finished. Directing them to a screen that no longer exists is
+   * worse than saying nothing — they go looking for it.
+   */
+  it('does not send the reader back to a checklist that may have retired', async () => {
+    withToaster();
+    await start('close');
+
+    endTour('target-missing', { cause: 'target-missing', step: aGatedStep() });
+
+    const why = await screen.findByText(/is not on screen/);
+    expect(why.textContent).not.toContain('checklist');
+    expect(why.textContent).toContain('Settings → Help');
   });
 
   /**
@@ -488,7 +514,7 @@ describe('useWalkthrough — the tour says why it stopped', () => {
 
     const why = await screen.findByText(/is not on screen/);
     expect(why.textContent).toContain(plain.title);
-    expect(why.textContent).toContain('start it again from the setup checklist');
+    expect(why.textContent).toContain('start it again whenever you want from Settings → Help');
   });
 
   // The fallback that used to sit here — a `target-missing` naming no step —
