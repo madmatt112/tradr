@@ -157,6 +157,9 @@ async function mockBrokerages(page: Page) {
  * prevent, reintroduced one method at a time. `fallback()` hands the request to
  * the next matching handler instead, so it lands on a `mockAppShell` stub or,
  * failing that, its backstop, which names it.
+ *
+ * This paragraph is not what enforces it — `app-shell-fixture.spec.ts` greps the
+ * test tree and fails on any `continue()` call.
  */
 async function installAccountingMocks(page: Page, getState: () => MockState) {
   // GET /accounts

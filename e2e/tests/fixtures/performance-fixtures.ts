@@ -177,15 +177,24 @@ export const SESSION_RESPONSE = {
  *
  * It FAILS CLOSED: anything under `/api/` that neither this helper nor the spec
  * answers hits the backstop registered below and fails the test by name. See
- * `failOnUnstubbedRequest`. Specs must import `test` from this module for that
- * to hold — the teardown half of the check is a fixture on it.
+ * `failOnUnstubbedRequest`.
  *
- * One way to defeat it, worth knowing: a spec handler that calls
- * `route.continue()` for the requests it does not want. `continue()` abandons
- * the handler chain and goes to the real network, so those requests never reach
- * the backstop and fail open to a 401 and the /login bounce all over again. Use
- * `route.fallback()`, which hands the request to the next matching handler —
- * this helper's stubs, and failing those, the backstop.
+ * Two things used to defeat it quietly, and both are now refused mechanically
+ * rather than by this comment:
+ *
+ *  1. Importing `test` from `@playwright/test` instead of from this module. The
+ *     backstop is installed by this function either way, but the teardown that
+ *     catches a request arriving after the spec's last await is a fixture on the
+ *     `test` exported below — a plain import silently drops it. So this function
+ *     now checks the fixture is live and throws if it is not; see
+ *     `contractedPages`.
+ *  2. A spec handler that calls `route.continue()` for the requests it does not
+ *     want. `continue()` abandons the handler chain and goes to the real
+ *     network, so those requests never reach the backstop and fail open to a 401
+ *     and the /login bounce all over again. Use `route.fallback()`, which hands
+ *     the request to the next matching handler — this helper's stubs, and
+ *     failing those, the backstop. `app-shell-fixture.spec.ts` greps the spec
+ *     tree and fails if a `continue()` call comes back.
  */
 /**
  * The default dashboard layout a freshly-registered user receives from the
@@ -199,7 +208,7 @@ export const SESSION_RESPONSE = {
  * file changes.
  *
  * It had already drifted: the copy below carried the pre-40px-unit values
- * (`stats-summary` at h:1, under the h:2 minimum its own type declares, and
+ * (`stats-summary` at h:1, far under the h:5 minimum its own type declares, and
  * six-column charts), so every spec leaning on the app shell rendered a layout
  * no user has ever been served.
  */
@@ -251,6 +260,26 @@ const DEFAULT_DASHBOARD_LAYOUT = {
 const unstubbedRequests = new WeakMap<Page, string[]>();
 
 /**
+ * Pages the contract fixtures below are live for. Stamped during fixture SETUP,
+ * so it is already true by the time any test body calls `mockAppShell`.
+ *
+ * This is what makes the guarantee compulsory rather than opt-in by import
+ * line. The backstop is installed by `mockAppShell` whichever `test` a spec
+ * imports, but the half that catches a request arriving AFTER the spec's last
+ * await is teardown on the `test` exported below. A spec importing `test` from
+ * `@playwright/test` therefore got the throw-while-awaiting half and nothing
+ * else — measured: a stray request fired 200ms after the body returned passed
+ * green, which is round 2's entire failure, re-opened by one import line. The
+ * cost lands on whoever writes the NEXT spec, so nothing in the diff that
+ * introduces it looks wrong.
+ *
+ * It also catches the other way to end up outside the fixtures: calling
+ * `mockAppShell` on a page the fixtures never saw (`context.newPage()`), whose
+ * violations no teardown reads.
+ */
+const contractedPages = new WeakSet<Page>();
+
+/**
  * The backstop that makes the list below a CONTRACT rather than a best effort.
  *
  * Registered first, so Playwright — which matches handlers in reverse
@@ -287,6 +316,22 @@ const unstubbedRequests = new WeakMap<Page, string[]>();
  *     EVERY unstubbed request rather than only the first.
  */
 async function failOnUnstubbedRequest(page: Page): Promise<void> {
+  // Half the contract lives in teardown on the `test` exported below, so refuse
+  // to install at all unless that `test` is the one running. Silently giving
+  // back a weaker guarantee than the doc comment promises is precisely the
+  // failure this helper exists to end.
+  if (!contractedPages.has(page)) {
+    throw new Error(
+      'mockAppShell: the app-shell contract fixtures are not live for this page.\n' +
+        'Without them the backstop still throws while the spec is awaiting something, ' +
+        'but a request the app makes AFTER the last await is never seen and the test ' +
+        'passes with a missing stub — the exact silent pass this helper exists to end.\n' +
+        "Fix: import `test` from './fixtures/performance-fixtures' (keep importing " +
+        '`expect` from `@playwright/test`), and call mockAppShell on the `page` fixture ' +
+        'rather than a page you opened yourself.',
+    );
+  }
+
   // A second install would register a second catch-all. Playwright matches in
   // reverse registration order, so it would shadow every route registered since
   // the first — including the spec's own overrides, which are registered after
@@ -381,6 +426,10 @@ const UNSTUBBED_SETTLE_MS = 500;
 export const test = base.extend<{ appShellContract: void; appShellSettle: void }>({
   appShellContract: [
     async ({ page }, use) => {
+      // Stamped in SETUP, so `mockAppShell` can refuse a page these fixtures
+      // are not live for — see `contractedPages`.
+      contractedPages.add(page);
+
       await use();
 
       // No record means the spec never installed the shell, so there is no

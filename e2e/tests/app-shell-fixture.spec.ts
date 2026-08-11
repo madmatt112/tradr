@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { expect, type Page } from '@playwright/test';
 
 import { mockAppShell, PERF_URL, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
@@ -24,6 +27,17 @@ const json = (body: unknown) => ({
 
 async function mockSession(page: Page) {
   await page.route('**/api/auth/me', (route) => route.fulfill(json(SESSION_RESPONSE)));
+}
+
+/** Every `.ts` file under the suite's own test root, recursively. */
+function suiteSources(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...suiteSources(full));
+    else if (entry.name.endsWith('.ts')) found.push(full);
+  }
+  return found;
 }
 
 test.describe('mockAppShell', () => {
@@ -90,6 +104,75 @@ test.describe('mockAppShell', () => {
 
     await page.goto('/dashboard');
     await page.waitForURL(/\/login/, { timeout: 20_000 });
+  });
+
+  test('refuses a page the contract fixtures are not live for', async ({ context }) => {
+    // The backstop is only half the contract. The other half — catching a
+    // request the app makes after the spec's last await — is teardown on the
+    // `test` this file imports from the fixture module, so a spec that takes
+    // `test` from `@playwright/test` gets a weaker guarantee than the helper
+    // advertises, and nothing in that spec's diff looks wrong. Measured before
+    // this check existed: a stray request 200ms after the body returned passed
+    // green.
+    //
+    // A page opened by hand stands in for it here, because a spec cannot import
+    // two different `test`s. It is the same hole from the other side: these
+    // fixtures never saw this page, so nothing would ever read its violations.
+    const unfixtured = await context.newPage();
+    await expect(mockAppShell(unfixtured)).rejects.toThrow(/contract fixtures are not live/);
+    await unfixtured.close();
+  });
+
+  test('no spec reaches the real network via route.continue', () => {
+    // `continue()` abandons the handler chain and goes to the network, so a
+    // request nothing here answers takes a real 401 against the synthetic
+    // session and the api client bounces the whole app to /login — the failure
+    // the backstop exists to end, past the backstop entirely.
+    //
+    // Seven of them were removed from ledger-balances in one pass, and what
+    // stood between the next author and putting one back was a doc comment.
+    // That is not a guard, so the rule gets teeth here instead.
+    //
+    // A test rather than an ESLint rule on purpose. `no-restricted-syntax` is
+    // already blanket-disabled at the top of several specs in this directory
+    // for the `process.env` selector it carries, which would switch this off
+    // with it; and a selector matching `route.continue` would miss a handler
+    // whose parameter is named anything else. A grep for the call misses
+    // neither.
+    //
+    // Scoped to the test tree because that is where `page.route` handlers live;
+    // e2e/support holds Node stub servers, which have no Route to continue.
+    //
+    // This file is IN scope, which is why the title and the message below name
+    // the call without its parentheses: the check holds itself to the rule
+    // rather than carving out an exemption that a real call could hide in.
+    const testRoot = path.dirname(test.info().file);
+    const offenders: string[] = [];
+
+    for (const file of suiteSources(testRoot)) {
+      fs.readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, index) => {
+          // Comment lines are where the hazard is DESCRIBED — twice in this
+          // suite, deliberately. A real call never starts a line with any of
+          // these, so skipping them costs the check nothing.
+          const code = line.trim();
+          if (code.startsWith('*') || code.startsWith('//') || code.startsWith('/*')) return;
+          if (/\.continue\s*\(/.test(line)) {
+            offenders.push(`${path.relative(testRoot, file)}:${index + 1}`);
+          }
+        });
+    }
+
+    expect(
+      offenders,
+      'A route handler here calls continue(), which abandons the handler chain and goes ' +
+        'to the real network, so the request never reaches the mockAppShell backstop: it ' +
+        '401s against the mocked session and the app silently redirects to /login ' +
+        'mid-test, and the spec goes on asserting against the login page. Use ' +
+        'route.fallback() instead — it hands the request to the next matching handler, ' +
+        'and failing all of them, to the backstop that names it.',
+    ).toEqual([]);
   });
 
   test('refuses a second install on the same page', async ({ page }) => {
