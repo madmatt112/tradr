@@ -794,19 +794,31 @@ test.describe('user onboarding', () => {
     await expect(popover(page)).toHaveCount(0);
 
     // The item is ticked off the user's data — nothing here is a stored per-step
-    // flag — and the account set's button is gone, because the control its first
-    // step opens on belongs to a zero-state this user has left. An honest
-    // omission rather than a button that would start a tour and end it in
-    // silence three seconds later.
+    // flag — and the account set's button is still there on the item that has
+    // been ticked. It used to be withheld the moment an account existed, back
+    // when the set opened on a zero-state control: the walkthrough about
+    // creating an account was then unreplayable by anyone who had created one.
+    // It runs on /accounts now, a screen this user has, so the offer stands.
     await page.goto('/dashboard');
     await expect(checklistProgress(page)).toHaveText('2 of 4 complete');
     await expect(checklistItemLabel(page, 'calculator')).toHaveText(/— completed$/);
     await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
-    await expect(page.locator('[data-checklist-action="account"]')).toHaveCount(0);
+    await expect(page.locator('[data-checklist-action="account"]')).toBeVisible();
+
+    // And the offer is honest, which is the half of the old assertion that still
+    // holds: a button here must not start a tour that ends in silence three
+    // seconds later. Pressed, it goes to the screen the set runs on and opens at
+    // the front of it.
+    await page.locator('[data-checklist-action="account"]').click();
+    await expect(page).toHaveURL(/\/accounts$/);
+    await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[0]);
+    await expect(popoverProgress(page)).toHaveText(`1 of ${ACCOUNT_STEP_TITLES.length}`);
+    await escapeTour(page);
+    await page.goto('/dashboard');
 
     // THE ASSERTION THIS TEST EXISTS FOR. A user who has completed an item
-    // reaches a LATER set through the UI, from the one control that is on
-    // screen — and it opens at the front of that set, on that set's own screen,
+    // reaches a LATER set through the UI, from the control that set carries —
+    // and it opens at the front of that set, on that set's own screen,
     // because no step index was ever stored to land anywhere else.
     await page.locator('[data-checklist-action="position"]').click();
     await expect(page).toHaveURL(/\/positions$/);
