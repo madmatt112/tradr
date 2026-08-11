@@ -695,6 +695,61 @@ export function useIsWalkthroughRunning(): boolean {
   return useWalkthroughStore((state) => state.isRunning);
 }
 
+export interface UseWalkthroughLauncherResult {
+  /** Run one named set. The id is required — nothing here knows what is outstanding. */
+  start: (itemId: ChecklistItemId, params?: Record<string, string>) => void;
+  /** The tour runtime failed to load; there is nothing behind the controls. */
+  isUnavailable: boolean;
+}
+
+/**
+ * START A NAMED SET, AND READ NO ONBOARDING STATE AT ALL.
+ *
+ * `useWalkthrough` composes `useOnboarding` because it answers questions about
+ * the user's progress — which set is outstanding, which sets could run from the
+ * data as it stands. A permanent entry point asks neither: it offers all four
+ * sets to everyone, always, so the user's checklist is not an input to anything
+ * it does.
+ *
+ * THAT IS THE WHOLE POINT OF THIS HOOK EXISTING. The checklist RETIRES when the
+ * four items are complete, and the retirement write is what switches
+ * `useOnboarding`'s two expensive reads — the accounts list and the whole
+ * unfiltered positions list — off for good. An entry point that has to outlive
+ * retirement therefore cannot be built on a hook that reads onboarding state:
+ * mounting one on an ordinary settings screen would put those reads back for
+ * every `pending`/`active` user, and asking a retired user's checklist which
+ * sets to offer would answer "none", which is the defect it was added to fix.
+ * So this reads nothing, offers everything, and costs no request.
+ *
+ * It also WRITES nothing, and that matters more here than at the other doors.
+ * The zero-state and the checklist slot write `status: 'active'` as the opt-in
+ * record before starting a tour; doing the same from settings would un-retire a
+ * user who had finished — turning both gated reads back on and putting the
+ * checklist back on their dashboard — for no reason other than that they asked
+ * to see a walkthrough again.
+ *
+ * `run()` is the same launcher the checklist's per-item buttons go through, so
+ * a set started from here is the set they start, step for step. The one thing
+ * this cannot do is fill in a position for a set that opens on one: that
+ * fallback is derived from the user's own rows, which is exactly the read this
+ * hook does not make. Such a set starts, finds no target, and exits with the
+ * notice that says why — the same ending it has always had when it cannot
+ * carry on.
+ */
+export function useWalkthroughLauncher(): UseWalkthroughLauncherResult {
+  const navigate = useNavigate();
+  const isUnavailable = useWalkthroughStore((state) => state.isUnavailable);
+
+  const start = useCallback(
+    (itemId: ChecklistItemId, params?: Record<string, string>) => {
+      void run(itemId, params, navigate as NavigateFn);
+    },
+    [navigate],
+  );
+
+  return { start, isUnavailable };
+}
+
 export function useWalkthrough(): UseWalkthroughResult {
   const navigate = useNavigate();
   const { checklist } = useOnboarding();

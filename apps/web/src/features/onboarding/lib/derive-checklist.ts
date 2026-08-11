@@ -100,29 +100,34 @@ export interface Checklist {
  * with each other. A checklist is a nudge — bad input should degrade to an
  * un-ticked item, never to an error the user cannot get past.
  */
+/**
+ * The four items as AUTHORED — their ids, their labels and the order they are
+ * shown in. No user data is involved, so this says nothing about completion.
+ *
+ * Split out of `deriveChecklist` because a second caller needs the NAMES
+ * without needing the answers. The walkthrough's permanent entry point in
+ * settings offers all four sets to every user, so it has nothing to derive a
+ * checklist from — and must not read onboarding state to find out what the four
+ * sets are called, because reading it is what the retired user's read gate
+ * exists to avoid. One list, so the two cannot disagree about which four items
+ * there are or what order they come in.
+ */
+export const CHECKLIST_ITEMS: readonly Omit<ChecklistItem, 'done'>[] = [
+  { id: 'account', label: 'Create a brokerage account' },
+  { id: 'calculator', label: 'Size a trade in the calculator' },
+  { id: 'position', label: 'Log a position' },
+  { id: 'close', label: 'Close it and see the stats' },
+];
+
 export function deriveChecklist(input: ChecklistInput): Checklist {
-  const items: ChecklistItem[] = [
-    {
-      id: 'account',
-      label: 'Create a brokerage account',
-      done: input.accountCount > 0,
-    },
-    {
-      id: 'calculator',
-      label: 'Size a trade in the calculator',
-      done: Boolean(input.calculatorFirstUsedAt),
-    },
-    {
-      id: 'position',
-      label: 'Log a position',
-      done: input.positionsEverCreatedCount > 0,
-    },
-    {
-      id: 'close',
-      label: 'Close it and see the stats',
-      done: input.closedPositionCount > 0,
-    },
-  ];
+  // The completion rules, still stated exactly once and only here.
+  const done: Record<ChecklistItemId, boolean> = {
+    account: input.accountCount > 0,
+    calculator: Boolean(input.calculatorFirstUsedAt),
+    position: input.positionsEverCreatedCount > 0,
+    close: input.closedPositionCount > 0,
+  };
+  const items: ChecklistItem[] = CHECKLIST_ITEMS.map((item) => ({ ...item, done: done[item.id] }));
 
   return { items, allComplete: items.every((item) => item.done) };
 }

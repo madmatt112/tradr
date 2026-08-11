@@ -34,6 +34,7 @@ import { Route as SettingsLayoutRoute } from '../_auth.settings';
 import { Route as AdvisorRoute } from '../_auth.settings.advisor';
 import { Route as ProfileRoute } from '../_auth.settings.profile';
 import { Route as AccountRoute } from '../_auth.settings.account';
+import { Route as HelpRoute } from '../_auth.settings.help';
 
 // The real routes are typed against the app's route registration; re-hosting
 // them under a fresh root requires loosening those option types.
@@ -42,6 +43,7 @@ const layoutOpts = SettingsLayoutRoute.options as any;
 const advisorOpts = AdvisorRoute.options as any;
 const profileOpts = ProfileRoute.options as any;
 const accountOpts = AccountRoute.options as any;
+const helpOpts = HelpRoute.options as any;
 
 // ---- Test router ----------------------------------------------------------
 // Re-host the real Settings routes under a fresh root so we can exercise the
@@ -74,8 +76,14 @@ function buildRouter(initialPath: string) {
     component: accountOpts.component,
   });
 
+  const help = createRoute({
+    getParentRoute: () => settingsLayout as any,
+    path: '/help',
+    component: helpOpts.component,
+  });
+
   const routeTree = rootRoute.addChildren([
-    settingsLayout.addChildren([advisor, profile, account]),
+    settingsLayout.addChildren([advisor, profile, account, help]),
   ]);
 
   return createRouter({
@@ -127,5 +135,27 @@ describe('Settings tabbed layout', () => {
     const btn = await screen.findByRole('button', { name: /Log out/i });
     fireEvent.click(btn);
     expect(logoutMutate).toHaveBeenCalledTimes(1);
+  });
+
+  // The walkthrough's permanent door. Every other one is temporary — the
+  // zero-state goes with the first account, and the activation checklist retires
+  // when all four items are complete — so it has to be reachable from a tab that
+  // is always there, for a user who has no checklist left.
+  it('case 4: the Help tab is reachable and offers all four walkthrough sets', async () => {
+    renderAt('/settings/advisor');
+
+    const tab = await screen.findByRole('tab', { name: /Help/i });
+    fireEvent.click(tab.querySelector('a') ?? tab);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('walkthrough-launcher')).toBeTruthy();
+    });
+    const sets = [...document.querySelectorAll('[data-walkthrough-set]')];
+    expect(sets.map((el) => el.getAttribute('data-walkthrough-set'))).toEqual([
+      'account',
+      'calculator',
+      'position',
+      'close',
+    ]);
   });
 });

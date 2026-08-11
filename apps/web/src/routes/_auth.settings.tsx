@@ -1,5 +1,5 @@
 import { createFileRoute, Link, Outlet, redirect, useLocation } from '@tanstack/react-router';
-import { Bot, Settings as SettingsIcon, User, Wallet } from 'lucide-react';
+import { Bot, CircleQuestionMark, Settings as SettingsIcon, User, Wallet } from 'lucide-react';
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -10,6 +10,11 @@ const SETTINGS_TABS = [
   { id: 'billing', label: 'Billing', icon: Wallet, route: '/settings/billing' },
   { id: 'profile', label: 'Profile', icon: User, route: '/settings/profile' },
   { id: 'account', label: 'Account', icon: SettingsIcon, route: '/settings/account' },
+  // The guided walkthrough's permanent home. It lives here rather than on the
+  // dashboard because every dashboard door into it is temporary: the zero-state
+  // goes when the first account is created and the activation checklist retires
+  // when all four items are done.
+  { id: 'help', label: 'Help', icon: CircleQuestionMark, route: '/settings/help' },
 ] as const;
 
 function SettingsLayout() {
