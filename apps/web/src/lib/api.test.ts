@@ -312,12 +312,20 @@ const SANCTIONED_ALLOW_UNAUTHENTICATED = [
   'lib/api.ts', // the declaration and the interception it opts out of
 ];
 
-/** Every `.ts`/`.tsx` file under `dir` whose text contains `needle`. */
+/**
+ * Every file under `dir` whose text contains `needle`.
+ *
+ * The extension set has to match everything the bundler will resolve, not just
+ * what the tree happens to contain today: a `.mts` or `.mjs` module is compiled
+ * and shipped like any other, so if it can carry a call site it has to be
+ * scanned for one. Narrowing this to `.ts`/`.tsx` would leave a guard that looks
+ * total and is not.
+ */
 function filesMentioning(needle: string, dir: string, base = dir): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) return filesMentioning(needle, full, base);
-    if (!/\.tsx?$/.test(entry.name)) return [];
+    if (!/\.[mc]?[jt]sx?$/.test(entry.name)) return [];
     return readFileSync(full, 'utf8').includes(needle) ? [relative(base, full)] : [];
   });
 }

@@ -142,7 +142,10 @@ export function useRegister() {
  * focus, an invalidation, a refetch) then answered a 401 that had opted out of
  * the interception: no redirect, no announcement. The one guarantee the
  * interception makes must not be suspendable by being on a 404 page. The cost is
- * one request a cache hit would have saved, on a page that is already an error.
+ * a request a cache hit would have saved; on a cold load a signed-in user pays
+ * two — this presence check, then the authenticated layout's own — and sees the
+ * layout's loading state in between. That is the price of not sharing mutable
+ * query state, on a page that is already an error.
  */
 export function useSessionPresence() {
   const { data: user, isLoading } = useQuery<User>({
