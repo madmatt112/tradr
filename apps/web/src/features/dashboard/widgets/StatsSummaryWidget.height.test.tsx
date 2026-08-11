@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PerformanceResponse } from '@tradr/shared';
 import { DEFAULT_WIDGETS } from '@tradr/shared/constants/dashboard-defaults';
+import { PerWidgetMinSize } from '@tradr/shared/schemas/dashboard';
 
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { usePerformance } from '@/features/performance/hooks/usePerformance';
@@ -141,14 +142,21 @@ function mockPerformance({ clamped }: { clamped: boolean }): void {
   } as unknown as PerformanceResult);
 }
 
-/** The pinned default body height, in px — what `body.clientHeight` reports. */
+/**
+ * The body height a widget of `h` rows has, in px — what `body.clientHeight`
+ * reports. A widget spanning `h` rows is `40h` of canvas less the 16px
+ * gridstack takes out of the cell, and WidgetCard spends its border and header
+ * out of that before its scroll body sees a pixel. At h=6 this comes to 173.
+ */
+function bodyPxAt(h: number): number {
+  return GRID_ROW_HEIGHT_PX * h - GRID_GAP_PX - CARD_BORDER_PX - CARD_HEADER_PX;
+}
+
+/** The pinned default body height, in px. */
 function pinnedBodyPx(): { h: number; bodyPx: number } {
   const pinned = DEFAULT_WIDGETS.find((w) => w.type === 'stats-summary');
   const h = pinned?.h ?? 0;
-  // A widget spanning `h` rows is `40h` of canvas less the 16px gridstack takes
-  // out of the cell, and WidgetCard spends its border and header out of that
-  // before its scroll body sees a pixel. At h=6 this comes to 173.
-  return { h, bodyPx: GRID_ROW_HEIGHT_PX * h - GRID_GAP_PX - CARD_BORDER_PX - CARD_HEADER_PX };
+  return { h, bodyPx: bodyPxAt(h) };
 }
 
 beforeEach(() => {
@@ -216,5 +224,37 @@ describe('StatsSummaryWidget — the pinned default height fits the populated ti
         `${tiles} tiles, needing ${contentPx}px, but h=${h} gives the body ${bodyPx}px — ` +
         `the free-tier user sees a clipped widget`,
     ).toBeGreaterThanOrEqual(contentPx);
+  });
+
+  // THE MINIMUM IS LOAD-BEARING NOW, not just the default. A saved layout is
+  // reconciled against `PerWidgetMinSize` on read (`reconcileStoredLayout`), so
+  // the minimum is what decides whether a stored height counts as geometry a
+  // user chose or geometry left behind by an older bound. At h=2 — what this
+  // said while the row unit was 80px and one row was a widget — a layout saved
+  // at that height is indistinguishable from a deliberate one and keeps
+  // clipping 111px of figures forever.
+  it('the per-type minimum is the tightest height the tiles fit in', () => {
+    const { container, root } = mountPopulated();
+    const tiles = container.querySelectorAll('dl > div').length;
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+
+    const rows = Math.ceil(tiles / TILE_COLUMNS);
+    const contentPx = rows * TILE_PX + (rows - 1) * TILE_ROW_GAP_PX + BODY_PADDING_PX;
+    const min = PerWidgetMinSize['stats-summary'].h;
+
+    expect(
+      bodyPxAt(min),
+      `stats-summary may be resized to h=${min} (${bodyPxAt(min)}px of body) but its ` +
+        `${tiles} tiles need ${contentPx}px — raise the minimum in PerWidgetMinSize`,
+    ).toBeGreaterThanOrEqual(contentPx);
+    // Tight, not merely sufficient: one row lower does not fit, so the bound is
+    // the content's and not a number someone rounded up to.
+    expect(bodyPxAt(min - 1)).toBeLessThan(contentPx);
+    // The conditional free-tier notice is the default's headroom, not the
+    // minimum's — the same split the two chart widgets carry.
+    expect(pinnedBodyPx().h).toBeGreaterThan(min);
   });
 });

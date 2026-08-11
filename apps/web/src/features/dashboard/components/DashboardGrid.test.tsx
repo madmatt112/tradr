@@ -23,6 +23,11 @@ import { WIDGET_DRAG_CANCEL_CLASS, WIDGET_DRAG_HANDLE_CLASS } from './WidgetCard
  */
 const PERF_MIN_H = PerWidgetMinSize['performance-chart'].h;
 
+/** Stats Summary's minimum height, read for the same reason: it is derived too
+ * (from the tile grid the widget renders plus its chrome), so a literal goes
+ * stale and gridstack then clamps the fixture to geometry nobody wrote. */
+const STATS_MIN_H = PerWidgetMinSize['stats-summary'].h;
+
 const W = (over: Partial<WidgetPlacement>): WidgetPlacement =>
   ({
     id: '00000000-0000-4000-8000-000000000001',
@@ -132,12 +137,12 @@ describe('toGridWidgets', () => {
 describe('fromGridWidgets', () => {
   it('round-trips through toGridWidgets preserving type and config', () => {
     const widgets: WidgetPlacement[] = [
-      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 }),
+      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: STATS_MIN_H }),
       W({
         id: 'b',
         type: 'performance-chart',
         x: 0,
-        y: 2,
+        y: STATS_MIN_H,
         w: 8,
         h: PERF_MIN_H,
         config: { timeframe: 'weekly' },
@@ -405,12 +410,12 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
     installMatchMediaSpy({});
     const scheduleLayoutWrite = vi.fn();
     const widgets: WidgetPlacement[] = [
-      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: 2 }),
+      W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: STATS_MIN_H }),
       W({
         id: 'b',
         type: 'performance-chart',
         x: 0,
-        y: 2,
+        y: STATS_MIN_H,
         w: 8,
         h: PERF_MIN_H,
         config: { timeframe: 'weekly' },
@@ -435,8 +440,8 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
     // is unambiguous. The move alone must not write. (Geometry is passed whole:
     // `update` defaults any side it is not given rather than keeping it, so a
     // partial `{x, y}` would silently reset `w`/`h` to 1.)
-    const emptyRow = 2 + PERF_MIN_H;
-    grid.update(itemA, { x: 0, y: emptyRow, w: 12, h: 2 });
+    const emptyRow = STATS_MIN_H + PERF_MIN_H;
+    grid.update(itemA, { x: 0, y: emptyRow, w: 12, h: STATS_MIN_H });
     expect(scheduleLayoutWrite).not.toHaveBeenCalled();
 
     fireGesture(grid, 'dragstop', itemA);
@@ -446,8 +451,8 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
     // `type` and `config` are not gridstack's to hold — they come back off the
     // widget the node matches.
     //
-    // `h: 2` also pins a gridstack gotcha: `save()` DELETES `h` from a node
-    // when it equals 1 or the item's own `minH`, and stats-summary's minH IS 2.
+    // Sitting stats-summary on its own minimum also pins a gridstack gotcha:
+    // `save()` DELETES `h` from a node when it equals 1 or the item's `minH`.
     // Taken at face value the placement would persist as 1 row tall.
     expect(dragged.find((widget) => widget.id === 'a')).toEqual({
       id: 'a',
@@ -455,13 +460,13 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
       x: 0,
       y: emptyRow,
       w: 12,
-      h: 2,
+      h: STATS_MIN_H,
     });
     expect(dragged.find((widget) => widget.id === 'b')).toEqual({
       id: 'b',
       type: 'performance-chart',
       x: 0,
-      y: 2,
+      y: STATS_MIN_H,
       w: 8,
       h: PERF_MIN_H,
       config: { timeframe: 'weekly' },
@@ -469,7 +474,7 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
 
     // Shrink to exactly PerWidgetMinSize['performance-chart'] — the other half
     // of the same gotcha, where `save()` would drop BOTH `w` and `h`.
-    grid.update(itemOf(grid, 'b'), { x: 0, y: 2, w: 4, h: PERF_MIN_H });
+    grid.update(itemOf(grid, 'b'), { x: 0, y: STATS_MIN_H, w: 4, h: PERF_MIN_H });
     fireGesture(grid, 'resizestop', itemOf(grid, 'b'));
     expect(scheduleLayoutWrite).toHaveBeenCalledTimes(2);
     const resized = scheduleLayoutWrite.mock.calls[1][0] as WidgetPlacement[];

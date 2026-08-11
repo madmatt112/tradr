@@ -41,7 +41,20 @@ export const GRID_MAX_ROWS = 24;
 // `chartWidgetMinRows` derives both from the same floor constant the charts
 // enforce for themselves, so the pair cannot drift.
 export const PerWidgetMinSize: Record<WidgetType, { w: number; h: number }> = {
-  'stats-summary': { w: 4, h: 2 },
+  // Same arithmetic as the charts, one widget over. Measured in chromium at
+  // 1440x900: five tiles on a 3-column track is two 44px rows and a 12px gap,
+  // 100px, plus 24px of body padding — 124px of content — and the widget's
+  // permanent chrome (49px header, 2px border, the 16px gridstack takes out of
+  // the cell) is 67px. 191px is 5 rows; h=4 gives the body 93px and clips 31px
+  // of figures. h=2, which this said until the tile grid was measured, gave it
+  // 13px and clipped 111px — a legal height at which the widget rendered blank.
+  //
+  // The free tier's clamped-window notice (24px plus a 12px gap) is NOT
+  // budgeted for here, exactly as it is not for the charts: the pinned default
+  // carries that headroom at h=6, and reserving a conditional row in the bound
+  // would put the minimum on the default and take vertical resizing away.
+  // `StatsSummaryWidget.height.test.tsx` pins both ends.
+  'stats-summary': { w: 4, h: 5 },
   'open-positions': { w: 4, h: 4 },
   // Pays for its timeframe strip and the gap under it out of the same body.
   'performance-chart': { w: 4, h: chartWidgetMinRows(TIMEFRAME_ROW_PX + STACK_GAP_PX) },
