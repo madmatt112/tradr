@@ -94,7 +94,13 @@ export function AccountList() {
     <>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Accounts</h1>
-        <Button className="cursor-pointer" onClick={beginCreate}>
+        {/* The walkthrough's account set opens here, so this button is its first
+            step's anchor — the same `data-tour` contract the positions list and
+            the account dialog already use. It is the one control that starts a
+            second account, and unlike the dashboard's welcome screen it is on
+            this page for every user, which is what lets that set run more than
+            once. */}
+        <Button className="cursor-pointer" data-tour="account-new" onClick={beginCreate}>
           New Account
         </Button>
       </div>

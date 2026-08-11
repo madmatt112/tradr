@@ -28,11 +28,20 @@
 //
 // What is NOT left alone is a set with nothing to open on. The close set starts
 // on one of the user's open positions and this component knows of none, so it
-// used to navigate nowhere and disappear; the account set is a tour of the
-// welcome screen, which is gone for good once an account exists. `start()` now
-// resolves the first from the user's own rows and answers for the second in
-// words — see `useWalkthroughLauncher`. Both happen at the CLICK, so this card
-// still asks the server nothing to render.
+// used to navigate nowhere and disappear; `start()` now resolves that row from
+// the user's own rows, and refuses in words when there is none — see
+// `useWalkthroughLauncher`. Both happen at the CLICK, so this card still asks
+// the server nothing to render.
+//
+// ALL FOUR OF THEM RUN. The account set was the last one that could not: it was
+// a tour of the dashboard's welcome screen, and that screen is gone for good
+// once any account exists, so for the user this card is FOR it could only ever
+// explain itself. It now runs on /accounts against "New Account" — the same
+// form, on the page where a second account is genuinely made — which is what
+// makes this card four walkthroughs rather than three and a note. The one state
+// it still declines is sample data, and that is the product's rule rather than
+// the tour's: a new account replaces the sample account, and the confirmation
+// that says so is not something a walkthrough can take the user through.
 
 import { Play } from 'lucide-react';
 

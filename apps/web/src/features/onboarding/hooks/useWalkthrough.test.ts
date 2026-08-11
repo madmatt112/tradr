@@ -709,13 +709,22 @@ describe('useWalkthrough — canStart', () => {
     >;
   }
 
-  it('offers the account set only while the zero-state is the screen the user is on', () => {
+  // THE ACCOUNT SET IS OFFERED TO A USER WHO ALREADY HAS ACCOUNTS, and that is
+  // the whole of why it was moved off the dashboard's welcome screen. Anchored
+  // there it could only run for a user with nothing, which is to say it could
+  // never be run twice; anchored on the Accounts page's "New Account" — a
+  // control `AccountList` renders for everybody — the only state it is withheld
+  // in is the one the product itself blocks, which is sample data (below).
+  it('offers the account set whether or not the user already has one', () => {
     accounts = [];
     expect(canStartAll().account).toBe(true);
 
-    // One account — of any kind, sample data included — and the dashboard shows
-    // the grid instead, so the button that set opens on is gone.
     accounts = [{ id: 'acct-1' }];
+    expect(canStartAll().account).toBe(true);
+
+    // Their own account alongside the sample one is still the sample state:
+    // creating another still starts by removing the sample data.
+    accounts = [{ id: 'acct-1' }, { id: 'demo-acct', isDemo: true }];
     expect(canStartAll().account).toBe(false);
   });
 
@@ -752,10 +761,12 @@ describe('useWalkthrough — canStart', () => {
     // one of the fixture's trades is not closing one of the user's.
     expect(answers.position).toBe(false);
     expect(answers.close).toBe(false);
-    // The account set is withheld for its own separate reason — the zero-state
-    // it opens on is gone the moment ANY account exists, sample or not — which
-    // leaves the calculator as this user's one guided entry point until they
-    // remove the sample data or create an account of their own.
+    // The account set is withheld here too, and for the product's own reason
+    // rather than the tour's: "New Account" asks to remove the sample data
+    // before it opens the form, the server refuses the create until it is gone,
+    // and that confirmation sits under the walkthrough's overlay where a click
+    // for it ends the walkthrough instead. That leaves the calculator as this
+    // user's one guided entry point until they remove the sample data.
     expect(answers.account).toBe(false);
     expect(answers.calculator).toBe(true);
   });
@@ -783,8 +794,9 @@ describe('useWalkthrough — canStart', () => {
   it('offers nothing that depends on an account count it does not have', () => {
     accounts = undefined;
     const answers = canStartAll();
-    expect(answers.account).toBe(false);
     expect(answers.position).toBe(false);
+    // The one that turns on no count at all is unaffected by not having one.
+    expect(answers.calculator).toBe(true);
   });
 
   // Completion is about the user's progress; `canStart` is about whether the
@@ -1051,7 +1063,7 @@ describe('useWalkthrough — action signals', () => {
     expect(downgraded).toEqual(
       [
         // Opens the account dialog.
-        '[data-testid="zero-state-create-account"]',
+        '[data-tour="account-new"]',
         // Chooses the Percent risk basis.
         '[data-tour="calculator-risk"]',
         // Picks the account to size against.
