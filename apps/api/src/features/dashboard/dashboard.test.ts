@@ -298,7 +298,7 @@ describe('dashboard routes', () => {
   });
 
   // -------------------------------------------------------------------------
-  // A layout saved before the geometry was fixed (deferral d-d3fb2fc7).
+  // A layout saved before the widget geometry was fixed.
   //
   // Every height in `staleWidgets` was legal when it was written — `h` values
   // from the 80px era, doubled by migration 0021, with the charts landing on
