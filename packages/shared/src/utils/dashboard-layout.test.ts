@@ -38,6 +38,37 @@ function currentLayout(): WidgetPlacement[] {
   return DEFAULT_WIDGETS.map((widget, i) => ({ id: ID(i + 1), ...widget }));
 }
 
+/**
+ * A stale layout whose repair REORDERS it. Every width is at or above its
+ * minimum and nothing overlaps, so this is a layout that really could have been
+ * saved; only the chart's height is repaired. Growing it pushes `open-positions`
+ * down past `stats-summary`, which sits in a column band the chart never
+ * reaches and so is never touched.
+ */
+function displacedPairLayout(): WidgetPlacement[] {
+  return [
+    { id: ID(1), type: 'performance-chart', x: 0, y: 0, w: 8, h: 2 },
+    { id: ID(2), type: 'open-positions', x: 4, y: 2, w: 4, h: 4 },
+    { id: ID(3), type: 'stats-summary', x: 8, y: 6, w: 4, h: 5 },
+  ];
+}
+
+/** The same reordering between two widgets that DO share columns. */
+function sharedColumnLayout(): WidgetPlacement[] {
+  return [
+    { id: ID(1), type: 'performance-chart', x: 0, y: 0, w: 8, h: 2 },
+    { id: ID(2), type: 'open-positions', x: 0, y: 2, w: 12, h: 4 },
+    { id: ID(3), type: 'stats-summary', x: 8, y: 6, w: 4, h: 5 },
+  ];
+}
+
+const FIXTURES: Array<[string, () => WidgetPlacement[]]> = [
+  ['a stale layout', staleLayout],
+  ['a current layout', currentLayout],
+  ['a layout the repair reorders', displacedPairLayout],
+  ['a layout the repair reorders across shared columns', sharedColumnLayout],
+];
+
 function anyOverlap(widgets: WidgetPlacement[]): boolean {
   for (let i = 0; i < widgets.length; i++) {
     for (let j = i + 1; j < widgets.length; j++) {
@@ -92,12 +123,16 @@ describe('reconcileStoredLayout', () => {
     expect(anyOverlap(stale)).toBe(false);
     const out = reconcileStoredLayout(stale);
     expect(anyOverlap(out)).toBe(false);
-    // Stacking order survives, which is what makes the repaired layout still
-    // recognisably theirs. Not whole-page reading order — the two columns grow
-    // by different amounts (the charts are on the left, the short rail widgets
-    // on the right), so rows that used to align no longer do. What holds is the
-    // order of any two widgets that share columns: one was above the other and
-    // still is.
+    // On THIS layout stacking order survives, which is what makes the repaired
+    // default arrangement still recognisably theirs: not whole-page reading
+    // order — the two columns grow by different amounts (the charts on the
+    // left, the short rail widgets on the right), so rows that used to align no
+    // longer do — but the order of any two widgets that share columns.
+    //
+    // That is a property of this fixture, NOT an invariant of the function. See
+    // the two reordering tests below, where it does not hold, and the note in
+    // `reconcileStoredLayout` explaining why holding it in general costs more
+    // than the cosmetic reordering it would prevent.
     for (const a of stale) {
       for (const b of stale) {
         if (a.id === b.id) continue;
@@ -113,6 +148,58 @@ describe('reconcileStoredLayout', () => {
       const before = stale.find((w) => w.id === widget.id)!;
       expect({ x: widget.x, w: widget.w }).toEqual({ x: before.x, w: before.w });
     }
+  });
+
+  // The guarantees the function actually makes, checked against every fixture
+  // rather than pinned to one — the single-fixture version of this is what let
+  // an unheld stacking-order claim stand.
+  it.each(FIXTURES)('holds its guarantees on %s', (_name, fixture) => {
+    const stale = fixture();
+    const out = reconcileStoredLayout(stale);
+
+    // The output is writable, which is the whole point.
+    expect(PutDashboardLayoutRequestSchema.safeParse({ widgets: out }).success).toBe(true);
+    expect(anyOverlap(out)).toBe(false);
+    expect(out.map((w) => w.id)).toEqual(stale.map((w) => w.id));
+    for (const widget of out) {
+      const before = stale.find((w) => w.id === widget.id)!;
+      // Columns never move (no fixture here is under a minimum width), heights
+      // never shrink, and the re-flow only ever pushes a widget DOWN.
+      expect({ x: widget.x, w: widget.w }).toEqual({ x: before.x, w: before.w });
+      expect(widget.h).toBeGreaterThanOrEqual(before.h);
+      expect(widget.y).toBeGreaterThanOrEqual(before.y);
+    }
+  });
+
+  it('can reorder two widgets when only one of them is displaced', () => {
+    // The limitation, pinned as behaviour so nobody reads the re-flow as an
+    // order-preserving one: `open-positions` was above `stats-summary` and ends
+    // below it, because growing the chart displaces the first and not the
+    // second. Cosmetic — no overlap, and the guarantees above still hold — but
+    // it IS the user's arrangement being silently rearranged.
+    const stale = displacedPairLayout();
+    const out = reconcileStoredLayout(stale);
+    const y = (type: WidgetType, widgets: WidgetPlacement[]): number =>
+      widgets.find((w) => w.type === type)!.y;
+
+    expect(y('open-positions', stale)).toBeLessThan(y('stats-summary', stale));
+    expect(y('open-positions', out)).toBeGreaterThan(y('stats-summary', out));
+  });
+
+  it('can reorder two widgets that share columns', () => {
+    // And sharing columns does not save the pair: a widget pushed down carries
+    // nobody with it, so the same flip happens between two widgets that overlap
+    // horizontally — which is why the fixture above pins only its own order.
+    const stale = sharedColumnLayout();
+    const out = reconcileStoredLayout(stale);
+    const above = stale.find((w) => w.type === 'open-positions')!;
+    const below = stale.find((w) => w.type === 'stats-summary')!;
+
+    expect(above.x < below.x + below.w && below.x < above.x + above.w).toBe(true);
+    expect(above.y).toBeLessThan(below.y);
+    expect(out.find((w) => w.id === above.id)!.y).toBeGreaterThan(
+      out.find((w) => w.id === below.id)!.y,
+    );
   });
 
   it('returns the widgets in the order it was given', () => {

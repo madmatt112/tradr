@@ -28,14 +28,22 @@ function overlaps(a: WidgetPlacement, b: WidgetPlacement): boolean {
  * This is the reconciliation, applied wherever a stored layout is read.
  *
  * A HEIGHT BELOW THE TYPE'S MINIMUM IS REPAIRED TO THE TYPE'S PINNED DEFAULT,
- * not merely raised to the minimum. The minimum is the floor the UI itself
- * enforces — gridstack carries it as `minH` and will not resize past it — so a
- * stored height below it cannot be something a user chose. It can only be
- * geometry from an older bound, and the honest repair for that is the height
- * the widget would be given if it were placed today. Clamping to the minimum
- * instead would leave a Stats Summary saved at h=2 clipping its figures for as
- * long as the user never resized it, which is the half of this defect that a
- * write-path fix alone does not reach.
+ * not merely raised to the minimum — a deliberate trade, not something
+ * correctness forces. The heights being repaired were LEGAL CHOICES when they
+ * were saved: the chart minimum was h=4 and Stats Summary's was h=2 until the
+ * commit that added this derived them from what the widgets render, so a user
+ * really could have picked one and meant it. What changed is that the app no
+ * longer supports those heights — the widget cannot show its content at them,
+ * and gridstack now carries the raised minimum as `minH`, so the user cannot
+ * resize back to one either. Between preserving a height that is no longer
+ * usable and handing the widget the size it would be given if it were placed
+ * today, this prefers the usable widget. The cost is bounded and small: the
+ * pinned default is one row above the minimum for `stats-summary` and
+ * `performance-chart` and three above it for `equity-curve`, so a repaired
+ * widget is at most three rows taller than the bound alone would demand.
+ * Clamping to the minimum instead would leave a Stats Summary saved at h=2
+ * clipping its figures for as long as the user never resized it, which is the
+ * half of this defect that a write-path fix alone does not reach.
  *
  * Widths are clamped rather than replaced, because the horizontal axis has
  * never moved: a width below the minimum can only come from a hand-written API
@@ -45,8 +53,21 @@ function overlaps(a: WidgetPlacement, b: WidgetPlacement): boolean {
  * GROWING A WIDGET CAN PUSH IT INTO ITS NEIGHBOUR, and an overlapping layout
  * fails `checkNoOverlap` — swapping one 400 for another. So the second pass
  * re-flows `y` in reading order, moving a widget DOWN past anything it now
- * collides with and never up. Relative order, columns and widths are preserved,
- * which is what makes the repaired layout still recognisably the user's.
+ * collides with and never up. Columns and widths come through untouched, and no
+ * widget ends up higher than it was stored.
+ *
+ * RELATIVE STACKING ORDER IS NOT ONE OF THE GUARANTEES. A widget moves only
+ * when it actually collides, so a displaced widget can end up below one it used
+ * to sit above whenever that pair does not collide: grow a `performance-chart`
+ * at (x0,w8) from h=2 to h=12 and the `open-positions` beneath it at y=2 is
+ * pushed to y=12, while a `stats-summary` over at (x8,y6) is touched by neither
+ * and keeps y=6 — the two swap places. Sharing columns does not save it either;
+ * a widget that is pushed down carries nobody with it. Holding order in general
+ * would mean cascading a push onto widgets that do not collide, moving layouts
+ * that need no repair and opening gaps in them — more disruption than the
+ * reordering it prevents, which is cosmetic: the result still never overlaps and
+ * the write schema still accepts it. The tests pin the reordering as behaviour,
+ * across more than one layout, so nobody mistakes it for an invariant.
  *
  * A layout that is already current is returned unchanged: nothing is below a
  * minimum, so nothing grows, so no widget collides with one already placed.
