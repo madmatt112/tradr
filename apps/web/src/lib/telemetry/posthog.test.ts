@@ -236,13 +236,13 @@ describe('scrubEvent', () => {
 
     const out = scrubEvent({
       properties: {
-        $current_url: 'https://app.tradr.io/login?expired=%22true%22',
+        $current_url: 'https://app.tradr.io/login?expired=true',
       } as Record<string, unknown>,
     });
 
     // Query strings carry real analytics signal and no route puts a secret in
     // one (REQ-3.9), so they are deliberately kept.
-    expect(out!.properties!.$current_url).toBe('https://app.tradr.io/login?expired=%22true%22');
+    expect(out!.properties!.$current_url).toBe('https://app.tradr.io/login?expired=true');
   });
 
   it('drops referrers even when no route has resolved', async () => {

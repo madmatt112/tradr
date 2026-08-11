@@ -252,7 +252,13 @@ async function request<T>(
     // it belongs to is still on screen.
     announceSessionExpired();
     if (router) {
-      router.navigate({ to: '/login', search: { expired: 'true' }, replace: true });
+      // A BOOLEAN, not the string 'true'. The router JSON-encodes any string
+      // value that is itself parseable JSON, so `'true'` reaches the address bar
+      // as `?expired=%22true%22` — quotes and all — and /login, which reads the
+      // raw query, matched none of it. A boolean is written through bare, so
+      // this navigation lands on the same `?expired=true` as the two hard
+      // navigations below and in the CSV preview's own 401 handling.
+      router.navigate({ to: '/login', search: { expired: true }, replace: true });
     } else {
       window.location.href = '/login?expired=true';
     }
