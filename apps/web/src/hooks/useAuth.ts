@@ -30,12 +30,12 @@ import { clearClientSessionState } from '@/lib/sessionTeardown';
  * the latch on what comes back is what turned one expiry into a loop of them.
  * Only a login re-arms it.
  *
- * Both callers below share this, and the confirmation is why. `useSessionPresence`
- * hands its 200 straight on to a surface that navigates into the authenticated
- * app, where the cached user it just wrote means `useAuth`'s own query may never
- * reach the network. Were the confirmation to live only in `useAuth`, that
- * session would run with `hasSession` false and its eventual expiry would pass
- * unannounced.
+ * Both callers below share this, and the confirmation is why: a 200 is the same
+ * evidence whoever asked for it. `useSessionPresence` asks from an
+ * unauthenticated surface that then navigates into the authenticated app, and
+ * until `useAuth`'s own query answers there its 200 is the only thing that has
+ * said a session exists. Were the confirmation to live only in `useAuth`, a 401
+ * arriving in that window would find `hasSession` false and pass unannounced.
  */
 async function fetchMe(opts?: RequestOptions): Promise<User> {
   const me = await api.get<User>('/auth/me', opts);
@@ -135,14 +135,18 @@ export function useRegister() {
  * rather than a session ending. No redirect, no announcement, and the one-shot
  * latch survives for the next real expiry.
  *
- * It shares `['auth','me']` with `useAuth` deliberately: a signed-in user who
- * mistypes a URL mid-session is answered from the cache without a request, and
- * the identity a cold load fetches here is the one the authenticated app then
- * reads.
+ * IT ASKS UNDER ITS OWN KEY, not `['auth','me']`. A react-query observer does
+ * not merely read the query it names, it writes its own `queryFn` onto it — so
+ * sharing the key handed the permissive fetch to the SESSION query for as long
+ * as this page was mounted. An expiry landing in that window (the tab regaining
+ * focus, an invalidation, a refetch) then answered a 401 that had opted out of
+ * the interception: no redirect, no announcement. The one guarantee the
+ * interception makes must not be suspendable by being on a 404 page. The cost is
+ * one request a cache hit would have saved, on a page that is already an error.
  */
 export function useSessionPresence() {
   const { data: user, isLoading } = useQuery<User>({
-    queryKey: ['auth', 'me'],
+    queryKey: ['auth', 'session-presence'],
     queryFn: () => fetchMe({ allowUnauthenticated: true }),
     retry: false,
   });
