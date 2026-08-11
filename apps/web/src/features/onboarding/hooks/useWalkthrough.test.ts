@@ -9,7 +9,14 @@ import { eventBus } from '@/stores/event-bus.store';
 
 import type { Checklist, ChecklistItemId } from '../lib/derive-checklist';
 import { WALKTHROUGH_STEPS, type WalkthroughStep } from '../lib/steps';
-import type { TourExitReason, TourHandlers, TourStep } from '../lib/tour-engine';
+// The module under `vi.mock` below: `stop()` here is the double's, or the real
+// engine's, on the same terms as everything else the hook calls.
+import {
+  stop as endRealTour,
+  type TourExitReason,
+  type TourHandlers,
+  type TourStep,
+} from '../lib/tour-engine';
 
 import {
   ACTION_SIGNALS,
@@ -89,7 +96,28 @@ const engine = {
   }),
   isActive: vi.fn(() => started !== null),
 };
-vi.mock('../lib/tour-engine', () => engine);
+
+/**
+ * The double above, OR the real engine — see `withRealEngine`.
+ *
+ * A double cannot check the pairing of an exit reason with the step it names,
+ * because the pairing is precisely what the test would be inventing. Only
+ * `lib/tour-engine` knows that the step it gave up on for a missing target is
+ * very often an action-gated one — every gated step in the position and close
+ * sets also waits for its target — so the wording the user is shown has to be
+ * pinned against a stop the real engine actually produced.
+ */
+let realEngine = false;
+vi.mock('../lib/tour-engine', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/tour-engine')>();
+  return {
+    startTour: (steps: TourStep[], handlers?: TourHandlers) =>
+      realEngine ? real.startTour(steps, handlers) : engine.startTour(steps, handlers),
+    advance: () => (realEngine ? real.advance() : engine.advance()),
+    stop: (reason?: TourExitReason) => (realEngine ? real.stop(reason) : engine.stop(reason)),
+    isActive: () => (realEngine ? real.isActive() : engine.isActive()),
+  };
+});
 
 // --- helpers ----------------------------------------------------------------
 
@@ -140,6 +168,37 @@ function endTour(reason: TourExitReason, blockedAt?: TourStep) {
 /** Put the app's real toaster on screen, so a notice can be READ rather than counted. */
 function withToaster() {
   render(createElement(Toaster));
+}
+
+/**
+ * Drive the next tour with the REAL engine — driver.js, the real gate, the real
+ * `blockedAt` — instead of the double.
+ *
+ * jsdom is enough, as it is for the engine's own tests: driver.js reads only
+ * `getBoundingClientRect`, which returns zeroes here. Reduced motion keeps its
+ * rendering synchronous, so the popover is on screen the moment a tour starts.
+ */
+function withRealEngine() {
+  realEngine = true;
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query.includes('prefers-reduced-motion'),
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
+
+/** Put the control a step anchors to on screen, so the real engine can find it. */
+function mountTarget(step: WalkthroughStep): void {
+  const attribute = /^\[([\w-]+)="([^"]+)"\]$/.exec(step.target ?? '');
+  if (!attribute) throw new Error(`the step under test has no attribute target: ${step.target}`);
+  const control = document.createElement('button');
+  control.setAttribute(attribute[1], attribute[2]);
+  document.body.appendChild(control);
 }
 
 /** The step in the running set that will only move on the real action. */
@@ -354,7 +413,9 @@ describe('useWalkthrough — the tour says why it stopped', () => {
     await start('position');
     const gated = aGatedStep();
 
-    endTour('target-missing', gated);
+    // The decline: the user closed the tour on a step whose gate they could
+    // have opened, which is the only stop that is theirs to clear.
+    endTour('dismissed', gated);
 
     const notice = await screen.findByText('The walkthrough stopped');
     expect(notice).toBeTruthy();
@@ -368,16 +429,24 @@ describe('useWalkthrough — the tour says why it stopped', () => {
     expect(why.textContent).toContain('start it again from the setup checklist');
   });
 
-  it('says the same when the user closes the tour on that step rather than acting', async () => {
+  /**
+   * THE SAME STEP, THE OTHER REASON, AND IT MUST NOT READ THE SAME. Every gated
+   * step in these two sets also waits for its target, so a slow load or a
+   * navigation that never happened stops the tour on one of them having shown
+   * the user no control at all. Wording that keyed off the gate blamed them for
+   * not pressing a button that was never there.
+   */
+  it('does not blame the user when a gated step was the one that never appeared', async () => {
     withToaster();
     await start('close');
     const gated = aGatedStep();
 
-    endTour('dismissed', gated);
+    endTour('target-missing', gated);
 
-    expect(await screen.findByText('The walkthrough stopped')).toBeTruthy();
-    const why = await screen.findByText(/only moves on once you have actually done it/);
+    const why = await screen.findByText(/never appeared on screen/);
     expect(why.textContent).toContain(gated.title);
+    expect(why.textContent).toContain('the walkthrough could not show you that step');
+    expect(screen.queryByText(/only moves on once you have actually done it/)).toBeNull();
   });
 
   // The general case, and the reason this is one path rather than a special
@@ -390,7 +459,7 @@ describe('useWalkthrough — the tour says why it stopped', () => {
 
     endTour('target-missing', plain);
 
-    const why = await screen.findByText(/was not on screen/);
+    const why = await screen.findByText(/never appeared on screen/);
     expect(why.textContent).toContain(plain.title);
     expect(why.textContent).toContain('start it again from the setup checklist');
   });
@@ -435,6 +504,77 @@ describe('useWalkthrough — the tour says why it stopped', () => {
     endTour('session-ended');
 
     expect(screen.queryByText('The walkthrough stopped')).toBeNull();
+  });
+});
+
+/**
+ * THE SAME NOTICE, WITH NOTHING INVENTED IN BETWEEN.
+ *
+ * Everything above hands `onExit` a reason and a step chosen by the test, which
+ * is how a notice came to name the wrong cause: the pairing was never checked
+ * against an engine that produces it. These two run the REAL engine over the
+ * REAL close set and read what is on screen at the end, so a reason that stops
+ * matching its wording fails here rather than in front of a user.
+ *
+ * The close set is the one that reaches both stops. Its first step is
+ * action-gated AND waits five seconds for a control on a route that has to load
+ * first — so the same step ends the tour `dismissed` when the user declines it
+ * and `target-missing` when the position never arrives, which is what a slow
+ * load and a failed navigation both look like from here.
+ */
+describe('useWalkthrough — the real engine says why it stopped', () => {
+  const gated = WALKTHROUGH_STEPS.close[0];
+
+  afterEach(() => {
+    // The engine's own module state, which the hook's reset does not reach.
+    // Runs before the file-wide teardown, so the toaster is still up for it.
+    endRealTour();
+    realEngine = false;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  it('blames the user for nothing when the control never rendered', async () => {
+    // The step really is gated — the pairing that used to pick the wording.
+    expect(gated.advanceOnAction).toBe(true);
+    expect(gated.waitForMs).toBeGreaterThan(0);
+    withToaster();
+    withRealEngine();
+    // Only `setTimeout`, so React and sonner keep their own scheduling: the
+    // wait for a target is a plain timer inside driver.js, and it is the only
+    // clock this test wants to move.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    // Nothing is mounted, so the control never appears — the position page
+    // still loading, or a navigation that did not happen.
+    await start('close');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(gated.waitForMs! + 100);
+    });
+    vi.useRealTimers();
+
+    const why = await screen.findByText(/never appeared on screen/);
+    expect(why.textContent).toContain(gated.title);
+    expect(screen.queryByText(/only moves on once you have actually done it/)).toBeNull();
+  });
+
+  it('says that same step needs them when they close the tour on it', async () => {
+    withToaster();
+    withRealEngine();
+    // The control is there and pressable, so the gate is really holding.
+    mountTarget(gated);
+
+    await start('close');
+    expect(document.querySelector('.driver-popover-title')?.textContent).toBe(gated.title);
+
+    // The close button is the only control that answers on a gated step.
+    act(() => {
+      document.querySelector<HTMLButtonElement>('.driver-popover-close-btn')?.click();
+    });
+
+    const why = await screen.findByText(/only moves on once you have actually done it/);
+    expect(why.textContent).toContain(gated.title);
   });
 });
 

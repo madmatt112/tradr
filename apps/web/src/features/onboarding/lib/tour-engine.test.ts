@@ -37,6 +37,25 @@ function clickPopoverButton(selector: string): void {
   document.querySelector<HTMLButtonElement>(selector)?.click();
 }
 
+/**
+ * The third way out, and the one no test reached: clicking the dimmed page
+ * around the highlight.
+ *
+ * driver.js paints that dimming as a `<path>` inside its overlay `<svg>` and
+ * only treats a click as an overlay click when the path itself was the target,
+ * so the event has to come from there. It ends the tour through
+ * `onDestroyStarted` rather than through a popover button — a separate route
+ * into `stop()`, carrying its own step index.
+ *
+ * Awaited, unlike the popover: the overlay is painted from the animation frame
+ * that follows the highlight rather than during it, so it is the one part of a
+ * tour that is not on screen the moment `startTour` returns.
+ */
+async function clickOverlay(): Promise<void> {
+  const dimming = await vi.waitUntil(() => document.querySelector('.driver-overlay path'));
+  dimming.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
 const TWO_STEPS: TourStep[] = [
   { target: '#one', title: 'First', description: 'The first control.' },
   { target: '#two', title: 'Second', description: 'The second control.' },
@@ -314,6 +333,17 @@ describe('exiting', () => {
     expect(isActive()).toBe(false);
   });
 
+  it('reports a dismissal from a click on the overlay', async () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+
+    await clickOverlay();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+    expect(isActive()).toBe(false);
+    expect(document.querySelector('.driver-overlay')).toBeNull();
+  });
+
   it('reports a dismissal from Escape', () => {
     const onExit = vi.fn();
     startTour(TWO_STEPS, { onExit });
@@ -366,6 +396,33 @@ describe('the step the user could not get past', () => {
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
 
     expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', gated[0]);
+  });
+
+  it('is reported when a click on the overlay ends one', async () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    await clickOverlay();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', gated[0]);
+  });
+
+  // The overlay ends the tour through a different hook from the other two, and
+  // that hook is handed its own step index — so this is the one place the index
+  // could be wrong without any other test noticing. Leaving the tour on step 1
+  // is what tells a read of `opts.index` apart from a hard-coded first step.
+  it('names the step the overlay click actually landed on', async () => {
+    const onExit = vi.fn();
+    const secondIsGated: TourStep[] = [
+      { target: '#one', title: 'First', description: 'The first control.' },
+      { target: '#two', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
+    ];
+    startTour(secondIsGated, { onExit });
+    advance();
+
+    await clickOverlay();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', secondIsGated[1]);
   });
 
   // The same test the gate itself is made of. A gated step whose control is

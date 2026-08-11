@@ -506,13 +506,27 @@ const STOP_NOTICE_MS = 12_000;
  * what the walkthrough teaches, so a user who does not want to place another
  * trade genuinely cannot go on. What was missing was never the gate; it was
  * anyone saying so.
+ *
+ * WHICH IS WHY THE WORDING FOLLOWS THE REASON AND NOT THE STEP. Being gated is
+ * not why a tour stopped — it is only why one of the two stops is the user's to
+ * clear. Every gated step in the position and close sets also carries a
+ * `waitForMs`, because each is entered cold on a route still loading, so a slow
+ * load or a navigation that did not happen ends those exact steps
+ * `target-missing`. Reading the gate flag instead of the reason told a user
+ * whose control never rendered that they had declined to press it, which is a
+ * confident lie about the one failure this notice exists to explain.
  */
-function explainStop(step: TourStep | undefined): string {
+function explainStop(reason: TourExitReason, step: TourStep | undefined): string {
   if (step === undefined) return 'It could not carry on from here.';
-  if (step.advanceOnAction === true) {
+  // The user turned the tour down where it stood, and the engine names a step
+  // here ONLY when its gate was one they could have opened (`recordGate`) — so
+  // this is the decline, and nothing else reaches it.
+  if (reason === 'dismissed') {
     return `“${step.title}” only moves on once you have actually done it, so the walkthrough cannot take that step for you.`;
   }
-  return `“${step.title}” was not on screen, so the walkthrough could not carry on.`;
+  // Everything else that names a step got it from the engine giving up on a
+  // target — gated or not, the control was never there to press.
+  return `“${step.title}” never appeared on screen, so the walkthrough could not show you that step.`;
 }
 
 function announceStop(reason: TourExitReason, blockedAt: TourStep | undefined): void {
@@ -525,7 +539,7 @@ function announceStop(reason: TourExitReason, blockedAt: TourStep | undefined): 
     // it was started from is still there. Exiting discards nothing — this
     // module writes no onboarding state at all — so "nothing was lost" is a
     // structural fact rather than a reassurance.
-    description: `${explainStop(blockedAt)} Nothing was lost — carry on without it, or start it again from the setup checklist whenever you want.`,
+    description: `${explainStop(reason, blockedAt)} Nothing was lost — carry on without it, or start it again from the setup checklist whenever you want.`,
   });
 }
 
