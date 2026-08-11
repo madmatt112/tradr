@@ -201,7 +201,7 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     expect(interceptNavigate).toHaveBeenCalledTimes(1);
     expect(interceptNavigate).toHaveBeenCalledWith({
       to: '/login',
-      search: { expired: 'true' },
+      search: { expired: true },
       replace: true,
     });
   });
