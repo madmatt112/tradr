@@ -88,8 +88,19 @@ release:
 # Refresh the local graphify knowledge graph against current main. Optional and
 # local-only — graphify-out/ is git-ignored and nothing in the build depends on
 # it. AST-only, so no API cost. See CLAUDE.md for what the graph is used for.
+#
+# Refuses to run from a linked worktree: `git checkout main` cannot succeed
+# there anyway, and there is a single shared graphify-out/ in the main checkout
+# that a worktree run would overwrite with one branch's view of the code. Both
+# paths are resolved with `cd … && pwd` before comparing — --git-common-dir is
+# reported relative to the cwd (`../.git` from a subdirectory), so comparing the
+# raw strings would refuse to run anywhere but the repo root.
 .PHONY: update-graphify-graph
 update-graphify-graph:
+	@gitdir=$$(cd "$$(git rev-parse --git-dir)" && pwd); \
+	  commondir=$$(cd "$$(git rev-parse --git-common-dir)" && pwd); \
+	  test "$$gitdir" = "$$commondir" || \
+	    { echo "refusing to run in a linked worktree — run this from the main checkout: $$(dirname "$$commondir")"; exit 1; }
 	git checkout main
 	git pull --ff-only
 	graphify update .
