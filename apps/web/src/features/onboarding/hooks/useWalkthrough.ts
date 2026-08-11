@@ -51,6 +51,7 @@
 
 import { useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { toast } from 'sonner';
 import { create } from 'zustand';
 
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
@@ -61,6 +62,7 @@ import type { EventName } from '@/stores/events.types';
 import { emitOnboardingEvent } from '../lib/analytics';
 import type { ChecklistItemId, Checklist } from '../lib/derive-checklist';
 import type { WalkthroughStep } from '../lib/steps';
+import type { TourExitReason, TourStep } from '../lib/tour-engine';
 
 import { selectOwnRows, useOnboarding } from './useOnboarding';
 
@@ -466,6 +468,67 @@ function withOpeningParams(
   return { ...fallback, ...params };
 }
 
+/**
+ * One toast, reused. A user who stops twice gets the second explanation in
+ * place of the first rather than a stack of them.
+ */
+const STOP_NOTICE_ID = 'walkthrough-stopped';
+
+/**
+ * Long enough to read twice. The notice arrives at the moment an overlay the
+ * user was reading disappeared, so it has to survive the double-take that
+ * causes; it is still transient, so it carries no close button — the app's one
+ * permanent notice is the only one that needs a manual way out.
+ */
+const STOP_NOTICE_MS = 12_000;
+
+/**
+ * WHY THE TOUR STOPPED, IN WORDS, ON SCREEN.
+ *
+ * A walkthrough that ends without saying why is this area's recurring defect
+ * rather than an oversight in one step: it has now happened from three separate
+ * causes — a set left on the wrong route, a highlighted control that unmounted
+ * mid-tour, and a user declining the action a step waits for — and each time it
+ * looked identical from the user's seat, which is to say it looked like nothing
+ * at all. So the answer is one path for "the tour could not carry on", not a
+ * message bolted onto whichever cause was reported last.
+ *
+ * WHAT IT DOES NOT COVER, DELIBERATELY. Completion needs no explanation, a
+ * session that ended took the whole screen with it, and an ordinary dismissal
+ * is the user saying they are done — telling someone who closed the tour that
+ * the tour closed is nagging. The trigger is the engine's `blockedAt`: a step
+ * the user could not get past. `target-missing` is reported even without one,
+ * because a tour that vanished having named no step is precisely the failure
+ * this exists to end, and silence would be the worst possible fallback.
+ *
+ * ACTION-GATED STEPS GET THE HONEST REASON. Replaying a set still requires the
+ * real thing — creating the position, recording the exit fill — because that is
+ * what the walkthrough teaches, so a user who does not want to place another
+ * trade genuinely cannot go on. What was missing was never the gate; it was
+ * anyone saying so.
+ */
+function explainStop(step: TourStep | undefined): string {
+  if (step === undefined) return 'It could not carry on from here.';
+  if (step.advanceOnAction === true) {
+    return `“${step.title}” only moves on once you have actually done it, so the walkthrough cannot take that step for you.`;
+  }
+  return `“${step.title}” was not on screen, so the walkthrough could not carry on.`;
+}
+
+function announceStop(reason: TourExitReason, blockedAt: TourStep | undefined): void {
+  if (blockedAt === undefined && reason !== 'target-missing') return;
+
+  toast.info('The walkthrough stopped', {
+    id: STOP_NOTICE_ID,
+    duration: STOP_NOTICE_MS,
+    // Both ways out, named: nothing was riding on the tour, and the checklist
+    // it was started from is still there. Exiting discards nothing — this
+    // module writes no onboarding state at all — so "nothing was lost" is a
+    // structural fact rather than a reassurance.
+    description: `${explainStop(blockedAt)} Nothing was lost — carry on without it, or start it again from the setup checklist whenever you want.`,
+  });
+}
+
 async function run(
   itemId: ChecklistItemId,
   callerParams: Record<string, string> | undefined,
@@ -534,9 +597,9 @@ async function run(
     },
     // Every ending arrives here — completed, dismissed, or a target that never
     // appeared — and all three do the same thing to the user's data, because
-    // none of them has any work to undo. They are told apart only for the
-    // funnel.
-    onExit: (reason) => {
+    // none of them has any work to undo. They are told apart for the funnel,
+    // and for whether the user is owed an explanation (`announceStop`).
+    onExit: (reason, blockedAt) => {
       // THE STEP INDEX COMES FROM THE LIVE SESSION, AND IS READ BEFORE THE
       // TEARDOWN THAT CLEARS IT. Nothing stores a step index — resume
       // re-derives its position from the checklist instead, and adding a stored
@@ -560,6 +623,9 @@ async function run(
         stepCount,
         reason,
       });
+      // After the teardown, so the screen the user is left with is the one the
+      // notice is about.
+      announceStop(reason, blockedAt);
     },
   });
 }

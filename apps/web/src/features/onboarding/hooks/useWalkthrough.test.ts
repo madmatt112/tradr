@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Toaster } from '@/components/ui/sonner';
 import { eventBus } from '@/stores/event-bus.store';
 
 import type { Checklist, ChecklistItemId } from '../lib/derive-checklist';
@@ -119,6 +122,33 @@ function highlight(index: number) {
   });
 }
 
+/**
+ * The engine giving up, as `lib/tour-engine` does: it ends the tour and names
+ * the step the user could not get past, or names none when there was none.
+ *
+ * WHICH step that is belongs to the engine and is pinned there against the real
+ * driver.js. What belongs here is what the user is left looking at afterwards.
+ */
+function endTour(reason: TourExitReason, blockedAt?: TourStep) {
+  act(() => {
+    const session = started;
+    started = null;
+    session?.handlers.onExit?.(reason, blockedAt);
+  });
+}
+
+/** Put the app's real toaster on screen, so a notice can be READ rather than counted. */
+function withToaster() {
+  render(createElement(Toaster));
+}
+
+/** The step in the running set that will only move on the real action. */
+function aGatedStep(): TourStep {
+  const step = started?.steps.find((s) => s.advanceOnAction);
+  if (!step) throw new Error('the set under test has no action-gated step');
+  return step;
+}
+
 function currentTargets(): (string | undefined)[] {
   return (started?.steps ?? []).map((s) => s.target);
 }
@@ -142,6 +172,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // sonner's queue is module-scoped like the session is, so a notice raised in
+  // one test would still be there for the next one's toaster to render.
+  toast.dismiss();
   // Unmount first: the store is module-scoped, so a hook still mounted from an
   // earlier test would re-render on the reset below — outside `act`, and
   // attributed to whichever test came next.
@@ -298,6 +331,110 @@ describe('useWalkthrough — start and exit', () => {
     await waitFor(() => expect(result.current.itemId).toBe('position'));
     expect(result.current.isRunning).toBe(true);
     expect(engine.startTour).toHaveBeenCalledTimes(2);
+  });
+});
+
+// --- a tour that cannot carry on -------------------------------------------
+
+/**
+ * A WALKTHROUGH THAT VANISHES WITH NOTHING ON SCREEN IS THIS AREA'S RECURRING
+ * DEFECT, and these are about what is left in front of the user, not about
+ * which function ran. They render the app's real toaster and read the words in
+ * it for that reason: "a handler was called" is exactly the evidence that would
+ * have passed while the screen stayed blank.
+ *
+ * The position and close sets each ask the user to do the real thing — create
+ * the position, record the exit fill — and replaying one still does. That is
+ * the walkthrough working as intended. What was broken was that a user who did
+ * not want to place another trade was shown nothing at all when it stopped.
+ */
+describe('useWalkthrough — the tour says why it stopped', () => {
+  it('tells the user an action-gated step needs them to actually do it', async () => {
+    withToaster();
+    await start('position');
+    const gated = aGatedStep();
+
+    endTour('target-missing', gated);
+
+    const notice = await screen.findByText('The walkthrough stopped');
+    expect(notice).toBeTruthy();
+
+    const why = await screen.findByText(/only moves on once you have actually done it/);
+    // The step it stopped at, named, so "which one?" is not left to the user.
+    expect(why.textContent).toContain(gated.title);
+    expect(why.textContent).toContain('the walkthrough cannot take that step for you');
+    // Both ways out, said plainly.
+    expect(why.textContent).toContain('carry on without it');
+    expect(why.textContent).toContain('start it again from the setup checklist');
+  });
+
+  it('says the same when the user closes the tour on that step rather than acting', async () => {
+    withToaster();
+    await start('close');
+    const gated = aGatedStep();
+
+    endTour('dismissed', gated);
+
+    expect(await screen.findByText('The walkthrough stopped')).toBeTruthy();
+    const why = await screen.findByText(/only moves on once you have actually done it/);
+    expect(why.textContent).toContain(gated.title);
+  });
+
+  // The general case, and the reason this is one path rather than a special
+  // case on the gate: the same silence has come from a set left on the wrong
+  // route and from a control that unmounted mid-tour.
+  it('explains an ordinary step that was never on screen', async () => {
+    withToaster();
+    await start('position');
+    const plain = started!.steps.find((s) => !s.advanceOnAction && s.target !== undefined)!;
+
+    endTour('target-missing', plain);
+
+    const why = await screen.findByText(/was not on screen/);
+    expect(why.textContent).toContain(plain.title);
+    expect(why.textContent).toContain('start it again from the setup checklist');
+  });
+
+  // The fallback exists so that the one failure this is here to end cannot come
+  // back through a gap: a tour that gave up and named no step still says so.
+  it('still explains a tour that gave up without naming a step', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('target-missing');
+
+    expect(await screen.findByText('The walkthrough stopped')).toBeTruthy();
+    expect(await screen.findByText(/It could not carry on from here/)).toBeTruthy();
+  });
+
+  it('says nothing when the user simply closed the tour', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('dismissed');
+
+    await waitFor(() => expect(engine.startTour).toHaveBeenCalled());
+    expect(screen.queryByText('The walkthrough stopped')).toBeNull();
+  });
+
+  it('says nothing when the user finished it', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('completed');
+
+    expect(screen.queryByText('The walkthrough stopped')).toBeNull();
+  });
+
+  // The session went away under the tour; the notice would land on the login
+  // screen, addressed to nobody.
+  it('says nothing when the session ended under it', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('session-ended');
+
+    expect(screen.queryByText('The walkthrough stopped')).toBeNull();
   });
 });
 

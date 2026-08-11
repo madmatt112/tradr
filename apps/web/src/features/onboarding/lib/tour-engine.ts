@@ -111,14 +111,35 @@ export interface TourHandlers {
    * and prepares before it calls.
    */
   onBeforeAdvance?: (index: number) => void;
-  /** Fires exactly once per tour, however it ended. */
-  onExit?: (reason: TourExitReason) => void;
+  /**
+   * Fires exactly once per tour, however it ended.
+   *
+   * `blockedAt` IS HOW THE TOUR SAYS WHY IT STOPPED, and it is the answer to a
+   * failure this walkthrough has now shipped three times: the tour vanishing
+   * with nothing on screen to explain it. It carries the step the user could
+   * not get past, and it is present only when there was one:
+   *
+   * - a step whose target never appeared, so the tour gave up on it; or
+   * - an action-gated step the user closed the tour on rather than perform,
+   *   where "Next" was inert and the close button was the only control that
+   *   answered them.
+   *
+   * Nobody outside this module can work either out. `onStepChange` never fires
+   * for a step that failed to resolve, so the caller's idea of "the current
+   * step" is the one BEFORE the failure; and whether a gate was really holding
+   * depends on whether the highlighted control was usable, which is read live
+   * here (`isGatedStep`). Absent means the tour ended without being stuck —
+   * completion, an ordinary dismissal, a session that went away.
+   */
+  onExit?: (reason: TourExitReason, blockedAt?: TourStep) => void;
 }
 
 let instance: Driver | null = null;
 let activeSteps: TourStep[] = [];
 let activeHandlers: TourHandlers = {};
 let exitReason: TourExitReason = 'dismissed';
+/** The step the tour could not get the user past — see `TourHandlers.onExit`. */
+let blockedAt: TourStep | undefined;
 let pendingStopTimer: number | undefined;
 
 function prefersReducedMotion(): boolean {
@@ -149,6 +170,7 @@ function clearState(): void {
   activeSteps = [];
   activeHandlers = {};
   exitReason = 'dismissed';
+  blockedAt = undefined;
 }
 
 /**
@@ -196,6 +218,27 @@ function isGatedStep(index: number): boolean {
 }
 
 /**
+ * Note that the user left from a step they could not move past, so the ending
+ * can be explained rather than merely happening.
+ *
+ * Called from the three paths a user turns the tour down by — Escape, the close
+ * button, the overlay — and from nowhere else. A PROGRAMMATIC `stop()` MUST NOT
+ * RECORD ONE: `startTour` ends the previous tour through it and so does the
+ * caller's own "end the walkthrough", and neither is the user failing to get
+ * past anything. Reporting those would put an explanation on screen for a tour
+ * the app itself took away, which is noise at exactly the moment the next one
+ * is starting.
+ *
+ * A gate the user could have opened is the only one worth reporting, which is
+ * why the test is `isGatedStep` rather than the step's `advanceOnAction` flag:
+ * a gated step whose control is disabled hands "Next" back, so a user leaving
+ * that one had a way on and chose not to take it.
+ */
+function recordGate(index: number): void {
+  if (isGatedStep(index)) blockedAt = activeSteps[index];
+}
+
+/**
  * THE WALKTHROUGH'S KEYBOARD CONTROLS ARE OURS, NOT DRIVER.JS'S, AND THAT IS A
  * BUG FIX.
  *
@@ -229,6 +272,7 @@ function handleKeyup(event: KeyboardEvent): void {
 
   if (event.key === 'Escape') {
     exitReason = 'dismissed';
+    recordGate(running.getActiveIndex() ?? -1);
     stop();
     return;
   }
@@ -255,6 +299,10 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
   // rather than float a popover over nothing or drift onto a neighbour.
   if (step.target !== undefined && element === undefined) {
     exitReason = 'target-missing';
+    // The step we gave up on, kept for `onExit`: this is the ONLY moment anyone
+    // knows which one it was. `onStepChange` is not called below, so the
+    // caller's current step stays the one before this.
+    blockedAt = step;
     // Deferred by a tick on purpose: driver.js writes its own step state
     // immediately AFTER calling this hook, so tearing down from inside it would
     // resurrect the tour we just destroyed.
@@ -298,8 +346,9 @@ const handleDoneClick: DriverHook = () => {
   stop();
 };
 
-const handleCloseClick: DriverHook = () => {
+const handleCloseClick: DriverHook = (_element, _driveStep, opts) => {
   exitReason = 'dismissed';
+  recordGate(opts.index ?? -1);
   stop();
 };
 
@@ -310,7 +359,11 @@ const handleCloseClick: DriverHook = () => {
  * once per tour, whatever ended it. `stop()` uses `destroy()`, which bypasses
  * this hook, so there is no loop.
  */
-const handleDestroyStarted: DriverHook = () => {
+const handleDestroyStarted: DriverHook = (_element, _driveStep, opts) => {
+  // The overlay click reaches here and nothing else the user does, so it is a
+  // dismissal like the other two and is recorded the same way. `stop()`'s own
+  // `destroy()` bypasses this hook, so a programmatic ending never lands here.
+  recordGate(opts.index ?? -1);
   stop();
 };
 
@@ -384,12 +437,16 @@ export function stop(reason?: TourExitReason): void {
 
   const handlers = activeHandlers;
   const ending = reason ?? exitReason;
+  // Read before the teardown that clears it, for the same reason the caller
+  // reads its own step index there: this is session state, and the session is
+  // about to be gone.
+  const blocked = blockedAt;
   // Drop our state BEFORE tearing driver.js down: `instance` is null from here
   // on, so anything re-entering through a driver.js hook is a no-op rather than
   // a second exit.
   clearState();
   running.destroy();
-  handlers.onExit?.(ending);
+  handlers.onExit?.(ending, blocked);
 }
 
 /** Whether a tour is currently running. */

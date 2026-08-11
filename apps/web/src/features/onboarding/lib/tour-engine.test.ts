@@ -74,7 +74,7 @@ describe('startTour', () => {
 
     advance();
     expect(isActive()).toBe(false);
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed', undefined);
     expect(document.querySelector('.driver-popover')).toBeNull();
   });
 
@@ -102,7 +102,7 @@ describe('startTour', () => {
 
     startTour([{ target: '#two', title: 'Only', description: 'Alone.' }]);
 
-    expect(firstExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(firstExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
     expect(isActive()).toBe(true);
     expect(popoverTitle()).toBe('Only');
   });
@@ -233,7 +233,7 @@ describe('onBeforeAdvance', () => {
     clickPopoverButton('.driver-popover-next-btn');
 
     expect(onBeforeAdvance).not.toHaveBeenCalled();
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed', undefined);
   });
 });
 
@@ -310,7 +310,7 @@ describe('exiting', () => {
 
     clickPopoverButton('.driver-popover-close-btn');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
     expect(isActive()).toBe(false);
   });
 
@@ -320,7 +320,7 @@ describe('exiting', () => {
 
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
     expect(isActive()).toBe(false);
   });
 
@@ -331,8 +331,77 @@ describe('exiting', () => {
 
     clickPopoverButton('.driver-popover-next-btn');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed', undefined);
     expect(isActive()).toBe(false);
+  });
+});
+
+/**
+ * LEAVING A STEP THAT WOULD ONLY MOVE ON AN ACTION IS NOT AN ORDINARY EXIT, and
+ * the difference is the whole of this defect. On a gated step "Next" is inert,
+ * so the close button is the only control that answers the user at all —
+ * whereas on any other step it is one of three ways on that they chose not to
+ * take. Naming the step here is what lets the caller say why the tour stopped
+ * instead of leaving the screen bare, which is how this has failed three times.
+ */
+describe('the step the user could not get past', () => {
+  const gated: TourStep[] = [
+    { target: '#one', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
+    { target: '#two', title: 'Done', description: 'Here it is.' },
+  ];
+
+  it('is reported when the close button ends a gated step', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', gated[0]);
+  });
+
+  it('is reported when Escape ends one', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', gated[0]);
+  });
+
+  // The same test the gate itself is made of. A gated step whose control is
+  // disabled hands "Next" back, so the user leaving that one had a way on and
+  // declined it — there is nothing to explain, and explaining anyway would be
+  // an interruption for a user who simply closed the tour.
+  it('is not reported when the gate had already been released', () => {
+    document.querySelector<HTMLButtonElement>('#one')!.disabled = true;
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+  });
+
+  it('is not reported for an ordinary step', () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+  });
+
+  // A tour the APP took away, not one the user got stuck in: `startTour` ends
+  // the previous tour through `stop()`, and so does the caller's own "end the
+  // walkthrough". Reporting those would put an explanation on screen at the
+  // moment the next tour starts.
+  it('is not reported when the caller ends the tour itself', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    stop();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
   });
 });
 
@@ -361,11 +430,18 @@ describe('missing targets', () => {
 
   it('ends the tour cleanly when the target never appears', async () => {
     const onExit = vi.fn();
-    startTour([{ target: '#never', title: 'Nope', description: 'Absent.', waitForMs: 20 }], {
-      onExit,
-    });
+    const step: TourStep = {
+      target: '#never',
+      title: 'Nope',
+      description: 'Absent.',
+      waitForMs: 20,
+    };
+    startTour([step], { onExit });
 
-    await vi.waitFor(() => expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing'));
+    // The step it gave up on comes out with the reason, and this is the only
+    // moment anyone could know it: `onStepChange` never fired for it, so the
+    // caller's idea of the current step is still the one before.
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', step));
 
     expect(isActive()).toBe(false);
     // No stuck overlay, and nothing was highlighted in its place.
@@ -374,11 +450,27 @@ describe('missing targets', () => {
     expect(document.body.classList.contains('driver-active')).toBe(false);
   });
 
+  it('names the step it gave up on, not the one it was showing', async () => {
+    const onExit = vi.fn();
+    const steps: TourStep[] = [
+      { target: '#one', title: 'First', description: 'Here.' },
+      { target: '#never', title: 'Unreachable', description: 'Absent.', waitForMs: 20 },
+    ];
+    startTour(steps, { onExit });
+
+    advance();
+
+    await vi.waitFor(() =>
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', steps[1]),
+    );
+  });
+
   it('gives up immediately when a step declares no wait', async () => {
     const onExit = vi.fn();
-    startTour([{ target: '#never', title: 'Nope', description: 'Absent.' }], { onExit });
+    const step: TourStep = { target: '#never', title: 'Nope', description: 'Absent.' };
+    startTour([step], { onExit });
 
-    await vi.waitFor(() => expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing'));
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', step));
     expect(isActive()).toBe(false);
   });
 
@@ -428,7 +520,7 @@ describe('an ending the tour itself cannot see', () => {
 
     stop('session-ended');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('session-ended');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('session-ended', undefined);
   });
 
   it('still reports the tracked reason when the caller names none', () => {
@@ -437,7 +529,7 @@ describe('an ending the tour itself cannot see', () => {
 
     clickPopoverButton('.driver-popover-close-btn');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
   });
 });
 
