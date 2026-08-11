@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -293,6 +294,49 @@ describe('runtime-config seam (C3 / Req 8.5)', () => {
     expect(tag).not.toMatch(/\btype\s*=\s*["']module["']/i);
     expect(tag).not.toMatch(/\basync\b/i);
     expect(tag).not.toMatch(/\bdefer\b/i);
+  });
+});
+
+// The interception's ONE sanctioned opt-out, and this list is what enforces it.
+//
+// `allowUnauthenticated` switches off the global 401 redirect for a single
+// request. It exists for one caller: the not-found page's presence check, whose
+// whole question is "is anyone signed in?" and for which a 401 is the answer
+// rather than a session ending. A second caller would be a request that
+// genuinely needs a session quietly losing the redirect a real expiry depends
+// on — and it would do so invisibly, because nothing about the request would
+// look wrong. A doc comment on the field cannot stop that; naming the sites can.
+const SANCTIONED_ALLOW_UNAUTHENTICATED = [
+  'hooks/useAuth.ts', // the presence check, the one legitimate caller
+  'lib/api.test.ts', // this guard, which has to spell the flag to look for it
+  'lib/api.ts', // the declaration and the interception it opts out of
+];
+
+/**
+ * Every file under `dir` whose text contains `needle`.
+ *
+ * The extension set has to match everything the bundler will resolve, not just
+ * what the tree happens to contain today: a `.mts` or `.mjs` module is compiled
+ * and shipped like any other, so if it can carry a call site it has to be
+ * scanned for one. Narrowing this to `.ts`/`.tsx` would leave a guard that looks
+ * total and is not.
+ */
+function filesMentioning(needle: string, dir: string, base = dir): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return filesMentioning(needle, full, base);
+    if (!/\.[mc]?[jt]sx?$/.test(entry.name)) return [];
+    return readFileSync(full, 'utf8').includes(needle) ? [relative(base, full)] : [];
+  });
+}
+
+describe('the 401 interception opt-out', () => {
+  it('is used at its sanctioned sites and nowhere else in apps/web/src', () => {
+    const src = fileURLToPath(new URL('..', import.meta.url));
+    expect(
+      filesMentioning('allowUnauthenticated', src).sort(),
+      'a new allowUnauthenticated call site opts a request out of the expiry redirect',
+    ).toEqual(SANCTIONED_ALLOW_UNAUTHENTICATED);
   });
 });
 

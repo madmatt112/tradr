@@ -20,7 +20,7 @@ import { queryClient } from '@/lib/queryClient';
 import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
-import { useAuth, useRegister } from './useAuth';
+import { useAuth, useRegister, useSessionPresence } from './useAuth';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -365,6 +365,39 @@ describe('a session expiring, and what the remounts afterwards may do', () => {
     // And the teardown still ran: this is a logout, announced as one.
     expect(onLogout).toHaveBeenCalledOnce();
     session.unmount();
+  });
+
+  // THE 404 PAGE'S QUESTION MUST NOT DISARM THE SESSION QUERY.
+  //
+  // `useSessionPresence` asks the same `GET /auth/me`, but with a 401 allowed as
+  // an answer. Asked under `['auth','me']` it did not merely READ that query, it
+  // owned it: a react-query observer writes its `queryFn` onto the cached query,
+  // so for as long as the not-found page was on screen the session query itself
+  // fetched permissively. An expiry landing in that window — the tab regaining
+  // focus, an invalidation, a refetch — answered 401 to a request that had opted
+  // out of the interception, and so redirected nowhere and announced nothing.
+  // The one guarantee the interception exists to make was suspended by being on
+  // a 404 page. The presence check asks under its own key for that reason.
+  it('does not disarm the session query while the not-found page is mounted', async () => {
+    const network = stubNetwork();
+    const session = await signIn();
+
+    // The unknown URL: __root's dispatcher mounts, and the authenticated surface
+    // that was on screen behind it goes.
+    const presence = renderHook(() => useSessionPresence(), { wrapper });
+    await act(async () => {});
+    session.unmount();
+
+    // The session ends while that page is up, and the session query goes back to
+    // the network — which is where the interception lives.
+    network.expire();
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ['auth', 'me'] });
+    });
+
+    expect(interceptNavigate).toHaveBeenCalledOnce();
+    expect(onLogout).toHaveBeenCalledOnce();
+    presence.unmount();
   });
 
   it('says nothing for the 401 a logged-out visitor gets', async () => {
