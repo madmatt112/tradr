@@ -9,8 +9,39 @@ import {
   markSessionEnded,
   markSessionStarted,
   setIsLoggingOut,
+  type RequestOptions,
 } from '@/lib/api';
 import { clearClientSessionState } from '@/lib/sessionTeardown';
+
+/**
+ * `GET /auth/me`, and the declaration that its answer licenses.
+ *
+ * `lib/api` intercepts 401s, and it cannot tell one that ENDED a session from
+ * the one a logged-out visitor's me-query returns. This request is what tells it
+ * apart, and the answer to it is the only honest evidence there is: the server
+ * has just named the user, so there is a session, right now. Declared HERE
+ * rather than from an effect over the cached user — an effect fires on every
+ * mount, including the ones that read a cached user belonging to a session that
+ * has already ended.
+ *
+ * CONFIRMED, not started: this answer says a session exists, not that one has
+ * just begun, and the difference is what the redirect latch turns on. An expiry
+ * clears the cache, which sends the me-query back to the network, and re-arming
+ * the latch on what comes back is what turned one expiry into a loop of them.
+ * Only a login re-arms it.
+ *
+ * Both callers below share this, and the confirmation is why. `useSessionPresence`
+ * hands its 200 straight on to a surface that navigates into the authenticated
+ * app, where the cached user it just wrote means `useAuth`'s own query may never
+ * reach the network. Were the confirmation to live only in `useAuth`, that
+ * session would run with `hasSession` false and its eventual expiry would pass
+ * unannounced.
+ */
+async function fetchMe(opts?: RequestOptions): Promise<User> {
+  const me = await api.get<User>('/auth/me', opts);
+  markSessionConfirmed();
+  return me;
+}
 
 /**
  * The login mutation ALONE, without the `['auth','me']` query `useAuth` mounts
@@ -86,30 +117,46 @@ export function useRegister() {
   });
 }
 
+/**
+ * Whether anyone is signed in — asked by a surface that is not itself
+ * authenticated, and must not become a session-expired notice when the answer
+ * is no.
+ *
+ * THE 404 PAGE IS THE CALLER, AND IT IS NOT A PUBLIC PAGE. /login and the other
+ * unauthenticated routes answer this by not asking: they are logged-out by
+ * definition, so they mount no me-query at all. The not-found page cannot do
+ * that, because it is a dispatcher — what an unknown URL should show genuinely
+ * differs for a signed-in user and an anonymous one, so it has to know. Asking
+ * through `useAuth` is what made a mistyped URL redirect a logged-out visitor to
+ * `/login?expired=true`: the me-query 401s, and the global interception reads
+ * every 401 as an expiry.
+ *
+ * So the question is asked, and `allowUnauthenticated` says a 401 is its answer
+ * rather than a session ending. No redirect, no announcement, and the one-shot
+ * latch survives for the next real expiry.
+ *
+ * It shares `['auth','me']` with `useAuth` deliberately: a signed-in user who
+ * mistypes a URL mid-session is answered from the cache without a request, and
+ * the identity a cold load fetches here is the one the authenticated app then
+ * reads.
+ */
+export function useSessionPresence() {
+  const { data: user, isLoading } = useQuery<User>({
+    queryKey: ['auth', 'me'],
+    queryFn: () => fetchMe({ allowUnauthenticated: true }),
+    retry: false,
+  });
+
+  return { isLoading, isAuthenticated: !!user };
+}
+
 export function useAuth() {
   const queryClient = useQueryClient();
   const router = useRouter();
 
   const { data: user, isLoading } = useQuery<User>({
     queryKey: ['auth', 'me'],
-    queryFn: async () => {
-      const me = await api.get<User>('/auth/me');
-      // `lib/api` intercepts 401s, and it cannot tell one that ENDED a session
-      // from the one a logged-out visitor's me-query returns on the login page.
-      // This request is what tells it apart, and the answer to it is the only
-      // honest evidence there is: the server has just named the user, so there
-      // is a session, right now. Declared HERE rather than from an effect over
-      // `user` — an effect fires on every mount, including the ones that read a
-      // cached user belonging to a session that has already ended.
-      //
-      // CONFIRMED, not started: this answer says a session exists, not that one
-      // has just begun, and the difference is what the redirect latch turns on.
-      // An expiry clears the cache, which sends this very query back to the
-      // network, and re-arming the latch on what comes back is what turned one
-      // expiry into a loop of them. The login below is the one that re-arms.
-      markSessionConfirmed();
-      return me;
-    },
+    queryFn: () => fetchMe(),
     retry: false,
   });
 

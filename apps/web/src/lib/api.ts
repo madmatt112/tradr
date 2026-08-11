@@ -202,6 +202,24 @@ export function setRouter(r: any) {
 
 export interface RequestOptions {
   signal?: AbortSignal;
+  /**
+   * Ask a question a 401 is a legitimate ANSWER to, rather than a failure.
+   *
+   * The interception below treats every 401 as a session that has just ended,
+   * because for every authenticated surface that is what one means. It is not
+   * what one means to a caller whose whole question is "is anyone signed in?" —
+   * there, "no" is the answer, and turning it into `/login?expired=true` tells a
+   * visitor who never had a session that theirs ran out.
+   *
+   * Set this and the 401 falls through to the ordinary error path: no
+   * navigation, no `auth:logout`, and — the part that matters most — the
+   * one-shot latch is left unburnt, so the next REAL expiry still has its one
+   * announcement to make.
+   *
+   * It is not a way to opt an authenticated request out of the redirect. A
+   * request that needs a session must keep it.
+   */
+  allowUnauthenticated?: boolean;
 }
 
 async function request<T>(
@@ -228,7 +246,7 @@ async function request<T>(
 
   const response = await fetch(resolveApiUrl(path), options);
 
-  if (response.status === 401 && !isLoggingOut && !redirecting) {
+  if (response.status === 401 && !opts?.allowUnauthenticated && !isLoggingOut && !redirecting) {
     redirecting = true;
     // Before the navigation, so each owner tears its state down while the page
     // it belongs to is still on screen.
