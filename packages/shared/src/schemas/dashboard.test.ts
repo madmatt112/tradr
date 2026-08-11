@@ -29,21 +29,22 @@ const UUID_G = '77777777-7777-4777-8777-777777777777';
 // derived, not chosen), so the heights here are read from that rather than
 // written out — otherwise this fixture goes stale the next time the chart's
 // chrome changes and every "accepts" case below fails for the wrong reason.
+const STATS_H = PerWidgetMinSize['stats-summary'].h;
 const PERF_H = PerWidgetMinSize['performance-chart'].h;
 const EQUITY_H = PerWidgetMinSize['equity-curve'].h;
 
 function canonicalWidgets() {
   return [
-    { id: UUID_A, type: 'stats-summary' as const, x: 0, y: 0, w: 12, h: 2 },
-    { id: UUID_B, type: 'performance-chart' as const, x: 0, y: 2, w: 6, h: PERF_H },
-    { id: UUID_C, type: 'equity-curve' as const, x: 0, y: 2 + PERF_H, w: 6, h: EQUITY_H },
-    { id: UUID_D, type: 'account-balances' as const, x: 6, y: 2, w: 6, h: 4 },
-    { id: UUID_E, type: 'position-sizing' as const, x: 6, y: 6, w: 6, h: 6 },
+    { id: UUID_A, type: 'stats-summary' as const, x: 0, y: 0, w: 12, h: STATS_H },
+    { id: UUID_B, type: 'performance-chart' as const, x: 0, y: STATS_H, w: 6, h: PERF_H },
+    { id: UUID_C, type: 'equity-curve' as const, x: 0, y: STATS_H + PERF_H, w: 6, h: EQUITY_H },
+    { id: UUID_D, type: 'account-balances' as const, x: 6, y: STATS_H, w: 6, h: 4 },
+    { id: UUID_E, type: 'position-sizing' as const, x: 6, y: STATS_H + 4, w: 6, h: 6 },
     {
       id: UUID_F,
       type: 'open-positions' as const,
       x: 0,
-      y: 2 + PERF_H + EQUITY_H,
+      y: STATS_H + PERF_H + EQUITY_H,
       w: 12,
       h: 4,
     },
@@ -241,7 +242,7 @@ describe('PutDashboardLayoutRequestSchema refinements', () => {
       x: 0,
       y: 0,
       w: 12,
-      h: 2,
+      h: STATS_H,
       config: {},
     });
     expect(result.success).toBe(true);

@@ -1,6 +1,6 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, type Page, type Route } from '@playwright/test';
 
-import { mockAppShell, SESSION_RESPONSE } from './fixtures/performance-fixtures';
+import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
 
 /**
  * Ledger-balances e2e suite (Task 24).
@@ -148,6 +148,18 @@ async function mockBrokerages(page: Page) {
  * Install the full set of accounting + accounts route handlers. The
  * `getState`/`setState` indirection lets each test customize the snapshot
  * without re-declaring every handler.
+ *
+ * The handlers below dispatch on method and hand anything they do not serve to
+ * `route.fallback()` — NOT `route.continue()`. `continue()` abandons the
+ * handler chain and goes to the real network, which for a request nothing here
+ * answers means a 401 against the synthetic session and the api client's global
+ * bounce to /login, mid-test: the exact failure `mockAppShell` fails closed to
+ * prevent, reintroduced one method at a time. `fallback()` hands the request to
+ * the next matching handler instead, so it lands on a `mockAppShell` stub or,
+ * failing that, its backstop, which names it.
+ *
+ * This paragraph is not what enforces it — `app-shell-fixture.spec.ts` greps the
+ * test tree and fails on any `continue()` call.
  */
 async function installAccountingMocks(page: Page, getState: () => MockState) {
   // GET /accounts
@@ -166,13 +178,13 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
       await jsonResponse(route, created, 201);
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   // GET /accounts/:id (account detail page)
   await page.route(/\/api\/accounts\/[0-9a-f-]{36}$/i, async (route) => {
     if (route.request().method() !== 'GET') {
-      await route.continue();
+      await route.fallback();
       return;
     }
     const url = new URL(route.request().url());
@@ -192,7 +204,7 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
   // GET route so the more specific path is not shadowed.
   await page.route(/\/api\/ledger\/[0-9a-f-]{36}\/reconcile$/i, async (route) => {
     if (route.request().method() !== 'POST') {
-      await route.continue();
+      await route.fallback();
       return;
     }
     const url = new URL(route.request().url());
@@ -269,7 +281,7 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
       await jsonResponse(route, { currency: body.currency });
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   // GET/POST /exchange-rates and /exchange-rates/preview
@@ -299,12 +311,12 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
       await jsonResponse(route, created, 201);
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   await page.route('**/api/exchange-rates/preview', async (route) => {
     if (route.request().method() !== 'POST') {
-      await route.continue();
+      await route.fallback();
       return;
     }
     const body = route.request().postDataJSON() as
@@ -343,7 +355,7 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
   // DELETE /exchange-rates/:id
   await page.route(/\/api\/exchange-rates\/[0-9a-f-]{36}$/i, async (route) => {
     if (route.request().method() !== 'DELETE') {
-      await route.continue();
+      await route.fallback();
       return;
     }
     const url = new URL(route.request().url());

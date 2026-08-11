@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { test as base, expect, type Page } from '@playwright/test';
 
 /**
  * Static performance API fixtures used by the e2e specs. Kept in one place so
@@ -174,6 +174,27 @@ export const SESSION_RESPONSE = {
  * takes precedence (Playwright matches routes in reverse registration order),
  * so a spec is free to override `/performance` (the boundary under test) or
  * `/users/me/display-currency` (ledger-balances) with its own handler.
+ *
+ * It FAILS CLOSED: anything under `/api/` that neither this helper nor the spec
+ * answers hits the backstop registered below and fails the test by name. See
+ * `failOnUnstubbedRequest`.
+ *
+ * Two things used to defeat it quietly, and both are now refused mechanically
+ * rather than by this comment:
+ *
+ *  1. Importing `test` from `@playwright/test` instead of from this module. The
+ *     backstop is installed by this function either way, but the teardown that
+ *     catches a request arriving after the spec's last await is a fixture on the
+ *     `test` exported below — a plain import silently drops it. So this function
+ *     now checks the fixture is live and throws if it is not; see
+ *     `contractedPages`.
+ *  2. A spec handler that calls `route.continue()` for the requests it does not
+ *     want. `continue()` abandons the handler chain and goes to the real
+ *     network, so those requests never reach the backstop and fail open to a 401
+ *     and the /login bounce all over again. Use `route.fallback()`, which hands
+ *     the request to the next matching handler — this helper's stubs, and
+ *     failing those, the backstop. `app-shell-fixture.spec.ts` greps the spec
+ *     tree and fails if a `continue()` call comes back.
  */
 /**
  * The default dashboard layout a freshly-registered user receives from the
@@ -187,7 +208,7 @@ export const SESSION_RESPONSE = {
  * file changes.
  *
  * It had already drifted: the copy below carried the pre-40px-unit values
- * (`stats-summary` at h:1, under the h:2 minimum its own type declares, and
+ * (`stats-summary` at h:1, far under the h:5 minimum its own type declares, and
  * six-column charts), so every spec leaning on the app shell rendered a layout
  * no user has ever been served.
  */
@@ -232,12 +253,226 @@ const DEFAULT_DASHBOARD_LAYOUT = {
   updatedAt: null,
 };
 
+/**
+ * Every unstubbed request the backstop saw, per page. Read by the `test`
+ * exported below in teardown — see `failOnUnstubbedRequest`.
+ */
+const unstubbedRequests = new WeakMap<Page, string[]>();
+
+/**
+ * Pages the contract fixtures below are live for. Stamped during fixture SETUP,
+ * so it is already true by the time any test body calls `mockAppShell`.
+ *
+ * This is what makes the guarantee compulsory rather than opt-in by import
+ * line. The backstop is installed by `mockAppShell` whichever `test` a spec
+ * imports, but the half that catches a request arriving AFTER the spec's last
+ * await is teardown on the `test` exported below. A spec importing `test` from
+ * `@playwright/test` therefore got the throw-while-awaiting half and nothing
+ * else — measured: a stray request fired 200ms after the body returned passed
+ * green, which is round 2's entire failure, re-opened by one import line. The
+ * cost lands on whoever writes the NEXT spec, so nothing in the diff that
+ * introduces it looks wrong.
+ *
+ * It also catches the other way to end up outside the fixtures: calling
+ * `mockAppShell` on a page the fixtures never saw (`context.newPage()`), whose
+ * violations no teardown reads.
+ */
+const contractedPages = new WeakSet<Page>();
+
+/**
+ * The backstop that makes the list below a CONTRACT rather than a best effort.
+ *
+ * Registered first, so Playwright — which matches handlers in reverse
+ * registration order — reaches it only when neither `mockAppShell` nor the spec
+ * answered the request. The request is never answered at all, so it cannot 401
+ * and cannot trip the redirect to /login.
+ *
+ * That inversion is the point. Unstubbed used to mean a 401, a global redirect,
+ * and a spec that quietly went on testing the login page — an assertion about
+ * the PRESENCE of something still passes there, so the suite stayed green while
+ * testing nothing. Four separate debugging rounds on this branch started that
+ * way, each ending in one more stub; a fifth (`/api/symbols/quote-config`) was
+ * masked until the login bounce was removed. Adding stubs never fixed it,
+ * because the next author always reached a different endpoint. Failing closed
+ * does: the cost of a missing stub is now one named error at the request that
+ * needed it, paid by whoever mounts the new surface.
+ *
+ * The violation is reported TWICE, and each report fails the test on its own —
+ * measured in both directions, by deleting each in turn (see
+ * app-shell-fixture.spec.ts). They are belt and braces, not two halves:
+ *
+ *  1. It throws. Playwright surfaces a throw from a route handler as a test
+ *     error naming the method and path, which points straight at the missing
+ *     stub, and mid-body it cancels the await in flight so the failure lands
+ *     at the request rather than at the end of the test. It is attributed only
+ *     while the test is still live, though: a request the app fires after the
+ *     spec's last await (a debounce, a deferred widget fetch) used to throw
+ *     into nothing and the test passed, silently — measured, a stray issued
+ *     50ms late was dropped entirely. What holds the test open long enough for
+ *     one of those to land is the settle window in the `test` fixtures below.
+ *  2. It records the violation first. A throw also INTERRUPTS the step that is
+ *     running, which is why the read of that record lives in a step of its own
+ *     (again, the fixtures below) — it survives the interrupt, and it names
+ *     EVERY unstubbed request rather than only the first.
+ */
+async function failOnUnstubbedRequest(page: Page): Promise<void> {
+  // Half the contract lives in teardown on the `test` exported below, so refuse
+  // to install at all unless that `test` is the one running. Silently giving
+  // back a weaker guarantee than the doc comment promises is precisely the
+  // failure this helper exists to end.
+  if (!contractedPages.has(page)) {
+    throw new Error(
+      'mockAppShell: the app-shell contract fixtures are not live for this page.\n' +
+        'Without them the backstop still throws while the spec is awaiting something, ' +
+        'but a request the app makes AFTER the last await is never seen and the test ' +
+        'passes with a missing stub — the exact silent pass this helper exists to end.\n' +
+        "Fix: import `test` from './fixtures/performance-fixtures' (keep importing " +
+        '`expect` from `@playwright/test`), and call mockAppShell on the `page` fixture ' +
+        'rather than a page you opened yourself.',
+    );
+  }
+
+  // A second install would register a second catch-all. Playwright matches in
+  // reverse registration order, so it would shadow every route registered since
+  // the first — including the spec's own overrides, which are registered after
+  // `mockAppShell` precisely so they win — and it would swap in a fresh record,
+  // dropping any violation already seen. Silent traps are what this whole
+  // backstop exists to end, so this one says so instead of being one.
+  if (unstubbedRequests.has(page)) {
+    throw new Error(
+      'mockAppShell: already installed on this page.\n' +
+        'A second call registers a second backstop that shadows every route ' +
+        'registered since the first (Playwright matches handlers in reverse ' +
+        'registration order), and replaces the record of what the first one saw.\n' +
+        'Fix: call it once, first, per page — in `beforeEach` or at the top of the ' +
+        'test, and register the spec-specific handlers after it.',
+    );
+  }
+
+  const seen: string[] = [];
+  unstubbedRequests.set(page, seen);
+
+  await page.route('**/api/**', (route) => {
+    const request = route.request();
+    const { pathname, search } = new URL(request.url());
+    const violation = `${request.method()} ${pathname}${search}`;
+    // Record BEFORE throwing. The throw fails the test AND interrupts whatever
+    // step is running, which is why the read of this list lives in a step of
+    // its own — see the `test` fixtures below.
+    seen.push(violation);
+    throw new Error(
+      `mockAppShell: unstubbed request ${violation}\n` +
+        `Nothing answers it, so this test would otherwise have taken a 401 and been ` +
+        `redirected to /login mid-run.\n` +
+        `Fix: if the authenticated shell mounts this everywhere, add a stub to ` +
+        `mockAppShell (e2e/tests/fixtures/performance-fixtures.ts). If it belongs to the ` +
+        `route under test, register it in the spec AFTER the mockAppShell call.`,
+    );
+  });
+}
+
+/**
+ * How long teardown lets the page keep talking before it reads the record.
+ *
+ * Teardown starts ~3ms after the test body's last await returns (measured), and
+ * the app does not stop asking for things when the spec stops looking: the
+ * dashboard grid re-persists its layout on a 300ms debounce, and a widget's
+ * fetch can leave well after the assertion that mounted it passed. Without a
+ * window, a stray request 50ms late was missed entirely — the test ended before
+ * the browser had issued it, so there was nothing to record and nothing to
+ * throw into either.
+ *
+ * 500ms clears the longest deferral the app shell has (the 300ms debounce) with
+ * margin, paid once per test that installs the shell. It is a bound, not a
+ * proof: a request the app defers longer than this is still beyond what a
+ * per-test teardown can see. Widen it if a shell surface starts asking later.
+ */
+const UNSTUBBED_SETTLE_MS = 500;
+
+/**
+ * `test` for every spec that uses `mockAppShell` — plain Playwright `test` plus
+ * an automatic teardown check that no request reached the backstop.
+ *
+ * It is fixtures rather than an `afterEach` each spec has to remember, because
+ * remembering is exactly what fails: the whole point of the backstop is that
+ * the NEXT author, mounting a surface nobody has thought of yet, gets told. A
+ * check they have to opt into is one they can leave out.
+ *
+ * TWO fixtures, and the split is load-bearing. A backstop throw does not merely
+ * fail the test, it INTERRUPTS whatever is running at that moment, and
+ * Playwright abandons that step's remaining code — so when the settle and the
+ * assertion lived in one fixture, a violation arriving during the settle
+ * cancelled the settle and the assertion below it never ran at all. Measured:
+ * the reported errors carried the throw and the cancellation, never the
+ * `expect`, and deleting the recorded list left the test exactly as red,
+ * because the throw was doing all the work by itself.
+ *
+ * An interrupt only reaches the step in flight, so the fix is to give the read
+ * a step of its own that awaits nothing:
+ *
+ *   - `appShellSettle` waits out the window. Interruptible, harmlessly — an
+ *     interrupt here means the violation it was waiting for has already been
+ *     recorded.
+ *   - `appShellContract` reads the record and asserts. It depends on nothing
+ *     that can be cancelled, so it runs whether or not the settle was cut
+ *     short, and reports EVERY violation rather than only the first.
+ *
+ * The dependency is what orders them: `appShellSettle` takes `appShellContract`
+ * as a fixture, so the contract is set up first and therefore torn down LAST.
+ *
+ * Specs import `test` from here and keep importing `expect` from
+ * `@playwright/test`.
+ */
+export const test = base.extend<{ appShellContract: void; appShellSettle: void }>({
+  appShellContract: [
+    async ({ page }, use) => {
+      // Stamped in SETUP, so `mockAppShell` can refuse a page these fixtures
+      // are not live for — see `contractedPages`.
+      contractedPages.add(page);
+
+      await use();
+
+      // No record means the spec never installed the shell, so there is no
+      // contract to check.
+      const seen = unstubbedRequests.get(page);
+      if (!seen) return;
+
+      expect(
+        seen,
+        'mockAppShell: the app made requests nothing stubbed. Each one would have ' +
+          '401d and bounced the spec to /login. Add a stub to mockAppShell ' +
+          '(e2e/tests/fixtures/performance-fixtures.ts) if the authenticated shell ' +
+          'mounts it everywhere, or register it in the spec AFTER the mockAppShell call.',
+      ).toEqual([]);
+    },
+    { auto: true },
+  ],
+  appShellSettle: [
+    async ({ page, appShellContract }, use) => {
+      void appShellContract; // ordering only — see the note above.
+      await use();
+
+      // Nothing installed the shell: no window to pay for.
+      if (!unstubbedRequests.has(page)) return;
+
+      // A plain timer, not `page.waitForTimeout`: a closed page turns that into
+      // a thrown error of its own, and this window is only ever a courtesy to
+      // the page, never an assertion about it.
+      await new Promise((resolve) => setTimeout(resolve, UNSTUBBED_SETTLE_MS));
+    },
+    { auto: true },
+  ],
+});
+
 export async function mockAppShell(page: Page): Promise<void> {
   const json = (body: unknown) => ({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify(body),
   });
+
+  // FIRST, so it is reached LAST — see the doc comment above.
+  await failOnUnstubbedRequest(page);
 
   await page.route('**/api/dashboard/layout', (route) =>
     route.fulfill(json(DEFAULT_DASHBOARD_LAYOUT)),
@@ -324,12 +559,7 @@ export async function mockAppShell(page: Page): Promise<void> {
   //
   // They are shell surface for the same reason the rest of this list is. Any
   // spec that navigates to /dashboard mounts all six widgets whether or not it
-  // is testing them, and one unmocked 401 does not merely blank a widget — the
-  // api client's global handler sends the whole app to /login, so the failure
-  // lands on some later assertion as "element not found" on a login form. That
-  // trap has now cost this branch four debugging rounds; the answer each time
-  // was another stub, and the stubs belong here rather than being rediscovered
-  // per spec.
+  // is testing them.
   //
   // Neutral answers: a zero total and no brokerages, so neither widget paints a
   // surface a spec was not written for.

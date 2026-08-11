@@ -1,6 +1,7 @@
 import {
   DEFAULT_WIDGETS,
   WIDGET_DEFAULT_NAMESPACE,
+  reconcileStoredLayout,
   uuidv5Batch,
   type DashboardLayoutResponse,
   type PutDashboardLayoutRequest,
@@ -104,13 +105,25 @@ export async function buildDefaultLayout(userId: string): Promise<WidgetPlacemen
   return widgets;
 }
 
+/**
+ * EVERY stored layout leaves this service reconciled — see
+ * `reconcileStoredLayout`. A row is written once and read forever, so raising a
+ * pinned default or a per-type minimum reaches nobody who has ever arranged
+ * their dashboard unless the read does it; and because the client PUTs what it
+ * was given, a response that carried stale geometry is what made the next add,
+ * remove or timeframe change 400 against the bound it fails.
+ *
+ * The row itself is left alone. This is idempotent and runs on a layout of at
+ * most six widgets, so repairing on read costs nothing worth writing for, and a
+ * GET has no business mutating. The user's next real save persists it.
+ */
 export async function getLayoutForUser(userId: string): Promise<DashboardLayoutResponse> {
   const { widgets, updatedAt, theme } = await selectLayoutAndTheme(db, userId);
   if (widgets === null) {
     const defaults = await buildDefaultLayout(userId);
     return { widgets: defaults, theme, updatedAt: null };
   }
-  return { widgets, theme, updatedAt };
+  return { widgets: reconcileStoredLayout(widgets), theme, updatedAt };
 }
 
 export async function getThemeForUser(userId: string): Promise<Theme> {
@@ -150,7 +163,11 @@ export async function putLayoutForUser(
         // updatedAt:null.
         const existing = await selectLayout(tx, userId);
         if (existing) {
-          widgetsOut = existing.widgets;
+          // Same reconciliation as the GET. A theme-only write answers with the
+          // stored layout it did not touch, and the endpoint may only have ONE
+          // answer to "what is this user's layout" — a caller that took this
+          // one would be handed exactly the geometry the GET repairs.
+          widgetsOut = reconcileStoredLayout(existing.widgets);
           updatedAtOut = existing.updatedAt;
         } else {
           widgetsOut = await buildDefaultLayout(userId);

@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { BODY_LIMIT_BYTES, PerWidgetMinSize } from '@tradr/shared';
+import { BODY_LIMIT_BYTES, DEFAULT_WIDGETS, PerWidgetMinSize } from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -77,6 +77,12 @@ function authedRequest(method: string, path: string, cookie: string, body?: unkn
 
 // Two non-overlapping minimal-valid widgets. Each must satisfy:
 //   - x + w <= 12, w/h >= PerWidgetMinSize, unique types, no overlap.
+//
+// Every height is read from the schema's own minimum rather than written out.
+// The minimums are DERIVED — a chart widget's from the height its chart needs,
+// Stats Summary's from the tile grid it renders — so a literal here goes stale
+// the next time one of those changes, and every case below then fails on the
+// fixture instead of on what it tests.
 function makeValidWidgets() {
   return [
     {
@@ -85,18 +91,14 @@ function makeValidWidgets() {
       x: 0,
       y: 0,
       w: 12,
-      h: 2,
+      h: PerWidgetMinSize['stats-summary'].h,
     },
     {
       id: randomUUID(),
       type: 'performance-chart' as const,
       x: 0,
-      y: 2,
+      y: PerWidgetMinSize['stats-summary'].h,
       w: 6,
-      // Read from the schema's own minimum rather than written out: a chart
-      // widget's minimum height is derived from the height its chart needs, so
-      // a literal here goes stale the next time that changes and every case
-      // below starts failing on the fixture instead of on what it tests.
       h: PerWidgetMinSize['performance-chart'].h,
     },
   ];
@@ -295,6 +297,86 @@ describe('dashboard routes', () => {
     expect(secondBody.updatedAt).toBe(firstBody.updatedAt);
   });
 
+  // -------------------------------------------------------------------------
+  // A layout saved before the widget geometry was fixed.
+  //
+  // Every height in `staleWidgets` was legal when it was written — `h` values
+  // from the 80px era, doubled by migration 0021, with the charts landing on
+  // the h=4 minimum they had before it was derived from the height a chart
+  // needs. Nothing revisits a saved row, so without reconciliation on read the
+  // owner of this row kept geometry the write schema now rejects: the dashboard
+  // rendered (gridstack clamps on the way in) but every edit that was not a
+  // drag or a resize sent the stale heights back and 400d, with a Retry that
+  // could only re-send the same body.
+  // -------------------------------------------------------------------------
+  function staleWidgets() {
+    return [
+      { id: randomUUID(), type: 'stats-summary' as const, x: 0, y: 0, w: 12, h: 2 },
+      { id: randomUUID(), type: 'performance-chart' as const, x: 0, y: 2, w: 8, h: 4 },
+      { id: randomUUID(), type: 'account-balances' as const, x: 8, y: 2, w: 4, h: 4 },
+      { id: randomUUID(), type: 'equity-curve' as const, x: 0, y: 6, w: 8, h: 4 },
+      { id: randomUUID(), type: 'position-sizing' as const, x: 8, y: 6, w: 4, h: 6 },
+      { id: randomUUID(), type: 'open-positions' as const, x: 0, y: 12, w: 12, h: 4 },
+    ];
+  }
+
+  async function seedStaleLayout(userId: string): Promise<void> {
+    // Written straight to the row, because the endpoint would refuse it — which
+    // is the point: the row predates the bound.
+    await db.insert(dashboardLayouts).values({ userId, widgets: staleWidgets() });
+  }
+
+  it('GET on a stale saved layout answers with the current pinned geometry', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    await seedStaleLayout(userId);
+
+    const res = await authedRequest('GET', '/api/dashboard/layout', cookie);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { widgets: Array<{ type: string; h: number }> };
+
+    // The geometry fix reaches a user who already has a saved layout. Read from
+    // DEFAULT_WIDGETS, not written out: this must keep holding the NEXT time a
+    // pinned height moves, which is the whole reason the reconciliation exists.
+    for (const type of ['stats-summary', 'performance-chart', 'equity-curve'] as const) {
+      const pinned = DEFAULT_WIDGETS.find((d) => d.type === type)!.h;
+      const got = body.widgets.find((w) => w.type === type)!.h;
+      expect(got, `${type} should have been repaired to its pinned height`).toBe(pinned);
+    }
+
+    // The stored row is deliberately NOT rewritten — a GET does not mutate.
+    const [row] = await db
+      .select({ widgets: dashboardLayouts.widgets })
+      .from(dashboardLayouts)
+      .where(eq(dashboardLayouts.userId, userId));
+    expect(row.widgets.find((w) => w.type === 'stats-summary')!.h).toBe(2);
+  });
+
+  it('removing a widget from a stale saved layout saves instead of 400ing', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    await seedStaleLayout(userId);
+
+    // Exactly what the client does: PUT the layout it was given, minus one
+    // widget. Before the reconciliation this answered 400 VALIDATION_ERROR,
+    // "Widget is smaller than the minimum size for its type", on both charts.
+    const getRes = await authedRequest('GET', '/api/dashboard/layout', cookie);
+    const { widgets } = (await getRes.json()) as { widgets: Array<{ type: string }> };
+    const next = widgets.filter((w) => w.type !== 'open-positions');
+
+    const res = await authedRequest('PUT', '/api/dashboard/layout', cookie, { widgets: next });
+    expect(res.status).toBe(200);
+
+    // And the write persisted the repaired geometry, so the row is no longer
+    // stale for the next reader.
+    const [row] = await db
+      .select({ widgets: dashboardLayouts.widgets })
+      .from(dashboardLayouts)
+      .where(eq(dashboardLayouts.userId, userId));
+    expect(row.widgets).toHaveLength(next.length);
+    for (const widget of row.widgets) {
+      expect(widget.h).toBeGreaterThanOrEqual(PerWidgetMinSize[widget.type].h);
+    }
+  });
+
   it('PUT empty body returns 400 ValidationError with required-field message', async () => {
     const { cookie } = await registerAndGetCookie();
     const res = await authedRequest('PUT', '/api/dashboard/layout', cookie, {});
@@ -425,7 +507,7 @@ describe('dashboard routes', () => {
         x: 0,
         y: 0,
         w: 12,
-        h: 2,
+        h: PerWidgetMinSize['stats-summary'].h,
       },
       {
         id: randomUUID(),

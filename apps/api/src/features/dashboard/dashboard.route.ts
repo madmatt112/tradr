@@ -67,6 +67,13 @@ export function buildThemeCookie(value: Theme): string {
  *       Authed. Returns the user's widget placements on a 12-column grid, their
  *       theme, and when the layout was last saved. A user who has never
  *       customised the dashboard gets the default layout, not an empty one.
+ *       A saved layout is reconciled against the current geometry before it is
+ *       returned: a widget stored below its type's minimum size — which only
+ *       happens when that minimum has been raised since the layout was saved —
+ *       is given the current default size for its type, and the widgets below
+ *       it move down so none overlap. The stored row is not rewritten; the
+ *       next save persists the reconciled placements. The response is
+ *       therefore always a body this endpoint will accept back on a PUT.
  *     tags: [Dashboard]
  *     responses:
  *       200:

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 import {
   INVALID_TIMEZONE_RESPONSE,
@@ -7,6 +7,7 @@ import {
   PERF_URL,
   POPULATED_RESPONSE,
   SESSION_RESPONSE,
+  test,
 } from './fixtures/performance-fixtures';
 
 /**

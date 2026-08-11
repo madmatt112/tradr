@@ -3,42 +3,23 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
 
 import { api, isUnauthorized } from '@/lib/api';
+import {
+  clearRejectedTimezone,
+  isTimezoneRejected,
+  recordRejectedTimezone,
+} from '@/lib/invalidTimezone';
 
 // ---- Storage keys ----
-const INVALID_TZ_KEY = 'perf.invalid_tz_seen';
 const RESOLVED_WEEK_START_KEY = 'perf.resolved_week_start';
 
 // ---- Module-local fallbacks (Safari private browsing throws on setItem) ----
 let storageWarned = false;
-let invalidTzSeenFallback = false;
 let resolvedWeekStartFallback: 0 | 1 | null = null;
 
 function warnStorageOnce(err: unknown) {
   if (storageWarned) return;
   storageWarned = true;
   console.warn('[usePerformance] sessionStorage unavailable; using in-memory fallback', err);
-}
-
-function readInvalidTzSeen(): boolean {
-  try {
-    if (sessionStorage.getItem(INVALID_TZ_KEY) === 'true') return true;
-  } catch (err) {
-    warnStorageOnce(err);
-  }
-  // Always also consult the in-memory fallback: when `setItem` throws (Safari
-  // private mode) `getItem` returns null even though we've already "seen" the
-  // INVALID_TIMEZONE error this page-load. Without this OR, two failures in
-  // one tab session would both retry → retry storm.
-  return invalidTzSeenFallback;
-}
-
-function writeInvalidTzSeen(): void {
-  try {
-    sessionStorage.setItem(INVALID_TZ_KEY, 'true');
-  } catch (err) {
-    warnStorageOnce(err);
-    invalidTzSeenFallback = true;
-  }
 }
 
 function readResolvedWeekStart(): 0 | 1 | null {
@@ -119,7 +100,6 @@ function emitWeekStartFlip(next: 0 | 1): void {
 // ---- Test seam: reset module-local state ----
 export function __resetUsePerformanceModuleState(): void {
   storageWarned = false;
-  invalidTzSeenFallback = false;
   resolvedWeekStartFallback = null;
   weekStartFlipListeners.clear();
 }
@@ -136,14 +116,27 @@ function buildPath(params: PerformanceQueryInput, omitTz: boolean): string {
 }
 
 /**
- * Custom retry policy. Returns true for at-most-one INVALID_TIMEZONE retry per session.
+ * Custom retry policy: at most ONE INVALID_TIMEZONE retry per rejected zone.
+ *
+ * The zone is the unit, not the session. Recording which zone was rejected is
+ * what stops the retry from being permanent — a request for any OTHER zone
+ * still carries its `tz`, so correcting the preference takes effect on the very
+ * next request instead of waiting for the tab to close.
+ *
  * Exported for tests; consumed by `usePerformance`.
  */
-export function performanceRetry(failureCount: number, error: unknown): boolean {
+export function performanceRetry(
+  failureCount: number,
+  error: unknown,
+  requestedTz: string | null | undefined,
+): boolean {
   if (failureCount >= 1) return false;
   if (!isInvalidTimezoneError(error)) return false;
-  if (readInvalidTzSeen()) return false;
-  writeInvalidTzSeen();
+  // No zone to blame (the request already omitted `tz`, so the server rejected
+  // its OWN default) or this zone already burnt its retry — either way, stop.
+  if (!requestedTz) return false;
+  if (isTimezoneRejected(requestedTz)) return false;
+  recordRejectedTimezone(requestedTz);
   return true;
 }
 
@@ -189,9 +182,9 @@ export function usePerformance(params: PerformanceQueryInput | null) {
       // `enabled` already guarantees this; the guard narrows the type locally
       // rather than asserting non-null.
       if (params === null) throw new Error('performance query ran without params');
-      // If the session has already seen INVALID_TIMEZONE, omit `tz` from
-      // subsequent requests so the server falls back to its default.
-      const omitTz = readInvalidTzSeen();
+      // Omit `tz` only for the exact zone the server rejected, so the server
+      // falls back to its own default. Any other zone is sent normally.
+      const omitTz = isTimezoneRejected(params.tz);
       const path = buildPath(params, omitTz);
       let data: PerformanceResponse;
       try {
@@ -200,6 +193,12 @@ export function usePerformance(params: PerformanceQueryInput | null) {
         handlePerformanceQueryError(err, queryClient);
         throw err;
       }
+
+      // A request that CARRIED a zone and succeeded proves nothing is rejected
+      // any more — drop the record so the tz-omitted fallback is temporary. A
+      // request that omitted `tz` proves nothing about the recorded zone, so it
+      // deliberately leaves the record alone.
+      if (!omitTz) clearRejectedTimezone();
 
       // Week-start-flip detection. Compare against last-seen value; on mismatch
       // invalidate the performance cache and emit a banner signal.
@@ -212,6 +211,6 @@ export function usePerformance(params: PerformanceQueryInput | null) {
 
       return data;
     },
-    retry: performanceRetry,
+    retry: (failureCount, error) => performanceRetry(failureCount, error, params?.tz),
   });
 }

@@ -279,3 +279,4 @@ export type { CanonicalPart, CanonicalMessage, ProviderModel } from './lib/advis
 export { uuidv5, uuidv5Batch, WIDGET_DEFAULT_NAMESPACE } from './utils/uuidv5';
 export { DEFAULT_WIDGETS, BODY_LIMIT_BYTES } from './constants/dashboard-defaults';
 export type { DefaultWidgetSpec } from './constants/dashboard-defaults';
+export { reconcileStoredLayout } from './utils/dashboard-layout';
