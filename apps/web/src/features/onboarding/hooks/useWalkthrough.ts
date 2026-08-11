@@ -62,7 +62,7 @@ import type { EventName } from '@/stores/events.types';
 import { emitOnboardingEvent } from '../lib/analytics';
 import type { ChecklistItemId, Checklist } from '../lib/derive-checklist';
 import type { WalkthroughStep } from '../lib/steps';
-import type { TourExitReason, TourStep } from '../lib/tour-engine';
+import type { TourBlock } from '../lib/tour-engine';
 
 import { selectOwnRows, useOnboarding } from './useOnboarding';
 
@@ -496,10 +496,8 @@ const STOP_NOTICE_MS = 12_000;
  * WHAT IT DOES NOT COVER, DELIBERATELY. Completion needs no explanation, a
  * session that ended took the whole screen with it, and an ordinary dismissal
  * is the user saying they are done — telling someone who closed the tour that
- * the tour closed is nagging. The trigger is the engine's `blockedAt`: a step
- * the user could not get past. `target-missing` is reported even without one,
- * because a tour that vanished having named no step is precisely the failure
- * this exists to end, and silence would be the worst possible fallback.
+ * the tour closed is nagging. The trigger is the engine's `TourBlock`: a step
+ * the user could not get past, and which of the two things held them there.
  *
  * ACTION-GATED STEPS GET THE HONEST REASON. Replaying a set still requires the
  * real thing — creating the position, recording the exit fill — because that is
@@ -507,30 +505,32 @@ const STOP_NOTICE_MS = 12_000;
  * trade genuinely cannot go on. What was missing was never the gate; it was
  * anyone saying so.
  *
- * WHICH IS WHY THE WORDING FOLLOWS THE REASON AND NOT THE STEP. Being gated is
- * not why a tour stopped — it is only why one of the two stops is the user's to
- * clear. Every gated step in the position and close sets also carries a
- * `waitForMs`, because each is entered cold on a route still loading, so a slow
- * load or a navigation that did not happen ends those exact steps
- * `target-missing`. Reading the gate flag instead of the reason told a user
- * whose control never rendered that they had declined to press it, which is a
- * confident lie about the one failure this notice exists to explain.
+ * THE CLASSIFICATION IS THE ONLY INPUT, AND THAT IS THE FIX. This wording has
+ * twice been chosen from something standing next to the cause instead of the
+ * cause itself — first the step's own `advanceOnAction` flag, then the exit
+ * reason — and each time it told a user whose control had never rendered, or had
+ * gone, that they had declined to press it. Both readings were available because
+ * both were being reassembled here out of parts. They are not any more: the
+ * engine decides, from the live DOM at the moment it gives up, and this is a
+ * switch over that decision. The switch is exhaustive with no default, so a
+ * third cause is a type error here rather than a sentence about the wrong thing.
  */
-function explainStop(reason: TourExitReason, step: TourStep | undefined): string {
-  if (step === undefined) return 'It could not carry on from here.';
-  // The user turned the tour down where it stood, and the engine names a step
-  // here ONLY when its gate was one they could have opened (`recordGate`) — so
-  // this is the decline, and nothing else reaches it.
-  if (reason === 'dismissed') {
-    return `“${step.title}” only moves on once you have actually done it, so the walkthrough cannot take that step for you.`;
+function explainStop(blocked: TourBlock): string {
+  switch (blocked.cause) {
+    case 'action-required':
+      // The control was on screen and pressable and the user left anyway, which
+      // is the one stop that is theirs to clear.
+      return `“${blocked.step.title}” only moves on once you have actually done it, so the walkthrough cannot take that step for you.`;
+    case 'target-missing':
+      // Present tense, because it is true of both ways a control comes to be
+      // absent: one that never rendered, and one the user has since dismissed
+      // along with the dialog it lived in.
+      return `“${blocked.step.title}” is not on screen, so the walkthrough could not carry on from there.`;
   }
-  // Everything else that names a step got it from the engine giving up on a
-  // target — gated or not, the control was never there to press.
-  return `“${step.title}” never appeared on screen, so the walkthrough could not show you that step.`;
 }
 
-function announceStop(reason: TourExitReason, blockedAt: TourStep | undefined): void {
-  if (blockedAt === undefined && reason !== 'target-missing') return;
+function announceStop(blocked: TourBlock | undefined): void {
+  if (blocked === undefined) return;
 
   toast.info('The walkthrough stopped', {
     id: STOP_NOTICE_ID,
@@ -539,7 +539,7 @@ function announceStop(reason: TourExitReason, blockedAt: TourStep | undefined): 
     // it was started from is still there. Exiting discards nothing — this
     // module writes no onboarding state at all — so "nothing was lost" is a
     // structural fact rather than a reassurance.
-    description: `${explainStop(reason, blockedAt)} Nothing was lost — carry on without it, or start it again from the setup checklist whenever you want.`,
+    description: `${explainStop(blocked)} Nothing was lost — carry on without it, or start it again from the setup checklist whenever you want.`,
   });
 }
 
@@ -613,7 +613,7 @@ async function run(
     // appeared — and all three do the same thing to the user's data, because
     // none of them has any work to undo. They are told apart for the funnel,
     // and for whether the user is owed an explanation (`announceStop`).
-    onExit: (reason, blockedAt) => {
+    onExit: (reason, blocked) => {
       // THE STEP INDEX COMES FROM THE LIVE SESSION, AND IS READ BEFORE THE
       // TEARDOWN THAT CLEARS IT. Nothing stores a step index — resume
       // re-derives its position from the checklist instead, and adding a stored
@@ -639,7 +639,7 @@ async function run(
       });
       // After the teardown, so the screen the user is left with is the one the
       // notice is about.
-      announceStop(reason, blockedAt);
+      announceStop(blocked);
     },
   });
 }
