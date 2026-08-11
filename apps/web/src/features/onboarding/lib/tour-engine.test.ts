@@ -37,6 +37,25 @@ function clickPopoverButton(selector: string): void {
   document.querySelector<HTMLButtonElement>(selector)?.click();
 }
 
+/**
+ * The third way out, and the one no test reached: clicking the dimmed page
+ * around the highlight.
+ *
+ * driver.js paints that dimming as a `<path>` inside its overlay `<svg>` and
+ * only treats a click as an overlay click when the path itself was the target,
+ * so the event has to come from there. It ends the tour through
+ * `onDestroyStarted` rather than through a popover button — a separate route
+ * into `stop()`, carrying its own step index.
+ *
+ * Awaited, unlike the popover: the overlay is painted from the animation frame
+ * that follows the highlight rather than during it, so it is the one part of a
+ * tour that is not on screen the moment `startTour` returns.
+ */
+async function clickOverlay(): Promise<void> {
+  const dimming = await vi.waitUntil(() => document.querySelector('.driver-overlay path'));
+  dimming.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
 const TWO_STEPS: TourStep[] = [
   { target: '#one', title: 'First', description: 'The first control.' },
   { target: '#two', title: 'Second', description: 'The second control.' },
@@ -74,7 +93,7 @@ describe('startTour', () => {
 
     advance();
     expect(isActive()).toBe(false);
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed', undefined);
     expect(document.querySelector('.driver-popover')).toBeNull();
   });
 
@@ -102,7 +121,7 @@ describe('startTour', () => {
 
     startTour([{ target: '#two', title: 'Only', description: 'Alone.' }]);
 
-    expect(firstExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(firstExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
     expect(isActive()).toBe(true);
     expect(popoverTitle()).toBe('Only');
   });
@@ -233,7 +252,7 @@ describe('onBeforeAdvance', () => {
     clickPopoverButton('.driver-popover-next-btn');
 
     expect(onBeforeAdvance).not.toHaveBeenCalled();
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed', undefined);
   });
 });
 
@@ -310,8 +329,19 @@ describe('exiting', () => {
 
     clickPopoverButton('.driver-popover-close-btn');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
     expect(isActive()).toBe(false);
+  });
+
+  it('reports a dismissal from a click on the overlay', async () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+
+    await clickOverlay();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+    expect(isActive()).toBe(false);
+    expect(document.querySelector('.driver-overlay')).toBeNull();
   });
 
   it('reports a dismissal from Escape', () => {
@@ -320,7 +350,7 @@ describe('exiting', () => {
 
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
     expect(isActive()).toBe(false);
   });
 
@@ -331,8 +361,162 @@ describe('exiting', () => {
 
     clickPopoverButton('.driver-popover-next-btn');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('completed', undefined);
     expect(isActive()).toBe(false);
+  });
+});
+
+/**
+ * LEAVING A STEP THAT WOULD ONLY MOVE ON AN ACTION IS NOT AN ORDINARY EXIT, and
+ * the difference is the whole of this defect. On a gated step "Next" is inert,
+ * so the close button is the only control that answers the user at all —
+ * whereas on any other step it is one of three ways on that they chose not to
+ * take. Naming the step here is what lets the caller say why the tour stopped
+ * instead of leaving the screen bare, which is how this has failed three times.
+ *
+ * AND NAMING IT IS NOT ENOUGH: the engine says WHICH of the two things held the
+ * user, because the caller cannot tell from the step or from the reason, and
+ * both of those readings have already shipped as the wrong answer.
+ */
+describe('the step the user could not get past', () => {
+  const gated: TourStep[] = [
+    { target: '#one', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
+    { target: '#two', title: 'Done', description: 'Here it is.' },
+  ];
+
+  const declined = { cause: 'action-required', step: gated[0] };
+
+  it('is reported when the close button ends a gated step', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', declined);
+  });
+
+  it('is reported when Escape ends one', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', declined);
+  });
+
+  it('is reported when a click on the overlay ends one', async () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    await clickOverlay();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', declined);
+  });
+
+  // The overlay ends the tour through a different hook from the other two, and
+  // that hook is handed its own step index — so this is the one place the index
+  // could be wrong without any other test noticing. Leaving the tour on step 1
+  // is what tells a read of `opts.index` apart from a hard-coded first step.
+  it('names the step the overlay click actually landed on', async () => {
+    const onExit = vi.fn();
+    const secondIsGated: TourStep[] = [
+      { target: '#one', title: 'First', description: 'The first control.' },
+      { target: '#two', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
+    ];
+    startTour(secondIsGated, { onExit });
+    advance();
+
+    await clickOverlay();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', {
+      cause: 'action-required',
+      step: secondIsGated[1],
+    });
+  });
+
+  /**
+   * A CONTROL THAT HAS GONE IS NOT A USER WHO DECLINED, and reading it as one is
+   * the same mistake as the two before it, one level further down: the engine
+   * recorded the gate for a step whose control had unmounted, so the caller was
+   * handed "the user did not do it" for a button that was no longer there.
+   *
+   * Reachable in the product. `#symbol` is gated and lives in the new-position
+   * dialog: cancel the dialog, then close the tour, and this is the path.
+   */
+  it('classifies a gated step whose control has gone as a missing target', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+    // The dialog the control lived in, dismissed under the running tour.
+    document.querySelector('#one')!.remove();
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', {
+      cause: 'target-missing',
+      step: gated[0],
+    });
+  });
+
+  it('classifies it the same way when Escape ends it', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+    document.querySelector('#one')!.remove();
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', {
+      cause: 'target-missing',
+      step: gated[0],
+    });
+  });
+
+  // The gate itself is untouched by that classification, and must be: an absent
+  // control is no more pressable than a disabled one, but handing "Next" back
+  // here would advance a tour past a step the user was never shown. Only a
+  // control that is ON SCREEN and unusable releases it.
+  it('keeps the gate on a step whose control has gone', () => {
+    startTour(gated);
+    document.querySelector('#one')!.remove();
+
+    clickPopoverButton('.driver-popover-next-btn');
+
+    expect(popoverTitle()).toBe('Do it');
+  });
+
+  // The same test the gate itself is made of. A gated step whose control is
+  // disabled hands "Next" back, so the user leaving that one had a way on and
+  // declined it — there is nothing to explain, and explaining anyway would be
+  // an interruption for a user who simply closed the tour.
+  it('is not reported when the gate had already been released', () => {
+    document.querySelector<HTMLButtonElement>('#one')!.disabled = true;
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+  });
+
+  it('is not reported for an ordinary step', () => {
+    const onExit = vi.fn();
+    startTour(TWO_STEPS, { onExit });
+
+    clickPopoverButton('.driver-popover-close-btn');
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+  });
+
+  // A tour the APP took away, not one the user got stuck in: `startTour` ends
+  // the previous tour through `stop()`, and so does the caller's own "end the
+  // walkthrough". Reporting those would put an explanation on screen at the
+  // moment the next tour starts.
+  it('is not reported when the caller ends the tour itself', () => {
+    const onExit = vi.fn();
+    startTour(gated, { onExit });
+
+    stop();
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
   });
 });
 
@@ -361,11 +545,23 @@ describe('missing targets', () => {
 
   it('ends the tour cleanly when the target never appears', async () => {
     const onExit = vi.fn();
-    startTour([{ target: '#never', title: 'Nope', description: 'Absent.', waitForMs: 20 }], {
-      onExit,
-    });
+    const step: TourStep = {
+      target: '#never',
+      title: 'Nope',
+      description: 'Absent.',
+      waitForMs: 20,
+    };
+    startTour([step], { onExit });
 
-    await vi.waitFor(() => expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing'));
+    // The step it gave up on comes out with the reason, and this is the only
+    // moment anyone could know it: `onStepChange` never fired for it, so the
+    // caller's idea of the current step is still the one before.
+    await vi.waitFor(() =>
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', {
+        cause: 'target-missing',
+        step,
+      }),
+    );
 
     expect(isActive()).toBe(false);
     // No stuck overlay, and nothing was highlighted in its place.
@@ -374,11 +570,35 @@ describe('missing targets', () => {
     expect(document.body.classList.contains('driver-active')).toBe(false);
   });
 
+  it('names the step it gave up on, not the one it was showing', async () => {
+    const onExit = vi.fn();
+    const steps: TourStep[] = [
+      { target: '#one', title: 'First', description: 'Here.' },
+      { target: '#never', title: 'Unreachable', description: 'Absent.', waitForMs: 20 },
+    ];
+    startTour(steps, { onExit });
+
+    advance();
+
+    await vi.waitFor(() =>
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', {
+        cause: 'target-missing',
+        step: steps[1],
+      }),
+    );
+  });
+
   it('gives up immediately when a step declares no wait', async () => {
     const onExit = vi.fn();
-    startTour([{ target: '#never', title: 'Nope', description: 'Absent.' }], { onExit });
+    const step: TourStep = { target: '#never', title: 'Nope', description: 'Absent.' };
+    startTour([step], { onExit });
 
-    await vi.waitFor(() => expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing'));
+    await vi.waitFor(() =>
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('target-missing', {
+        cause: 'target-missing',
+        step,
+      }),
+    );
     expect(isActive()).toBe(false);
   });
 
@@ -428,7 +648,7 @@ describe('an ending the tour itself cannot see', () => {
 
     stop('session-ended');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('session-ended');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('session-ended', undefined);
   });
 
   it('still reports the tracked reason when the caller names none', () => {
@@ -437,7 +657,31 @@ describe('an ending the tour itself cannot see', () => {
 
     clickPopoverButton('.driver-popover-close-btn');
 
-    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed');
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+  });
+
+  /**
+   * An ending the caller named is not the user stuck on a step, so it carries no
+   * classification either — even when one has already been taken. Forwarding it
+   * would explain a walkthrough the session took away, to a user who is by then
+   * looking at the login screen.
+   *
+   * The window is real rather than theoretical: giving up on a target records
+   * the classification and defers the teardown by a tick, so a logout landing in
+   * between finds one waiting. The fake clock holds that tick open.
+   */
+  it('carries no classification for an ending the caller named', () => {
+    const onExit = vi.fn();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      startTour([{ target: '#never', title: 'Nope', description: 'Absent.' }], { onExit });
+
+      stop('session-ended');
+
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('session-ended', undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

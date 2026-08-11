@@ -1,12 +1,23 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Toaster } from '@/components/ui/sonner';
 import { eventBus } from '@/stores/event-bus.store';
 
 import type { Checklist, ChecklistItemId } from '../lib/derive-checklist';
 import { WALKTHROUGH_STEPS, type WalkthroughStep } from '../lib/steps';
-import type { TourExitReason, TourHandlers, TourStep } from '../lib/tour-engine';
+// The module under `vi.mock` below: `stop()` here is the double's, or the real
+// engine's, on the same terms as everything else the hook calls.
+import {
+  stop as endRealTour,
+  type TourBlock,
+  type TourExitReason,
+  type TourHandlers,
+  type TourStep,
+} from '../lib/tour-engine';
 
 import {
   ACTION_SIGNALS,
@@ -86,7 +97,29 @@ const engine = {
   }),
   isActive: vi.fn(() => started !== null),
 };
-vi.mock('../lib/tour-engine', () => engine);
+
+/**
+ * The double above, OR the real engine — see `withRealEngine`.
+ *
+ * A double cannot check which cause the engine assigns a stop, because the
+ * assignment is precisely what the test would be inventing. Only
+ * `lib/tour-engine` reads the live DOM at the moment it gives up, and only it
+ * knows that a step it gave up on is very often an action-gated one — every
+ * gated step in the position and close sets also waits for its target, and both
+ * of them live in dialogs the user can close. So the wording has to be pinned
+ * against a stop the real engine actually produced.
+ */
+let realEngine = false;
+vi.mock('../lib/tour-engine', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/tour-engine')>();
+  return {
+    startTour: (steps: TourStep[], handlers?: TourHandlers) =>
+      realEngine ? real.startTour(steps, handlers) : engine.startTour(steps, handlers),
+    advance: () => (realEngine ? real.advance() : engine.advance()),
+    stop: (reason?: TourExitReason) => (realEngine ? real.stop(reason) : engine.stop(reason)),
+    isActive: () => (realEngine ? real.isActive() : engine.isActive()),
+  };
+});
 
 // --- helpers ----------------------------------------------------------------
 
@@ -119,6 +152,89 @@ function highlight(index: number) {
   });
 }
 
+/**
+ * The engine giving up, as `lib/tour-engine` does: it ends the tour and hands
+ * over its classification of why the user could not get past a step, or none
+ * when nobody was stuck.
+ *
+ * WHICH step it was and WHICH cause held them belong to the engine and are
+ * pinned there against the real driver.js. They arrive as one value, so a test
+ * here cannot pair a cause with a step the engine would never have paired it
+ * with. What belongs here is what the user is left looking at afterwards.
+ */
+function endTour(reason: TourExitReason, blocked?: TourBlock) {
+  act(() => {
+    const session = started;
+    started = null;
+    session?.handlers.onExit?.(reason, blocked);
+  });
+}
+
+/** Put the app's real toaster on screen, so a notice can be READ rather than counted. */
+function withToaster() {
+  render(createElement(Toaster));
+}
+
+/** Some other notice, raised only to prove a render happened — see below. */
+const A_MARKER = 'a notice raised by the test';
+
+/**
+ * NO NOTICE APPEARED, AND THIS CAN FAIL WHEN ONE DID.
+ *
+ * Querying straight after the tour ends proves nothing: sonner renders on its
+ * own schedule, so the toaster is still empty on that tick whether a notice was
+ * raised or not. Every "says nothing" test here read as green with the notice
+ * firing — checked by raising one deliberately and watching them pass.
+ *
+ * So the silence is measured against a notice that IS expected. Raising a marker
+ * and waiting for it puts the toaster through a render, and sonner renders its
+ * whole queue in one pass — so anything raised before the marker is on screen by
+ * the time the marker is. If the walkthrough spoke, this sees it.
+ */
+async function expectNoStopNotice(): Promise<void> {
+  toast.info(A_MARKER);
+  expect(await screen.findByText(A_MARKER)).toBeTruthy();
+  expect(screen.queryByText('The walkthrough stopped')).toBeNull();
+}
+
+/**
+ * Drive the next tour with the REAL engine — driver.js, the real gate, the real
+ * classification read off the live DOM — instead of the double.
+ *
+ * jsdom is enough, as it is for the engine's own tests: driver.js reads only
+ * `getBoundingClientRect`, which returns zeroes here. Reduced motion keeps its
+ * rendering synchronous, so the popover is on screen the moment a tour starts.
+ */
+function withRealEngine() {
+  realEngine = true;
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query.includes('prefers-reduced-motion'),
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
+
+/** Put the control a step anchors to on screen, so the real engine can find it. */
+function mountTarget(step: WalkthroughStep): void {
+  const attribute = /^\[([\w-]+)="([^"]+)"\]$/.exec(step.target ?? '');
+  if (!attribute) throw new Error(`the step under test has no attribute target: ${step.target}`);
+  const control = document.createElement('button');
+  control.setAttribute(attribute[1], attribute[2]);
+  document.body.appendChild(control);
+}
+
+/** The step in the running set that will only move on the real action. */
+function aGatedStep(): TourStep {
+  const step = started?.steps.find((s) => s.advanceOnAction);
+  if (!step) throw new Error('the set under test has no action-gated step');
+  return step;
+}
+
 function currentTargets(): (string | undefined)[] {
   return (started?.steps ?? []).map((s) => s.target);
 }
@@ -142,6 +258,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // sonner's queue is module-scoped like the session is, so a notice raised in
+  // one test would still be there for the next one's toaster to render.
+  toast.dismiss();
   // Unmount first: the store is module-scoped, so a hook still mounted from an
   // earlier test would re-render on the reset below — outside `act`, and
   // attributed to whichever test came next.
@@ -298,6 +417,213 @@ describe('useWalkthrough — start and exit', () => {
     await waitFor(() => expect(result.current.itemId).toBe('position'));
     expect(result.current.isRunning).toBe(true);
     expect(engine.startTour).toHaveBeenCalledTimes(2);
+  });
+});
+
+// --- a tour that cannot carry on -------------------------------------------
+
+/**
+ * A WALKTHROUGH THAT VANISHES WITH NOTHING ON SCREEN IS THIS AREA'S RECURRING
+ * DEFECT, and these are about what is left in front of the user, not about
+ * which function ran. They render the app's real toaster and read the words in
+ * it for that reason: "a handler was called" is exactly the evidence that would
+ * have passed while the screen stayed blank.
+ *
+ * The position and close sets each ask the user to do the real thing — create
+ * the position, record the exit fill — and replaying one still does. That is
+ * the walkthrough working as intended. What was broken was that a user who did
+ * not want to place another trade was shown nothing at all when it stopped.
+ */
+describe('useWalkthrough — the tour says why it stopped', () => {
+  it('tells the user an action-gated step needs them to actually do it', async () => {
+    withToaster();
+    await start('position');
+    const gated = aGatedStep();
+
+    // The decline: the user closed the tour on a step whose control was there
+    // and pressable, which is the only stop that is theirs to clear.
+    endTour('dismissed', { cause: 'action-required', step: gated });
+
+    const notice = await screen.findByText('The walkthrough stopped');
+    expect(notice).toBeTruthy();
+
+    const why = await screen.findByText(/only moves on once you have actually done it/);
+    // The step it stopped at, named, so "which one?" is not left to the user.
+    expect(why.textContent).toContain(gated.title);
+    expect(why.textContent).toContain('the walkthrough cannot take that step for you');
+    // Both ways out, said plainly.
+    expect(why.textContent).toContain('carry on without it');
+    expect(why.textContent).toContain('start it again from the setup checklist');
+  });
+
+  /**
+   * THE SAME STEP, THE OTHER CAUSE, AND IT MUST NOT READ THE SAME. Every gated
+   * step in these two sets also waits for its target, so a slow load or a
+   * navigation that never happened stops the tour on one of them having shown
+   * the user no control at all. Wording that keyed off the gate blamed them for
+   * not pressing a button that was never there.
+   */
+  it('does not blame the user when a gated step was the one that never appeared', async () => {
+    withToaster();
+    await start('close');
+    const gated = aGatedStep();
+
+    endTour('target-missing', { cause: 'target-missing', step: gated });
+
+    const why = await screen.findByText(/is not on screen/);
+    expect(why.textContent).toContain(gated.title);
+    expect(why.textContent).toContain('the walkthrough could not carry on from there');
+    expect(screen.queryByText(/only moves on once you have actually done it/)).toBeNull();
+  });
+
+  // The general case, and the reason this is one path rather than a special
+  // case on the gate: the same silence has come from a set left on the wrong
+  // route and from a control that unmounted mid-tour.
+  it('explains an ordinary step that was never on screen', async () => {
+    withToaster();
+    await start('position');
+    const plain = started!.steps.find((s) => !s.advanceOnAction && s.target !== undefined)!;
+
+    endTour('target-missing', { cause: 'target-missing', step: plain });
+
+    const why = await screen.findByText(/is not on screen/);
+    expect(why.textContent).toContain(plain.title);
+    expect(why.textContent).toContain('start it again from the setup checklist');
+  });
+
+  // The fallback that used to sit here — a `target-missing` naming no step —
+  // has no test because it has no case: the engine hands over one value
+  // carrying both the cause and the step it happened on, so "gave up, said
+  // which reason, named no step" is not a thing that can be constructed. The
+  // engine's own tests pin that every give-up produces one.
+
+  it('says nothing when the user simply closed the tour', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('dismissed');
+
+    await expectNoStopNotice();
+  });
+
+  it('says nothing when the user finished it', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('completed');
+
+    await expectNoStopNotice();
+  });
+
+  // The session went away under the tour; the notice would land on the login
+  // screen, addressed to nobody.
+  it('says nothing when the session ended under it', async () => {
+    withToaster();
+    await start('position');
+
+    endTour('session-ended');
+
+    await expectNoStopNotice();
+  });
+});
+
+/**
+ * THE SAME NOTICE, WITH NOTHING INVENTED IN BETWEEN.
+ *
+ * Everything above hands `onExit` a classification chosen by the test, which is
+ * how the wrong cause reached the screen twice: what the engine actually
+ * produces was never driven. These run the REAL engine over the REAL close set
+ * and read what is on screen at the end, so a classification that stops matching
+ * its wording fails here rather than in front of a user.
+ *
+ * The close set is the one that reaches every stop. Its first step is
+ * action-gated AND waits five seconds for a control on a route that has to load
+ * first, so the SAME step produces all three endings: the user declining an
+ * action they could have taken, a control that never arrived, and a control that
+ * arrived and then went away under them.
+ */
+describe('useWalkthrough — the real engine says why it stopped', () => {
+  const gated = WALKTHROUGH_STEPS.close[0];
+
+  afterEach(() => {
+    // The engine's own module state, which the hook's reset does not reach.
+    // Runs before the file-wide teardown, so the toaster is still up for it.
+    endRealTour();
+    realEngine = false;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  it('blames the user for nothing when the control never rendered', async () => {
+    // The step really is gated — the pairing that used to pick the wording.
+    expect(gated.advanceOnAction).toBe(true);
+    expect(gated.waitForMs).toBeGreaterThan(0);
+    withToaster();
+    withRealEngine();
+    // Only `setTimeout`, so React and sonner keep their own scheduling: the
+    // wait for a target is a plain timer inside driver.js, and it is the only
+    // clock this test wants to move.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    // Nothing is mounted, so the control never appears — the position page
+    // still loading, or a navigation that did not happen.
+    await start('close');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(gated.waitForMs! + 100);
+    });
+    vi.useRealTimers();
+
+    const why = await screen.findByText(/is not on screen/);
+    expect(why.textContent).toContain(gated.title);
+    expect(screen.queryByText(/only moves on once you have actually done it/)).toBeNull();
+  });
+
+  it('says that same step needs them when they close the tour on it', async () => {
+    withToaster();
+    withRealEngine();
+    // The control is there and pressable, so the gate is really holding.
+    mountTarget(gated);
+
+    await start('close');
+    expect(document.querySelector('.driver-popover-title')?.textContent).toBe(gated.title);
+
+    // The close button is the only control that answers on a gated step.
+    act(() => {
+      document.querySelector<HTMLButtonElement>('.driver-popover-close-btn')?.click();
+    });
+
+    const why = await screen.findByText(/only moves on once you have actually done it/);
+    expect(why.textContent).toContain(gated.title);
+  });
+
+  /**
+   * THE CONTROL WENT AWAY UNDER THE STEP, AND THE USER DID NOT DECLINE ANYTHING.
+   *
+   * The third ending, and the one that read as the first: the engine recorded a
+   * gate for a step whose control had unmounted, so the tour told a user who had
+   * just cancelled a dialog that they had failed to do the thing inside it. It
+   * is the ordinary shape of every gated step in the product — `#symbol` and Add
+   * Fill both live in dialogs — which is why the classification is read from the
+   * live DOM at the moment the tour ends rather than from the step's own flag.
+   */
+  it('does not blame the user when the control was dismissed with its dialog', async () => {
+    withToaster();
+    withRealEngine();
+    mountTarget(gated);
+
+    await start('close');
+    expect(document.querySelector('.driver-popover-title')?.textContent).toBe(gated.title);
+
+    // The dialog the control lived in, cancelled; then the tour closed.
+    document.querySelector(gated.target!)!.remove();
+    act(() => {
+      document.querySelector<HTMLButtonElement>('.driver-popover-close-btn')?.click();
+    });
+
+    const why = await screen.findByText(/is not on screen/);
+    expect(why.textContent).toContain(gated.title);
+    expect(screen.queryByText(/only moves on once you have actually done it/)).toBeNull();
   });
 });
 

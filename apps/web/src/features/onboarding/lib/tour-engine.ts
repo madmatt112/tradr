@@ -82,19 +82,59 @@ export type TourExitReason =
   | 'completed'
   /**
    * The user turned the walkthrough down where it stood — close button, overlay
-   * click, or Escape. It means they did not want the tour, which is why it does
-   * NOT cover a tour that ended because the session did: the funnel exists to
-   * find where users stop, and "declined the walkthrough" and "left the app"
-   * are different answers to that question.
+   * click, or Escape — WITH A WAY ON AVAILABLE. It means they did not want the
+   * tour, which is why it does not cover a tour that ended because the session
+   * did, and why it does not cover leaving a step whose control was not on
+   * screen: the funnel exists to find where users stop, and "declined the
+   * walkthrough", "left the app" and "we pointed at nothing" are different
+   * answers to that question.
    */
   | 'dismissed'
-  /** A step's target never appeared within its `waitForMs`. */
+  /**
+   * The tour was pointing at a control that is not on screen — one that never
+   * appeared within its `waitForMs`, or one that has gone since. Both are the
+   * same thing to the user, and neither is anything they did.
+   */
   | 'target-missing'
   /**
    * The session ended under the tour — a logout, or an expiry — and took it
    * down with it. Not a judgement on the walkthrough: the user was still in it.
    */
   | 'session-ended';
+
+/**
+ * WHY THE USER COULD NOT GET PAST A STEP — the engine's own classification, and
+ * the ONLY thing a caller should explain a stop from.
+ *
+ * There are exactly two answers, and they are not interchangeable: either the
+ * control the step asks for was there and the user chose not to use it, or it
+ * was not there at all. Telling someone the first when it was the second blames
+ * them for a control that had vanished, which is this area's recurring defect
+ * one level down from where it kept being fixed.
+ *
+ * The classification carries its own step, so "which step?" cannot be answered
+ * from a different source than "why?", and a cause without a step is
+ * unrepresentable rather than merely unlikely.
+ */
+export type TourBlockCause =
+  /**
+   * The step only moves on the real action, and the control was on screen and
+   * usable — so the user had the means and did not take it.
+   */
+  | 'action-required'
+  /**
+   * The step's control is not on screen. It never resolved within `waitForMs`,
+   * or it was there when the step opened and has since unmounted — a dialog the
+   * user closed, a row that went away. Nothing was asked of the user that they
+   * could have done.
+   */
+  | 'target-missing';
+
+export interface TourBlock {
+  cause: TourBlockCause;
+  /** The step the tour could not carry the user past. */
+  step: TourStep;
+}
 
 export interface TourHandlers {
   /** Fires as each step is highlighted, before any animation. */
@@ -111,14 +151,37 @@ export interface TourHandlers {
    * and prepares before it calls.
    */
   onBeforeAdvance?: (index: number) => void;
-  /** Fires exactly once per tour, however it ended. */
-  onExit?: (reason: TourExitReason) => void;
+  /**
+   * Fires exactly once per tour, however it ended.
+   *
+   * `blocked` IS HOW THE TOUR SAYS WHY IT STOPPED, and it is the answer to a
+   * failure this walkthrough has now shipped three times: the tour vanishing
+   * with nothing on screen to explain it. It names the step the user could not
+   * get past AND which of the two things held them there, together, and it is
+   * present only when there was such a step.
+   *
+   * NOBODY OUTSIDE THIS MODULE CAN WORK EITHER OUT, WHICH IS WHY THEY ARE
+   * DECIDED HERE AND NOT RE-DERIVED THERE. `onStepChange` never fires for a step
+   * that failed to resolve, so the caller's idea of "the current step" is the
+   * one BEFORE the failure; and whether the user was really being asked for an
+   * action depends on whether the highlighted control was on screen and usable,
+   * which is read live here (`blockOn`). A caller that reconstructed the cause
+   * from the step's own `advanceOnAction` flag, or from `reason`, would be
+   * guessing at exactly the moment it must not.
+   *
+   * Absent means the tour ended without anyone being stuck — completion, an
+   * ordinary dismissal, a session that went away, an ending the app itself
+   * asked for.
+   */
+  onExit?: (reason: TourExitReason, blocked?: TourBlock) => void;
 }
 
 let instance: Driver | null = null;
 let activeSteps: TourStep[] = [];
 let activeHandlers: TourHandlers = {};
 let exitReason: TourExitReason = 'dismissed';
+/** Why the tour could not carry on, if it could not — see `TourHandlers.onExit`. */
+let blocked: TourBlock | undefined;
 let pendingStopTimer: number | undefined;
 
 function prefersReducedMotion(): boolean {
@@ -149,50 +212,88 @@ function clearState(): void {
   activeSteps = [];
   activeHandlers = {};
   exitReason = 'dismissed';
+  blocked = undefined;
 }
 
 /**
- * Whether the control a step points at can be used at all right now.
+ * WHAT IS HOLDING THE USER ON THIS STEP, AND WHICH OF THE TWO THINGS IT IS —
+ * decided in ONE place, from the live DOM, so that "does 'Next' advance?" and
+ * "what do we tell the user?" can never be answers to differently-asked
+ * questions. Every previous fix in this area corrected one of those readings and
+ * left the other looking somewhere else.
  *
  * Read live rather than remembered from the highlight, because the answer
  * changes under the step: the control a user is being asked to press is often
- * disabled until they have done something else, and that something else may
- * happen while the popover is on screen.
+ * disabled until they have done something else, and it may be enabled — or gone
+ * — while the popover is still on screen.
+ *
+ * The states a gated step can be in, and nothing else:
+ *
+ * - NO CONTROL NAMED — `action-required`. A centred step gated on an action has
+ *   nothing that could be missing, so the only thing holding the user is the
+ *   action itself, which the caller reports when it lands.
+ * - NAMED BUT NOT THERE — `target-missing`. The user is not declining anything;
+ *   there is nothing on screen to decline. It is decided here rather than only
+ *   in `handleHighlightStarted` because a control can go away AFTER it resolved:
+ *   `#symbol` lives in the new-position dialog, so cancelling that dialog
+ *   unmounts the control the step is pointing at while the tour still runs on it.
+ * - THERE BUT UNUSABLE — nothing. A GATE THE USER CANNOT OPEN IS NOT A GATE, IT
+ *   IS A TRAP: the rest of the page is `pointer-events: none` under a running
+ *   tour, so a gated step whose control is disabled would leave Escape as the
+ *   only way out, and Escape ends the walkthrough rather than continuing it.
+ *   The close set reaches exactly that state — "It closes itself" highlights
+ *   Close Position, disabled until the whole entered quantity has been exited,
+ *   and the step before it advances on any exit fill, so a user who records the
+ *   PARTIAL exit it invites arrives at a control they cannot press. Returning
+ *   nothing hands them "Next", and there is then nothing to explain either: they
+ *   had a way on.
+ * - THERE AND USABLE — `action-required`. The gate holds, which is the whole
+ *   point of an action step, and a user who leaves anyway declined something
+ *   they could have done.
+ *
+ * A step with no `advanceOnAction` is never blocking: "Next" moves it, so
+ * whatever the user did, they had a way on.
  */
-function isTargetUnusable(target: string | undefined): boolean {
-  if (target === undefined) return false;
-  const element = document.querySelector(target);
-  // A target that is not there at all is `handleHighlightStarted`'s to deal
-  // with — it ends the tour. Not knowing is not the same as knowing it is dead,
-  // so the gate stands.
-  if (element === null) return false;
-  return element.matches(':disabled, [aria-disabled="true"], [data-disabled]');
+function blockOn(index: number): TourBlock | undefined {
+  const step = activeSteps[index];
+  if (step?.advanceOnAction !== true) return undefined;
+  if (step.target === undefined) return { cause: 'action-required', step };
+
+  const element = document.querySelector(step.target);
+  if (element === null) return { cause: 'target-missing', step };
+  if (element.matches(':disabled, [aria-disabled="true"], [data-disabled]')) return undefined;
+  return { cause: 'action-required', step };
 }
 
 /**
- * The one step state that decides whether "Next" (or its key) advances.
+ * Whether "Next" (or its key) is suppressed on this step.
  *
- * A GATE THE USER CANNOT OPEN IS NOT A GATE, IT IS A TRAP. Suppressing "Next"
- * is only safe while the highlighted control is one the user can actually
- * press: the rest of the page is `pointer-events: none` under a running tour,
- * so a gated step whose control is disabled leaves Escape as the only way out —
- * and Escape ends the walkthrough rather than continuing it.
- *
- * The close set reaches exactly that state. "It closes itself" highlights Close
- * Position, which is disabled until the whole entered quantity has been exited
- * ("Exit the full quantity first"), and the step before it advances on any exit
- * fill — so a user who records a PARTIAL exit, which the step before explicitly
- * invites, arrives at a control they cannot press waiting for a `closed` event
- * that will not come. Releasing the gate here hands them "Next" instead, which
- * is what a step whose action is unavailable owes them.
- *
- * It costs the happy path nothing: an enabled control keeps its gate, so the
- * step still ignores "Next" for every user who can do the thing it asks.
+ * Being blocked at all is the test, NOT which cause it is: a control that has
+ * gone is no more pressable than one that never worked, and handing "Next" back
+ * there would advance a tour whose step the user was never shown. The gate is
+ * released by exactly one state — a control that is on screen and unusable —
+ * which is `blockOn`'s to decide, so the gate and the explanation cannot come
+ * apart. It costs the happy path nothing: an enabled control keeps its gate, so
+ * the step still ignores "Next" for every user who can do the thing it asks.
  */
 function isGatedStep(index: number): boolean {
-  const step = activeSteps[index];
-  if (step?.advanceOnAction !== true) return false;
-  return !isTargetUnusable(step.target);
+  return blockOn(index) !== undefined;
+}
+
+/**
+ * Classify the step the user left from, so the ending can be explained rather
+ * than merely happening.
+ *
+ * Called from the three paths a user turns the tour down by — Escape, the close
+ * button, the overlay — and from nowhere else. A PROGRAMMATIC `stop()` MUST NOT
+ * RECORD ONE: `startTour` ends the previous tour through it and so does the
+ * caller's own "end the walkthrough", and neither is the user failing to get
+ * past anything. Reporting those would put an explanation on screen for a tour
+ * the app itself took away, which is noise at exactly the moment the next one
+ * is starting.
+ */
+function recordBlock(index: number): void {
+  blocked = blockOn(index);
 }
 
 /**
@@ -229,6 +330,7 @@ function handleKeyup(event: KeyboardEvent): void {
 
   if (event.key === 'Escape') {
     exitReason = 'dismissed';
+    recordBlock(running.getActiveIndex() ?? -1);
     stop();
     return;
   }
@@ -254,7 +356,12 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
   // target that means the `waitForElement` window expired, so end the tour
   // rather than float a popover over nothing or drift onto a neighbour.
   if (step.target !== undefined && element === undefined) {
-    exitReason = 'target-missing';
+    // The step we gave up on and why, kept for `onExit`: this is the ONLY moment
+    // anyone knows which one it was. `onStepChange` is not called below, so the
+    // caller's current step stays the one before this. The reason reported to
+    // the caller is derived from this in `stop()` rather than set beside it —
+    // one value, so the two cannot disagree.
+    blocked = { cause: 'target-missing', step };
     // Deferred by a tick on purpose: driver.js writes its own step state
     // immediately AFTER calling this hook, so tearing down from inside it would
     // resurrect the tour we just destroyed.
@@ -298,8 +405,9 @@ const handleDoneClick: DriverHook = () => {
   stop();
 };
 
-const handleCloseClick: DriverHook = () => {
+const handleCloseClick: DriverHook = (_element, _driveStep, opts) => {
   exitReason = 'dismissed';
+  recordBlock(opts.index ?? -1);
   stop();
 };
 
@@ -310,7 +418,11 @@ const handleCloseClick: DriverHook = () => {
  * once per tour, whatever ended it. `stop()` uses `destroy()`, which bypasses
  * this hook, so there is no loop.
  */
-const handleDestroyStarted: DriverHook = () => {
+const handleDestroyStarted: DriverHook = (_element, _driveStep, opts) => {
+  // The overlay click reaches here and nothing else the user does, so it is a
+  // dismissal like the other two and is recorded the same way. `stop()`'s own
+  // `destroy()` bypasses this hook, so a programmatic ending never lands here.
+  recordBlock(opts.index ?? -1);
   stop();
 };
 
@@ -325,6 +437,7 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
   activeSteps = steps;
   activeHandlers = handlers;
   exitReason = 'dismissed';
+  blocked = undefined;
 
   instance = driver({
     steps: steps.map(toDriveStep),
@@ -383,13 +496,25 @@ export function stop(reason?: TourExitReason): void {
   if (!running) return;
 
   const handlers = activeHandlers;
-  const ending = reason ?? exitReason;
+  // A CALLER-NAMED ENDING CARRIES NO CLASSIFICATION. The tour did not stop
+  // because the user was stuck on a step — the session went away under it, or
+  // the app took it down — so there is nothing for the caller to explain and no
+  // step to name. Forwarding one would put "you did not do this" on screen for a
+  // user who was logged out mid-step.
+  const block = reason === undefined ? blocked : undefined;
+  // ONE VALUE ANSWERS BOTH QUESTIONS, WHICH IS WHY THE REASON IS DERIVED HERE
+  // AND NOT TRACKED BESIDE THE CLASSIFICATION. A tour that stopped because the
+  // control it was pointing at was not on screen ended on the missing target,
+  // whichever way the user got out of it — reporting that as a dismissal is what
+  // let the caller call an absent control a decision the user made. Read before
+  // the teardown that clears it, like the caller's own step index.
+  const ending = reason ?? (block?.cause === 'target-missing' ? 'target-missing' : exitReason);
   // Drop our state BEFORE tearing driver.js down: `instance` is null from here
   // on, so anything re-entering through a driver.js hook is a no-op rather than
   // a second exit.
   clearState();
   running.destroy();
-  handlers.onExit?.(ending);
+  handlers.onExit?.(ending, block);
 }
 
 /** Whether a tour is currently running. */
