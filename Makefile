@@ -84,3 +84,12 @@ release:
 	git commit -m "chore(release): v$(VERSION)"
 	git tag v$(VERSION)
 	@echo "Tagged v$(VERSION). Publish with: git push origin HEAD v$(VERSION)"
+
+# Refresh the local graphify knowledge graph against current main. Optional and
+# local-only — graphify-out/ is git-ignored and nothing in the build depends on
+# it. AST-only, so no API cost. See CLAUDE.md for what the graph is used for.
+.PHONY: update-graphify-graph
+update-graphify-graph:
+	git checkout main
+	git pull --ff-only
+	graphify update .
