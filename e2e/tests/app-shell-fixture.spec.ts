@@ -92,6 +92,18 @@ test.describe('mockAppShell', () => {
     await page.waitForURL(/\/login/, { timeout: 20_000 });
   });
 
+  test('refuses a second install on the same page', async ({ page }) => {
+    // Installing twice used to be a silent trap, which is the one thing this
+    // helper must not be. The second call's backstop is registered last, so
+    // Playwright reaches it FIRST — shadowing every route registered since the
+    // first call, the spec's own overrides included — and it swaps in a fresh
+    // record, losing whatever the first backstop had already seen. Nothing said
+    // so; the spec simply started failing on a stub it had definitely
+    // registered.
+    await mockAppShell(page);
+    await expect(mockAppShell(page)).rejects.toThrow(/already installed on this page/);
+  });
+
   test('fails the test when the unstubbed request comes after the last await', async ({ page }) => {
     // Also SUPPOSED to fail, and for a reason the test above cannot cover.
     //
@@ -105,9 +117,21 @@ test.describe('mockAppShell', () => {
     //
     // The body below is written to PASS in that world: it schedules one
     // unstubbed request for after it has returned and asserts nothing. What
-    // fails it now is teardown — the fixture settles, the request lands, the
-    // backstop records it, and the recorded list is asserted empty. Take either
-    // half away and this reports "Expected to fail, but passed".
+    // fails it now is teardown — the settle fixture holds the test open, the
+    // request lands, the backstop records it and throws, and the recorded list
+    // is asserted empty in a later fixture.
+    //
+    // Those two reports are belt and braces, NOT two halves of one check:
+    // measured by deleting each in turn, either alone still fails this test —
+    // with only the record the single error is the recorded-list assertion,
+    // with only the throw it is `unstubbed request GET
+    // /api/__unstubbed-after-last-await`.
+    //
+    // What is not redundant is WHERE the record is read. A backstop throw
+    // interrupts the step in flight, so while the settle and the assertion
+    // shared one fixture the throw cancelled the settle and the assertion never
+    // ran at all — inert, with the throw quietly doing all the work. The read
+    // has a fixture of its own now, which is what makes the second report real.
     test.fail();
 
     await mockAppShell(page);

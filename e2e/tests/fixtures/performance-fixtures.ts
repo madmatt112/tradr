@@ -268,22 +268,42 @@ const unstubbedRequests = new WeakMap<Page, string[]>();
  * does: the cost of a missing stub is now one named error at the request that
  * needed it, paid by whoever mounts the new surface.
  *
- * The violation is reported TWICE, because one report alone is not enough:
+ * The violation is reported TWICE, and each report fails the test on its own —
+ * measured in both directions, by deleting each in turn (see
+ * app-shell-fixture.spec.ts). They are belt and braces, not two halves:
  *
  *  1. It throws. Playwright surfaces a throw from a route handler as a test
  *     error naming the method and path, which points straight at the missing
- *     stub — but ONLY while the test is awaiting something. A request the app
- *     fires after the spec's last await (a debounce, a deferred widget fetch)
- *     throws into nothing and the test passes, silently, which is the very
- *     failure this backstop exists to end. Measured: a stray request issued
- *     50ms after the last await was dropped entirely.
- *  2. It records the violation first. The `test` exported below waits out a
- *     settle window and then asserts that record is empty, so the verdict does
- *     not depend on anything having been awaited when the throw fired. The
- *     throw names the request the moment it happens; the recorded list is what
- *     survives if nothing was listening.
+ *     stub, and mid-body it cancels the await in flight so the failure lands
+ *     at the request rather than at the end of the test. It is attributed only
+ *     while the test is still live, though: a request the app fires after the
+ *     spec's last await (a debounce, a deferred widget fetch) used to throw
+ *     into nothing and the test passed, silently — measured, a stray issued
+ *     50ms late was dropped entirely. What holds the test open long enough for
+ *     one of those to land is the settle window in the `test` fixtures below.
+ *  2. It records the violation first. A throw also INTERRUPTS the step that is
+ *     running, which is why the read of that record lives in a step of its own
+ *     (again, the fixtures below) — it survives the interrupt, and it names
+ *     EVERY unstubbed request rather than only the first.
  */
 async function failOnUnstubbedRequest(page: Page): Promise<void> {
+  // A second install would register a second catch-all. Playwright matches in
+  // reverse registration order, so it would shadow every route registered since
+  // the first — including the spec's own overrides, which are registered after
+  // `mockAppShell` precisely so they win — and it would swap in a fresh record,
+  // dropping any violation already seen. Silent traps are what this whole
+  // backstop exists to end, so this one says so instead of being one.
+  if (unstubbedRequests.has(page)) {
+    throw new Error(
+      'mockAppShell: already installed on this page.\n' +
+        'A second call registers a second backstop that shadows every route ' +
+        'registered since the first (Playwright matches handlers in reverse ' +
+        'registration order), and replaces the record of what the first one saw.\n' +
+        'Fix: call it once, first, per page — in `beforeEach` or at the top of the ' +
+        'test, and register the spec-specific handlers after it.',
+    );
+  }
+
   const seen: string[] = [];
   unstubbedRequests.set(page, seen);
 
@@ -291,7 +311,9 @@ async function failOnUnstubbedRequest(page: Page): Promise<void> {
     const request = route.request();
     const { pathname, search } = new URL(request.url());
     const violation = `${request.method()} ${pathname}${search}`;
-    // Record BEFORE throwing: the throw may go nowhere, this cannot.
+    // Record BEFORE throwing. The throw fails the test AND interrupts whatever
+    // step is running, which is why the read of this list lives in a step of
+    // its own — see the `test` fixtures below.
     seen.push(violation);
     throw new Error(
       `mockAppShell: unstubbed request ${violation}\n` +
@@ -326,25 +348,45 @@ const UNSTUBBED_SETTLE_MS = 500;
  * `test` for every spec that uses `mockAppShell` — plain Playwright `test` plus
  * an automatic teardown check that no request reached the backstop.
  *
- * It is a fixture rather than an `afterEach` each spec has to remember, because
+ * It is fixtures rather than an `afterEach` each spec has to remember, because
  * remembering is exactly what fails: the whole point of the backstop is that
  * the NEXT author, mounting a surface nobody has thought of yet, gets told. A
  * check they have to opt into is one they can leave out.
  *
+ * TWO fixtures, and the split is load-bearing. A backstop throw does not merely
+ * fail the test, it INTERRUPTS whatever is running at that moment, and
+ * Playwright abandons that step's remaining code — so when the settle and the
+ * assertion lived in one fixture, a violation arriving during the settle
+ * cancelled the settle and the assertion below it never ran at all. Measured:
+ * the reported errors carried the throw and the cancellation, never the
+ * `expect`, and deleting the recorded list left the test exactly as red,
+ * because the throw was doing all the work by itself.
+ *
+ * An interrupt only reaches the step in flight, so the fix is to give the read
+ * a step of its own that awaits nothing:
+ *
+ *   - `appShellSettle` waits out the window. Interruptible, harmlessly — an
+ *     interrupt here means the violation it was waiting for has already been
+ *     recorded.
+ *   - `appShellContract` reads the record and asserts. It depends on nothing
+ *     that can be cancelled, so it runs whether or not the settle was cut
+ *     short, and reports EVERY violation rather than only the first.
+ *
+ * The dependency is what orders them: `appShellSettle` takes `appShellContract`
+ * as a fixture, so the contract is set up first and therefore torn down LAST.
+ *
  * Specs import `test` from here and keep importing `expect` from
  * `@playwright/test`.
  */
-export const test = base.extend<{ appShellContract: void }>({
+export const test = base.extend<{ appShellContract: void; appShellSettle: void }>({
   appShellContract: [
     async ({ page }, use) => {
       await use();
 
       // No record means the spec never installed the shell, so there is no
-      // contract to check and no settle to pay for.
+      // contract to check.
       const seen = unstubbedRequests.get(page);
       if (!seen) return;
-
-      if (!page.isClosed()) await page.waitForTimeout(UNSTUBBED_SETTLE_MS);
 
       expect(
         seen,
@@ -353,6 +395,21 @@ export const test = base.extend<{ appShellContract: void }>({
           '(e2e/tests/fixtures/performance-fixtures.ts) if the authenticated shell ' +
           'mounts it everywhere, or register it in the spec AFTER the mockAppShell call.',
       ).toEqual([]);
+    },
+    { auto: true },
+  ],
+  appShellSettle: [
+    async ({ page, appShellContract }, use) => {
+      void appShellContract; // ordering only — see the note above.
+      await use();
+
+      // Nothing installed the shell: no window to pay for.
+      if (!unstubbedRequests.has(page)) return;
+
+      // A plain timer, not `page.waitForTimeout`: a closed page turns that into
+      // a thrown error of its own, and this window is only ever a courtesy to
+      // the page, never an assertion about it.
+      await new Promise((resolve) => setTimeout(resolve, UNSTUBBED_SETTLE_MS));
     },
     { auto: true },
   ],
