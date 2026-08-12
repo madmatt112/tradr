@@ -97,11 +97,16 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
     };
   }
 
-  // option-contracts — TWO deterministic contracts on the nearest expiry:
+  // option-contracts — THREE deterministic contracts on the nearest expiry,
+  // one per premium-resolution branch:
   //   - Row A carries a `last_price` so the calculator's option hand-off
   //     (symbol-search-quotes Task 14) can assert entry = the traded premium.
-  //   - Row B has NO `last_price`, exercising the NBBO-mid fallback: its
-  //     premium resolves to (4.10 + 4.30) / 2 = 4.20.
+  //   - Row B has NO `last_price` but a two-sided quote, exercising the
+  //     NBBO-mid fallback: its premium resolves to (4.10 + 4.30) / 2 = 4.20.
+  //   - Row C has neither, so no premium resolves and the hand-off falls
+  //     through to "enter the premium manually". Before the mid fallback that
+  //     was Row B's job; a quoted contract now always yields a premium, so the
+  //     manual path needs a contract that is genuinely unpriced.
   //
   // Rows are spelled the way the live endpoint spells them: NO strike / type /
   // expiry fields (the projection decodes those from the OCC symbol) and prices
@@ -128,6 +133,13 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
               nbbo_ask: '4.30',
               volume: 320,
               open_interest: 980,
+            },
+            // Unpriced: no trade, no quote. Strike 175 shares no substring with
+            // any other rendered value, so a row filter resolves it uniquely.
+            {
+              option_symbol: `${ticker}300621C00175000`,
+              volume: 0,
+              open_interest: 44,
             },
           ],
         },

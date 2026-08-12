@@ -228,31 +228,44 @@ test.describe('symbol-search-quotes', () => {
     const entry = page.locator('#entryPrice');
     await expect(entry).toHaveValue('');
 
-    // --- No-last-price row ⇒ entry stays blank + manual-entry note ---
+    // --- Unpriced row ⇒ entry stays blank + manual-entry note ---
     await page.getByRole('button', { name: 'Select from options chain' }).click();
     let dialog = page.getByRole('dialog');
     await dialog.locator('#options-chain-symbol').fill('AAPL');
-    // The strike-190 row from the UW stub has no last_price.
+    // The strike-175 row from the UW stub has neither a trade nor a quote, so
+    // no premium resolves. A row with only a quote now yields the NBBO mid.
     await dialog
       .getByRole('row')
-      .filter({ hasText: '190' })
+      .filter({ hasText: '175' })
       .getByRole('button', { name: 'Use' })
       .click();
     await expect(entry).toHaveValue('');
     await expect(page.getByText('No last trade — enter the premium manually.')).toBeVisible();
 
-    // --- Last-price row ⇒ entry = the premium (5.25) + OCC shown ---
+    // --- Quote-only row ⇒ entry = the NBBO mid (4.10 / 4.30 → 4.2) ---
     await page.getByRole('button', { name: 'Select from options chain' }).click();
     dialog = page.getByRole('dialog');
     await dialog.locator('#options-chain-symbol').fill('AAPL');
-    // The strike-200 row carries last_price 5.25 (the premium).
+    await dialog
+      .getByRole('row')
+      .filter({ hasText: '190' })
+      .getByRole('button', { name: 'Use' })
+      .click();
+    await expect(entry).toHaveValue('4.2');
+    await expect(page.getByText('No last trade — enter the premium manually.')).toHaveCount(0);
+
+    // --- Last-price row ⇒ entry = the traded premium (5.25) + OCC shown ---
+    await page.getByRole('button', { name: 'Select from options chain' }).click();
+    dialog = page.getByRole('dialog');
+    await dialog.locator('#options-chain-symbol').fill('AAPL');
+    // The strike-200 row carries last_price 5.25, which wins over its mid.
     await dialog
       .getByRole('row')
       .filter({ hasText: '5.25' })
       .getByRole('button', { name: 'Use' })
       .click();
     await expect(entry).toHaveValue('5.25');
-    await expect(page.getByText('Selected contract: AAPL260717C00200000')).toBeVisible();
+    await expect(page.getByText('Selected contract: AAPL300621C00200000')).toBeVisible();
     // The premium hand-off cleared the earlier manual-entry note.
     await expect(page.getByText('No last trade — enter the premium manually.')).toHaveCount(0);
 

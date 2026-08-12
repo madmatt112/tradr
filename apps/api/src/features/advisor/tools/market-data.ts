@@ -144,7 +144,11 @@ function asNumber(value: unknown): number | undefined {
 function premiumOf(lastPrice?: number, bid?: number, ask?: number): number | undefined {
   if (lastPrice !== undefined) return lastPrice;
   if (bid === undefined || ask === undefined) return undefined;
-  return (bid + ask) / 2;
+  // Rounded, because binary float lands the mid of 4.10 and 4.30 on
+  // 4.199999999999999 — and this number is not internal: it is rendered in the
+  // chain and written into the entry-price field the user then trades on.
+  // Options quote in pennies, so a mid needs at most a half-penny; 4dp is ample.
+  return Number(((bid + ask) / 2).toFixed(4));
 }
 
 /**

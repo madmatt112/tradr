@@ -288,6 +288,17 @@ describe('options-chain handler + shared parsing (REQ-12.4)', () => {
     expect(out.contracts[0].last_price).toBeUndefined();
   });
 
+  // The mid is rendered and written into the entry-price field, so it must not
+  // carry binary-float noise: (4.10 + 4.30) / 2 is 4.199999999999999 raw.
+  it('rounds the mid instead of emitting float noise', () => {
+    const out = parseOptionChain('SPY', {
+      data: [{ option_symbol: 'SPY260814C00780000', nbbo_bid: '4.10', nbbo_ask: '4.30' }],
+    }) as { contracts: Record<string, unknown>[] };
+
+    expect(out.contracts[0].premium).toBe(4.2);
+    expect(String(out.contracts[0].premium)).toBe('4.2');
+  });
+
   it('omits the premium when neither a trade nor a two-sided quote exists', () => {
     const out = parseOptionChain('SPY', {
       data: [{ option_symbol: 'SPY260814C00780000', nbbo_bid: '1' }],
