@@ -337,3 +337,44 @@ describe('Sidebar — Changelog link + new-updates badge', () => {
     unmount(container, root);
   });
 });
+
+// jsdom computes no layout, so these assert the class contract that keeps the
+// rail pinned to the viewport instead of stretching to the height of <main> —
+// the arrangement that used to scroll the Log out button out of sight on long
+// routes.
+describe('Sidebar — pinned to the viewport, not the page', () => {
+  it('sizes the rail to the viewport and sticks it to the top', () => {
+    const { container, root } = mountWith(<Sidebar />);
+
+    const aside = container.querySelector('aside');
+    expect(aside?.className).toContain('sticky');
+    expect(aside?.className).toContain('top-0');
+    expect(aside?.className).toContain('h-screen');
+
+    unmount(container, root);
+  });
+
+  it('scrolls the nav links rather than the footer off the bottom', () => {
+    const { container, root } = mountWith(<Sidebar />);
+
+    const nav = container.querySelector('nav');
+    expect(nav?.className).toContain('overflow-y-auto');
+    // Without `min-h-0` the flex child refuses to shrink below its content and
+    // pushes the footer past the bottom edge — the bug this guards.
+    expect(nav?.className).toContain('min-h-0');
+
+    unmount(container, root);
+  });
+
+  it('keeps the Log out button in a footer that cannot be compressed', () => {
+    const { container, root } = mountWith(<Sidebar />);
+
+    const logout = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Log out',
+    );
+    expect(logout).toBeDefined();
+    expect(logout?.parentElement?.className).toContain('shrink-0');
+
+    unmount(container, root);
+  });
+});
