@@ -207,6 +207,65 @@ describe('options-chain handler + shared parsing (REQ-12.4)', () => {
     expect(out.count).toBe(50);
     expect(out.contracts).toHaveLength(50);
   });
+
+  // UW's enriched rows spell these three differently from the names the chain
+  // viewer and calculator read; the projection normalises them.
+  it('normalises UW expires/nbbo_bid/nbbo_ask onto expiry/bid/ask', () => {
+    const out = parseOptionChain('AAPL', {
+      data: [
+        {
+          option_symbol: 'AAPL260619C00190000',
+          expires: '2026-06-19',
+          nbbo_bid: 4.1,
+          nbbo_ask: 4.25,
+          strike: 190,
+        },
+      ],
+    }) as { contracts: Record<string, unknown>[] };
+
+    expect(out.contracts[0]).toMatchObject({ expiry: '2026-06-19', bid: 4.1, ask: 4.25 });
+    expect(out.contracts[0].expires).toBeUndefined();
+    expect(out.contracts[0].nbbo_bid).toBeUndefined();
+  });
+
+  it('prefers the plain spelling when UW sends both', () => {
+    const out = parseOptionChain('AAPL', {
+      data: [{ expiry: '2026-06-19', expires: '1999-01-01', bid: 1, nbbo_bid: 9 }],
+    }) as { contracts: Record<string, unknown>[] };
+
+    expect(out.contracts[0]).toMatchObject({ expiry: '2026-06-19', bid: 1 });
+  });
+
+  // The production 503: UW's default response is bare OCC symbol strings.
+  it('decodes bare option-symbol strings into contracts', () => {
+    const out = parseOptionChain('SPY', {
+      data: ['SPY251219C00500000', 'SPY251219P00450000'],
+    }) as { count: number; contracts: Record<string, unknown>[] };
+
+    expect(out.count).toBe(2);
+    expect(out.contracts[0]).toEqual({
+      option_symbol: 'SPY251219C00500000',
+      option_type: 'call',
+      strike: 500,
+      expiry: '2025-12-19',
+    });
+    expect(out.contracts[1]).toEqual({
+      option_symbol: 'SPY251219P00450000',
+      option_type: 'put',
+      strike: 450,
+      expiry: '2025-12-19',
+    });
+  });
+
+  it('keeps an undecodable symbol as a bare row rather than dropping it', () => {
+    const out = parseOptionChain('SPY', { data: ['NOT-AN-OCC-SYMBOL'] }) as {
+      count: number;
+      contracts: Record<string, unknown>[];
+    };
+
+    expect(out.count).toBe(1);
+    expect(out.contracts[0]).toEqual({ option_symbol: 'NOT-AN-OCC-SYMBOL' });
+  });
 });
 
 describe('missing UW client', () => {
