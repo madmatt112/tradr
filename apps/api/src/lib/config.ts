@@ -333,9 +333,16 @@ export const envSchema = z.object({
   // hard-coded personal contact in source, REQ-9.4) + test/E2E URL seam. Both
   // empty-tolerant (the CHANGELOG_GITHUB_BASE_URL idiom); SEC_USER_AGENT has no
   // `.url()` so it drops the validator but keeps the '' → default preprocess.
+  //
+  // The contact URL must NOT be a github.com address: SEC serves a 403 ("Request
+  // Rate Threshold Exceeded", misleadingly) to any agent referencing github.com,
+  // and to a bare name carrying no contact at all. Both were verified against
+  // the live host; the project's own domain is accepted. A 403 here is silent —
+  // the sync records `last_error` and leaves `symbols` empty, so search returns
+  // 200 with no results forever.
   SEC_USER_AGENT: z.preprocess(
     (v) => (v === '' ? undefined : v),
-    z.string().default('tradr (+https://github.com/madmatt112/tradr)'),
+    z.string().default('tradr (+https://tradr.cloud)'),
   ),
   SEC_TICKERS_URL: z.preprocess(
     (v) => (v === '' ? undefined : v),
