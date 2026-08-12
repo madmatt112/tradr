@@ -68,6 +68,24 @@
  * against a silently empty pass, tempting as it is: the closing step above has
  * legitimately zero, so the guard would fail on correct code.
  *
+ * IT READS THE LOCK RATHER THAN TRUSTING IT, AND THAT IS HOW IT CAUGHT ONE. The
+ * gate is the element's own resolved `pointer-events`, never a list of what the
+ * tour ought to have locked — so a lock that leaks is visible here rather than
+ * assumed away. It leaked: driver.js 1.8.0 decides which element to
+ * un-highlight from a value it writes only when a step's 400ms transition runs
+ * to completion, so a step change landing inside that window leaves
+ * `driver-active-element` — and with it `pointer-events: auto` and the focus
+ * ring — on a control the tour has walked away from. On a loaded CI runner the
+ * calculator's opening step lost that race and `#entryPrice` was still live six
+ * steps later, under the closing step's popover. The popover was in the SAME
+ * place, to the pixel, on the machine where this passed; what differed was
+ * whether the page had left a control under it to press. `tour-engine.ts`
+ * releases stale highlights now.
+ *
+ * So read a failure here as one of two things, and measure before choosing: a
+ * prompt in the wrong place, or a lock that leaked under it. Moving a prompt
+ * that was already clear of everything the tour meant to lock fixes neither.
+ *
  * WHAT COUNTS AS "THE PROMPT IS ON IT" IS ANY OVERLAP THE PROMPT WOULD WIN, not
  * a swallowed click. Those are not the same test, and the difference is the
  * whole reason this class kept getting through: Playwright hit-tests the CENTRE

@@ -613,6 +613,41 @@ describe('missing targets', () => {
   });
 });
 
+/**
+ * ONE CONTROL IS THE HIGHLIGHTED ONE, AND A STEP CHANGE THAT ARRIVES EARLY MUST
+ * NOT LEAVE A SECOND ONE BEHIND.
+ *
+ * `driver-active-element` carries the lock as well as the ring: `driver.css`
+ * takes `pointer-events` off the whole page and gives them back to that element,
+ * so a stale copy is a control the dimming says is locked and is not. driver.js
+ * decides what to un-highlight from a value it only writes when a step's 400ms
+ * transition finishes, so a press inside that window strands the class on the
+ * control the abandoned transition had just moved to.
+ *
+ * ANIMATION ON IS THE POINT, not incidental: with `prefers-reduced-motion` the
+ * engine passes `animate: false` and driver.js does its bookkeeping inline, so
+ * the window does not exist and this test would pass against the bug. Every
+ * other test here runs reduced — this one must not.
+ */
+describe('a highlight the tour has moved off', () => {
+  it('is released even when the next step arrives before the transition ends', () => {
+    stubReducedMotion(false);
+    startTour(TWO_STEPS);
+    expect(document.querySelector('#one')?.classList.contains('driver-active-element')).toBe(true);
+
+    // No wait: the whole defect is the step change that lands inside the
+    // previous step's transition.
+    advance();
+
+    expect(document.querySelectorAll('.driver-active-element')).toHaveLength(1);
+    expect(document.querySelector('#two')?.classList.contains('driver-active-element')).toBe(true);
+    // And the ARIA driver.js sets beside the class goes with it, or the control
+    // the tour has left goes on announcing itself as the popover's trigger.
+    expect(document.querySelector('#one')?.hasAttribute('aria-haspopup')).toBe(false);
+    expect(document.querySelector('#one')?.getAttribute('aria-expanded')).toBeNull();
+  });
+});
+
 describe('reduced motion', () => {
   it('disables animation when the user prefers reduced motion', () => {
     stubReducedMotion(true);

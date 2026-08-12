@@ -45,6 +45,25 @@
  * Right of the field is the results column, which is read-only: `CalculatorResults`
  * renders figures and no controls at all, so nothing there can be covered.
  * Declaring it also stops the placement moving with the page height.
+ *
+ * THE LAST STEP IS THE ONE THAT CANNOT BE BESIDE ANYTHING, and it is left over
+ * the form on purpose. It anchors to the results panel, and driver.js will only
+ * use a side the popover fits on: measured in Chromium at 1280x720, the panel
+ * lands at x 772-1256, y 0-780 once driver.js has scrolled it in, and the
+ * popover is 300x268. Above wants 278px over a top edge at 0, below wants 278px
+ * under a bottom edge at 780, right wants 300px past 1256 — none of the three
+ * exist, so `left` is the only side there is, whatever the step declares, and
+ * left is x 452-752 against a form column at x 264-748. Centring instead is
+ * worse, not better: driver.js centres on the VIEWPORT rather than on the
+ * element, which is x 490-790, y 226-494 — three fields rather than two.
+ *
+ * What it covers there is `#symbol` whole and the top 10px of `#entryPrice`,
+ * and neither is anybody's to press: a running tour holds the page inert and
+ * the wash says so. That is the one case `e2e/support/popover-clearance.ts`
+ * gates out by design, and the reason it reads `pointer-events` rather than
+ * geometry alone. It went red here once, and the popover was not what had
+ * moved — the tour had leaked a live control under it. See `tour-engine.ts`,
+ * `releaseStaleHighlights`.
  */
 
 import type { WalkthroughStepSource } from './index';
