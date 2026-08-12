@@ -21,8 +21,9 @@ import { errorHandler } from '@/middleware/error.middleware';
 // --- Module mocks ------------------------------------------------------------
 
 const selectUnusualWhalesKeyCiphertext = vi.fn();
-const getOptionChain = vi.fn();
-const createUnusualWhalesClient = vi.fn(() => ({ getOptionChain }));
+const getExpiryBreakdown = vi.fn();
+const getOptionContracts = vi.fn();
+const createUnusualWhalesClient = vi.fn(() => ({ getExpiryBreakdown, getOptionContracts }));
 
 vi.mock('@/db', () => ({ db: {} }));
 vi.mock('./external-keys.query', () => ({
@@ -66,7 +67,8 @@ function get(app: ReturnType<typeof makeApp>, query: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  createUnusualWhalesClient.mockReturnValue({ getOptionChain });
+  createUnusualWhalesClient.mockReturnValue({ getExpiryBreakdown, getOptionContracts });
+  getExpiryBreakdown.mockResolvedValue({ data: [{ expires: '2030-06-21' }] });
 });
 
 afterEach(() => {
@@ -81,25 +83,22 @@ describe('advisor options-chain route', () => {
     const res = await get(app, '?symbol=AAPL');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ configured: false });
-    expect(getOptionChain).not.toHaveBeenCalled();
+    expect(getOptionContracts).not.toHaveBeenCalled();
   });
 
   // --- 2. key + success → parsed chain (REQ-12.4) ----------------------------
   it('returns the parsed chain from the shared projection on success', async () => {
     selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
-    // UW's `greeks=true` row, spelled the way UW's own example spells it:
-    // `expires` / `nbbo_bid` / `nbbo_ask`, normalised by the shared projection
-    // into the `expiry` / `bid` / `ask` the viewer and calculator read.
-    getOptionChain.mockResolvedValue({
+    getExpiryBreakdown.mockResolvedValue({ data: [{ expires: '2030-06-21' }] });
+    // An `option-contracts` row: no strike/type/expiry fields, prices as
+    // decimal strings. The projection decodes the OCC symbol and numifies.
+    getOptionContracts.mockResolvedValue({
       data: [
         {
-          option_symbol: 'AAPL250620C00150000',
-          option_type: 'call',
-          strike: 150,
-          expires: '2025-06-20',
-          last_price: 3.2,
-          nbbo_bid: 3.1,
-          nbbo_ask: 3.3,
+          option_symbol: 'AAPL300621C00150000',
+          last_price: '3.2',
+          nbbo_bid: '3.1',
+          nbbo_ask: '3.3',
           volume: 100,
           open_interest: 2000,
           extra_field_dropped: 'x',
@@ -108,48 +107,58 @@ describe('advisor options-chain route', () => {
     });
 
     const app = makeApp();
-    const res = await get(app, '?symbol=AAPL&expiration=2025-06-20');
+    const res = await get(app, '?symbol=AAPL&expiration=2030-06-21');
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.configured).toBe(true);
     expect(body.chain.symbol).toBe('AAPL');
-    expect(body.chain.expiration).toBe('2025-06-20');
+    expect(body.expiration).toBe('2030-06-21');
     expect(body.chain.count).toBe(1);
     expect(body.chain.contracts[0]).toMatchObject({
       strike: 150,
       option_type: 'call',
-      expiry: '2025-06-20',
+      expiry: '2030-06-21',
       bid: 3.1,
       ask: 3.3,
       last_price: 3.2,
+      premium: 3.2,
     });
     // Compact projection drops unknown fields.
     expect(body.chain.contracts[0].extra_field_dropped).toBeUndefined();
-    expect(getOptionChain).toHaveBeenCalledWith('AAPL', '2025-06-20');
+    expect(getOptionContracts).toHaveBeenCalledWith('AAPL', '2030-06-21', undefined);
   });
 
-  // --- 2b. the production failure: a real ticker's bare-symbol chain ---------
-  // SPY returned `data: ["SPY…", …]`, which the old object-only schema rejected
-  // as MARKET_DATA_UNAVAILABLE → 503, while bogus SPYSD's empty `data: []`
-  // parsed and correctly 404'd. This asserts the real ticker now succeeds.
-  it('decodes a bare option-symbol chain instead of failing as unavailable', async () => {
+  // --- 2b. expiry resolution + picker payload --------------------------------
+  it('defaults to the nearest expiry and returns the list for the picker', async () => {
     selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
-    getOptionChain.mockResolvedValue({
-      data: ['SPY251219C00500000', 'SPY251219P00450000'],
+    getExpiryBreakdown.mockResolvedValue({
+      data: [{ expires: '2030-09-20' }, { expires: '2030-06-21' }],
     });
+    getOptionContracts.mockResolvedValue({ data: [{ option_symbol: 'AAPL300621C00150000' }] });
 
     const app = makeApp();
-    const res = await get(app, '?symbol=SPY');
+    const res = await get(app, '?symbol=AAPL');
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.chain.count).toBe(2);
-    expect(body.chain.contracts[0]).toEqual({
-      option_symbol: 'SPY251219C00500000',
-      option_type: 'call',
-      strike: 500,
-      expiry: '2025-12-19',
-    });
-    expect(body.chain.contracts[1]).toMatchObject({ option_type: 'put', strike: 450 });
+    expect(body.expiration).toBe('2030-06-21');
+    expect(body.expirations).toEqual(['2030-06-21', '2030-09-20']);
+    expect(getOptionContracts).toHaveBeenCalledWith('AAPL', '2030-06-21', undefined);
+  });
+
+  // The bug this guards: `option-chains?date=` is a MARKET day, not an expiry,
+  // so a future expiry there returned an empty envelope and surfaced as a bare
+  // "Symbol not found." for a symbol that plainly exists.
+  it('reports an unavailable expiry without calling the contracts endpoint', async () => {
+    selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
+    getExpiryBreakdown.mockResolvedValue({ data: [{ expires: '2030-06-21' }] });
+
+    const app = makeApp();
+    const res = await get(app, '?symbol=AAPL&expiration=2030-06-22');
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.code).toBe('SYMBOL_NOT_FOUND');
+    expect(body.error.message).toContain('expire on that date');
+    expect(getOptionContracts).not.toHaveBeenCalled();
   });
 
   // --- 3. bad symbol → 400 validation ----------------------------------------
@@ -169,7 +178,7 @@ describe('advisor options-chain route', () => {
     [TOOL_RESULT_CODES.MARKET_DATA_UNAVAILABLE, 503],
   ])('maps UW %s to HTTP %i', async (code, status) => {
     selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
-    getOptionChain.mockRejectedValue(new MarketDataError(code, 'msg'));
+    getOptionContracts.mockRejectedValue(new MarketDataError(code, 'msg'));
     const app = makeApp();
     const res = await get(app, '?symbol=AAPL');
     expect(res.status).toBe(status);
@@ -182,7 +191,7 @@ describe('advisor options-chain route', () => {
   // --- 8. platform meter trip → 429 PLATFORM_RATE_LIMITED --------------------
   it('maps a platform meter trip to 429 PLATFORM_RATE_LIMITED', async () => {
     selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
-    getOptionChain.mockRejectedValue(new PlatformRateLimitedError());
+    getOptionContracts.mockRejectedValue(new PlatformRateLimitedError());
     const app = makeApp();
     const res = await get(app, '?symbol=AAPL');
     expect(res.status).toBe(429);

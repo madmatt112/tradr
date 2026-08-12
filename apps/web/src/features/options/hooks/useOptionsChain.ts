@@ -21,6 +21,12 @@ export interface OptionContract {
   last_price?: number;
   bid?: number;
   ask?: number;
+  /**
+   * The premium to use as an entry price: the last traded price when the
+   * contract has traded, otherwise the NBBO midpoint. Absent when the contract
+   * has neither, in which case the calculator asks for it manually.
+   */
+  premium?: number;
   volume?: number;
   open_interest?: number;
   implied_volatility?: number;
@@ -38,7 +44,16 @@ export interface OptionChain {
 }
 
 /** GET response — empty state (no key) or the parsed chain. */
-export type OptionsChainResponse = { configured: false } | { configured: true; chain: OptionChain };
+export type OptionsChainResponse =
+  | { configured: false }
+  | {
+      configured: true;
+      /** The expiry this chain is for — the requested one, or the nearest. */
+      expiration: string;
+      /** Every tradeable expiry, soonest first, for the picker. */
+      expirations: string[];
+      chain: OptionChain;
+    };
 
 export const optionsChainKeys = {
   chain: (symbol: string, expiration?: string) =>

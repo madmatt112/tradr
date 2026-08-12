@@ -17,7 +17,8 @@
 // Authorization header, the key, or response bodies.
 //
 // Endpoint paths are pinned against the live UW docs (api.unusualwhales.com/docs,
-// PublicApi.TickerController): info / flow-alerts / option-chains.
+// PublicApi.TickerController): info / flow-alerts / expiry-breakdown /
+// option-contracts.
 
 import { z } from 'zod';
 
@@ -143,16 +144,8 @@ export class MarketDataMeter {
 
 const stockInfoSchema = z.object({ data: z.record(z.unknown()) });
 const flowAlertsSchema = z.object({ data: z.array(z.record(z.unknown())) });
-
-// option-chains returns EITHER shape depending on whether `greeks=true` is
-// honoured: bare OCC option-symbol strings (the documented default) or an
-// enriched object per contract. Accepting both is deliberate — a strict
-// object-only schema is what made every real ticker fail its parse and surface
-// as MARKET_DATA_UNAVAILABLE (503), while a bogus ticker's empty `data: []`
-// passed and correctly 404'd. `parseOptionChain` normalises both forms.
-const optionChainsSchema = z.object({
-  data: z.array(z.union([z.string(), z.record(z.unknown())])),
-});
+const expiryBreakdownSchema = z.object({ data: z.array(z.record(z.unknown())) });
+const optionContractsSchema = z.object({ data: z.array(z.record(z.unknown())) });
 
 // --- Client -----------------------------------------------------------------
 
@@ -174,7 +167,10 @@ export interface UnusualWhalesClientDeps {
 export interface UnusualWhalesClient {
   getStockQuote(symbol: string, signal?: AbortSignal): Promise<unknown>;
   getOptionsFlow(symbol: string, limit?: number, signal?: AbortSignal): Promise<unknown>;
-  getOptionChain(symbol: string, expiration?: string, signal?: AbortSignal): Promise<unknown>;
+  /** The ticker's expiries (cheap — no contract rows). */
+  getExpiryBreakdown(symbol: string, signal?: AbortSignal): Promise<unknown>;
+  /** One expiry's contracts, with NBBO + greeks. */
+  getOptionContracts(symbol: string, expiry: string, signal?: AbortSignal): Promise<unknown>;
 }
 
 /** Stable cache/normalized-args key for `(method, args)` (REQ-6.7). */
@@ -375,19 +371,40 @@ export function createUnusualWhalesClient(deps: UnusualWhalesClientDeps): Unusua
       );
     },
 
-    // Pinned: GET /api/stock/{ticker}/option-chains (PublicApi.TickerController.option_chains).
+    // Pinned: GET /api/stock/{ticker}/expiry-breakdown.
     //
-    // `greeks=true` asks for the enriched object per contract (strike, expiry,
-    // type, NBBO, IV, OI, volume, greeks) instead of the default bare
-    // option-symbol strings. Without it the response carries no pricing at all,
-    // and the chain viewer's whole purpose is handing a contract's premium to
-    // the calculator as the entry price.
-    getOptionChain(symbol, expiration, signal) {
+    // The cheap expiry index (~2.5 KB): one row per expiry with its contract
+    // count. Used to resolve "nearest expiry" and to populate the viewer's
+    // expiry picker without pulling any contract rows.
+    getExpiryBreakdown(symbol, signal) {
       return request(
-        'getOptionChain',
-        `/api/stock/${encodeURIComponent(symbol)}/option-chains`,
-        { date: expiration, greeks: 'true' },
-        optionChainsSchema,
+        'getExpiryBreakdown',
+        `/api/stock/${encodeURIComponent(symbol)}/expiry-breakdown`,
+        {},
+        expiryBreakdownSchema,
+        (p) => !Array.isArray(p.data) || (p.data as unknown[]).length === 0,
+        signal,
+      );
+    },
+
+    // Pinned: GET /api/stock/{ticker}/option-contracts.
+    //
+    // NOT `option-chains`. That endpoint's `date` parameter is the MARKET day
+    // ("symbols present at the given day"), not the expiry — passing a future
+    // expiry to it returns an empty envelope, which the empty-check then
+    // reports as SYMBOL_NOT_FOUND. `option-contracts` takes a real `expiry`
+    // filter, and its rows carry `last_price` and NBBO, which the chain rows
+    // do not. One expiry is ~200 KB against ~4.7 MB for a whole greeks chain.
+    //
+    // `limit` is the endpoint's documented maximum (500). Rows carry
+    // `option_symbol` but no strike/type/expiry fields — the projection decodes
+    // those from the symbol.
+    getOptionContracts(symbol, expiry, signal) {
+      return request(
+        'getOptionContracts',
+        `/api/stock/${encodeURIComponent(symbol)}/option-contracts`,
+        { expiry, limit: 500 },
+        optionContractsSchema,
         (p) => !Array.isArray(p.data) || (p.data as unknown[]).length === 0,
         signal,
       );

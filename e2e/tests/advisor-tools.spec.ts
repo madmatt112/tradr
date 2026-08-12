@@ -8,7 +8,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * (e2e/support/uw-stub-server.ts), the API with `UNUSUAL_WHALES_BASE_URL`
  * pointed at that stub, and the web dev server. UW responses are therefore
  * deterministic and NEVER hit the live host — the stub serves the three pinned
- * ticker endpoints (`/api/stock/{ticker}/{info|flow-alerts|option-chains}`),
+ * ticker endpoints (`/api/stock/{ticker}/{info|flow-alerts|expiry-breakdown|option-contracts}`),
  * with ticker `UNKNOWN` yielding an empty envelope (the SYMBOL_NOT_FOUND path).
  *
  * Auth + seed follow the established live-stack convention from
@@ -314,12 +314,15 @@ test.describe('advisor-tools', () => {
     // Save a UW key (verifies against the stub).
     await saveMarketDataKey(page, 'uw-e2e-test-key');
 
-    // Back on the options page, the same symbol now renders the stubbed chain:
-    // one deterministic call contract (strike 190, expiry 2026-06-19).
+    // Back on the options page, the same symbol now renders the stubbed chain
+    // for the NEAREST expiry (2030-06-21), with both stub contracts. Strike and
+    // expiry are decoded from the OCC symbol — the upstream sends neither.
     await page.goto('/options');
     await page.locator('#options-chain-symbol').fill('AAPL');
     await expect(page.getByText('190')).toBeVisible();
-    await expect(page.getByText('2026-06-19')).toBeVisible();
+    await expect(page.locator('#options-chain-expiry')).toHaveValue('2030-06-21');
+    // Row B never traded, so its premium is the NBBO mid: (4.10 + 4.30) / 2.
+    await expect(page.getByRole('cell', { name: '4.2', exact: true })).toBeVisible();
     // The no-key CTA is gone now that a key is configured.
     await expect(
       page.getByText('Connect an Unusual Whales key to view live options chains.'),

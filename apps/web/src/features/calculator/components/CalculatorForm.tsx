@@ -273,7 +273,12 @@ export function CalculatorForm() {
   // Option contract hand-off (REQ-6.2/6.3). ORDER IS PINNED (OD#9): set `mode`
   // via a BARE non-clearing setValue (must NOT route through handleModeChange,
   // which would wipe the premium), store the validated option_symbol, then write
-  // entryPrice = the PREMIUM (contract.last_price, never the underlying spot) LAST.
+  // entryPrice = the PREMIUM (never the underlying spot) LAST.
+  //
+  // `premium` is the API's resolved entry price: the last traded price when the
+  // contract has traded, else the NBBO midpoint. Most contracts on a given
+  // expiry have never traded, so without the midpoint fallback this hand-off
+  // would almost always land on the manual-entry note.
   const handleContractSelected = (contract: OptionContract) => {
     setChainOpen(false);
     setValue('mode', 'options', { shouldValidate: false });
@@ -281,9 +286,9 @@ export function CalculatorForm() {
       const parsed = parseOccSymbol(contract.option_symbol);
       if (parsed.ok) setHandedOffOcc(contract.option_symbol);
     }
-    if (contract.last_price != null) {
+    if (contract.premium != null) {
       setManualPremiumNote(false);
-      setValue('entryPrice', String(contract.last_price), { shouldValidate: true });
+      setValue('entryPrice', String(contract.premium), { shouldValidate: true });
     } else {
       setManualPremiumNote(true);
     }

@@ -376,7 +376,8 @@ describe('buildToolContext — per-tool abort controller seam', () => {
       () => ({
         getStockQuote: async () => null,
         getOptionsFlow: async () => null,
-        getOptionChain: async () => null,
+        getExpiryBreakdown: async () => null,
+        getOptionContracts: async () => null,
       }),
     );
     expect(ctx.signal.aborted).toBe(false);
@@ -395,7 +396,8 @@ describe('buildToolContext — per-tool abort controller seam', () => {
     const makeUw = () => ({
       getStockQuote: async () => null,
       getOptionsFlow: async () => null,
-      getOptionChain: async () => null,
+      getExpiryBreakdown: async () => null,
+      getOptionContracts: async () => null,
     });
     const md = buildToolContext(
       'market-data',

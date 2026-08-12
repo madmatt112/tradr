@@ -125,88 +125,161 @@ function parseOptionsFlow(symbol: string, raw: unknown, limit: number): Record<s
   return { symbol, count: alerts.length, alerts };
 }
 
-/** First present (non-null) value among `keys` — UW spells some fields two ways. */
-function firstOf(row: Record<string, unknown>, keys: string[]): unknown {
-  for (const k of keys) {
-    if (row[k] !== undefined && row[k] !== null) return row[k];
-  }
-  return undefined;
+/** Parse a UW numeric field, which arrives as a decimal STRING on most rows. */
+function asNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 /**
- * Project one enriched contract row. UW is inconsistent about three field
- * names — its `greeks=true` example spells them `expires`/`nbbo_bid`/`nbbo_ask`
- * while the parameter docs say `expiry`/NBBO — so both spellings are accepted
- * and normalised to the one name the chain viewer and calculator read.
+ * The premium the calculator uses as the entry price.
+ *
+ * `last_price` is an actual fill and wins when present. Many contracts have
+ * never traded, so the NBBO midpoint is the fallback — it is the neutral
+ * fair-value convention, sitting between what you would pay and what you would
+ * receive. Returns undefined when neither is available, which the calculator
+ * hand-off already treats as "enter the premium manually".
+ */
+function premiumOf(lastPrice?: number, bid?: number, ask?: number): number | undefined {
+  if (lastPrice !== undefined) return lastPrice;
+  if (bid === undefined || ask === undefined) return undefined;
+  // Rounded, because binary float lands the mid of 4.10 and 4.30 on
+  // 4.199999999999999 — and this number is not internal: it is rendered in the
+  // chain and written into the entry-price field the user then trades on.
+  // Options quote in pennies, so a mid needs at most a half-penny; 4dp is ample.
+  return Number(((bid + ask) / 2).toFixed(4));
+}
+
+/**
+ * Project one `option-contracts` row (design §Component 12, REQ-12.4).
+ *
+ * The endpoint sends `option_symbol` but NO strike / type / expiry fields, so
+ * those are decoded from the OCC symbol. Prices arrive as decimal strings and
+ * are normalised to numbers here so the viewer and the calculator do not each
+ * re-parse them. An unparseable symbol keeps its priced fields rather than
+ * being dropped.
  */
 function projectContract(row: Record<string, unknown>): Record<string, unknown> {
-  const out = pick(row, [
-    'option_symbol',
-    'option_type',
-    'strike',
-    'last_price',
-    'volume',
-    'open_interest',
-    'implied_volatility',
-    'delta',
-    'gamma',
-    'theta',
-    'vega',
-  ]);
-  const aliased: Record<string, string[]> = {
-    expiry: ['expiry', 'expires'],
-    bid: ['bid', 'nbbo_bid'],
-    ask: ['ask', 'nbbo_ask'],
+  const optionSymbol = typeof row.option_symbol === 'string' ? row.option_symbol : '';
+
+  const bid = asNumber(row.nbbo_bid);
+  const ask = asNumber(row.nbbo_ask);
+  const lastPrice = asNumber(row.last_price);
+  const premium = premiumOf(lastPrice, bid, ask);
+
+  const out: Record<string, unknown> = {
+    option_symbol: optionSymbol,
+    ...pick(row, ['volume', 'open_interest']),
   };
-  for (const [name, keys] of Object.entries(aliased)) {
-    const value = firstOf(row, keys);
-    if (value !== undefined) out[name] = value;
+
+  const decoded = parseOccSymbol(optionSymbol);
+  if (decoded.ok) {
+    out.option_type = decoded.value.type;
+    out.strike = Number(decoded.value.strike);
+    out.expiry = decoded.value.expiration;
   }
+
+  if (bid !== undefined) out.bid = bid;
+  if (ask !== undefined) out.ask = ask;
+  if (lastPrice !== undefined) out.last_price = lastPrice;
+  if (premium !== undefined) out.premium = premium;
+
+  for (const greek of ['implied_volatility', 'delta', 'gamma', 'theta', 'vega'] as const) {
+    const n = asNumber(row[greek]);
+    if (n !== undefined) out[greek] = n;
+  }
+
   return out;
 }
 
 /**
- * Project one bare OCC option-symbol string — the shape UW returns when
- * `greeks=true` is not honoured. Decoding recovers strike/expiry/type so the
- * chain still renders; there is no pricing in this form, and the calculator
- * hand-off already treats a missing `last_price` as "enter the premium
- * manually". An unparseable symbol degrades to the symbol alone rather than
- * dropping the row.
+ * The expiries a ticker has contracts for, soonest first, from
+ * `expiry-breakdown`. Expiries already in the past are dropped — they cannot
+ * be traded and would otherwise become the default "nearest".
  */
-function projectBareSymbol(optionSymbol: string): Record<string, unknown> {
-  const parsed = parseOccSymbol(optionSymbol);
-  if (!parsed.ok) return { option_symbol: optionSymbol };
-  const { expiration, type, strike } = parsed.value;
-  return {
-    option_symbol: optionSymbol,
-    option_type: type,
-    strike: Number(strike),
-    expiry: expiration,
-  };
+export function parseExpirations(raw: unknown, today: string): string[] {
+  return asRows((raw as { data?: unknown }).data)
+    .map((row) => (typeof row.expires === 'string' ? row.expires : undefined))
+    .filter((e): e is string => e !== undefined && e >= today)
+    .sort();
 }
 
 /**
- * Compact options-chain projection from `{ data: [...] }`, capped to
- * `CHAIN_MAX_CONTRACTS`. Exported for the options-chain viewer (task 35,
- * REQ-12.4) so the tool and the viewer parse identically. Handles both UW
- * response forms (see `optionChainsSchema`).
+ * Compact options-chain projection from `{ data: [...] }`, capped to `limit`.
+ * Exported for the options-chain viewer (task 35, REQ-12.4) so the tool and the
+ * viewer parse identically.
+ *
+ * Contracts are sorted by strike: the endpoint's own order is arbitrary, and a
+ * cap applied to an arbitrary order yields an unusable scatter rather than a
+ * chain. The cap is a parameter because its two consumers differ — the advisor
+ * tool persists its result and must stay small, while the viewer renders one
+ * expiry and wants the whole ladder.
  */
 export function parseOptionChain(
   symbol: string,
   raw: unknown,
   expiration?: string,
+  limit: number = CHAIN_MAX_CONTRACTS,
 ): Record<string, unknown> {
-  const data = (raw as { data?: unknown }).data;
-  const rows = (Array.isArray(data) ? data : []).slice(0, CHAIN_MAX_CONTRACTS);
-  const contracts = rows.map((row) =>
-    typeof row === 'string' ? projectBareSymbol(row) : projectContract(asRecord(row)),
-  );
+  const contracts = asRows((raw as { data?: unknown }).data)
+    .map(projectContract)
+    .sort((a, b) => ((a.strike as number) ?? 0) - ((b.strike as number) ?? 0))
+    .slice(0, limit);
+
   return {
     symbol,
     ...(expiration ? { expiration } : {}),
     count: contracts.length,
     contracts,
   };
+}
+
+/** Today as an ISO date, for "is this expiry still tradeable". */
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve which expiry to show, then fetch that expiry's contracts (REQ-12.4).
+ * Shared by the advisor tool and the viewer endpoint so both scope the chain
+ * identically.
+ *
+ * Two calls: the cheap expiry index, then one expiry's contracts. Both are
+ * metered and cached like any other UW call. Fetching every expiry at once is
+ * what the `option-chains` endpoint does, and it costs ~4.7 MB for a liquid
+ * ticker to render a single ladder.
+ *
+ * A requested expiry the ticker does not have is reported as SYMBOL_NOT_FOUND
+ * with an explicit message — the upstream would otherwise return an empty
+ * envelope, which the client's empty-check reports as a bare "Symbol not
+ * found." against a symbol that plainly exists.
+ */
+export async function fetchChainForExpiry(
+  uw: NonNullable<ToolContext['uw']>,
+  symbol: string,
+  expiration?: string,
+  signal?: AbortSignal,
+): Promise<{ raw: unknown; expiration: string; expirations: string[] }> {
+  const breakdown = await uw.getExpiryBreakdown(symbol, signal);
+  const expirations = parseExpirations(breakdown, todayIso());
+
+  if (expirations.length === 0) {
+    throw new MarketDataError(
+      TOOL_RESULT_CODES.SYMBOL_NOT_FOUND,
+      'No tradeable option expirations for this symbol.',
+    );
+  }
+  if (expiration !== undefined && !expirations.includes(expiration)) {
+    throw new MarketDataError(
+      TOOL_RESULT_CODES.SYMBOL_NOT_FOUND,
+      'No contracts expire on that date for this symbol.',
+    );
+  }
+
+  const chosen = expiration ?? expirations[0];
+  const raw = await uw.getOptionContracts(symbol, chosen, signal);
+  return { raw, expiration: chosen, expirations };
 }
 
 // --- Failure mapping (REQ-7.5) ----------------------------------------------
@@ -288,8 +361,11 @@ export const optionsChainTool: ToolDefinition = {
   async handler(input, ctx) {
     const { symbol, expiration } = optionsChainInputSchema.parse(input);
     try {
-      const raw = await requireUw(ctx).getOptionChain(symbol, expiration, ctx.signal);
-      return { status: 'ok', content: parseOptionChain(symbol, raw, expiration) };
+      const resolved = await fetchChainForExpiry(requireUw(ctx), symbol, expiration, ctx.signal);
+      return {
+        status: 'ok',
+        content: parseOptionChain(symbol, resolved.raw, resolved.expiration),
+      };
     } catch (error) {
       return toErrorResult(error);
     }

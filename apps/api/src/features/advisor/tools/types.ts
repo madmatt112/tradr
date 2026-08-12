@@ -29,7 +29,7 @@ export type ToolRequires = 'unusual-whales-key' | 'trade-data-consent' | 'none';
  * The Unusual Whales client (REQ-1.4, REQ-6.4) — re-exported from the concrete
  * implementation (task 8, `features/advisor/lib/unusual-whales.client.ts`) so
  * `ctx.uw` carries the real method surface (`getOptionsFlow(symbol, limit?)`,
- * `getOptionChain(symbol, expiration?)`) market-data handlers forward to. The
+ * `getOptionContracts(symbol, expiry)`) market-data handlers forward to. The
  * `import type` re-export above keeps this free of a runtime circular import.
  */
 

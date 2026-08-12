@@ -728,9 +728,11 @@ describe('CalculatorForm — pull-quote gating + populate (REQ-5.2/5.3/5.4)', ()
 describe('CalculatorForm — option contract hand-off (REQ-6.3/6.5)', () => {
   beforeEach(resetQuoteFixtures);
 
-  it('populates entry from the contract premium (last_price) and shows the OCC symbol', async () => {
+  it('populates entry from the contract premium and shows the OCC symbol', async () => {
     const user = userEvent.setup();
-    quote.contracts.current = [{ option_symbol: 'AAPL  250620C00150000', last_price: 3.25 }];
+    quote.contracts.current = [
+      { option_symbol: 'AAPL  250620C00150000', last_price: 3.25, premium: 3.25 },
+    ];
     await mount();
     await user.click(screen.getByRole('tab', { name: 'Options' }));
     await user.click(screen.getByRole('button', { name: 'Select from options chain' }));
@@ -740,7 +742,23 @@ describe('CalculatorForm — option contract hand-off (REQ-6.3/6.5)', () => {
     expect(screen.getByText(/Selected contract:/)).toBeTruthy();
   });
 
-  it('leaves entry blank with a manual-entry note when the contract has no last_price', async () => {
+  // Most contracts on an expiry have never traded, so the API resolves the
+  // premium to the NBBO midpoint. The form must use it exactly like a fill.
+  it('populates entry from the NBBO-mid premium when the contract has not traded', async () => {
+    const user = userEvent.setup();
+    quote.contracts.current = [
+      { option_symbol: 'AAPL  250620C00150000', bid: 3.1, ask: 3.4, premium: 3.25 },
+    ];
+    await mount();
+    await user.click(screen.getByRole('tab', { name: 'Options' }));
+    await user.click(screen.getByRole('button', { name: 'Select from options chain' }));
+    await user.click(screen.getByRole('button', { name: /Use AAPL/ }));
+
+    expect(input('Entry price').value).toBe('3.25');
+    expect(screen.queryByText(/enter the premium manually/i)).toBeNull();
+  });
+
+  it('leaves entry blank with a manual-entry note when the contract has no premium', async () => {
     const user = userEvent.setup();
     quote.contracts.current = [{ option_symbol: 'AAPL  250620C00150000' }];
     await mount();
