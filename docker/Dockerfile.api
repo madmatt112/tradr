@@ -18,6 +18,22 @@ WORKDIR /repo
 # Pin pnpm to the workspace packageManager version (root package.json).
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
+# Toolchain for building native modules FROM SOURCE.
+#
+# bcrypt fetches a prebuilt `.node` from a GitHub release in its postinstall,
+# and node-pre-gyp does not retry that download. Without a toolchain its
+# source-compile fallback cannot run, so a single dropped connection fails the
+# whole build — which is what took CI and this image down repeatedly.
+#
+# Retrying the download is not sufficient on its own: EVERY install step that
+# resolves bcrypt runs that postinstall (the workspace install below as well as
+# the /native install later), so the fallback has to actually work rather than
+# each call site needing its own retry. This costs build time only — the
+# builder stage is discarded and the runner copies just node_modules.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy the whole repo (the bundle inlines @tradr/* workspace source, so we
 # need the full monorepo, not just apps/api). .dockerignore keeps the context
 # slim (no node_modules, no .git, no .env).
