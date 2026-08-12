@@ -346,7 +346,59 @@ function handleKeyup(event: KeyboardEvent): void {
   }
 }
 
+/**
+ * EXACTLY ONE CONTROL IS THE HIGHLIGHTED ONE — which driver.js 1.8.0 does not
+ * guarantee, and the gap is a control the tour has walked away from that stays
+ * live and outlined for the rest of the walkthrough.
+ *
+ * `driver-active-element` is what the lock turns on. `driver.css` takes
+ * `pointer-events` off `.driver-active *` and hands them back to
+ * `.driver-active .driver-active-element` and its descendants, and `tour.css`
+ * draws the focus ring on the same selector. So the class is both "this is the
+ * control the step is about" and "this is the one thing on the page you may
+ * still press".
+ *
+ * driver.js decides which element to take it OFF by reading `__activeElement`,
+ * and it only writes that value when a step's 400ms highlight transition runs to
+ * completion — from a `requestAnimationFrame` loop that abandons itself the
+ * moment a newer transition starts. So a step change that lands inside the
+ * previous step's 400ms reads a stale `__activeElement`, strips the class from
+ * an element that never had it, and leaves it on the one the abandoned
+ * transition had just added it to. Nothing removes it again until the tour is
+ * destroyed.
+ *
+ * Reproduced against the real stack: two "Next" presses in one tick leave the
+ * middle step's control carrying the class, `pointer-events: auto` and the focus
+ * ring, six steps after the tour moved off it — and a walkthrough opened onto a
+ * busy page does the same to its FIRST control, because the opening highlight is
+ * a transition too and the user's first press beats its commit. It shows up as a
+ * ring on the wrong control, and it means a control the dimming says is locked
+ * is not.
+ *
+ * Fixed here rather than upstream because this hook is the one moment we know a
+ * new highlight is starting: driver.js calls it BEFORE it moves the class, so
+ * clearing every stale copy leaves it to add the one that belongs, and the end
+ * state is the same one it intended. `element` is skipped so a re-highlight of
+ * the step already showing does not blink its own ring off and on.
+ */
+function releaseStaleHighlights(element: Element | undefined): void {
+  for (const stale of document.querySelectorAll('.driver-active-element')) {
+    if (stale === element) continue;
+    stale.classList.remove('driver-active-element', 'driver-no-interaction');
+    // driver.js sets these three alongside the class and takes them off the same
+    // stale reference, so they are left behind by the same race: a control the
+    // tour has left would keep announcing itself as the popover's trigger.
+    stale.removeAttribute('aria-haspopup');
+    stale.removeAttribute('aria-expanded');
+    stale.removeAttribute('aria-controls');
+  }
+}
+
 const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
+  // Before anything that can return: a step whose target went missing ends the
+  // tour, and the control the PREVIOUS step highlighted must not outlive it.
+  releaseStaleHighlights(element);
+
   const index = opts.index ?? -1;
   const step = activeSteps[index];
   if (!step) return;

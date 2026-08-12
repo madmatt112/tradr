@@ -40,6 +40,36 @@
  *   Profile (`ReportingTimezoneSelect`). A user must not be able to conclude
  *   that setting one has set the other, so the trading-day step disclaims it
  *   and this set closes by naming it on its own.
+ *
+ * BESIDE THE DIALOG, NEVER OVER IT — every field step declares `side: 'left'`,
+ * and that is a fix rather than a preference.
+ *
+ * Left to itself, driver.js puts the popover below the field it is describing,
+ * which on a stack of form rows is on top of the next two. Measured in Chromium
+ * at 1280x720, with the dialog's controls running x 409-871: the Name step's
+ * popover (x 399-699) covered the middle of Currency and of Trading-day
+ * timezone; the Currency step's covered Trading-day timezone; the Trading-day
+ * step's covered Starting balance and three of the four risk presets; and the
+ * Starting balance step's covered those presets and Brokerage.
+ *
+ * NONE OF THOSE STEPS WAS UNFINISHABLE, which is exactly why it survived six
+ * rounds of fixing this class one control at a time: each step's OWN field was
+ * always clear, so every test that drove the tour passed. The user it costs is
+ * the one who fills the form in their own order, or who changes their mind and
+ * reaches for Cancel, and finds a control that will not take a click with
+ * nothing on screen to say why. `tour.css` deliberately hands the whole dialog
+ * back its `pointer-events` while a tour is running, so these ARE live controls
+ * with a popover sitting on them.
+ *
+ * Left of the field the popover lands at x 89-399, clear of every control in
+ * the dialog. The last two field steps already resolved there because nothing
+ * else fitted; declaring it makes the placement a property of the step rather
+ * than of the space left over, and keeps one placement for the whole walk of
+ * one form instead of the popover jumping sides halfway down it.
+ *
+ * The submit step is the exception, and goes ABOVE: its control is at the
+ * bottom right of the dialog, so "left" is on top of Cancel — which is the one
+ * control a user reaching past the walkthrough is most likely to want.
  */
 
 import type { WalkthroughStepSource } from './index';
@@ -75,6 +105,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     // seconds later and ended the walkthrough on a field that was about to
     // exist. It still ends cleanly for a dialog that is genuinely never opened.
     waitForMs: 15000,
+    side: 'left',
     title: 'Name',
     body:
       'Name the account after the brokerage account it mirrors. You pick it by this name every ' +
@@ -84,6 +115,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '#currency',
     route: '/accounts',
     docs: 'gettingStarted',
+    side: 'left',
     title: 'Currency',
     body:
       'The currency this account trades in. Its balance, fees and P&amp;L are all recorded and ' +
@@ -93,6 +125,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '#timezone',
     route: '/accounts',
     docs: 'gettingStarted',
+    side: 'left',
     title: 'Trading-day timezone',
     body:
       'This defaults to America/New_York because NYSE, NASDAQ and NYSE Arca all operate on US ' +
@@ -104,6 +137,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '#startingBalance',
     route: '/accounts',
     docs: 'gettingStarted',
+    side: 'left',
     title: 'Starting balance',
     body:
       'The account&rsquo;s opening cash, and the baseline every later figure is measured against. ' +
@@ -115,6 +149,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '#defaultRiskPercent',
     route: '/accounts',
     docs: 'gettingStarted',
+    side: 'left',
     title: 'Default risk %',
     body:
       'The share of this account&rsquo;s balance you risk on a single trade. It prefills the ' +
@@ -128,6 +163,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '#brokerage',
     route: '/accounts',
     docs: 'gettingStarted',
+    side: 'left',
     title: 'Brokerage',
     body:
       'Choose a brokerage and Tradr calculates and records this account&rsquo;s fees from that ' +
@@ -138,6 +174,12 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     target: '[data-tour="account-submit"]',
     route: '/accounts',
     docs: 'gettingStarted',
+    // ABOVE THE FOOTER, NOT BESIDE IT. Every other step on this dialog goes
+    // left; this one cannot, because Cancel is what is immediately to the left
+    // of the control it highlights, and the popover reached 68px across it.
+    // Above and end-aligned, the popover clears the whole footer row.
+    side: 'top',
+    align: 'end',
     advanceOnAction: true,
     title: 'Create the account',
     body:

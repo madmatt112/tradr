@@ -788,11 +788,21 @@ describe('_auth.dashboard route — the widget coach mark', () => {
     const { container } = renderRoute();
 
     expect(screen.getByTestId('coach-mark-dashboard-widgets')).toBeTruthy();
-    // Anchored in the header row, not floating somewhere else on the page: the
-    // mark points at the widget controls it describes.
+    // INSIDE the header, beside the heading — not merely somewhere on the page,
+    // and not at the right-hand end of the row, which is where it used to sit.
+    // A coach mark opens BELOW its anchor, so an anchor at the right-hand end
+    // opens the card over the column the dashboard keeps its buttons in: the
+    // checklist's per-item play buttons, and the widget card menus once the
+    // checklist has retired. Measured at 1280x720, its "Got it" landed exactly
+    // on the play button for "Log a position" — the control that restarts a
+    // walkthrough. The e2e suite measures that; this pins the structure the
+    // measurement depends on.
     const anchor = container.querySelector('[data-slot="coach-mark-anchor"]');
     expect(anchor).not.toBeNull();
-    expect(anchor!.parentElement!.querySelector('[data-slot="dashboard-header"]')).not.toBeNull();
+    const header = anchor!.closest('[data-slot="dashboard-header"]');
+    expect(header).not.toBeNull();
+    // Beside the heading specifically: same parent, heading first.
+    expect(anchor!.parentElement!.querySelector('h1')?.textContent).toBe('Dashboard');
   });
 
   it('stays off the zero-state, which has one thing to say and is entitled to say it', () => {

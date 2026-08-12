@@ -28,6 +28,42 @@
  *   risk lands at or under the budget rather than on it.
  * - Card titles are "Position Sizing" and "Risk / Reward"; the rows named below
  *   are that component's own labels. Risk / Reward renders only with a target.
+ *
+ * BESIDE THE FORM, NEVER OVER IT — every field step declares `side: 'right'`.
+ *
+ * `CalculatorForm` is a two-column grid: the form on the left, the results on
+ * the right. Left to itself driver.js put the popover wherever it happened to
+ * fit, which on a short page is BELOW the field it is describing and therefore
+ * on top of the next two. Measured in Chromium at 1280x720, reached the way a
+ * user with no account reaches it — the entry-price popover at x 254-554,
+ * y 472-680 sat squarely over the middle of both Stop loss and Target price
+ * (x 264-748). It moved as the page did: the same step, on the same viewport,
+ * placed itself to the RIGHT for a user who had an account, so this was a
+ * defect that appeared and disappeared with the layout rather than one anybody
+ * would reliably see and report.
+ *
+ * Right of the field is the results column, which is read-only: `CalculatorResults`
+ * renders figures and no controls at all, so nothing there can be covered.
+ * Declaring it also stops the placement moving with the page height.
+ *
+ * THE LAST STEP IS THE ONE THAT CANNOT BE BESIDE ANYTHING, and it is left over
+ * the form on purpose. It anchors to the results panel, and driver.js will only
+ * use a side the popover fits on: measured in Chromium at 1280x720, the panel
+ * lands at x 772-1256, y 0-780 once driver.js has scrolled it in, and the
+ * popover is 300x268. Above wants 278px over a top edge at 0, below wants 278px
+ * under a bottom edge at 780, right wants 300px past 1256 — none of the three
+ * exist, so `left` is the only side there is, whatever the step declares, and
+ * left is x 452-752 against a form column at x 264-748. Centring instead is
+ * worse, not better: driver.js centres on the VIEWPORT rather than on the
+ * element, which is x 490-790, y 226-494 — three fields rather than two.
+ *
+ * What it covers there is `#symbol` whole and the top 10px of `#entryPrice`,
+ * and neither is anybody's to press: a running tour holds the page inert and
+ * the wash says so. That is the one case `e2e/support/popover-clearance.ts`
+ * gates out by design, and the reason it reads `pointer-events` rather than
+ * geometry alone. It went red here once, and the popover was not what had
+ * moved — the tour had leaked a live control under it. See `tour-engine.ts`,
+ * `releaseStaleHighlights`.
  */
 
 import type { WalkthroughStepSource } from './index';
@@ -41,6 +77,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     // step waits for the calculator to mount rather than assuming the
     // navigation has already landed.
     waitForMs: 5000,
+    side: 'right',
     title: 'Entry price',
     body:
       'Start with the price you plan to get in at. Nothing here is submitted or saved — the ' +
@@ -50,6 +87,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     target: '#stopLoss',
     route: '/calculator',
     docs: 'gettingStarted',
+    side: 'right',
     title: 'Stop loss',
     body:
       'The price at which you would accept the trade is wrong. The distance from entry to stop ' +
@@ -60,6 +98,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     target: '#targetPrice',
     route: '/calculator',
     docs: 'gettingStarted',
+    side: 'right',
     title: 'Target price (optional)',
     body:
       'Optional, as the label says. Add it and you also get the Per-unit reward and the ' +
@@ -69,6 +108,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     target: '[data-tour="calculator-risk"]',
     route: '/calculator',
     docs: 'gettingStarted',
+    side: 'right',
     advanceOnAction: true,
     title: 'Risk',
     body:
@@ -81,6 +121,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     route: '/calculator',
     docs: 'gettingStarted',
     waitForMs: 3000,
+    side: 'right',
     advanceOnAction: true,
     title: 'Account',
     body:
@@ -95,6 +136,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     route: '/calculator',
     docs: 'gettingStarted',
     waitForMs: 3000,
+    side: 'right',
     title: 'The amount at risk',
     body:
       'Under Percent, Risk percent is prefilled from that account&rsquo;s Default risk % when it ' +

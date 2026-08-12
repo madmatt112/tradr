@@ -1,5 +1,12 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 
+import {
+  COACH_MARK,
+  WALKTHROUGH_POPOVER,
+  expectClearOfPopover,
+  expectPromptClearOfEveryControl,
+} from '../support/popover-clearance';
+
 /**
  * User-onboarding e2e suite.
  *
@@ -156,12 +163,20 @@ async function startWalkthrough(page: Page): Promise<void> {
   await expect(button).not.toHaveAttribute('aria-disabled', 'true');
   await button.click();
   await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[0]);
+  await expectStepClear(page, `account step 1, "${ACCOUNT_STEP_TITLES[0]}"`);
 }
 
-/** Advance with the popover's own button and assert where it landed. */
+/**
+ * Advance with the popover's own button and assert where it landed — and that
+ * it landed clear of everything on screen. The clearance check rides on the
+ * traversal rather than living in a test of its own so that every scenario that
+ * walks this set measures every step of it, at no cost worth counting: one
+ * round trip and one pass over the document, a few milliseconds a step.
+ */
 async function advanceTo(page: Page, index: number): Promise<void> {
   await popoverNext(page).click();
   await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[index]);
+  await expectStepClear(page, `account step ${index + 1}, "${ACCOUNT_STEP_TITLES[index]}"`);
 }
 
 /**
@@ -182,39 +197,40 @@ async function advanceTo(page: Page, index: number): Promise<void> {
 async function pressToTitle(page: Page, key: string, expected: string): Promise<void> {
   await page.keyboard.press(key);
   await expect(popoverTitle(page)).toHaveText(expected);
+  await expectStepClear(page, `calculator step "${expected}"`);
 }
 
 /**
- * THE POPOVER MUST NOT LIE ACROSS THE CONTROL ITS OWN STEP IS FINISHED BY, and
- * a click cannot always tell you that it does.
+ * NOTHING THE USER CAN PRESS IS UNDER THE POPOVER — asserted at EVERY step of
+ * every set, against EVERY control on screen, and naming none of them.
  *
- * Playwright hit-tests the CENTRE of the box it is about to click, so a popover
- * that covers a control's edge — but stops short of its middle — dispatches
- * cleanly and the suite goes green over an overlap a user can see and can land
- * a pointer in. That is exactly the state the two fill-dialog steps shipped in:
- * the popover sat 21px across the Add button's right-hand end while its centre
- * stayed 9px clear, so every real click here passed.
+ * This walkthrough has now shipped six versions of one defect: a popover or a
+ * coach mark laid over a control. Each was found by a person and pinned by a
+ * test naming that one control, and the next one landed somewhere no assertion
+ * was looking — because the fixes all asserted that the control the CURRENT
+ * STEP DESCRIBES is clear, and every one of these defects was a control the
+ * step said nothing about. The neighbouring field, the Cancel, the button that
+ * restarts the walkthrough. Nobody writes an assertion for a control their step
+ * is not about, so that is the set the defect lives in.
  *
- * Measuring the rectangles is what closes that gap. It fails on any intersection
- * at all rather than on the one that happens to swallow a click, and it reports
- * the overlap in pixels so the next person does not have to re-measure it.
+ * `expectPromptClearOfEveryControl` is therefore called with no control at all:
+ * it enumerates them itself and asks the browser what a click aimed at the
+ * middle of each would actually hit. See `support/popover-clearance.ts` for
+ * what counts as a control the user can press, why a page the tour has
+ * deliberately made inert is not it, and — measured, per step — how much a pass
+ * of this therefore does and does not establish. On a locked step with no dialog
+ * open it comes down to the highlighted control alone.
+ *
+ * IF THIS FAILS, MOVE THE POPOVER. Do not narrow it to the controls the step
+ * happens to describe — that is the fix that has been made five times.
  */
-async function expectClearOfPopover(page: Page, control: Locator, what: string): Promise<void> {
-  const pop = await popover(page).boundingBox();
-  const box = await control.boundingBox();
-  if (pop === null || box === null) {
-    throw new Error(`${what}: the popover and the control must both be on screen to be measured`);
-  }
-  const dx = Math.min(pop.x + pop.width, box.x + box.width) - Math.max(pop.x, box.x);
-  const dy = Math.min(pop.y + pop.height, box.y + box.height) - Math.max(pop.y, box.y);
-  expect(
-    dx > 0 && dy > 0,
-    `the walkthrough popover overlaps ${what} by ${dx.toFixed(0)}x${dy.toFixed(0)}px ` +
-      `(popover x ${pop.x.toFixed(0)}–${(pop.x + pop.width).toFixed(0)}, ` +
-      `y ${pop.y.toFixed(0)}–${(pop.y + pop.height).toFixed(0)}; ` +
-      `control x ${box.x.toFixed(0)}–${(box.x + box.width).toFixed(0)}, ` +
-      `y ${box.y.toFixed(0)}–${(box.y + box.height).toFixed(0)})`,
-  ).toBe(false);
+function expectStepClear(page: Page, where: string): Promise<void> {
+  return expectPromptClearOfEveryControl(page, WALKTHROUGH_POPOVER, where);
+}
+
+/** The same assertion for a coach mark, whose card is its own kind of prompt. */
+function expectMarkClear(page: Page, where: string): Promise<void> {
+  return expectPromptClearOfEveryControl(page, COACH_MARK, where);
 }
 
 /** Escape out of the tour — also one press, for the same reason. */
@@ -403,6 +419,9 @@ test.describe('user onboarding', () => {
     // Doing the thing is what advances it.
     await createAccountFromDialog(page, 'Guided account');
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[CREATE_STEP + 1]);
+    // The last step of the set, which no `advanceTo` reaches: the tour gets
+    // here on the account being created, not on a press.
+    await expectStepClear(page, `account step ${ACCOUNT_STEP_TITLES.length}, the closing aside`);
 
     // Finish, on the Accounts page the set runs on, with the account the user
     // just made listed behind it.
@@ -474,6 +493,7 @@ test.describe('user onboarding', () => {
     await page.locator('[data-checklist-action="position"]').click();
     await expect(page).toHaveURL(/\/positions$/);
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[0]);
+    await expectStepClear(page, `position step 1, "${POSITION_STEP_TITLES[0]}"`);
 
     // The gesture step 1 asks for, from the control it highlights.
     await page.locator('[data-tour="position-new"]').click();
@@ -481,6 +501,7 @@ test.describe('user onboarding', () => {
     await expect(dialog.locator('#symbol')).toBeVisible();
     await popoverNext(page).click();
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[1]);
+    await expectStepClear(page, `position step 2, "${POSITION_STEP_TITLES[1]}", dialog open`);
 
     // The three controls the popover covered. Each click is the assertion.
     await dialogSelect(dialog, 'Side').click({ timeout: 5_000 });
@@ -497,13 +518,16 @@ test.describe('user onboarding', () => {
     // own page, which nothing but the walkthrough was going to do.
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[2]);
     await expect(page).toHaveURL(/\/positions\/[0-9a-f-]{36}/);
+    await expectStepClear(page, `position step 3, "${POSITION_STEP_TITLES[2]}"`);
 
     // Draft → open, through the two controls the remaining steps highlight.
     await page.locator('[data-tour="position-add-fill"]').click();
     await expect(page.getByLabel('Price')).toBeVisible();
-    // The step highlights Add Fill, but what FINISHES it is the Add button in
-    // the dialog Add Fill opens, so that is the control the popover has to keep
-    // out of the way of.
+    // EVERY control in that dialog first, none of them named — then the one
+    // this step is finished by. In that order, because the general measurement
+    // is the one that reports the whole picture and the named one is a
+    // narrower, louder restatement of part of it.
+    await expectStepClear(page, `position step 3, "${POSITION_STEP_TITLES[2]}", fill dialog open`);
     await expectClearOfPopover(
       page,
       page.getByRole('button', { name: 'Add', exact: true }),
@@ -513,10 +537,12 @@ test.describe('user onboarding', () => {
     await page.locator('#quantity').fill('10');
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[3]);
+    await expectStepClear(page, `position step 4, "${POSITION_STEP_TITLES[3]}"`);
 
     await page.locator('[data-tour="position-open"]').click();
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[4]);
     await expect(popoverProgress(page)).toHaveText(`5 of ${POSITION_STEP_TITLES.length}`);
+    await expectStepClear(page, `position step 5, "${POSITION_STEP_TITLES[4]}"`);
 
     // "Done" finishes it, and item 3 ticks off the user's real data. The set
     // ends on the position rather than the dashboard, so the checklist is read
@@ -557,12 +583,15 @@ test.describe('user onboarding', () => {
     // checklist names the ITEM, never the row.
     await expect(page).toHaveURL(new RegExp(`/positions/${positionId}`));
     await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[0]);
+    await expectStepClear(page, `close step 1, "${CLOSE_STEP_TITLES[0]}"`);
 
     // The exit, recorded from the control this step highlights.
     await page.locator('[data-tour="position-add-fill"]').click();
     await expect(page.getByLabel('Price')).toBeVisible();
     // Same control, same dialog, same step shape as the position set's draft
-    // step — and it shipped with the same overlap, so it is measured here too.
+    // step — and it shipped with the same overlap, so it is measured here too,
+    // in the same order.
+    await expectStepClear(page, `close step 1, "${CLOSE_STEP_TITLES[0]}", fill dialog open`);
     await expectClearOfPopover(
       page,
       page.getByRole('button', { name: 'Add', exact: true }),
@@ -579,6 +608,7 @@ test.describe('user onboarding', () => {
     await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[2]);
     await expect(page).toHaveURL(/\/dashboard/);
     await expect(page.locator('[data-grid-mode]')).toBeVisible();
+    await expectStepClear(page, `close step 3, "${CLOSE_STEP_TITLES[2]}"`);
     // And it got there without anyone closing anything by hand — that button
     // renders only while a position is open, and this one is not.
     await expect(page.locator('[data-tour="position-close"]')).toHaveCount(0);
@@ -624,6 +654,7 @@ test.describe('user onboarding', () => {
     // exit leaves unpressable.
     await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[1]);
     await expect(page.locator('[data-tour="position-close"]')).toBeDisabled();
+    await expectStepClear(page, `close step 2, "${CLOSE_STEP_TITLES[1]}"`);
 
     // THE ASSERTION. "Next" is live, because the gate behind it cannot be
     // opened — and it carries the user to the last step, on the dashboard,
@@ -772,10 +803,12 @@ test.describe('user onboarding', () => {
     // into the controls each step highlights. It is the one item completable
     // without an account, and item 2's only trace is the stored first-use
     // timestamp the calculation writes.
+    await expectStepClear(page, `calculator step 1, "${CALCULATOR_STEP_TITLES[0]}"`);
     await page.locator('#entryPrice').fill('100');
     for (const title of CALCULATOR_STEP_TITLES.slice(1)) {
       await popoverNext(page).click();
       await expect(popoverTitle(page)).toHaveText(title);
+      await expectStepClear(page, `calculator step "${title}"`);
       if (title === 'Stop loss') await page.locator('#stopLoss').fill('95');
       if (title === 'The amount at risk') await page.locator('#dollarRisk').fill('50');
     }
@@ -947,6 +980,7 @@ test.describe('user onboarding', () => {
     await page.goto('/import');
     const coachMark = page.getByTestId('coach-mark-csv-import');
     await expect(coachMark).toBeVisible();
+    await expectMarkClear(page, 'the csv-import coach mark');
 
     // THE CLICK IS THE ASSERTION. With the popover in the pointer path this
     // times out with "subtree intercepts pointer events" — the exact failure
@@ -958,6 +992,41 @@ test.describe('user onboarding', () => {
     // And the same gesture dismissed the mark: reaching past it is an outside
     // press, which is a dismissal like any other close.
     await expect(coachMark).toHaveCount(0);
+  });
+
+  // THE OTHER THREE MARKS, MEASURED THE SAME WAY, and the reason this test
+  // exists separately from the one above: that one pins the surface that broke,
+  // by clicking the control that broke. A click can only ever prove the control
+  // somebody thought of, and the mark this test was written for was blocking one
+  // nobody had — the dashboard mark's "Got it" sat on the activation checklist's
+  // play button for "Log a position", so a click meant for the button that
+  // RESTARTS A WALKTHROUGH acknowledged the tip instead. The mark opened at
+  // x 984-1272 from an anchor at the right-hand end of the header row, which put
+  // it over the column the whole app keeps its per-row buttons in.
+  //
+  // So this names no control at all. It opens each mark and asks what a click
+  // aimed at the middle of every control on the page would actually hit.
+  test('no coach mark stands on a control the user can press', async ({ page, request }) => {
+    const email = await registerUser(request, 'markclear');
+    const accountId = await createAccount(request, 'Mark account');
+    // An open position, so the dashboard has widgets to arrange (the mark's own
+    // gate) and the position detail has an Add Fill for its mark to describe.
+    const positionId = await createOpenPosition(request, accountId);
+    await loginViaUi(page, email);
+
+    // The dashboard, with the checklist up — the mark and the checklist share
+    // this screen for every user who has not finished setting up.
+    await expect(page.getByTestId('activation-checklist')).toBeVisible();
+    await expect(page.getByTestId('coach-mark-dashboard-widgets')).toBeVisible();
+    await expectMarkClear(page, 'the dashboard-widgets coach mark, checklist on screen');
+
+    await page.goto(`/positions/${positionId}`);
+    await expect(page.getByTestId('coach-mark-position-partials')).toBeVisible();
+    await expectMarkClear(page, 'the position-partials coach mark');
+
+    await page.goto('/options');
+    await expect(page.getByTestId('coach-mark-options-tools')).toBeVisible();
+    await expectMarkClear(page, 'the options-tools coach mark');
   });
 
   test('the walkthrough is reachable and traversable with the keyboard alone', async ({

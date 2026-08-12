@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useState, type ReactElement, type ReactNode } from 'react';
 
 import type { WidgetPlacement, WidgetType } from '@tradr/shared';
 
@@ -28,6 +28,27 @@ export interface DashboardHeaderProps {
   onResetLayout?: () => void;
   /** Disables the reset action while the default layout is being rebuilt. */
   resetBusy?: boolean;
+  /**
+   * The dashboard's coach mark, rendered BESIDE THE HEADING — which is where
+   * every other surface's mark sits (`ImportPage`, `OptionsPage`,
+   * `PositionDetail` all put it immediately after their `<h1>`/`<h2>`), and
+   * where it has to sit here too.
+   *
+   * A coach mark opens below its anchor. Anchored at the far right of this row,
+   * as this one was, it opens over the right-hand edge of everything beneath —
+   * which on the dashboard is the column the app keeps its per-row and per-card
+   * buttons in. Measured in Chromium at 1280x720, the card landed at x
+   * 984-1272 with its "Got it" directly on top of the activation checklist's
+   * play button for "Log a position" (x 1207-1239): a click aimed at the play
+   * button pressed "Got it" instead. Those play buttons are the only way back
+   * into a walkthrough once the zero-state has gone, so the mark was covering
+   * the control that restores the thing it is a substitute for. With the
+   * checklist retired it landed on the first widget's card menu instead.
+   *
+   * Beside the heading the card opens over body text and nothing else. The
+   * prop exists because the heading lives in here, not in the route.
+   */
+  coachMark?: ReactNode;
 }
 
 /**
@@ -50,12 +71,16 @@ export function DashboardHeader({
   onAdd,
   onResetLayout,
   resetBusy,
+  coachMark,
 }: DashboardHeaderProps): ReactElement {
   const [confirmingReset, setConfirmingReset] = useState(false);
 
   return (
     <header data-slot="dashboard-header" className="flex items-center justify-between gap-2">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        {coachMark}
+      </div>
       <div className="flex items-center gap-2">
         <AddWidgetPopover placedTypes={placedTypes} onAdd={onAdd} />
         {onResetLayout ? (
