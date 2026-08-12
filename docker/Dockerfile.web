@@ -13,6 +13,22 @@ WORKDIR /repo
 # Pin pnpm to the workspace packageManager version (root package.json, task 5).
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
+# Toolchain for building native modules FROM SOURCE.
+#
+# The install below is workspace-wide, so it resolves the api's `bcrypt` even
+# though the SPA never calls it. bcrypt fetches a prebuilt `.node` from a GitHub
+# release in its postinstall; node-pre-gyp does not retry that download, and
+# without a toolchain the source-compile fallback cannot run — so one dropped
+# connection failed `target web`, which is exactly how this image broke.
+#
+# Scoping the install to the web package would avoid bcrypt entirely, but the
+# bundle-size gate compares this build's artifact against a full-workspace
+# install, so narrowing it here could move the bundle. Making the fallback work
+# is the change that does not touch what gets built.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy the whole monorepo (Vite resolves @tradr/shared from workspace source).
 # .dockerignore keeps the context slim (no node_modules, no .git, no .env).
 COPY . .
