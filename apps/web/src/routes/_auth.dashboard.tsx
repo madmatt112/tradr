@@ -464,20 +464,21 @@ function DashboardPage(): ReactElement {
           layout button, and the zero-state above returns before either. A mark
           also has to stay off a surface the deployment does not offer, but
           there is no deployment gate to consult here: the grid is local layout
-          state persisted per user, configured nowhere. */}
-      <div className="flex items-center gap-2">
-        <div className="flex-1">
-          <DashboardHeader
-            placedTypes={placedTypes}
-            onAdd={handleAdd}
-            onResetLayout={() => {
-              void handleUseDefaultLayout();
-            }}
-            resetBusy={defaultBusy}
-          />
-        </div>
-        <CoachMark surface="dashboard-widgets" />
-      </div>
+          state persisted per user, configured nowhere.
+
+          It is handed to the header rather than placed beside it so that it
+          anchors to the HEADING, as every other surface's mark does — see the
+          prop's own note. Anchored at the right-hand end of this row it opened
+          on top of the checklist's play buttons. */}
+      <DashboardHeader
+        placedTypes={placedTypes}
+        onAdd={handleAdd}
+        onResetLayout={() => {
+          void handleUseDefaultLayout();
+        }}
+        resetBusy={defaultBusy}
+        coachMark={<CoachMark surface="dashboard-widgets" />}
+      />
       {/* Above the grid, below the page heading and its actions — see the note
           on the empty branch. */}
       <ChecklistSlot />
