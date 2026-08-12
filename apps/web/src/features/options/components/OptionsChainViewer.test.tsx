@@ -101,9 +101,11 @@ describe('OptionsChainViewer', () => {
     await waitFor(() => {
       expect(screen.getByText('150')).toBeTruthy();
     });
-    // Scoped to the table: the expiry also appears in the picker above it.
+    // The expiry lives in the picker now, not repeated down every row — it is
+    // constant for a chain, so a column of it was pure noise.
     const table = screen.getByRole('table');
-    expect(within(table).getByText('2025-06-20')).toBeTruthy();
+    expect(within(table).queryByText('2025-06-20')).toBeNull();
+    expect((screen.getByLabelText('Expiration') as HTMLSelectElement).value).toBe('2025-06-20');
     // The premium column is what the calculator hand-off uses.
     expect(within(table).getByText('3.2')).toBeTruthy();
   });
@@ -133,13 +135,157 @@ describe('OptionsChainViewer', () => {
     });
   });
 
+  // The defect this replaced: a flat 400-row list of both sides, ordered from
+  // the lowest strike, so the view opened on deep-ITM calls and worthless puts
+  // and at-the-money was far below the fold.
+  it('opens centred on at-the-money and hides the far strikes', async () => {
+    const contracts = [];
+    for (let strike = 700; strike <= 850; strike += 1) {
+      contracts.push({ option_type: 'call', strike, option_symbol: `SPY${strike}C`, premium: 1 });
+      contracts.push({ option_type: 'put', strike, option_symbol: `SPY${strike}P`, premium: 1 });
+    }
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        expiration: '2030-06-21',
+        expirations: ['2030-06-21'],
+        underlying: { price: 772.5, market_time: 'regular' },
+        chain: { symbol: 'SPY', count: contracts.length, contracts },
+      },
+    });
+    renderWithClient(<OptionsChainViewer />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'SPY');
+
+    const table = await screen.findByRole('table');
+    // 10 strikes either side of ATM, one row per strike — not 302 rows.
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(21);
+    expect(within(table).getByText('772')).toBeTruthy();
+    // Far strikes are out of the window entirely.
+    expect(within(table).queryByText('700')).toBeNull();
+    expect(screen.getByRole('button', { name: /Show more strikes/ })).toBeTruthy();
+  });
+
+  it('marks the at-the-money row and shades in-the-money rows', async () => {
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        expiration: '2030-06-21',
+        expirations: ['2030-06-21'],
+        underlying: { price: 772.5, market_time: 'regular' },
+        chain: {
+          symbol: 'SPY',
+          count: 3,
+          contracts: [
+            { option_type: 'call', strike: 770, option_symbol: 'SPY770C' },
+            { option_type: 'call', strike: 775, option_symbol: 'SPY775C' },
+          ],
+        },
+      },
+    });
+    renderWithClient(<OptionsChainViewer />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'SPY');
+
+    const table = await screen.findByRole('table');
+    const rows = within(table).getAllByRole('row').slice(1);
+    // 770 is below spot → ITM call, and nearest spot → ATM.
+    expect(rows[0].getAttribute('data-itm')).toBe('true');
+    expect(rows[0].getAttribute('data-atm')).toBe('true');
+    // 775 is above spot → OTM.
+    expect(rows[1].getAttribute('data-itm')).toBeNull();
+  });
+
+  it('opens on puts for a short and lets the toggle switch sides', async () => {
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        expiration: '2030-06-21',
+        expirations: ['2030-06-21'],
+        underlying: { price: 100, market_time: 'regular' },
+        chain: {
+          symbol: 'SPY',
+          count: 2,
+          contracts: [
+            { option_type: 'call', strike: 100, option_symbol: 'C', premium: 1.5 },
+            { option_type: 'put', strike: 100, option_symbol: 'P', premium: 2.5 },
+          ],
+        },
+      },
+    });
+    renderWithClient(<OptionsChainViewer direction="short" />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'SPY');
+
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('2.5')).toBeTruthy();
+    expect(within(table).queryByText('1.5')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Calls' }));
+    await waitFor(() => {
+      expect(within(screen.getByRole('table')).getByText('1.5')).toBeTruthy();
+    });
+  });
+
+  it('surfaces the underlying price and flags a non-regular session', async () => {
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        expiration: '2030-06-21',
+        expirations: ['2030-06-21'],
+        underlying: { price: 772.5, market_time: 'postmarket' },
+        chain: {
+          symbol: 'SPY',
+          count: 1,
+          contracts: [{ option_type: 'call', strike: 770, option_symbol: 'C' }],
+        },
+      },
+    });
+    renderWithClient(<OptionsChainViewer />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'SPY');
+
+    const banner = await screen.findByText(/772\.5/);
+    expect(banner).toBeTruthy();
+    // A postmarket print is not a live quote — say so rather than imply it is.
+    expect(screen.getByText(/Postmarket/)).toBeTruthy();
+  });
+
+  it('renders the whole side unwindowed when no spot price came back', async () => {
+    const contracts = [];
+    for (let strike = 100; strike <= 140; strike += 1) {
+      contracts.push({ option_type: 'call', strike, option_symbol: `C${strike}` });
+    }
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        expiration: '2030-06-21',
+        expirations: ['2030-06-21'],
+        chain: { symbol: 'SPY', count: contracts.length, contracts },
+      },
+    });
+    renderWithClient(<OptionsChainViewer />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'SPY');
+
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row').slice(1)).toHaveLength(41);
+    expect(screen.queryByRole('button', { name: /Show more strikes/ })).toBeNull();
+  });
+
   it('hides the picker when the API sends no expiry list', async () => {
     useOptionsChainMock.mockReturnValue({
       isLoading: false,
       isError: false,
       data: {
         configured: true,
-        chain: { symbol: 'AAPL', count: 1, contracts: [{ strike: 150 }] },
+        chain: { symbol: 'AAPL', count: 1, contracts: [{ option_type: 'call', strike: 150 }] },
       },
     });
     renderWithClient(<OptionsChainViewer />);

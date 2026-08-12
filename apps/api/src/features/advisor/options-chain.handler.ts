@@ -34,6 +34,7 @@ import {
   fetchChainForExpiry,
   optionsChainInputSchema,
   parseOptionChain,
+  parseStockQuote,
 } from './tools/market-data';
 
 /**
@@ -125,10 +126,28 @@ export async function getOptionsChainHandler(c: Context<AuthEnv>) {
 
   try {
     const resolved = await fetchChainForExpiry(client, symbol, expiration);
+
+    // The underlying's last trade, used to anchor the ladder on at-the-money.
+    // Fetched separately and NON-FATALLY: without it the viewer loses its ATM
+    // marker and opens at the top of the ladder, which is worse but still
+    // usable — failing the whole chain because a quote was unavailable would
+    // trade the primary payload for the garnish.
+    let underlying: Record<string, unknown> | undefined;
+    try {
+      underlying = parseStockQuote(symbol, await client.getStockQuote(symbol));
+    } catch (quoteError) {
+      logger.warn('options-chain underlying quote failed', {
+        userId,
+        symbol,
+        code: quoteError instanceof MarketDataError ? quoteError.code : 'unknown',
+      });
+    }
+
     return c.json({
       configured: true,
       expiration: resolved.expiration,
       expirations: resolved.expirations,
+      ...(underlying ? { underlying } : {}),
       chain: parseOptionChain(symbol, resolved.raw, resolved.expiration, VIEWER_MAX_CONTRACTS),
     });
   } catch (error) {

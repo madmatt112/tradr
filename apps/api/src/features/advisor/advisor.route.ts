@@ -730,12 +730,18 @@ advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
  *       false }` so the viewer shows an empty-state CTA to Settings, not an error.
  *
  *       A chain is scoped to ONE expiry. Omit `expiration` to get the nearest tradeable
- *       one. The response is `{ configured: true, expiration, expirations[], chain }`:
- *       `expiration` is the expiry actually returned, `expirations` is every tradeable
- *       expiry (soonest first) for the picker, and `chain` is the compact projection
- *       `{ symbol, expiration?, count, contracts[] }` sorted by strike. Each contract
- *       carries `premium` — the last traded price, or the NBBO midpoint when the
+ *       one. The response is `{ configured: true, expiration, expirations[], underlying?,
+ *       chain }`: `expiration` is the expiry actually returned, `expirations` is every
+ *       tradeable expiry (soonest first) for the picker, and `chain` is the compact
+ *       projection `{ symbol, expiration?, count, contracts[] }` sorted by strike. Each
+ *       contract carries `premium` — the last traded price, or the NBBO midpoint when the
  *       contract has not traded — which is what the calculator uses as an entry price.
+ *
+ *       `underlying` is the last trade on the underlying (`price`, `market_time`,
+ *       `tape_time`), used by the viewer to anchor the ladder on at-the-money. It is
+ *       fetched separately and is OMITTED rather than fatal when that quote fails — the
+ *       chain is the payload; the anchor is not worth failing it for. A `market_time`
+ *       other than `regular` means the price is a pre/post-market print, not a live quote.
  *
  *       Requesting an `expiration` the symbol has no contracts for is 404
  *       SYMBOL_NOT_FOUND with an explicit message. Other upstream failures map to their
@@ -754,7 +760,7 @@ advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
  *         schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
  *     responses:
  *       200:
- *         description: '{ configured: false } or { configured: true, expiration, expirations, chain }.'
+ *         description: '{ configured: false } or { configured: true, expiration, expirations, underlying?, chain }.'
  *       400: { description: 'Validation error or MARKET_DATA_KEY_INVALID.' }
  *       404: { description: 'SYMBOL_NOT_FOUND — unknown symbol, or no contracts on that expiry.' }
  *       429: { description: 'MARKET_DATA_RATE_LIMITED or PLATFORM_RATE_LIMITED.' }

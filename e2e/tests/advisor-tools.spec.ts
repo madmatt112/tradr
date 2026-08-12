@@ -315,14 +315,22 @@ test.describe('advisor-tools', () => {
     await saveMarketDataKey(page, 'uw-e2e-test-key');
 
     // Back on the options page, the same symbol now renders the stubbed chain
-    // for the NEAREST expiry (2030-06-21), with both stub contracts. Strike and
-    // expiry are decoded from the OCC symbol — the upstream sends neither.
+    // for the NEAREST expiry (2030-06-21). Strike and expiry are decoded from
+    // the OCC symbol — the upstream sends neither.
     await page.goto('/options');
     await page.locator('#options-chain-symbol').fill('AAPL');
     await expect(page.getByText('190')).toBeVisible();
     await expect(page.locator('#options-chain-expiry')).toHaveValue('2030-06-21');
     // Row B never traded, so its premium is the NBBO mid: (4.10 + 4.30) / 2.
     await expect(page.getByRole('cell', { name: '4.2', exact: true })).toBeVisible();
+    // The ladder is anchored on the underlying's last trade (stub: 192.50), so
+    // strike 190 is the ATM row and is in the money for a call.
+    await expect(page.locator('[data-slot="underlying-spot"]')).toContainText('192.5');
+    await expect(page.locator('tr[data-atm="true"]')).toContainText('190');
+    await expect(page.locator('tr[data-itm="true"]').first()).toBeVisible();
+    // Side and expiry live in controls, not as a column repeated down every row.
+    await expect(page.getByRole('button', { name: 'Calls' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: 'Expiry' })).toHaveCount(0);
     // The no-key CTA is gone now that a key is configured.
     await expect(
       page.getByText('Connect an Unusual Whales key to view live options chains.'),

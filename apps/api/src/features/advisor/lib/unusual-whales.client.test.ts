@@ -53,7 +53,10 @@ describe('createUnusualWhalesClient — request shape & auth', () => {
 
     expect(out).toEqual({ data: { ticker: 'AAPL', price: 1 } });
     const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/info`);
+    // NOT /info: that endpoint returns reference data (beta, issue type, avg
+    // volume) and no price at all, so the quote projection read fields that
+    // were never there. stock-state is the last-trade endpoint.
+    expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/stock-state`);
     expect((init.headers as Record<string, string>).authorization).toBe(
       'Bearer plaintext-secret-key',
     );
@@ -316,7 +319,7 @@ describe('base URL is config-sourced (REQ-6.4 E2E seam)', () => {
     await client.getStockQuote('AAPL');
 
     const [url] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toBe(`${config.UNUSUAL_WHALES_BASE_URL}/api/stock/AAPL/info`);
+    expect(url).toBe(`${config.UNUSUAL_WHALES_BASE_URL}/api/stock/AAPL/stock-state`);
   });
 
   it('envSchema parses an override from env → config (the value the client reads)', () => {
@@ -338,7 +341,7 @@ describe('base URL is config-sourced (REQ-6.4 E2E seam)', () => {
     await client.getStockQuote('AAPL');
 
     const [url] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toBe('http://localhost:9999/api/stock/AAPL/info');
+    expect(url).toBe('http://localhost:9999/api/stock/AAPL/stock-state');
   });
 });
 

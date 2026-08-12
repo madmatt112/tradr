@@ -86,9 +86,24 @@ describe('pre-call input validation (REQ-7.3)', () => {
 });
 
 describe('stock-quote handler', () => {
+  // A real `stock-state` row: decimal STRINGS, last trade in `close`, plus the
+  // session/tape stamps. The previous fixture invented `{ticker, price,
+  // volume}` — a shape the upstream never sent — so the projection agreed with
+  // it while returning an empty object against the live API.
   it('forwards ctx.signal and returns a compact projection (REQ-7.4)', async () => {
     const getStockQuote = vi.fn(async () => ({
-      data: { ticker: 'AAPL', price: 200, volume: 1000, junk_field: 'x'.repeat(5000) },
+      data: {
+        close: '772.5',
+        open: '772.52',
+        high: '773.32',
+        low: '772.11',
+        prev_close: '772.49',
+        volume: 6675723,
+        total_volume: 33075019,
+        market_time: 'postmarket',
+        tape_time: '2026-08-12T22:04:48Z',
+        junk_field: 'x'.repeat(5000),
+      },
     }));
     const ctx = ctxWith(stubUw({ getStockQuote }));
     const result = await stockQuoteTool.handler({ symbol: 'AAPL' }, ctx);
@@ -96,10 +111,34 @@ describe('stock-quote handler', () => {
     expect(getStockQuote).toHaveBeenCalledWith('AAPL', ctx.signal);
     expect(result).toEqual({
       status: 'ok',
-      content: { symbol: 'AAPL', ticker: 'AAPL', price: 200, volume: 1000 },
+      content: {
+        symbol: 'AAPL',
+        price: 772.5,
+        open: 772.52,
+        high: 773.32,
+        low: 772.11,
+        prev_close: 772.49,
+        volume: 6675723,
+        total_volume: 33075019,
+        market_time: 'postmarket',
+        tape_time: '2026-08-12T22:04:48Z',
+      },
     });
     // Wide junk fields are dropped — the persisted result stays compact.
     expect(JSON.stringify(result)).not.toContain('junk_field');
+  });
+
+  // The bug this guards: pointed at /info, every one of these fields was
+  // absent, so the tool answered "here is your quote" with just the symbol.
+  it('returns a price, not a bare symbol', async () => {
+    const getStockQuote = vi.fn(async () => ({ data: { close: '772.5' } }));
+    const result = await stockQuoteTool.handler(
+      { symbol: 'AAPL' },
+      ctxWith(stubUw({ getStockQuote })),
+    );
+    if (result.status === 'ok') {
+      expect((result.content as { price?: number }).price).toBe(772.5);
+    }
   });
 
   it('maps a MarketDataError to its tool_result code + bucket (REQ-7.5)', async () => {

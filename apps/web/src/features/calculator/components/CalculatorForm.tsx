@@ -514,7 +514,13 @@ export function CalculatorForm() {
                     Pick a contract to use its premium as the entry price.
                   </DialogDescription>
                 </DialogHeader>
-                <OptionsChainViewer onSelectContract={handleContractSelected} />
+                {/* `direction` opens the chain on the side being shopped —
+                    long buys calls, short buys puts — rather than asking again
+                    for a choice already made above. */}
+                <OptionsChainViewer
+                  onSelectContract={handleContractSelected}
+                  direction={direction}
+                />
               </DialogContent>
             </Dialog>
             {handedOffOcc && (
