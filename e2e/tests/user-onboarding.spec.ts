@@ -216,8 +216,10 @@ async function pressToTitle(page: Page, key: string, expected: string): Promise<
  * `expectPromptClearOfEveryControl` is therefore called with no control at all:
  * it enumerates them itself and asks the browser what a click aimed at the
  * middle of each would actually hit. See `support/popover-clearance.ts` for
- * what counts as a control the user can press, and why a page the tour has
- * deliberately made inert is not it.
+ * what counts as a control the user can press, why a page the tour has
+ * deliberately made inert is not it, and — measured, per step — how much a pass
+ * of this therefore does and does not establish. On a locked step with no dialog
+ * open it comes down to the highlighted control alone.
  *
  * IF THIS FAILS, MOVE THE POPOVER. Do not narrow it to the controls the step
  * happens to describe — that is the fix that has been made five times.

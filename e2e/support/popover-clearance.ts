@@ -28,6 +28,46 @@
  * defect. The test for it is the element's own resolved `pointer-events`, which
  * is the same value the browser decides hit-testing by.
  *
+ * WHAT A GREEN RUN HERE PROVES — AND WHERE IT NARROWS TO ALMOST NOTHING. Because
+ * the gate is `pointer-events`, the size of the set this sweeps is the size of
+ * the set the page has left live, and that varies enormously step to step. All
+ * three of these were measured in Chromium at 1280x720, walking the account set:
+ *
+ *   A STEP WITH ONE OF THE APP'S DIALOGS OPEN — 12 controls on screen, 0 gated
+ *   out, all 12 measured. `tour.css` hands the whole dialog its `pointer-events`
+ *   back, so the sweep is at full strength exactly where it matters most: every
+ *   one of the six shipped defects was a control on an open dialog.
+ *
+ *   A STEP HIGHLIGHTING A CONTROL, NO DIALOG — 24 on screen, 23 gated out, 1
+ *   measured, and that one is the highlighted control itself. driver.js has made
+ *   the rest of the page inert, so here the sweep is no stronger than the
+ *   per-step assertion it exists to generalise beyond. It is not finding
+ *   anything new on these steps; it is confirming the same one control.
+ *
+ *   A STEP THAT HIGHLIGHTS NOTHING (the closing aside) — 28 on screen, 28 gated
+ *   out, 0 measured. It asserts nothing whatever there, which is right, because
+ *   there is nothing on that screen a user can press.
+ *
+ * So "every step swept clear" does NOT mean "every control on every step was
+ * checked". Read a pass as: nothing the page had left live was covered.
+ *
+ * THE GATE IS SOUND FOR THE POINTER, AND CLAIMS NOTHING BEYOND IT. Measured on
+ * the same step: a real mouse click at the dead centre of a gated button fired
+ * neither `pointerdown` nor `click` on it, `elementFromPoint` there returned the
+ * overlay's own `<path>` rather than the button, and the click closed the tour —
+ * which is where it had actually landed. The pointer genuinely cannot reach it.
+ * What `pointer-events: none` does NOT do is make the control inert: it stays
+ * `tabIndex` 0, still takes focus, and Enter and Space still fire its click
+ * handler. That costs this assertion nothing, because a prompt's geometry cannot
+ * block a keyboard activation — a covered control that is operated by keyboard
+ * is operated whether the prompt is on it or a screen away. What the overlap
+ * does cost that user is the sight of their own focus ring, and no measurement
+ * in this file is about that.
+ *
+ * There is deliberately no "the sweep looked at at least one control" guard
+ * against a silently empty pass, tempting as it is: the closing step above has
+ * legitimately zero, so the guard would fail on correct code.
+ *
  * WHAT COUNTS AS "THE PROMPT IS ON IT" IS ANY OVERLAP THE PROMPT WOULD WIN, not
  * a swallowed click. Those are not the same test, and the difference is the
  * whole reason this class kept getting through: Playwright hit-tests the CENTRE
@@ -154,8 +194,12 @@ export async function findCoveredControls(
       if (el.closest('[aria-hidden="true"],[data-aria-hidden="true"],[inert]') !== null) continue;
 
       const style = getComputedStyle(el);
-      // THE GATE. A control the page has already made unclickable is not one the
-      // prompt is blocking — see the note at the top of the file.
+      // THE GATE, and the reason this sweep is narrower than its name. A control
+      // the page has already made unclickable is not one the prompt is blocking.
+      // It is also most of them on a tour-locked step — 23 of 24 on one measured
+      // here — so read the note at the top of the file before trusting a pass:
+      // it says what a green run does and does not establish, and why the gate
+      // is right about the pointer and silent about the keyboard.
       if (style.pointerEvents === 'none') continue;
       if (style.visibility === 'hidden' || style.display === 'none') continue;
 

@@ -178,10 +178,6 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     // left; this one cannot, because Cancel is what is immediately to the left
     // of the control it highlights, and the popover reached 68px across it.
     // Above and end-aligned, the popover clears the whole footer row.
-    // ABOVE THE FOOTER, NOT BESIDE IT. Every other step on this dialog goes
-    // left; this one cannot, because Cancel is what is immediately to the left
-    // of the control it highlights, and the popover reached 68px across it.
-    // Above and end-aligned, the popover clears the whole footer row.
     side: 'top',
     align: 'end',
     advanceOnAction: true,
