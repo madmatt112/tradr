@@ -73,13 +73,18 @@ export function Sidebar() {
   }, [collapsed]);
 
   return (
+    // `sticky top-0 h-screen` decouples the rail from the page: as a plain flex
+    // child it stretched to the height of <main>, which puts the footer — and
+    // the Log out button in it — at the bottom of the DOCUMENT rather than the
+    // viewport, out of sight on any long route. The explicit height also stops
+    // `align-items: stretch` from re-growing it.
     <aside
       className={cn(
-        'flex flex-col border-r bg-card transition-[width] duration-200',
+        'sticky top-0 flex h-screen flex-col border-r bg-card transition-[width] duration-200',
         collapsed ? 'w-16' : 'w-60',
       )}
     >
-      <div className="flex items-center justify-between border-b p-3">
+      <div className="flex shrink-0 items-center justify-between border-b p-3">
         {!collapsed && <span className="text-lg font-semibold">Tradr</span>}
         <div className="flex items-center gap-1">
           <ThemeToggle />
@@ -95,7 +100,11 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 p-2">
+      {/* `min-h-0` is what lets this shrink below its content height (a flex
+          child's default `min-height: auto` would otherwise push the footer
+          off the bottom); `overflow-y-auto` then scrolls the links themselves
+          on a short viewport, leaving the footer pinned. */}
+      <nav className="min-h-0 flex-1 overflow-y-auto p-2">
         <Link
           to="/dashboard"
           className={cn(
@@ -270,7 +279,7 @@ export function Sidebar() {
         )}
       </nav>
 
-      <div className="border-t p-3">
+      <div className="shrink-0 border-t p-3">
         {!collapsed && user && (
           <p className="mb-2 truncate text-xs text-muted-foreground">{user.email}</p>
         )}
