@@ -44,7 +44,21 @@ RUN printf '%s\n' \
   '    "tiktoken": "1.0.22"' \
   '  }' \
   '}' > package.json
-RUN npm install --omit=dev --no-audit --no-fund
+# bcrypt's prebuilt .node is fetched from a GitHub release, and node-pre-gyp
+# does NOT retry that download. A transient hang-up there is not recoverable:
+# node-pre-gyp falls back to compiling from source, which this slim image
+# cannot do (no Python, no toolchain), so a dropped connection fails the whole
+# build. Retry with backoff rather than carry a full build toolchain in the
+# builder — a retry costs nothing on the happy path, whereas python3 + g++ +
+# make would be installed on every build to serve a fallback we never want.
+RUN for attempt in 1 2 3; do \
+      npm install --omit=dev --no-audit --no-fund && exit 0; \
+      echo "native npm install failed (attempt ${attempt}/3); retrying"; \
+      rm -rf node_modules; \
+      sleep $((attempt * 5)); \
+    done; \
+    echo "native npm install failed after 3 attempts" >&2; \
+    exit 1
 
 # Assert the assembled tree is RUNTIME-USABLE, not merely resolvable: both a
 # resolve check (import succeeds) and a named-export shape check. tiktoken's
