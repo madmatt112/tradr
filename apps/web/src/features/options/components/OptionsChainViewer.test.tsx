@@ -12,7 +12,7 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -78,11 +78,20 @@ describe('OptionsChainViewer', () => {
       isError: false,
       data: {
         configured: true,
+        expiration: '2025-06-20',
+        expirations: ['2025-06-20', '2025-09-19'],
         chain: {
           symbol: 'AAPL',
           count: 1,
           contracts: [
-            { option_type: 'call', strike: 150, expiry: '2025-06-20', bid: 3.1, ask: 3.3 },
+            {
+              option_type: 'call',
+              strike: 150,
+              expiry: '2025-06-20',
+              bid: 3.1,
+              ask: 3.3,
+              premium: 3.2,
+            },
           ],
         },
       },
@@ -92,7 +101,53 @@ describe('OptionsChainViewer', () => {
     await waitFor(() => {
       expect(screen.getByText('150')).toBeTruthy();
     });
-    expect(screen.getByText('2025-06-20')).toBeTruthy();
+    // Scoped to the table: the expiry also appears in the picker above it.
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('2025-06-20')).toBeTruthy();
+    // The premium column is what the calculator hand-off uses.
+    expect(within(table).getByText('3.2')).toBeTruthy();
+  });
+
+  it('offers every expiry in a picker and refetches on change (REQ-12.4)', async () => {
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        expiration: '2025-06-20',
+        expirations: ['2025-06-20', '2025-09-19'],
+        chain: { symbol: 'AAPL', count: 1, contracts: [{ strike: 150, premium: 3.2 }] },
+      },
+    });
+    renderWithClient(<OptionsChainViewer />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL');
+
+    const picker = await screen.findByLabelText('Expiration');
+    expect((picker as HTMLSelectElement).value).toBe('2025-06-20');
+
+    await userEvent.selectOptions(picker, '2025-09-19');
+    await waitFor(() => {
+      // The hook is re-invoked with the chosen expiry, which is what scopes the
+      // upstream fetch to one ladder instead of the whole chain.
+      expect(useOptionsChainMock).toHaveBeenCalledWith('AAPL', '2025-09-19');
+    });
+  });
+
+  it('hides the picker when the API sends no expiry list', async () => {
+    useOptionsChainMock.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        configured: true,
+        chain: { symbol: 'AAPL', count: 1, contracts: [{ strike: 150 }] },
+      },
+    });
+    renderWithClient(<OptionsChainViewer />);
+    await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL');
+    await waitFor(() => {
+      expect(screen.getByText('150')).toBeTruthy();
+    });
+    expect(screen.queryByLabelText('Expiration')).toBeNull();
   });
 
   it.each([
@@ -134,6 +189,8 @@ describe('OptionsChainViewer onSelectContract (REQ-6.5/6.6)', () => {
     isError: false,
     data: {
       configured: true,
+      expiration: '2025-06-20',
+      expirations: ['2025-06-20'],
       chain: {
         symbol: 'AAPL',
         count: 2,
@@ -144,6 +201,7 @@ describe('OptionsChainViewer onSelectContract (REQ-6.5/6.6)', () => {
             strike: 150,
             expiry: '2025-06-20',
             last_price: 3.2,
+            premium: 3.2,
           },
           { option_type: 'put', strike: 140, expiry: '2025-06-20' },
         ],

@@ -11,6 +11,7 @@ import {
   marketDataTools,
   optionsChainTool,
   optionsFlowTool,
+  parseExpirations,
   parseOptionChain,
   stockQuoteTool,
 } from './market-data';
@@ -22,7 +23,8 @@ function stubUw(overrides: Partial<UnusualWhalesClient> = {}): UnusualWhalesClie
   return {
     getStockQuote: vi.fn(async () => ({ data: {} })),
     getOptionsFlow: vi.fn(async () => ({ data: [] })),
-    getOptionChain: vi.fn(async () => ({ data: [] })),
+    getExpiryBreakdown: vi.fn(async () => ({ data: [{ expires: '2030-06-21' }] })),
+    getOptionContracts: vi.fn(async () => ({ data: [] })),
     ...overrides,
   };
 }
@@ -78,7 +80,7 @@ describe('pre-call input validation (REQ-7.3)', () => {
   it('validates the optional ISO expiration on the options chain', () => {
     const s = optionsChainTool.inputSchema;
     expect(s.safeParse({ symbol: 'AAPL' }).success).toBe(true);
-    expect(s.safeParse({ symbol: 'AAPL', expiration: '2026-06-19' }).success).toBe(true);
+    expect(s.safeParse({ symbol: 'AAPL', expiration: '2030-06-21' }).success).toBe(true);
     expect(s.safeParse({ symbol: 'AAPL', expiration: 'June' }).success).toBe(false);
   });
 });
@@ -167,104 +169,176 @@ describe('options-flow handler', () => {
 });
 
 describe('options-chain handler + shared parsing (REQ-12.4)', () => {
-  it('forwards the expiration and returns a compact projection', async () => {
-    const getOptionChain = vi.fn(async () => ({
-      data: [
-        { option_symbol: 'AAPL260619C00200000', strike: 200, delta: 0.5, junk: 'y'.repeat(2000) },
-      ],
+  it('scopes to the requested expiry and returns a compact projection', async () => {
+    const getOptionContracts = vi.fn(async () => ({
+      data: [{ option_symbol: 'AAPL300621C00200000', delta: '0.5', junk: 'y'.repeat(2000) }],
     }));
-    const ctx = ctxWith(stubUw({ getOptionChain }));
+    const ctx = ctxWith(stubUw({ getOptionContracts }));
     const result = await optionsChainTool.handler(
-      { symbol: 'AAPL', expiration: '2026-06-19' },
+      { symbol: 'AAPL', expiration: '2030-06-21' },
       ctx,
     );
 
-    expect(getOptionChain).toHaveBeenCalledWith('AAPL', '2026-06-19', ctx.signal);
+    expect(getOptionContracts).toHaveBeenCalledWith('AAPL', '2030-06-21', ctx.signal);
     expect(result.status).toBe('ok');
     if (result.status === 'ok') {
-      expect(result.content).toMatchObject({ symbol: 'AAPL', expiration: '2026-06-19', count: 1 });
+      expect(result.content).toMatchObject({ symbol: 'AAPL', expiration: '2030-06-21', count: 1 });
     }
     expect(JSON.stringify(result)).not.toContain('junk');
   });
 
+  it('defaults to the nearest expiry when none is given', async () => {
+    const getExpiryBreakdown = vi.fn(async () => ({
+      // Deliberately unsorted, and carrying a past expiry that must be dropped.
+      data: [{ expires: '2031-01-17' }, { expires: '2020-01-01' }, { expires: '2030-06-21' }],
+    }));
+    const getOptionContracts = vi.fn(async () => ({ data: [{ option_symbol: 'X' }] }));
+    const ctx = ctxWith(stubUw({ getExpiryBreakdown, getOptionContracts }));
+
+    await optionsChainTool.handler({ symbol: 'AAPL' }, ctx);
+
+    expect(getOptionContracts).toHaveBeenCalledWith('AAPL', '2030-06-21', ctx.signal);
+  });
+
+  it('reports an expiry the ticker does not have, rather than "symbol not found"', async () => {
+    const getExpiryBreakdown = vi.fn(async () => ({ data: [{ expires: '2030-06-21' }] }));
+    const getOptionContracts = vi.fn(async () => ({ data: [] }));
+    const result = await optionsChainTool.handler(
+      { symbol: 'AAPL', expiration: '2030-06-22' },
+      ctxWith(stubUw({ getExpiryBreakdown, getOptionContracts })),
+    );
+
+    expect(result).toMatchObject({ status: 'error', code: 'SYMBOL_NOT_FOUND' });
+    if (result.status === 'error') expect(result.message).toContain('expire on that date');
+    expect(getOptionContracts).not.toHaveBeenCalled();
+  });
+
   it('exports parseOptionChain for the viewer (task 35) producing identical output', async () => {
-    const raw = { data: [{ option_symbol: 'X', strike: 1, bid: 2, ask: 3, junk: 'z' }] };
-    const getOptionChain = vi.fn(async () => raw);
+    const raw = { data: [{ option_symbol: 'X', nbbo_bid: '2', nbbo_ask: '3', junk: 'z' }] };
+    const getOptionContracts = vi.fn(async () => raw);
     const handlerResult = await optionsChainTool.handler(
       { symbol: 'AAPL' },
-      ctxWith(stubUw({ getOptionChain })),
+      ctxWith(stubUw({ getOptionContracts })),
     );
-    const direct = parseOptionChain('AAPL', raw);
+    const direct = parseOptionChain('AAPL', raw, '2030-06-21');
     if (handlerResult.status === 'ok') {
       expect(handlerResult.content).toEqual(direct);
     }
     expect(JSON.stringify(direct)).not.toContain('junk');
   });
 
-  it('caps the chain to 50 contracts', () => {
-    const data = Array.from({ length: 80 }, (_, i) => ({ strike: i }));
+  it('caps the chain to 50 contracts by default', () => {
+    const data = Array.from({ length: 80 }, (_, i) => ({
+      option_symbol: `AAPL300621C${String(i * 1000).padStart(8, '0')}`,
+    }));
     const out = parseOptionChain('AAPL', { data }) as { count: number; contracts: unknown[] };
     expect(out.count).toBe(50);
     expect(out.contracts).toHaveLength(50);
   });
 
-  // UW's enriched rows spell these three differently from the names the chain
-  // viewer and calculator read; the projection normalises them.
-  it('normalises UW expires/nbbo_bid/nbbo_ask onto expiry/bid/ask', () => {
-    const out = parseOptionChain('AAPL', {
+  // option-contracts rows carry NO strike/type/expiry fields — only the OCC
+  // symbol — so the projection decodes them, and prices arrive as strings.
+  it('decodes strike/type/expiry from the option symbol and numifies prices', () => {
+    const out = parseOptionChain('SPY', {
       data: [
         {
-          option_symbol: 'AAPL260619C00190000',
-          expires: '2026-06-19',
-          nbbo_bid: 4.1,
-          nbbo_ask: 4.25,
-          strike: 190,
+          option_symbol: 'SPY260814C00780000',
+          nbbo_bid: '0.38',
+          nbbo_ask: '0.39',
+          last_price: '0.39',
+          implied_volatility: '0.1064785219753081',
+          volume: 163686,
+          open_interest: 154315,
         },
       ],
     }) as { contracts: Record<string, unknown>[] };
 
-    expect(out.contracts[0]).toMatchObject({ expiry: '2026-06-19', bid: 4.1, ask: 4.25 });
-    expect(out.contracts[0].expires).toBeUndefined();
-    expect(out.contracts[0].nbbo_bid).toBeUndefined();
+    expect(out.contracts[0]).toMatchObject({
+      option_symbol: 'SPY260814C00780000',
+      option_type: 'call',
+      strike: 780,
+      expiry: '2026-08-14',
+      bid: 0.38,
+      ask: 0.39,
+      last_price: 0.39,
+      volume: 163686,
+      open_interest: 154315,
+    });
+    expect(out.contracts[0].implied_volatility).toBeCloseTo(0.10648, 5);
   });
 
-  it('prefers the plain spelling when UW sends both', () => {
-    const out = parseOptionChain('AAPL', {
-      data: [{ expiry: '2026-06-19', expires: '1999-01-01', bid: 1, nbbo_bid: 9 }],
+  // The entry-price hand-off: a real fill wins, the NBBO mid stands in when a
+  // contract has never traded.
+  it('uses last_price as the premium when the contract has traded', () => {
+    const out = parseOptionChain('SPY', {
+      data: [
+        { option_symbol: 'SPY260814C00780000', nbbo_bid: '1', nbbo_ask: '3', last_price: '2.5' },
+      ],
     }) as { contracts: Record<string, unknown>[] };
 
-    expect(out.contracts[0]).toMatchObject({ expiry: '2026-06-19', bid: 1 });
+    expect(out.contracts[0].premium).toBe(2.5);
   });
 
-  // The production 503: UW's default response is bare OCC symbol strings.
-  it('decodes bare option-symbol strings into contracts', () => {
+  it('falls back to the NBBO mid when there is no last trade', () => {
     const out = parseOptionChain('SPY', {
-      data: ['SPY251219C00500000', 'SPY251219P00450000'],
-    }) as { count: number; contracts: Record<string, unknown>[] };
+      data: [{ option_symbol: 'SPY260814C00780000', nbbo_bid: '25.19', nbbo_ask: '26.15' }],
+    }) as { contracts: Record<string, unknown>[] };
 
-    expect(out.count).toBe(2);
-    expect(out.contracts[0]).toEqual({
-      option_symbol: 'SPY251219C00500000',
-      option_type: 'call',
-      strike: 500,
-      expiry: '2025-12-19',
-    });
-    expect(out.contracts[1]).toEqual({
-      option_symbol: 'SPY251219P00450000',
-      option_type: 'put',
-      strike: 450,
-      expiry: '2025-12-19',
-    });
+    expect(out.contracts[0].premium).toBeCloseTo(25.67, 2);
+    expect(out.contracts[0].last_price).toBeUndefined();
   });
 
-  it('keeps an undecodable symbol as a bare row rather than dropping it', () => {
-    const out = parseOptionChain('SPY', { data: ['NOT-AN-OCC-SYMBOL'] }) as {
-      count: number;
+  it('omits the premium when neither a trade nor a two-sided quote exists', () => {
+    const out = parseOptionChain('SPY', {
+      data: [{ option_symbol: 'SPY260814C00780000', nbbo_bid: '1' }],
+    }) as { contracts: Record<string, unknown>[] };
+
+    expect(out.contracts[0].premium).toBeUndefined();
+  });
+
+  // A cap over the endpoint's arbitrary order yields a scatter across strikes;
+  // sorting first makes the kept slice an actual ladder.
+  it('sorts by strike before capping', () => {
+    const data = [
+      { option_symbol: 'SPY260814C00780000' },
+      { option_symbol: 'SPY260814C00100000' },
+      { option_symbol: 'SPY260814C00500000' },
+    ];
+    const out = parseOptionChain('SPY', { data }, undefined, 2) as {
       contracts: Record<string, unknown>[];
     };
 
+    expect(out.contracts.map((c) => c.strike)).toEqual([100, 500]);
+  });
+
+  it('keeps an undecodable symbol rather than dropping the row', () => {
+    const out = parseOptionChain('SPY', {
+      data: [{ option_symbol: 'NOT-AN-OCC-SYMBOL', nbbo_bid: '1', nbbo_ask: '2' }],
+    }) as { count: number; contracts: Record<string, unknown>[] };
+
     expect(out.count).toBe(1);
-    expect(out.contracts[0]).toEqual({ option_symbol: 'NOT-AN-OCC-SYMBOL' });
+    expect(out.contracts[0]).toMatchObject({ option_symbol: 'NOT-AN-OCC-SYMBOL', premium: 1.5 });
+    expect(out.contracts[0].strike).toBeUndefined();
+  });
+});
+
+describe('parseExpirations', () => {
+  it('sorts soonest-first and drops expiries already past', () => {
+    const raw = {
+      data: [{ expires: '2027-01-15' }, { expires: '2020-01-01' }, { expires: '2030-06-21' }],
+    };
+    expect(parseExpirations(raw, '2026-01-01')).toEqual(['2027-01-15', '2030-06-21']);
+  });
+
+  it('keeps an expiry falling on today', () => {
+    expect(parseExpirations({ data: [{ expires: '2026-08-12' }] }, '2026-08-12')).toEqual([
+      '2026-08-12',
+    ]);
+  });
+
+  it('tolerates a malformed payload', () => {
+    expect(parseExpirations({ data: 'nope' }, '2026-01-01')).toEqual([]);
+    expect(parseExpirations({}, '2026-01-01')).toEqual([]);
   });
 });
 

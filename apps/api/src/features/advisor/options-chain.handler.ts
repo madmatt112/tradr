@@ -30,7 +30,19 @@ import {
   PlatformRateLimitedError,
 } from './lib/unusual-whales.client';
 import { TOOL_RESULT_CODES } from './tools/error-codes';
-import { optionsChainInputSchema, parseOptionChain } from './tools/market-data';
+import {
+  fetchChainForExpiry,
+  optionsChainInputSchema,
+  parseOptionChain,
+} from './tools/market-data';
+
+/**
+ * Contract cap for the VIEWER (the advisor tool keeps its own smaller cap —
+ * its result is persisted, this response is not). One expiry's ladder for a
+ * liquid ticker runs to a few hundred strikes; this bounds a pathological
+ * ticker without truncating a normal chain.
+ */
+const VIEWER_MAX_CONTRACTS = 400;
 
 type AuthEnv = { Variables: { userId: string; isAdmin: boolean } };
 
@@ -112,8 +124,13 @@ export async function getOptionsChainHandler(c: Context<AuthEnv>) {
   });
 
   try {
-    const raw = await client.getOptionChain(symbol, expiration);
-    return c.json({ configured: true, chain: parseOptionChain(symbol, raw, expiration) });
+    const resolved = await fetchChainForExpiry(client, symbol, expiration);
+    return c.json({
+      configured: true,
+      expiration: resolved.expiration,
+      expirations: resolved.expirations,
+      chain: parseOptionChain(symbol, resolved.raw, resolved.expiration, VIEWER_MAX_CONTRACTS),
+    });
   } catch (error) {
     logger.warn('options-chain fetch failed', {
       userId,

@@ -70,41 +70,30 @@ describe('createUnusualWhalesClient — request shape & auth', () => {
     expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/flow-alerts?limit=5`);
   });
 
-  it('passes the option-chain expiration as the date query param, and asks for greeks', async () => {
-    const fetchImpl = mockFetch(() => jsonResponse({ data: [{ strike: 100 }] }));
+  it('fetches the cheap expiry index with no query params', async () => {
+    const fetchImpl = mockFetch(() => jsonResponse({ data: [{ expires: '2026-06-19' }] }));
     const client = createUnusualWhalesClient(makeDeps(fetchImpl));
 
-    await client.getOptionChain('AAPL', '2026-06-19');
+    await client.getExpiryBreakdown('AAPL');
 
     const [url] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    // Without `greeks=true` UW returns bare option-symbol strings and the chain
-    // carries no pricing at all.
-    expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/option-chains?date=2026-06-19&greeks=true`);
+    expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/expiry-breakdown`);
   });
 
-  it('asks for greeks even when no expiration is given', async () => {
-    const fetchImpl = mockFetch(() => jsonResponse({ data: [{ strike: 100 }] }));
+  // The bug this guards: `option-chains` takes `date`, which is the MARKET day,
+  // NOT the expiry — a future expiry passed there returns an empty envelope,
+  // which the empty-check reports as SYMBOL_NOT_FOUND for a symbol that plainly
+  // exists. `option-contracts` has a real `expiry` filter.
+  it('scopes contracts by a real expiry filter, not the market-date param', async () => {
+    const fetchImpl = mockFetch(() => jsonResponse({ data: [{ option_symbol: 'X' }] }));
     const client = createUnusualWhalesClient(makeDeps(fetchImpl));
 
-    await client.getOptionChain('AAPL');
+    await client.getOptionContracts('AAPL', '2026-06-19');
 
     const [url] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/option-chains?greeks=true`);
-  });
-
-  // The bug this guards: UW's DEFAULT option-chains response is an array of
-  // bare option-symbol STRINGS, not objects. An object-only schema rejected
-  // every real ticker as MARKET_DATA_UNAVAILABLE (503) while a bogus ticker's
-  // empty `data: []` parsed fine and 404'd — the exact inversion seen in prod.
-  it('accepts the bare option-symbol-string chain form without erroring', async () => {
-    const fetchImpl = mockFetch(() =>
-      jsonResponse({ data: ['AAPL260619C00190000', 'AAPL260619P00185000'] }),
-    );
-    const client = createUnusualWhalesClient(makeDeps(fetchImpl));
-
-    await expect(client.getOptionChain('AAPL')).resolves.toEqual({
-      data: ['AAPL260619C00190000', 'AAPL260619P00185000'],
-    });
+    expect(url).toBe(`${STUB_BASE}/api/stock/AAPL/option-contracts?expiry=2026-06-19&limit=500`);
+    expect(url).not.toContain('date=');
+    expect(url).not.toContain('option-chains');
   });
 });
 

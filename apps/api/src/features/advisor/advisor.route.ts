@@ -722,18 +722,26 @@ advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
  * @swagger
  * /api/advisor/options-chain:
  *   get:
- *     summary: Get the live options chain for a symbol from Unusual Whales.
+ *     summary: Get one expiry's option chain for a symbol from Unusual Whales.
  *     description: >
  *       Backs the options-tools page chain viewer. Shares the Unusual Whales client and
  *       the `market_data_options_chain` tool's parsing (no duplicate fetch logic). When
  *       the authenticated user has no Unusual Whales key the response is `{ configured:
- *       false }` so the viewer shows an empty-state CTA to Settings, not an error. With
- *       a key the response is `{ configured: true, chain }` where `chain` is the
- *       compact projection `{ symbol, expiration?, count, contracts[] }`. Upstream
- *       failures are mapped to their reason codes on the matching HTTP status: 400
- *       MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED,
- *       404 SYMBOL_NOT_FOUND, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never
- *       returned or logged.
+ *       false }` so the viewer shows an empty-state CTA to Settings, not an error.
+ *
+ *       A chain is scoped to ONE expiry. Omit `expiration` to get the nearest tradeable
+ *       one. The response is `{ configured: true, expiration, expirations[], chain }`:
+ *       `expiration` is the expiry actually returned, `expirations` is every tradeable
+ *       expiry (soonest first) for the picker, and `chain` is the compact projection
+ *       `{ symbol, expiration?, count, contracts[] }` sorted by strike. Each contract
+ *       carries `premium` — the last traded price, or the NBBO midpoint when the
+ *       contract has not traded — which is what the calculator uses as an entry price.
+ *
+ *       Requesting an `expiration` the symbol has no contracts for is 404
+ *       SYMBOL_NOT_FOUND with an explicit message. Other upstream failures map to their
+ *       reason codes on the matching HTTP status: 400 MARKET_DATA_KEY_INVALID, 429
+ *       MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 503 MARKET_DATA_UNAVAILABLE.
+ *       The plaintext key is never returned or logged.
  *     tags: [Advisor]
  *     parameters:
  *       - in: query
@@ -742,11 +750,13 @@ advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
  *         schema: { type: string, pattern: '^[A-Z.]{1,6}$' }
  *       - in: query
  *         name: expiration
+ *         description: Expiry to fetch (YYYY-MM-DD). Defaults to the nearest tradeable expiry.
  *         schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
  *     responses:
- *       200: { description: '{ configured: false } or { configured: true, chain }.' }
+ *       200:
+ *         description: '{ configured: false } or { configured: true, expiration, expirations, chain }.'
  *       400: { description: 'Validation error or MARKET_DATA_KEY_INVALID.' }
- *       404: { description: SYMBOL_NOT_FOUND. }
+ *       404: { description: 'SYMBOL_NOT_FOUND — unknown symbol, or no contracts on that expiry.' }
  *       429: { description: 'MARKET_DATA_RATE_LIMITED or PLATFORM_RATE_LIMITED.' }
  *       503: { description: MARKET_DATA_UNAVAILABLE. }
  */

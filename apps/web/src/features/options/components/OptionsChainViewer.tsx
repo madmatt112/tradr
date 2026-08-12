@@ -60,9 +60,25 @@ interface OptionsChainViewerProps {
 
 export function OptionsChainViewer({ onSelectContract }: OptionsChainViewerProps = {}) {
   const [symbolInput, setSymbolInput] = useState('');
+  const [expiry, setExpiry] = useState<string | undefined>(undefined);
   const debounced = useDebouncedValue(symbolInput.trim().toUpperCase(), 400);
 
-  const query = useOptionsChain(debounced);
+  const query = useOptionsChain(debounced, expiry);
+
+  // A chain is one expiry's ladder, so a held-over expiry from the previous
+  // symbol would ask for a date the new ticker may not list. Clearing on symbol
+  // change falls back to "nearest", which every ticker has.
+  const onSymbolChange = (value: string) => {
+    setSymbolInput(value);
+    setExpiry(undefined);
+  };
+
+  // Defaulted rather than assumed: during a rolling deploy the web bundle and
+  // the API can briefly disagree about the response shape, and a missing list
+  // should hide the picker, not blank the whole viewer.
+  const data = query.data;
+  const expirations = data?.configured === true ? (data.expirations ?? []) : [];
+  const selectedExpiry = data?.configured === true ? data.expiration : undefined;
 
   return (
     <Card data-slot="options-chain-viewer">
@@ -78,12 +94,30 @@ export function OptionsChainViewer({ onSelectContract }: OptionsChainViewerProps
             autoComplete="off"
             placeholder="AAPL"
             value={symbolInput}
-            onChange={(e) => setSymbolInput(e.target.value)}
+            onChange={(e) => onSymbolChange(e.target.value)}
           />
           <p className="text-sm text-muted-foreground">
             Enter a US ticker to view its live options chain from Unusual Whales.
           </p>
         </div>
+
+        {expirations.length > 0 ? (
+          <div className="space-y-2">
+            <Label htmlFor="options-chain-expiry">Expiration</Label>
+            <select
+              id="options-chain-expiry"
+              className="border-input bg-background h-9 w-full rounded-md border px-3 py-1 text-sm cursor-pointer"
+              value={selectedExpiry ?? ''}
+              onChange={(e) => setExpiry(e.target.value)}
+            >
+              {expirations.map((date) => (
+                <option key={date} value={date}>
+                  {date}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
         <ChainBody symbol={debounced} query={query} onSelectContract={onSelectContract} />
       </CardContent>
@@ -188,7 +222,9 @@ function ChainTable({
             <TableHead>Expiry</TableHead>
             <TableHead>Bid</TableHead>
             <TableHead>Ask</TableHead>
-            <TableHead>Last</TableHead>
+            {/* The premium the "Use" button hands to the calculator: the last
+                traded price, or the NBBO mid when the contract has not traded. */}
+            <TableHead>Premium</TableHead>
             <TableHead>Vol</TableHead>
             <TableHead>OI</TableHead>
             {onSelectContract ? (
@@ -206,7 +242,7 @@ function ChainTable({
               <TableCell>{row.expiry ?? '—'}</TableCell>
               <TableCell>{num(row.bid)}</TableCell>
               <TableCell>{num(row.ask)}</TableCell>
-              <TableCell>{num(row.last_price)}</TableCell>
+              <TableCell>{num(row.premium)}</TableCell>
               <TableCell>{num(row.volume)}</TableCell>
               <TableCell>{num(row.open_interest)}</TableCell>
               {onSelectContract ? (

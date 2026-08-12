@@ -7,9 +7,10 @@
  * booted with `UNUSUAL_WHALES_BASE_URL` pointed at THIS server, which serves
  * deterministic responses for the three pinned ticker endpoints:
  *
- *   GET /api/stock/{ticker}/info          → stockInfoSchema  `{ data: {...} }`
- *   GET /api/stock/{ticker}/flow-alerts   → flowAlertsSchema `{ data: [...] }`
- *   GET /api/stock/{ticker}/option-chains → optionChainsSchema `{ data: [...] }`
+ *   GET /api/stock/{ticker}/info             → stockInfoSchema  `{ data: {...} }`
+ *   GET /api/stock/{ticker}/flow-alerts      → flowAlertsSchema `{ data: [...] }`
+ *   GET /api/stock/{ticker}/expiry-breakdown → expiryBreakdownSchema `{ data: [...] }`
+ *   GET /api/stock/{ticker}/option-contracts → optionContractsSchema `{ data: [...] }`
  *
  * A ticker of `UNKNOWN` yields an empty envelope so e2e can exercise the
  * SYMBOL_NOT_FOUND path; any other ticker yields a non-empty deterministic
@@ -31,7 +32,8 @@ const DEFAULT_PORT = 4599;
 
 function deterministicResponse(pathname: string): { status: number; body: unknown } | null {
   // /api/stock/{ticker}/{resource}
-  const match = /^\/api\/stock\/([^/]+)\/(info|flow-alerts|option-chains)$/.exec(pathname);
+  const match =
+    /^\/api\/stock\/([^/]+)\/(info|flow-alerts|expiry-breakdown|option-contracts)$/.exec(pathname);
   if (!match) return null;
 
   const ticker = decodeURIComponent(match[1]).toUpperCase();
@@ -78,20 +80,34 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
     };
   }
 
-  // option-chains — TWO deterministic call contracts:
-  //   - Row A carries a `last_price` (the premium) so the calculator's option
-  //     hand-off (symbol-search-quotes Task 14) can assert entry = premium.
-  //   - Row B has NO `last_price` (existing fixture, kept byte-identical) so the
-  //     hand-off's "no last trade ⇒ entry blank + manual note" case is covered,
-  //     and the advisor-tools spec's `strike 190 / expiry 2026-06-19` assertions
-  //     still resolve uniquely (Row A uses a distinct strike/expiry that share no
-  //     substring with either).
+  // expiry-breakdown — the cheap expiry index the viewer resolves "nearest"
+  // from and populates its picker with. Dates are far enough out that they stay
+  // tradeable (the API drops expiries already past).
+  if (resource === 'expiry-breakdown') {
+    return {
+      status: 200,
+      body: empty
+        ? { data: [] }
+        : {
+            data: [
+              { expires: '2030-06-21', open_interest: 1200, volume: 420, chains: 2 },
+              { expires: '2030-07-19', open_interest: 900, volume: 310, chains: 2 },
+            ],
+          },
+    };
+  }
+
+  // option-contracts — TWO deterministic contracts on the nearest expiry:
+  //   - Row A carries a `last_price` so the calculator's option hand-off
+  //     (symbol-search-quotes Task 14) can assert entry = the traded premium.
+  //   - Row B has NO `last_price`, exercising the NBBO-mid fallback: its
+  //     premium resolves to (4.10 + 4.30) / 2 = 4.20.
   //
-  // The rows are spelled the way UW's `greeks=true` example spells them
-  // (`expires` / `nbbo_bid` / `nbbo_ask`) — the previous fixture used the
-  // POST-projection names, so it agreed with the client's schema instead of
-  // testing it, and the real array-of-strings response 503'd in production
-  // against a fully green suite.
+  // Rows are spelled the way the live endpoint spells them: NO strike / type /
+  // expiry fields (the projection decodes those from the OCC symbol) and prices
+  // as decimal STRINGS. The previous fixture invented post-projection field
+  // names, so it agreed with the client instead of testing it — which is how a
+  // response shape the provider never sends stayed green all the way to prod.
   return {
     status: 200,
     body: empty
@@ -99,25 +115,17 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
       : {
           data: [
             {
-              ticker,
-              option_symbol: `${ticker}260717C00200000`,
-              strike: '200',
-              expires: '2026-07-17',
-              option_type: 'call',
-              last_price: 5.25,
+              option_symbol: `${ticker}300621C00200000`,
+              last_price: '5.25',
               nbbo_bid: '5.10',
               nbbo_ask: '5.30',
               volume: 150,
               open_interest: 400,
             },
             {
-              ticker,
-              option_symbol: `${ticker}260619C00190000`,
-              strike: '190',
-              expires: '2026-06-19',
-              option_type: 'call',
+              option_symbol: `${ticker}300621C00190000`,
               nbbo_bid: '4.10',
-              nbbo_ask: '4.25',
+              nbbo_ask: '4.30',
               volume: 320,
               open_interest: 980,
             },

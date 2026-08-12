@@ -935,7 +935,8 @@ describe('per-iteration re-read + UW-client rebuild (task 26)', () => {
     const fakeUw: UnusualWhalesClient = {
       getStockQuote: vi.fn().mockResolvedValue({ price: 1 }),
       getOptionsFlow: vi.fn(),
-      getOptionChain: vi.fn(),
+      getExpiryBreakdown: vi.fn(),
+      getOptionContracts: vi.fn(),
     };
     const { registry } = uwRegistry();
 
@@ -967,7 +968,8 @@ describe('per-iteration re-read + UW-client rebuild (task 26)', () => {
     const makeUwClient = vi.fn(() => ({
       getStockQuote: vi.fn().mockResolvedValue({ price: 1 }),
       getOptionsFlow: vi.fn(),
-      getOptionChain: vi.fn(),
+      getExpiryBreakdown: vi.fn(),
+      getOptionContracts: vi.fn(),
     }));
     const { registry } = uwRegistry();
 
@@ -1005,7 +1007,8 @@ describe('per-iteration re-read + UW-client rebuild (task 26)', () => {
       return {
         getStockQuote: vi.fn().mockResolvedValue({ price: 1 }),
         getOptionsFlow: vi.fn(),
-        getOptionChain: vi.fn(),
+        getExpiryBreakdown: vi.fn(),
+        getOptionContracts: vi.fn(),
       };
     });
     const { registry } = uwRegistry();
