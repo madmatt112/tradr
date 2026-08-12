@@ -99,7 +99,7 @@ describe('OptionsChainViewer', () => {
     renderWithClient(<OptionsChainViewer />);
     await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL');
     await waitFor(() => {
-      expect(screen.getByText('150')).toBeTruthy();
+      expect(screen.getByText('150.00')).toBeTruthy();
     });
     // The expiry lives in the picker now, not repeated down every row — it is
     // constant for a chain, so a column of it was pure noise.
@@ -107,7 +107,7 @@ describe('OptionsChainViewer', () => {
     expect(within(table).queryByText('2025-06-20')).toBeNull();
     expect((screen.getByLabelText('Expiration') as HTMLSelectElement).value).toBe('2025-06-20');
     // The premium column is what the calculator hand-off uses.
-    expect(within(table).getByText('3.2')).toBeTruthy();
+    expect(within(table).getByText('3.20')).toBeTruthy();
   });
 
   it('offers every expiry in a picker and refetches on change (REQ-12.4)', async () => {
@@ -162,9 +162,9 @@ describe('OptionsChainViewer', () => {
     // 10 strikes either side of ATM, one row per strike — not 302 rows.
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(21);
-    expect(within(table).getByText('772')).toBeTruthy();
+    expect(within(table).getByText('772.00')).toBeTruthy();
     // Far strikes are out of the window entirely.
-    expect(within(table).queryByText('700')).toBeNull();
+    expect(within(table).queryByText('700.00')).toBeNull();
     expect(screen.getByRole('button', { name: /Show more strikes/ })).toBeTruthy();
   });
 
@@ -222,12 +222,12 @@ describe('OptionsChainViewer', () => {
     await userEvent.type(screen.getByLabelText('Symbol'), 'SPY');
 
     const table = await screen.findByRole('table');
-    expect(within(table).getByText('2.5')).toBeTruthy();
-    expect(within(table).queryByText('1.5')).toBeNull();
+    expect(within(table).getByText('2.50')).toBeTruthy();
+    expect(within(table).queryByText('1.50')).toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: 'Calls' }));
     await waitFor(() => {
-      expect(within(screen.getByRole('table')).getByText('1.5')).toBeTruthy();
+      expect(within(screen.getByRole('table')).getByText('1.50')).toBeTruthy();
     });
   });
 
@@ -291,7 +291,7 @@ describe('OptionsChainViewer', () => {
     renderWithClient(<OptionsChainViewer />);
     await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL');
     await waitFor(() => {
-      expect(screen.getByText('150')).toBeTruthy();
+      expect(screen.getByText('150.00')).toBeTruthy();
     });
     expect(screen.queryByLabelText('Expiration')).toBeNull();
   });
@@ -361,7 +361,7 @@ describe('OptionsChainViewer onSelectContract (REQ-6.5/6.6)', () => {
     renderWithClient(<OptionsChainViewer onSelectContract={onSelectContract} />);
     await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL');
     await waitFor(() => {
-      expect(screen.getByText('150')).toBeTruthy();
+      expect(screen.getByText('150.00')).toBeTruthy();
     });
 
     // Exactly one "Use" button — the row lacking option_symbol renders none.
@@ -379,7 +379,7 @@ describe('OptionsChainViewer onSelectContract (REQ-6.5/6.6)', () => {
     renderWithClient(<OptionsChainViewer />);
     await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL');
     await waitFor(() => {
-      expect(screen.getByText('150')).toBeTruthy();
+      expect(screen.getByText('150.00')).toBeTruthy();
     });
     expect(screen.queryByRole('button', { name: 'Use' })).toBeNull();
   });

@@ -319,10 +319,11 @@ test.describe('advisor-tools', () => {
     // the OCC symbol — the upstream sends neither.
     await page.goto('/options');
     await page.locator('#options-chain-symbol').fill('AAPL');
-    await expect(page.getByText('190')).toBeVisible();
+    // Figures render through the `Numeric` primitive, so a strike is "190.00".
+    await expect(page.getByText('190.00')).toBeVisible();
     await expect(page.locator('#options-chain-expiry')).toHaveValue('2030-06-21');
     // Row B never traded, so its premium is the NBBO mid: (4.10 + 4.30) / 2.
-    await expect(page.getByRole('cell', { name: '4.2', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '4.20', exact: true })).toBeVisible();
     // The ladder is anchored on the underlying's last trade (stub: 192.50), so
     // strike 190 is the ATM row and is in the money for a call.
     await expect(page.locator('[data-slot="underlying-spot"]')).toContainText('192.5');

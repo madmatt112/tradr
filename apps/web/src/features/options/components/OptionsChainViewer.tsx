@@ -12,6 +12,7 @@
 import { Link } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 
+import { Numeric } from '@/components/Numeric';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -50,10 +51,6 @@ function errorCodeOf(err: unknown): string | undefined {
     return e.error?.code ?? e.code;
   }
   return undefined;
-}
-
-function num(value: number | undefined): string {
-  return value === undefined || value === null ? '—' : String(value);
 }
 
 interface OptionsChainViewerProps {
@@ -299,7 +296,7 @@ function UnderlyingBanner({
   return (
     <p className="text-sm" data-slot="underlying-spot">
       <span className="font-medium">{symbol}</span>{' '}
-      <span className="tabular-nums">{underlying.price}</span>
+      <Numeric value={underlying.price} direction="none" precision={2} />
       {stale ? (
         <span className="text-muted-foreground">
           {' '}
@@ -398,17 +395,31 @@ function ChainTable({
                 data-atm={atm ? 'true' : undefined}
                 className={itm ? 'bg-muted/50' : undefined}
               >
-                <TableCell className="tabular-nums font-medium">
-                  {num(row.strike)}
+                {/* Every figure goes through `Numeric` — the DOM enforcement
+                    point for financial values. `direction="none"` because a
+                    strike or a premium has no gain/loss sense; the signed,
+                    coloured treatment belongs to P&L, not to a price. */}
+                <TableCell className="font-medium">
+                  <Numeric value={row.strike ?? null} direction="none" precision={2} />
                   {atm ? (
                     <span className="text-muted-foreground ml-2 text-xs font-normal">ATM</span>
                   ) : null}
                 </TableCell>
-                <TableCell className="tabular-nums">{num(row.bid)}</TableCell>
-                <TableCell className="tabular-nums">{num(row.ask)}</TableCell>
-                <TableCell className="tabular-nums">{num(row.premium)}</TableCell>
-                <TableCell className="tabular-nums">{num(row.volume)}</TableCell>
-                <TableCell className="tabular-nums">{num(row.open_interest)}</TableCell>
+                <TableCell>
+                  <Numeric value={row.bid ?? null} direction="none" precision={2} />
+                </TableCell>
+                <TableCell>
+                  <Numeric value={row.ask ?? null} direction="none" precision={2} />
+                </TableCell>
+                <TableCell>
+                  <Numeric value={row.premium ?? null} direction="none" precision={2} />
+                </TableCell>
+                <TableCell>
+                  <Numeric value={row.volume ?? null} kind="integer" direction="none" />
+                </TableCell>
+                <TableCell>
+                  <Numeric value={row.open_interest ?? null} kind="integer" direction="none" />
+                </TableCell>
                 {onSelectContract ? (
                   <TableCell>
                     {row.option_symbol ? (
