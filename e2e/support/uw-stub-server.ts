@@ -86,6 +86,12 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
   //     and the advisor-tools spec's `strike 190 / expiry 2026-06-19` assertions
   //     still resolve uniquely (Row A uses a distinct strike/expiry that share no
   //     substring with either).
+  //
+  // The rows are spelled the way UW's `greeks=true` example spells them
+  // (`expires` / `nbbo_bid` / `nbbo_ask`) — the previous fixture used the
+  // POST-projection names, so it agreed with the client's schema instead of
+  // testing it, and the real array-of-strings response 503'd in production
+  // against a fully green suite.
   return {
     status: 200,
     body: empty
@@ -96,11 +102,11 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
               ticker,
               option_symbol: `${ticker}260717C00200000`,
               strike: '200',
-              expiry: '2026-07-17',
+              expires: '2026-07-17',
               option_type: 'call',
               last_price: 5.25,
-              bid: '5.10',
-              ask: '5.30',
+              nbbo_bid: '5.10',
+              nbbo_ask: '5.30',
               volume: 150,
               open_interest: 400,
             },
@@ -108,10 +114,10 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
               ticker,
               option_symbol: `${ticker}260619C00190000`,
               strike: '190',
-              expiry: '2026-06-19',
+              expires: '2026-06-19',
               option_type: 'call',
-              bid: '4.10',
-              ask: '4.25',
+              nbbo_bid: '4.10',
+              nbbo_ask: '4.25',
               volume: 320,
               open_interest: 980,
             },

@@ -162,7 +162,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | --- | --- | --- |
 | `STOCK_QUOTE_API_KEY` | Optional | Symbol AUTOCOMPLETE needs NO key — it is backed by the public SEC ticker file. Only the delayed LAST-PRICE lookup needs a key. Absent ⇒ that affordance is simply absent for everyone (isStockQuoteConfigured false); a fresh clone + `docker compose up` runs identically with it unset. api-only: the frontend learns configuredness from an authed config endpoint, not from a web env var. Platform-global delayed-quote provider key (API Ninjas). Optional. |
 | `STOCK_QUOTE_BASE_URL` | Optional | Quote-provider base URL — test/E2E seam; leave unset in production. Optional (default https://api.api-ninjas.com). |
-| `SEC_USER_AGENT` | Optional | SEC contact User-Agent for the ticker-file fetch (SEC asks for a contact). Override to your own contact if you like; the default is a safe non-personal value. Optional (default tradr (+https://github.com/madmatt112/tradr)). |
+| `SEC_USER_AGENT` | Optional | SEC contact User-Agent for the ticker-file fetch (SEC asks for a contact). Override to your own contact if you like; the default is a safe non-personal value. Do NOT point it at a github.com URL — SEC 403s those, and the symbol table then silently stays empty. Optional (default tradr (+https://tradr.cloud)). |
 | `SEC_TICKERS_URL` | Optional | SEC ticker file URL — test/E2E seam; leave unset in production. Optional (default https://www.sec.gov/files/company_tickers_exchange.json). |
 
 ## Transactional email (api container)

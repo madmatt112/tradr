@@ -21,6 +21,8 @@
 
 import { z } from 'zod';
 
+import { parseOccSymbol } from '@tradr/shared';
+
 import { MarketDataError, PlatformRateLimitedError } from '../lib/unusual-whales.client';
 
 import { TOOL_RESULT_CODES } from './error-codes';
@@ -123,34 +125,81 @@ function parseOptionsFlow(symbol: string, raw: unknown, limit: number): Record<s
   return { symbol, count: alerts.length, alerts };
 }
 
+/** First present (non-null) value among `keys` — UW spells some fields two ways. */
+function firstOf(row: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) {
+    if (row[k] !== undefined && row[k] !== null) return row[k];
+  }
+  return undefined;
+}
+
+/**
+ * Project one enriched contract row. UW is inconsistent about three field
+ * names — its `greeks=true` example spells them `expires`/`nbbo_bid`/`nbbo_ask`
+ * while the parameter docs say `expiry`/NBBO — so both spellings are accepted
+ * and normalised to the one name the chain viewer and calculator read.
+ */
+function projectContract(row: Record<string, unknown>): Record<string, unknown> {
+  const out = pick(row, [
+    'option_symbol',
+    'option_type',
+    'strike',
+    'last_price',
+    'volume',
+    'open_interest',
+    'implied_volatility',
+    'delta',
+    'gamma',
+    'theta',
+    'vega',
+  ]);
+  const aliased: Record<string, string[]> = {
+    expiry: ['expiry', 'expires'],
+    bid: ['bid', 'nbbo_bid'],
+    ask: ['ask', 'nbbo_ask'],
+  };
+  for (const [name, keys] of Object.entries(aliased)) {
+    const value = firstOf(row, keys);
+    if (value !== undefined) out[name] = value;
+  }
+  return out;
+}
+
+/**
+ * Project one bare OCC option-symbol string — the shape UW returns when
+ * `greeks=true` is not honoured. Decoding recovers strike/expiry/type so the
+ * chain still renders; there is no pricing in this form, and the calculator
+ * hand-off already treats a missing `last_price` as "enter the premium
+ * manually". An unparseable symbol degrades to the symbol alone rather than
+ * dropping the row.
+ */
+function projectBareSymbol(optionSymbol: string): Record<string, unknown> {
+  const parsed = parseOccSymbol(optionSymbol);
+  if (!parsed.ok) return { option_symbol: optionSymbol };
+  const { expiration, type, strike } = parsed.value;
+  return {
+    option_symbol: optionSymbol,
+    option_type: type,
+    strike: Number(strike),
+    expiry: expiration,
+  };
+}
+
 /**
  * Compact options-chain projection from `{ data: [...] }`, capped to
  * `CHAIN_MAX_CONTRACTS`. Exported for the options-chain viewer (task 35,
- * REQ-12.4) so the tool and the viewer parse identically.
+ * REQ-12.4) so the tool and the viewer parse identically. Handles both UW
+ * response forms (see `optionChainsSchema`).
  */
 export function parseOptionChain(
   symbol: string,
   raw: unknown,
   expiration?: string,
 ): Record<string, unknown> {
-  const rows = asRows((raw as { data?: unknown }).data).slice(0, CHAIN_MAX_CONTRACTS);
+  const data = (raw as { data?: unknown }).data;
+  const rows = (Array.isArray(data) ? data : []).slice(0, CHAIN_MAX_CONTRACTS);
   const contracts = rows.map((row) =>
-    pick(row, [
-      'option_symbol',
-      'option_type',
-      'strike',
-      'expiry',
-      'last_price',
-      'bid',
-      'ask',
-      'volume',
-      'open_interest',
-      'implied_volatility',
-      'delta',
-      'gamma',
-      'theta',
-      'vega',
-    ]),
+    typeof row === 'string' ? projectBareSymbol(row) : projectContract(asRecord(row)),
   );
   return {
     symbol,

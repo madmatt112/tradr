@@ -143,7 +143,16 @@ export class MarketDataMeter {
 
 const stockInfoSchema = z.object({ data: z.record(z.unknown()) });
 const flowAlertsSchema = z.object({ data: z.array(z.record(z.unknown())) });
-const optionChainsSchema = z.object({ data: z.array(z.record(z.unknown())) });
+
+// option-chains returns EITHER shape depending on whether `greeks=true` is
+// honoured: bare OCC option-symbol strings (the documented default) or an
+// enriched object per contract. Accepting both is deliberate — a strict
+// object-only schema is what made every real ticker fail its parse and surface
+// as MARKET_DATA_UNAVAILABLE (503), while a bogus ticker's empty `data: []`
+// passed and correctly 404'd. `parseOptionChain` normalises both forms.
+const optionChainsSchema = z.object({
+  data: z.array(z.union([z.string(), z.record(z.unknown())])),
+});
 
 // --- Client -----------------------------------------------------------------
 
@@ -367,11 +376,17 @@ export function createUnusualWhalesClient(deps: UnusualWhalesClientDeps): Unusua
     },
 
     // Pinned: GET /api/stock/{ticker}/option-chains (PublicApi.TickerController.option_chains).
+    //
+    // `greeks=true` asks for the enriched object per contract (strike, expiry,
+    // type, NBBO, IV, OI, volume, greeks) instead of the default bare
+    // option-symbol strings. Without it the response carries no pricing at all,
+    // and the chain viewer's whole purpose is handing a contract's premium to
+    // the calculator as the entry price.
     getOptionChain(symbol, expiration, signal) {
       return request(
         'getOptionChain',
         `/api/stock/${encodeURIComponent(symbol)}/option-chains`,
-        { date: expiration },
+        { date: expiration, greeks: 'true' },
         optionChainsSchema,
         (p) => !Array.isArray(p.data) || (p.data as unknown[]).length === 0,
         signal,

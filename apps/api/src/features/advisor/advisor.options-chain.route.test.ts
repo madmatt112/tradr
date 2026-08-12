@@ -87,16 +87,19 @@ describe('advisor options-chain route', () => {
   // --- 2. key + success → parsed chain (REQ-12.4) ----------------------------
   it('returns the parsed chain from the shared projection on success', async () => {
     selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
+    // UW's `greeks=true` row, spelled the way UW's own example spells it:
+    // `expires` / `nbbo_bid` / `nbbo_ask`, normalised by the shared projection
+    // into the `expiry` / `bid` / `ask` the viewer and calculator read.
     getOptionChain.mockResolvedValue({
       data: [
         {
           option_symbol: 'AAPL250620C00150000',
           option_type: 'call',
           strike: 150,
-          expiry: '2025-06-20',
+          expires: '2025-06-20',
           last_price: 3.2,
-          bid: 3.1,
-          ask: 3.3,
+          nbbo_bid: 3.1,
+          nbbo_ask: 3.3,
           volume: 100,
           open_interest: 2000,
           extra_field_dropped: 'x',
@@ -112,10 +115,41 @@ describe('advisor options-chain route', () => {
     expect(body.chain.symbol).toBe('AAPL');
     expect(body.chain.expiration).toBe('2025-06-20');
     expect(body.chain.count).toBe(1);
-    expect(body.chain.contracts[0]).toMatchObject({ strike: 150, option_type: 'call' });
+    expect(body.chain.contracts[0]).toMatchObject({
+      strike: 150,
+      option_type: 'call',
+      expiry: '2025-06-20',
+      bid: 3.1,
+      ask: 3.3,
+      last_price: 3.2,
+    });
     // Compact projection drops unknown fields.
     expect(body.chain.contracts[0].extra_field_dropped).toBeUndefined();
     expect(getOptionChain).toHaveBeenCalledWith('AAPL', '2025-06-20');
+  });
+
+  // --- 2b. the production failure: a real ticker's bare-symbol chain ---------
+  // SPY returned `data: ["SPY…", …]`, which the old object-only schema rejected
+  // as MARKET_DATA_UNAVAILABLE → 503, while bogus SPYSD's empty `data: []`
+  // parsed and correctly 404'd. This asserts the real ticker now succeeds.
+  it('decodes a bare option-symbol chain instead of failing as unavailable', async () => {
+    selectUnusualWhalesKeyCiphertext.mockResolvedValue({ encryptedKey: 'enc(k)', keyVersion: 1 });
+    getOptionChain.mockResolvedValue({
+      data: ['SPY251219C00500000', 'SPY251219P00450000'],
+    });
+
+    const app = makeApp();
+    const res = await get(app, '?symbol=SPY');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.chain.count).toBe(2);
+    expect(body.chain.contracts[0]).toEqual({
+      option_symbol: 'SPY251219C00500000',
+      option_type: 'call',
+      strike: 500,
+      expiry: '2025-12-19',
+    });
+    expect(body.chain.contracts[1]).toMatchObject({ option_type: 'put', strike: 450 });
   });
 
   // --- 3. bad symbol → 400 validation ----------------------------------------

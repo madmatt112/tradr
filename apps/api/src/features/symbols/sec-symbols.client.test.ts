@@ -1,9 +1,12 @@
 // Unit tests for the PURE SEC parser (design v4, REQ-2.1/2.2/2.5). NO network:
-// `parseSecTickers` is exercised against a hand-built columnar fixture.
+// `parseSecTickers` is exercised against a hand-built columnar fixture, and
+// `fetchSecSymbols` against a stubbed global fetch.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { parseSecTickers } from './sec-symbols.client';
+import { config } from '@/lib/config';
+
+import { fetchSecSymbols, parseSecTickers } from './sec-symbols.client';
 
 // A deliberately NON-canonical `fields` order (the real SEC file is
 // ["cik","name","ticker","exchange"]). Reading by index proves the parser maps
@@ -71,5 +74,32 @@ describe('parseSecTickers', () => {
     expect(parseSecTickers({})).toEqual([]);
     expect(parseSecTickers(null)).toEqual([]);
     expect(parseSecTickers({ fields: FIELDS, data: 'nope' })).toEqual([]);
+  });
+});
+
+describe('fetchSecSymbols request headers (REQ-2.2)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends the configured contact User-Agent', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ fields: ['cik', 'name', 'ticker', 'exchange'], data: [] }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchSecSymbols();
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['User-Agent']).toBe(config.SEC_USER_AGENT);
+  });
+
+  // The bug this guards: SEC serves a 403 to any User-Agent referencing
+  // github.com (verified against the live host). `fetchSecSymbols` then threw,
+  // the sync recorded `last_error`, and `symbols` stayed empty — so symbol
+  // search returned 200 with no results indefinitely, with nothing in the API
+  // response to indicate a failure.
+  it('defaults to a contact SEC accepts — never a github.com URL', () => {
+    expect(config.SEC_USER_AGENT).not.toMatch(/github\.com/i);
+    // A bare name with no contact at all is also rejected.
+    expect(config.SEC_USER_AGENT).toMatch(/https?:\/\/|@/);
   });
 });
