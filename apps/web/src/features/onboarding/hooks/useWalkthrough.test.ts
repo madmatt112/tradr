@@ -55,6 +55,11 @@ vi.mock('./useOnboarding', async (importOriginal) => ({
 let positions: { id: string; status: string; accountId?: string }[] | undefined;
 vi.mock('@/features/positions/hooks/usePositions', () => ({
   usePositions: () => ({ data: positions }),
+  // The launcher's click-time read reaches for the query DEFINITION rather than
+  // the hook. Nothing in this file drives that path — `WalkthroughLauncher.test`
+  // does, against a real QueryClient — but the export has to exist for the
+  // module under test to import it.
+  positionsListQuery: () => ({ queryKey: ['positions', 'list', undefined], queryFn: () => [] }),
 }));
 
 // The accounts list, supplied directly for the same reason again. The
@@ -63,6 +68,7 @@ vi.mock('@/features/positions/hooks/usePositions', () => ({
 let accounts: { id: string; isDemo?: boolean }[] | undefined;
 vi.mock('@/features/accounts/hooks/useAccounts', () => ({
   useAccounts: () => ({ data: accounts }),
+  accountsListQuery: () => ({ queryKey: ['accounts', 'list'], queryFn: () => [] }),
 }));
 
 // `lib/analytics` is the REAL module here — only the vendor-facing capture is a
@@ -453,7 +459,27 @@ describe('useWalkthrough — the tour says why it stopped', () => {
     expect(why.textContent).toContain('the walkthrough cannot take that step for you');
     // Both ways out, said plainly.
     expect(why.textContent).toContain('carry on without it');
-    expect(why.textContent).toContain('start it again from the setup checklist');
+    expect(why.textContent).toContain('start it again whenever you want from Settings → Help');
+  });
+
+  /**
+   * THE WAY BACK IN HAS TO STILL BE THERE WHEN THEY GET THERE.
+   *
+   * This notice used to send the reader to the setup checklist, which is the one
+   * surface in the product that goes away for good: it retires the moment all
+   * four items are complete, and a user replaying a set from settings has by
+   * definition finished. Directing them to a screen that no longer exists is
+   * worse than saying nothing — they go looking for it.
+   */
+  it('does not send the reader back to a checklist that may have retired', async () => {
+    withToaster();
+    await start('close');
+
+    endTour('target-missing', { cause: 'target-missing', step: aGatedStep() });
+
+    const why = await screen.findByText(/is not on screen/);
+    expect(why.textContent).not.toContain('checklist');
+    expect(why.textContent).toContain('Settings → Help');
   });
 
   /**
@@ -488,7 +514,7 @@ describe('useWalkthrough — the tour says why it stopped', () => {
 
     const why = await screen.findByText(/is not on screen/);
     expect(why.textContent).toContain(plain.title);
-    expect(why.textContent).toContain('start it again from the setup checklist');
+    expect(why.textContent).toContain('start it again whenever you want from Settings → Help');
   });
 
   // The fallback that used to sit here — a `target-missing` naming no step —
@@ -683,13 +709,22 @@ describe('useWalkthrough — canStart', () => {
     >;
   }
 
-  it('offers the account set only while the zero-state is the screen the user is on', () => {
+  // THE ACCOUNT SET IS OFFERED TO A USER WHO ALREADY HAS ACCOUNTS, and that is
+  // the whole of why it was moved off the dashboard's welcome screen. Anchored
+  // there it could only run for a user with nothing, which is to say it could
+  // never be run twice; anchored on the Accounts page's "New Account" — a
+  // control `AccountList` renders for everybody — the only state it is withheld
+  // in is the one the product itself blocks, which is sample data (below).
+  it('offers the account set whether or not the user already has one', () => {
     accounts = [];
     expect(canStartAll().account).toBe(true);
 
-    // One account — of any kind, sample data included — and the dashboard shows
-    // the grid instead, so the button that set opens on is gone.
     accounts = [{ id: 'acct-1' }];
+    expect(canStartAll().account).toBe(true);
+
+    // Their own account alongside the sample one is still the sample state:
+    // creating another still starts by removing the sample data.
+    accounts = [{ id: 'acct-1' }, { id: 'demo-acct', isDemo: true }];
     expect(canStartAll().account).toBe(false);
   });
 
@@ -726,10 +761,12 @@ describe('useWalkthrough — canStart', () => {
     // one of the fixture's trades is not closing one of the user's.
     expect(answers.position).toBe(false);
     expect(answers.close).toBe(false);
-    // The account set is withheld for its own separate reason — the zero-state
-    // it opens on is gone the moment ANY account exists, sample or not — which
-    // leaves the calculator as this user's one guided entry point until they
-    // remove the sample data or create an account of their own.
+    // The account set is withheld here too, and for the product's own reason
+    // rather than the tour's: "New Account" asks to remove the sample data
+    // before it opens the form, the server refuses the create until it is gone,
+    // and that confirmation sits under the walkthrough's overlay where a click
+    // for it ends the walkthrough instead. That leaves the calculator as this
+    // user's one guided entry point until they remove the sample data.
     expect(answers.account).toBe(false);
     expect(answers.calculator).toBe(true);
   });
@@ -757,8 +794,9 @@ describe('useWalkthrough — canStart', () => {
   it('offers nothing that depends on an account count it does not have', () => {
     accounts = undefined;
     const answers = canStartAll();
-    expect(answers.account).toBe(false);
     expect(answers.position).toBe(false);
+    // The one that turns on no count at all is unaffected by not having one.
+    expect(answers.calculator).toBe(true);
   });
 
   // Completion is about the user's progress; `canStart` is about whether the
@@ -1025,7 +1063,7 @@ describe('useWalkthrough — action signals', () => {
     expect(downgraded).toEqual(
       [
         // Opens the account dialog.
-        '[data-testid="zero-state-create-account"]',
+        '[data-tour="account-new"]',
         // Chooses the Percent risk basis.
         '[data-tour="calculator-risk"]',
         // Picks the account to size against.

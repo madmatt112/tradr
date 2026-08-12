@@ -1,9 +1,18 @@
 /**
  * Checklist item 1 — create a brokerage account.
  *
- * Runs entirely on `/dashboard`: the zero-state mounts `AccountDialog` itself,
- * so the form opens over the same route the tour started on and no step here
- * navigates.
+ * RUNS ENTIRELY ON `/accounts`, AND THAT IS WHAT MAKES IT REPEATABLE. It used to
+ * run on `/dashboard`, against the zero-state's "Create my first account" — a
+ * screen the dashboard renders only while the user has no accounts at all. That
+ * anchored the whole set to a screen every user leaves within a minute of
+ * arriving and never sees again, so the one walkthrough about creating an
+ * account could not be replayed by anybody who had created one. `/accounts` is
+ * where a second account is actually made, it is on the sidebar for every user,
+ * and it mounts the SAME `AccountDialog` the zero-state does — so every field
+ * step below is unchanged, and the set now runs for the user who has finished
+ * onboarding as well as the one who has not started.
+ *
+ * No step navigates: the dialog opens over this route, as it did over the other.
  *
  * EVERY CLAIM, AND WHERE IT WAS CHECKED:
  * - Booked against an account, mirrors a real brokerage account, never places
@@ -37,14 +46,14 @@ import type { WalkthroughStepSource } from './index';
 
 export const accountSteps: readonly WalkthroughStepSource[] = [
   {
-    target: '[data-testid="zero-state-create-account"]',
-    route: '/dashboard',
+    target: '[data-tour="account-new"]',
+    route: '/accounts',
     docs: 'gettingStarted',
-    // The set is entered COLD, so its first step waits like any other: the
-    // dashboard route holds `DashboardSkeleton` until both the onboarding
-    // preference and the accounts list have answered, and only then mounts
-    // `ZeroState` (`routes/_auth.dashboard.tsx`). Without this the tour would
-    // exit `target-missing` before the screen it is describing exists.
+    // The set is entered COLD, so its first step waits like any other:
+    // `AccountList` renders skeletons until `useAccounts` has answered, and the
+    // button this points at is on the branch it takes afterwards. Without this
+    // the tour would exit `target-missing` before the screen it is describing
+    // has finished arriving.
     waitForMs: 5000,
     advanceOnAction: true,
     title: 'Start with an account',
@@ -52,11 +61,11 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
       'Every position, fill and ledger entry is booked against an account, so this is the one ' +
       'thing to do first. A Tradr account mirrors a real brokerage account — the same currency, ' +
       'the same starting balance, the same trades — but it is not connected to your broker, and ' +
-      'Tradr never places or executes trades. Choose Create my first account to open the form.',
+      'Tradr never places or executes trades. Choose New Account to open the form.',
   },
   {
     target: '#name',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     // THE WAIT COVERS A PERSON, NOT A RENDER, and that is why it is this long.
     // The step before asks the user to open the account dialog, a gesture the
@@ -73,7 +82,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
   },
   {
     target: '#currency',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     title: 'Currency',
     body:
@@ -82,7 +91,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
   },
   {
     target: '#timezone',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     title: 'Trading-day timezone',
     body:
@@ -93,7 +102,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
   },
   {
     target: '#startingBalance',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     title: 'Starting balance',
     body:
@@ -104,7 +113,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
   },
   {
     target: '#defaultRiskPercent',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     title: 'Default risk %',
     body:
@@ -117,7 +126,7 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
   },
   {
     target: '#brokerage',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     title: 'Brokerage',
     body:
@@ -127,20 +136,20 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
   },
   {
     target: '[data-tour="account-submit"]',
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     advanceOnAction: true,
     title: 'Create the account',
     body:
-      'Choose Create. Your dashboard replaces this welcome screen as soon as the account exists, ' +
-      'and the first item on the setup checklist ticks itself.',
+      'Choose Create. The account appears in the list behind this form as soon as it exists, and ' +
+      'you can book positions against it straight away.',
   },
   {
     // No target: the reporting timezone is not a control on this screen, and the
     // invitation belongs at the point the account is created rather than as a
     // detour into settings mid-walkthrough. Centred, so it reads as the aside it
     // is.
-    route: '/dashboard',
+    route: '/accounts',
     docs: 'gettingStarted',
     title: 'Your reporting timezone',
     body:

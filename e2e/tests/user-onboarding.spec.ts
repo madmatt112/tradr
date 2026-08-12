@@ -242,9 +242,15 @@ async function tabTo(page: Page, selector: string): Promise<void> {
  * Walk the account set from its first step to `stopAt`, opening the account
  * dialog on the way because the six field steps anchor to controls that only
  * exist once it is open.
+ *
+ * The button that opens it is the Accounts page's "New Account", which is where
+ * this set runs: it used to run on the dashboard's welcome screen, and anchoring
+ * it there meant the one walkthrough about creating an account could not be
+ * replayed by anyone who had created one. The form is the same `AccountDialog`
+ * either way, which is why nothing below this line changed with it.
  */
 async function walkAccountSetTo(page: Page, stopAt: number): Promise<void> {
-  await page.getByTestId('zero-state-create-account').click();
+  await page.locator('[data-tour="account-new"]').click();
   await expect(page.getByLabel('Name')).toBeVisible();
   for (let index = 1; index <= stopAt; index += 1) {
     await advanceTo(page, index);
@@ -398,13 +404,17 @@ test.describe('user onboarding', () => {
     await createAccountFromDialog(page, 'Guided account');
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[CREATE_STEP + 1]);
 
-    // Finish. The dashboard behind the tour has already swapped to the grid.
+    // Finish, on the Accounts page the set runs on, with the account the user
+    // just made listed behind it.
     await popoverNext(page).click();
     await expect(popover(page)).toHaveCount(0);
+    await expect(page.getByRole('cell', { name: 'Guided account' })).toBeVisible();
+
+    // And the dashboard has swapped to the grid, off the account that now
+    // exists. Item 1 ticked itself off the user's real data, no flag written.
+    await page.goto('/dashboard');
     await expect(page.getByTestId('onboarding-zero-state')).toHaveCount(0);
     await expect(page.locator('[data-widget-type]').first()).toBeVisible();
-
-    // Item 1 ticked itself off the user's real data, no flag written.
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
     await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
   });
@@ -435,7 +445,7 @@ test.describe('user onboarding', () => {
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[0]);
 
     // And the moment the user does the thing, the tour is there.
-    await page.getByTestId('zero-state-create-account').click();
+    await page.locator('[data-tour="account-new"]').click();
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[1]);
     await escapeTour(page);
   });
@@ -706,16 +716,19 @@ test.describe('user onboarding', () => {
     await walkAccountSetTo(page, CREATE_STEP);
     await createAccountFromDialog(page, 'Exit account');
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[CREATE_STEP + 1]);
-    await expect(page.getByTestId('onboarding-zero-state')).toHaveCount(0);
+    await expect(page.getByRole('cell', { name: 'Exit account' })).toBeVisible();
 
     // Escape — one action, and the tour is abandoned rather than completed.
     await escapeTour(page);
 
-    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
     // And it is on the server, not just on the screen.
     const accounts = (await (await request.get('/api/accounts')).json()) as { name: string }[];
     expect(accounts.map((account) => account.name)).toEqual(['Exit account']);
 
+    // The checklist counted it, on the screen the checklist lives on, and still
+    // does after a reload: an abandoned walkthrough rolls nothing back.
+    await page.goto('/dashboard');
+    await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
     await page.reload();
     await expect(page.locator('[data-widget-type]').first()).toBeVisible();
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
@@ -781,19 +794,31 @@ test.describe('user onboarding', () => {
     await expect(popover(page)).toHaveCount(0);
 
     // The item is ticked off the user's data — nothing here is a stored per-step
-    // flag — and the account set's button is gone, because the control its first
-    // step opens on belongs to a zero-state this user has left. An honest
-    // omission rather than a button that would start a tour and end it in
-    // silence three seconds later.
+    // flag — and the account set's button is still there on the item that has
+    // been ticked. It used to be withheld the moment an account existed, back
+    // when the set opened on a zero-state control: the walkthrough about
+    // creating an account was then unreplayable by anyone who had created one.
+    // It runs on /accounts now, a screen this user has, so the offer stands.
     await page.goto('/dashboard');
     await expect(checklistProgress(page)).toHaveText('2 of 4 complete');
     await expect(checklistItemLabel(page, 'calculator')).toHaveText(/— completed$/);
     await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
-    await expect(page.locator('[data-checklist-action="account"]')).toHaveCount(0);
+    await expect(page.locator('[data-checklist-action="account"]')).toBeVisible();
+
+    // And the offer is honest, which is the half of the old assertion that still
+    // holds: a button here must not start a tour that ends in silence three
+    // seconds later. Pressed, it goes to the screen the set runs on and opens at
+    // the front of it.
+    await page.locator('[data-checklist-action="account"]').click();
+    await expect(page).toHaveURL(/\/accounts$/);
+    await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[0]);
+    await expect(popoverProgress(page)).toHaveText(`1 of ${ACCOUNT_STEP_TITLES.length}`);
+    await escapeTour(page);
+    await page.goto('/dashboard');
 
     // THE ASSERTION THIS TEST EXISTS FOR. A user who has completed an item
-    // reaches a LATER set through the UI, from the one control that is on
-    // screen — and it opens at the front of that set, on that set's own screen,
+    // reaches a LATER set through the UI, from the control that set carries —
+    // and it opens at the front of that set, on that set's own screen,
     // because no step index was ever stored to land anywhere else.
     await page.locator('[data-checklist-action="position"]').click();
     await expect(page).toHaveURL(/\/positions$/);
@@ -952,6 +977,12 @@ test.describe('user onboarding', () => {
 
     // Escape ends it in one key, from any step.
     await escapeTour(page);
+
+    // Back to the checklist, which is on the dashboard the account set has just
+    // taken the user off — that set runs on /accounts, where the button it opens
+    // on lives.
+    await page.goto('/dashboard');
+    await expect(page.getByTestId('activation-checklist')).toBeVisible();
 
     // And a set whose steps all live on one screen traverses on the arrow keys
     // alone — the account set cannot, because its field steps need a dialog the

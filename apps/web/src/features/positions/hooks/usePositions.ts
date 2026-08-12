@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import type { CreatePositionInput, Position, PositionListItem } from '@tradr/shared';
@@ -44,6 +44,26 @@ export function handleCreatePositionError(
 }
 
 /**
+ * The list as a query DEFINITION rather than a subscription.
+ *
+ * `usePositions` is built on it, so a caller that needs the list ONCE — in
+ * response to a click, without mounting a hook that would fetch on render —
+ * reads the same cache entry through the same fetcher rather than a second copy
+ * of the key that could drift from this one.
+ */
+export function positionsListQuery(filters?: { status?: string; accountId?: string }) {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.accountId) params.set('accountId', filters.accountId);
+  const query = params.toString();
+
+  return queryOptions({
+    queryKey: ['positions', 'list', filters],
+    queryFn: () => api.get<PositionListItem[]>(`/positions${query ? `?${query}` : ''}`),
+  });
+}
+
+/**
  * `GET /positions` has no LIMIT and returns every enriched row, so it is the
  * most expensive list the app fetches. `options.enabled` lets a caller that may
  * not need it at all skip the request entirely; omitted, it fetches as before.
@@ -53,14 +73,8 @@ export function usePositions(
   filters?: { status?: string; accountId?: string },
   options?: { enabled?: boolean },
 ) {
-  const params = new URLSearchParams();
-  if (filters?.status) params.set('status', filters.status);
-  if (filters?.accountId) params.set('accountId', filters.accountId);
-  const query = params.toString();
-
-  return useQuery<PositionListItem[]>({
-    queryKey: ['positions', 'list', filters],
-    queryFn: () => api.get<PositionListItem[]>(`/positions${query ? `?${query}` : ''}`),
+  return useQuery({
+    ...positionsListQuery(filters),
     enabled: options?.enabled,
   });
 }

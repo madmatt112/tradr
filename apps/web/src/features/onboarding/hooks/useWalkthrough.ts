@@ -49,13 +49,14 @@
 // back. The checklist after a walkthrough is the same checklist as before it,
 // plus whatever the user actually did.
 
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { create } from 'zustand';
 
-import { useAccounts } from '@/features/accounts/hooks/useAccounts';
-import { usePositions } from '@/features/positions/hooks/usePositions';
+import { accountsListQuery, useAccounts } from '@/features/accounts/hooks/useAccounts';
+import { positionsListQuery, usePositions } from '@/features/positions/hooks/usePositions';
 import { eventBus } from '@/stores/event-bus.store';
 import type { EventName } from '@/stores/events.types';
 
@@ -321,15 +322,20 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
  * checklist ASKS before it offers a shortcut, and withholds the ones that cannot
  * run rather than putting a dead control on screen.
  *
+ * BOTH DOORS ASK IT, and they differ only in when they can. The permanent entry
+ * point in settings has no mounted reads to answer from, so it asks at the click
+ * (`resolveStartable`) and explains in place of starting. Same question, same
+ * function, so the two cannot come to disagree about what "can run" means.
+ *
  * DATA DECIDES, NOT THE MOUNT SITE, so the two places the checklist is mounted
  * need no rules of their own:
  *
- * - `account` opens on the zero-state's "Create my first account", and
- *   `_auth.dashboard.tsx` renders that screen only while the accounts list is
- *   EMPTY. The demo account counts here exactly as it counts for that gate:
- *   seeding sample data takes the zero-state away, and this set's first target
- *   with it — even though the checklist item stays outstanding, because sample
- *   data completes nothing.
+ * - `account` opens on `[data-tour="account-new"]` — the Accounts page's "New
+ *   Account" — which `AccountList` renders for every user, with accounts or
+ *   without. There is no state this set cannot start from, which is the point of
+ *   moving it there: it used to open on the dashboard's welcome screen, a screen
+ *   that is gone for good once any account exists, so the one walkthrough about
+ *   creating an account could not be replayed by anyone who had created one.
  * - `position` opens on `[data-tour="position-new"]`, which `PositionList` tags
  *   only on its enabled branch — the one it takes once an account exists. It
  *   needs an account the user OWNS, for the reason below.
@@ -337,8 +343,8 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
  *   that route is the open position `useWalkthrough` falls back to — which is
  *   one of the user's own, for the same reason. No open position of theirs, no
  *   route to navigate to.
- * - `calculator` has nothing that can be missing: `/calculator` renders its
- *   fields for every user, which is why it is the one item a user with no
+ * - `calculator` has nothing that can be missing either: `/calculator` renders
+ *   its fields for every user, which is why it is the one item a user with no
  *   accounts can complete.
  *
  * "RUNS" MEANS "GETS THE USER SOMEWHERE", SO SAMPLE DATA DOES NOT COUNT FOR THE
@@ -356,10 +362,17 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
  * the sample data or creating an account — either takes the demo rows away and
  * both buttons come back with something behind them.
  *
- * The `account` answer is the one place the demo account still counts, and that
- * is not an inconsistency: that set is gated on a SCREEN existing, not on a row
- * being written, and the screen it opens on is gone the moment any account
- * exists.
+ * THE SAMPLE ACCOUNT IS THE ONE STATE `account` IS WITHHELD IN, and the reason
+ * is the product's, not the tour's: sample data and real accounts cannot both
+ * exist, so "New Account" puts up a confirmation to remove the sample data
+ * instead of opening the form, and the server refuses the create outright until
+ * it is gone (`AccountList.beginCreate`, `useCreateAccount`'s
+ * `DEMO_ACCOUNT_EXISTS` branch). A tour cannot drive that confirmation: it sits
+ * under the walkthrough's own overlay, and the click that reaches for it lands
+ * on the overlay and ends the walkthrough where it stands — verified in a
+ * browser, and silent, which is the failure this whole branch exists to stop.
+ * So the set is refused in words, exactly as `position` is for the same user,
+ * and both come back the moment the sample data is removed.
  *
  * An unknown count (the read is disabled, in flight, or failed) answers "no" for
  * every set that depends on it. Withholding a shortcut that would have worked
@@ -367,10 +380,10 @@ function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] 
  * costs them a walkthrough that silently never starts.
  */
 interface StartableFrom {
-  /** Every account, the demo one included — the zero-state gate's own read. */
-  accountCount: number | undefined;
   /** Accounts the user created themselves, on the checklist's terms. */
   ownAccountCount: number | undefined;
+  /** The sample account exists — `useDemoAccount`'s own rule. */
+  hasDemoAccount: boolean;
   /** One of the user's own positions is open — not one of the fixture's. */
   hasOwnOpenPosition: boolean;
 }
@@ -378,13 +391,114 @@ interface StartableFrom {
 function canStartSet(itemId: ChecklistItemId, from: StartableFrom): boolean {
   switch (itemId) {
     case 'account':
-      return from.accountCount === 0;
+      return !from.hasDemoAccount;
+    // Nothing on /calculator can be missing, for anyone.
     case 'calculator':
       return true;
     case 'position':
       return from.ownAccountCount !== undefined && from.ownAccountCount > 0;
     case 'close':
       return from.hasOwnOpenPosition;
+  }
+}
+
+/**
+ * Whether starting this set needs the user's rows read at all.
+ *
+ * The launcher has no mounted reads, so the only way it can answer `canStartSet`
+ * is to ask the server at the click — a request worth making for a question that
+ * has an answer, and worth NOT making for one that does not. `calculator` is
+ * that second case: it starts from anywhere, for anyone, and needs no route
+ * values, so a read before it could only ever come back "yes, as always".
+ *
+ * A switch rather than a set literal, and exhaustive, so it cannot fall out of
+ * step with `canStartSet` above: a fifth set is a type error in both or neither.
+ */
+function needsStartableRead(itemId: ChecklistItemId): boolean {
+  switch (itemId) {
+    case 'account':
+    case 'position':
+    case 'close':
+      return true;
+    case 'calculator':
+      return false;
+  }
+}
+
+/** What a set needs to run, and the values the one that opens on a position needs. */
+interface Startable {
+  from: StartableFrom;
+  /** The position the close set opens on, or `undefined` when there is none. */
+  openPositionParams: Record<string, string> | undefined;
+}
+
+/**
+ * THE SAME TWO ANSWERS `useWalkthrough` DERIVES FROM ITS MOUNTED READS, ASKED
+ * FROM A CLICK INSTEAD OF FROM A RENDER.
+ *
+ * The checklist can subscribe to the accounts and positions lists because it is
+ * only ever mounted for a user whose read gate is open. The permanent entry
+ * point cannot: mounting those reads on a settings screen would put the two
+ * expensive queries back for every user, which is the property the gate exists
+ * to protect. So it asks the same questions of the same cache entries at the
+ * moment the user presses Start — a request the user asked for, not a passive
+ * read on the way past — and nothing at all before then.
+ *
+ * `fetchQuery` AND NOT `ensureQueryData`, AND THE DIFFERENCE IS THE WHOLE ANSWER
+ * BEING RIGHT. `ensureQueryData` hands back whatever is in the cache whenever
+ * something is, however old and however explicitly invalidated; it only fetches
+ * when the entry is missing outright. Nothing keeps this entry fresh, either:
+ * `['positions', 'list', undefined]` is subscribed to by the checklist and by
+ * `useWalkthrough`, both of which are switched off for exactly the retired user
+ * this door exists for, so the invalidation every create and close publishes
+ * marks it stale and no observer ever refetches it. The refusal below is
+ * therefore decided on a snapshot of the user's data from the last time they
+ * pressed one of these buttons.
+ *
+ * That made this notice's own remedy fail. It tells a user with no open position
+ * to go and log one — and a user who did exactly that, came back, and pressed
+ * Start was refused a second time in the same words, with no request sent. Only
+ * a full page reload, which drops the cache, made the button work. It goes wrong
+ * the other way too: close a position and the stale entry still calls it open,
+ * so the set starts and points at an exit control that is gone. A remedy that
+ * does not work is worse than no remedy, so the read that decides has to be a
+ * read of now.
+ *
+ * WHAT THAT COSTS IS ONE REQUEST PER PRESS, and it is the right price. The app's
+ * client keeps the library's `staleTime` of zero (`lib/queryClient.ts`), so this
+ * genuinely goes to the server each time — but only for the two sets whose
+ * answer depends on it (`needsStartableRead`), only when a user has pressed a
+ * button asking to be walked through something, and never on the way past. The
+ * alternative on offer was a free answer that was wrong.
+ *
+ * A FAILED READ IS "DON'T KNOW", NOT "NO", and the two must not be collapsed.
+ * The checklist withholds a shortcut it cannot substantiate because it can put
+ * the user on the item's own screen instead; there is no such screen here, and
+ * telling someone their trades are missing because a request failed would be a
+ * sentence about the wrong thing. `null` means the caller should go ahead and
+ * let the walkthrough report its own ending, which is what it did before this
+ * gate existed.
+ */
+async function resolveStartable(queryClient: QueryClient): Promise<Startable | null> {
+  try {
+    const [accounts, positions] = await Promise.all([
+      queryClient.fetchQuery(accountsListQuery()),
+      queryClient.fetchQuery(positionsListQuery()),
+    ]);
+    // The checklist's own selector, for the reason given where it is defined:
+    // "the user's data" has to mean here exactly what it means to completion.
+    const { ownAccounts, ownPositions } = selectOwnRows(accounts, positions);
+    const open = ownPositions.find((position) => position.status === 'open');
+    return {
+      from: {
+        ownAccountCount: ownAccounts.length,
+        hasDemoAccount: accounts.length > ownAccounts.length,
+        hasOwnOpenPosition: open !== undefined,
+      },
+      openPositionParams: open ? { positionId: open.id } : undefined,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -529,17 +643,92 @@ function explainStop(blocked: TourBlock): string {
   }
 }
 
+/**
+ * WHERE TO START IT AGAIN — one answer, true for every reader.
+ *
+ * It used to name the setup checklist, which is the one surface that can have
+ * gone: the checklist RETIRES for good once all four items are complete, and a
+ * user who finished onboarding is precisely the user this notice was sending
+ * back to it. Settings › Help is the walkthrough's permanent home — it is there
+ * for every user, retired or not — so it is the direction that cannot come to be
+ * false under the person reading it.
+ */
+const START_AGAIN_HERE = 'start it again whenever you want from Settings → Help';
+
 function announceStop(blocked: TourBlock | undefined): void {
   if (blocked === undefined) return;
 
   toast.info('The walkthrough stopped', {
     id: STOP_NOTICE_ID,
     duration: STOP_NOTICE_MS,
-    // Both ways out, named: nothing was riding on the tour, and the checklist
-    // it was started from is still there. Exiting discards nothing — this
-    // module writes no onboarding state at all — so "nothing was lost" is a
-    // structural fact rather than a reassurance.
-    description: `${explainStop(blocked)} Nothing was lost — carry on without it, or start it again from the setup checklist whenever you want.`,
+    // Both ways out, named: nothing was riding on the tour, and the door it was
+    // started from is still there. Exiting discards nothing — this module writes
+    // no onboarding state at all — so "nothing was lost" is a structural fact
+    // rather than a reassurance.
+    description: `${explainStop(blocked)} Nothing was lost — carry on without it, or ${START_AGAIN_HERE}.`,
+  });
+}
+
+/**
+ * WHY A SET CANNOT BEGIN AT ALL, SAID AT THE CLICK RATHER THAN FIVE SECONDS
+ * LATER.
+ *
+ * This is a different thing from `explainStop`, and the difference is the one
+ * the launcher was shipped blurring: a tour that stops was running and could not
+ * carry on, while none of these three could have got anywhere. Two have nothing
+ * to open on — a position the user does not have, an account they have not made
+ * — and starting them would put an overlay over nothing until the first step's
+ * `waitForMs` expired, which is a button that appears to do nothing. The third,
+ * `account`, opens fine and then cannot proceed: the form behind "New Account"
+ * only opens once the sample data has been removed, and that confirmation is not
+ * something a tour can drive.
+ *
+ * So each answer names what is in the way AND what to do about it. The set is
+ * still offered afterwards: the user who logs a position can press `close` five
+ * minutes later and it will run — and now genuinely does, because the read
+ * behind that decision is taken fresh at the click (`resolveStartable`). Both
+ * remedies were followed in a browser, from the refusal to the set running.
+ */
+function explainCannotStart(itemId: ChecklistItemId): string {
+  switch (itemId) {
+    case 'account':
+      return (
+        'Your own accounts and the sample account cannot both exist, so creating one starts by ' +
+        'removing the sample data — and that is a confirmation this walkthrough cannot take you ' +
+        'through. Remove the sample data first, from the banner on your dashboard, and this ' +
+        'walkthrough will run.'
+      );
+    case 'position':
+      return (
+        'A position is booked against an account, and you have none of your own yet — the sample ' +
+        'data does not count, because a position logged against it would tick nothing. Create an ' +
+        'account under Accounts and this walkthrough will run.'
+      );
+    case 'close':
+      return (
+        'This one runs on a position of yours that is still open, and you have none right now. ' +
+        'Log one and open it, then start this walkthrough again.'
+      );
+    case 'calculator':
+      // Unreachable: `canStartSet` answers yes for this set unconditionally,
+      // because /calculator renders its fields for every user, and
+      // `needsStartableRead` means the launcher does not even ask before
+      // starting it. Kept so the switch stays exhaustive and a fifth set is a
+      // type error here.
+      return 'This walkthrough cannot start from where you are right now.';
+  }
+}
+
+function announceCannotStart(itemId: ChecklistItemId): void {
+  toast.info('That walkthrough cannot start yet', {
+    // The walkthrough's one notice, reused: a user who presses two sets in a row
+    // gets the second explanation in place of the first rather than a stack.
+    id: STOP_NOTICE_ID,
+    duration: STOP_NOTICE_MS,
+    // No "start it again from …" here, unlike `announceStop`: this notice can
+    // only be raised by the launcher, so the reader is already looking at the
+    // place they would be sent to. The set stays on the card either way.
+    description: `${explainCannotStart(itemId)} Nothing was changed.`,
   });
 }
 
@@ -695,6 +884,97 @@ export function useIsWalkthroughRunning(): boolean {
   return useWalkthroughStore((state) => state.isRunning);
 }
 
+export interface UseWalkthroughLauncherResult {
+  /** Run one named set. The id is required — nothing here knows what is outstanding. */
+  start: (itemId: ChecklistItemId, params?: Record<string, string>) => void;
+  /** The tour runtime failed to load; there is nothing behind the controls. */
+  isUnavailable: boolean;
+}
+
+/**
+ * START A NAMED SET, AND READ NOTHING UNTIL THE USER ASKS.
+ *
+ * `useWalkthrough` composes `useOnboarding` because it answers questions about
+ * the user's progress — which set is outstanding, which sets could run from the
+ * data as it stands. A permanent entry point asks neither on the way past: it
+ * offers all four sets to everyone, always, so the user's checklist is not an
+ * input to what it puts on screen.
+ *
+ * THAT IS THE WHOLE POINT OF THIS HOOK EXISTING. The checklist RETIRES when the
+ * four items are complete, and the retirement write is what switches
+ * `useOnboarding`'s two expensive reads — the accounts list and the whole
+ * unfiltered positions list — off for good. An entry point that has to outlive
+ * retirement therefore cannot be built on a hook that reads onboarding state:
+ * mounting one on an ordinary settings screen would put those reads back for
+ * every `pending`/`active` user, and asking a retired user's checklist which
+ * sets to offer would answer "none", which is the defect it was added to fix.
+ * So mounting this costs no request at all, and the onboarding preference — the
+ * value the gate is keyed on — is never read from here at any point, click
+ * included.
+ *
+ * It also WRITES nothing, and that matters more here than at the other doors.
+ * The zero-state and the checklist slot write `status: 'active'` as the opt-in
+ * record before starting a tour; doing the same from settings would un-retire a
+ * user who had finished — turning both gated reads back on and putting the
+ * checklist back on their dashboard — for no reason other than that they asked
+ * to see a walkthrough again.
+ *
+ * `run()` is the same launcher the checklist's per-item buttons go through, so
+ * a set started from here is the set they start, step for step — INCLUDING the
+ * position the close set opens on. That fallback is derived from the user's own
+ * rows, and this hook resolves them from the CLICK rather than from a render
+ * (`resolveStartable`): reading nothing on mount is the constraint, and it says
+ * nothing about a request the user asked for. Without it that button was a tour
+ * that navigated nowhere, waited out its first step and vanished — the exact
+ * "reachable and useless" failure the checklist path fixed for itself.
+ *
+ * THREE OF THE FOUR ASK THAT QUESTION, AND ONLY THOSE THREE. `position` and
+ * `close` open on something the user may not have, and `account` cannot get past
+ * its own first step while sample data is what a new account would replace.
+ * `calculator` opens on fields `/calculator` renders for everybody and needs no
+ * route values, so it is started without a request at all
+ * (`needsStartableRead`).
+ *
+ * AND A SET THAT STILL CANNOT RUN SAYS SO IMMEDIATELY, in place of starting.
+ * `canStartSet` is the same question the checklist asks before offering a
+ * shortcut; the difference is only when it can be asked. The checklist has the
+ * answer at render and withholds the button; this card cannot know until the
+ * click, so it answers then — which is a control that responds rather than one
+ * that appears to do nothing for five seconds and then apologises. What it
+ * answers from is the data as it is at that click, not as it was at the last
+ * one: see `resolveStartable`, where getting that wrong made the refusal's own
+ * advice impossible to act on.
+ */
+export function useWalkthroughLauncher(): UseWalkthroughLauncherResult {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const isUnavailable = useWalkthroughStore((state) => state.isUnavailable);
+
+  const start = useCallback(
+    (itemId: ChecklistItemId, params?: Record<string, string>) => {
+      void (async () => {
+        // A set that starts from anywhere and needs no route values is started,
+        // not investigated: the read below could only come back "yes, as
+        // always", and a request nobody's answer depends on is one this card
+        // should not make.
+        if (!needsStartableRead(itemId)) {
+          await run(itemId, params, navigate as NavigateFn);
+          return;
+        }
+        const startable = await resolveStartable(queryClient);
+        if (startable && !canStartSet(itemId, startable.from)) {
+          announceCannotStart(itemId);
+          return;
+        }
+        await run(itemId, params, navigate as NavigateFn, startable?.openPositionParams);
+      })();
+    },
+    [navigate, queryClient],
+  );
+
+  return { start, isUnavailable };
+}
+
 export function useWalkthrough(): UseWalkthroughResult {
   const navigate = useNavigate();
   const { checklist } = useOnboarding();
@@ -714,11 +994,12 @@ export function useWalkthrough(): UseWalkthroughResult {
   // `params` from the caller always wins; this is only the fallback.
   const { data: positions } = usePositions(undefined, { enabled: checklist != null });
 
-  // The accounts list, on the same terms the dashboard's zero-state gate reads
-  // it — the whole thing, demo row included. Same query key as the gate's own
-  // read and as `useOnboarding`'s, and gated on the same condition as the
-  // positions observer, so this costs no extra request on either screen the
-  // checklist is mounted on.
+  // The accounts list, the whole thing with the demo row still in it — which is
+  // what makes it possible to tell the sample account's positions from the
+  // user's below. Same query key as the dashboard zero-state gate's own read and
+  // as `useOnboarding`'s, and gated on the same condition as the positions
+  // observer, so this costs no extra request on either screen the checklist is
+  // mounted on.
   const { data: accounts } = useAccounts({ enabled: checklist != null });
 
   // THE USER'S OWN ROWS, FROM THE CHECKLIST'S OWN SELECTOR. `canStartSet` has to
@@ -742,11 +1023,13 @@ export function useWalkthrough(): UseWalkthroughResult {
 
   const hasOwnOpenPosition = openPositionParams !== undefined;
   const ownAccountCount = own?.ownAccounts.length;
-  const accountCount = accounts?.length;
+  // The same rule `useDemoAccount` uses, from the list already read here rather
+  // than from a second read of it.
+  const hasDemoAccount = accounts?.some((account) => account.isDemo) ?? false;
   const canStart = useCallback(
     (itemId: ChecklistItemId) =>
-      canStartSet(itemId, { accountCount, ownAccountCount, hasOwnOpenPosition }),
-    [accountCount, ownAccountCount, hasOwnOpenPosition],
+      canStartSet(itemId, { ownAccountCount, hasDemoAccount, hasOwnOpenPosition }),
+    [ownAccountCount, hasDemoAccount, hasOwnOpenPosition],
   );
 
   // What the funnel counts as "offered": there is a walkthrough behind the

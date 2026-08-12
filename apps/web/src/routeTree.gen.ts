@@ -29,6 +29,7 @@ import { Route as AuthPositionsIndexRouteImport } from './routes/_auth/positions
 import { Route as AuthAdvisorIndexRouteImport } from './routes/_auth.advisor.index'
 import { Route as AuthAccountsIndexRouteImport } from './routes/_auth/accounts/index'
 import { Route as AuthSettingsProfileRouteImport } from './routes/_auth.settings.profile'
+import { Route as AuthSettingsHelpRouteImport } from './routes/_auth.settings.help'
 import { Route as AuthSettingsBillingRouteImport } from './routes/_auth.settings.billing'
 import { Route as AuthSettingsAdvisorRouteImport } from './routes/_auth.settings.advisor'
 import { Route as AuthSettingsAccountRouteImport } from './routes/_auth.settings.account'
@@ -139,6 +140,11 @@ const AuthSettingsProfileRoute = AuthSettingsProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => AuthSettingsRoute,
 } as any)
+const AuthSettingsHelpRoute = AuthSettingsHelpRouteImport.update({
+  id: '/help',
+  path: '/help',
+  getParentRoute: () => AuthSettingsRoute,
+} as any)
 const AuthSettingsBillingRoute = AuthSettingsBillingRouteImport.update({
   id: '/billing',
   path: '/billing',
@@ -218,6 +224,7 @@ export interface FileRoutesByFullPath {
   '/settings/account': typeof AuthSettingsAccountRoute
   '/settings/advisor': typeof AuthSettingsAdvisorRoute
   '/settings/billing': typeof AuthSettingsBillingRoute
+  '/settings/help': typeof AuthSettingsHelpRoute
   '/settings/profile': typeof AuthSettingsProfileRoute
   '/accounts/': typeof AuthAccountsIndexRoute
   '/advisor/': typeof AuthAdvisorIndexRoute
@@ -250,6 +257,7 @@ export interface FileRoutesByTo {
   '/settings/account': typeof AuthSettingsAccountRoute
   '/settings/advisor': typeof AuthSettingsAdvisorRoute
   '/settings/billing': typeof AuthSettingsBillingRoute
+  '/settings/help': typeof AuthSettingsHelpRoute
   '/settings/profile': typeof AuthSettingsProfileRoute
   '/accounts': typeof AuthAccountsIndexRoute
   '/advisor': typeof AuthAdvisorIndexRoute
@@ -283,6 +291,7 @@ export interface FileRoutesById {
   '/_auth/settings/account': typeof AuthSettingsAccountRoute
   '/_auth/settings/advisor': typeof AuthSettingsAdvisorRoute
   '/_auth/settings/billing': typeof AuthSettingsBillingRoute
+  '/_auth/settings/help': typeof AuthSettingsHelpRoute
   '/_auth/settings/profile': typeof AuthSettingsProfileRoute
   '/_auth/accounts/': typeof AuthAccountsIndexRoute
   '/_auth/advisor/': typeof AuthAdvisorIndexRoute
@@ -317,6 +326,7 @@ export interface FileRouteTypes {
     | '/settings/account'
     | '/settings/advisor'
     | '/settings/billing'
+    | '/settings/help'
     | '/settings/profile'
     | '/accounts/'
     | '/advisor/'
@@ -349,6 +359,7 @@ export interface FileRouteTypes {
     | '/settings/account'
     | '/settings/advisor'
     | '/settings/billing'
+    | '/settings/help'
     | '/settings/profile'
     | '/accounts'
     | '/advisor'
@@ -381,6 +392,7 @@ export interface FileRouteTypes {
     | '/_auth/settings/account'
     | '/_auth/settings/advisor'
     | '/_auth/settings/billing'
+    | '/_auth/settings/help'
     | '/_auth/settings/profile'
     | '/_auth/accounts/'
     | '/_auth/advisor/'
@@ -538,6 +550,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthSettingsProfileRouteImport
       parentRoute: typeof AuthSettingsRoute
     }
+    '/_auth/settings/help': {
+      id: '/_auth/settings/help'
+      path: '/help'
+      fullPath: '/settings/help'
+      preLoaderRoute: typeof AuthSettingsHelpRouteImport
+      parentRoute: typeof AuthSettingsRoute
+    }
     '/_auth/settings/billing': {
       id: '/_auth/settings/billing'
       path: '/billing'
@@ -631,6 +650,7 @@ interface AuthSettingsRouteChildren {
   AuthSettingsAccountRoute: typeof AuthSettingsAccountRoute
   AuthSettingsAdvisorRoute: typeof AuthSettingsAdvisorRoute
   AuthSettingsBillingRoute: typeof AuthSettingsBillingRoute
+  AuthSettingsHelpRoute: typeof AuthSettingsHelpRoute
   AuthSettingsProfileRoute: typeof AuthSettingsProfileRoute
 }
 
@@ -638,6 +658,7 @@ const AuthSettingsRouteChildren: AuthSettingsRouteChildren = {
   AuthSettingsAccountRoute: AuthSettingsAccountRoute,
   AuthSettingsAdvisorRoute: AuthSettingsAdvisorRoute,
   AuthSettingsBillingRoute: AuthSettingsBillingRoute,
+  AuthSettingsHelpRoute: AuthSettingsHelpRoute,
   AuthSettingsProfileRoute: AuthSettingsProfileRoute,
 }
 
