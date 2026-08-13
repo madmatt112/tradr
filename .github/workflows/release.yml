@@ -227,6 +227,15 @@ jobs:
       contents: write # create the GitHub Release (+ attach the SPA bundle)
       packages: read # pull the released web image to extract the SPA
     steps:
+      # Only for docs/release-notes/, which the release step reads through
+      # body_path. This job builds nothing from source, so a sparse checkout is
+      # all it needs — and without ANY checkout body_path hits ENOENT and the
+      # action silently falls back to generated-notes-only, which is how v0.8.0
+      # shipped with its hand-written notes missing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: docs/release-notes
+
       - name: Resolve GHCR namespace (lowercased owner)
         id: ns
         run: echo "owner=${OWNER,,}" >> "$GITHUB_OUTPUT"
@@ -262,6 +271,9 @@ jobs:
           test -f spa/index.html || { echo "::error::no index.html in the extracted SPA"; exit 1; }
           tar -C spa -czf "tradr-web-dist-${VERSION}.tar.gz" .
 
+      # A version with no docs/release-notes/vX.Y.Z.md is fine: the action warns
+      # and falls back to the generated notes alone. Hand-written prose is
+      # optional per release, not required.
       - name: Create GitHub Release (notes + SPA asset)
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
