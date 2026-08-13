@@ -43,6 +43,17 @@ export interface OptionChain {
   contracts: OptionContract[];
 }
 
+/**
+ * The underlying's last trade, used to anchor the ladder on at-the-money.
+ * Absent when the quote could not be fetched — the chain still renders.
+ */
+export interface Underlying {
+  price?: number;
+  /** Session the trade came from; anything but `regular` is not a live quote. */
+  market_time?: string;
+  tape_time?: string;
+}
+
 /** GET response — empty state (no key) or the parsed chain. */
 export type OptionsChainResponse =
   | { configured: false }
@@ -52,6 +63,7 @@ export type OptionsChainResponse =
       expiration: string;
       /** Every tradeable expiry, soonest first, for the picker. */
       expirations: string[];
+      underlying?: Underlying;
       chain: OptionChain;
     };
 

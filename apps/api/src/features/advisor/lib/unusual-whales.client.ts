@@ -142,7 +142,7 @@ export class MarketDataMeter {
 // compact projection; the client only guarantees the envelope is well-formed
 // and non-empty (empty → SYMBOL_NOT_FOUND, REQ-6.5).
 
-const stockInfoSchema = z.object({ data: z.record(z.unknown()) });
+const stockStateSchema = z.object({ data: z.record(z.unknown()) });
 const flowAlertsSchema = z.object({ data: z.array(z.record(z.unknown())) });
 const expiryBreakdownSchema = z.object({ data: z.array(z.record(z.unknown())) });
 const optionContractsSchema = z.object({ data: z.array(z.record(z.unknown())) });
@@ -347,13 +347,20 @@ export function createUnusualWhalesClient(deps: UnusualWhalesClientDeps): Unusua
   }
 
   return {
-    // Pinned: GET /api/stock/{ticker}/info (PublicApi.TickerController.info).
+    // Pinned: GET /api/stock/{ticker}/stock-state.
+    //
+    // NOT `/info`, which this was pointed at and which returns REFERENCE data
+    // only — announce_time, avg30_volume, next_earnings_date, issue_type. It
+    // carries no price, so every field the quote projection reads was absent
+    // and the tool returned an empty object while claiming to be a quote.
+    // `stock-state` is the last-trade endpoint: close/open/high/low/prev_close,
+    // volume, plus `tape_time` and `market_time` for recency.
     getStockQuote(symbol, signal) {
       return request(
         'getStockQuote',
-        `/api/stock/${encodeURIComponent(symbol)}/info`,
+        `/api/stock/${encodeURIComponent(symbol)}/stock-state`,
         {},
-        stockInfoSchema,
+        stockStateSchema,
         (p) => !p.data || Object.keys(p.data as Record<string, unknown>).length === 0,
         signal,
       );

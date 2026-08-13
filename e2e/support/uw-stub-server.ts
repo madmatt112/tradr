@@ -33,7 +33,9 @@ const DEFAULT_PORT = 4599;
 function deterministicResponse(pathname: string): { status: number; body: unknown } | null {
   // /api/stock/{ticker}/{resource}
   const match =
-    /^\/api\/stock\/([^/]+)\/(info|flow-alerts|expiry-breakdown|option-contracts)$/.exec(pathname);
+    /^\/api\/stock\/([^/]+)\/(info|stock-state|flow-alerts|expiry-breakdown|option-contracts)$/.exec(
+      pathname,
+    );
   if (!match) return null;
 
   const ticker = decodeURIComponent(match[1]).toUpperCase();
@@ -54,6 +56,33 @@ function deterministicResponse(pathname: string): { status: number; body: unknow
               last: '187.32',
               market_cap: '2950000000000',
               sector: 'Technology',
+            },
+          },
+    };
+  }
+
+  // stock-state — the last-trade endpoint the quote tool and the chain's ATM
+  // anchor both read.
+  //
+  // Spot is deliberately 192.50, between this stub's 190 and 200 strikes: 175
+  // and 190 are then ITM calls, 200 is OTM, and 190 is unambiguously the ATM
+  // row. A spot unrelated to the strikes would still render, but would anchor
+  // the ladder somewhere meaningless and make the ITM shading untestable.
+  if (resource === 'stock-state') {
+    return {
+      status: 200,
+      body: empty
+        ? { data: {} }
+        : {
+            data: {
+              close: '192.50',
+              open: '191.80',
+              high: '193.10',
+              low: '191.42',
+              prev_close: '191.95',
+              volume: 6675723,
+              market_time: 'regular',
+              tape_time: '2030-06-20T18:00:00Z',
             },
           },
     };

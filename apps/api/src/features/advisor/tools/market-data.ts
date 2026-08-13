@@ -81,25 +81,39 @@ function asRows(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.map(asRecord) : [];
 }
 
-/** Compact stock-quote projection from `{ data: {...} }`. */
-function parseStockQuote(symbol: string, raw: unknown): Record<string, unknown> {
+/**
+ * Compact stock-quote projection from `stock-state`'s `{ data: {...} }`.
+ *
+ * Field names follow that endpoint, not the old `/info` guess: the last trade
+ * is `close` (surfaced as `price`, which is what the tool's description
+ * promises), and `tape_time` / `market_time` say how fresh it is and which
+ * session it came from — a `close` stamped `postmarket` is not a live quote.
+ * Prices arrive as decimal strings.
+ */
+export function parseStockQuote(symbol: string, raw: unknown): Record<string, unknown> {
   const data = asRecord((raw as { data?: unknown }).data);
-  return {
-    symbol,
-    ...pick(data, [
-      'ticker',
-      'price',
-      'close',
-      'open',
-      'high',
-      'low',
-      'volume',
-      'market_cap',
-      'prev_close',
-      'change',
-      'change_percent',
-    ]),
-  };
+  const out: Record<string, unknown> = { symbol };
+
+  const price = asNumber(data.close);
+  if (price !== undefined) out.price = price;
+
+  for (const [field, key] of [
+    ['open', 'open'],
+    ['high', 'high'],
+    ['low', 'low'],
+    ['prev_close', 'prev_close'],
+    ['volume', 'volume'],
+    ['total_volume', 'total_volume'],
+  ] as const) {
+    const n = asNumber(data[key]);
+    if (n !== undefined) out[field] = n;
+  }
+
+  for (const key of ['market_time', 'tape_time'] as const) {
+    if (typeof data[key] === 'string') out[key] = data[key];
+  }
+
+  return out;
 }
 
 /** Compact options-flow projection from `{ data: [...] }`, capped to `limit`. */
