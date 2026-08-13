@@ -85,6 +85,18 @@ release:
 	git tag v$(VERSION)
 	@echo "Tagged v$(VERSION). Publish with: git push origin HEAD v$(VERSION)"
 
+# Preview the auto-generated changelog for a version that hasn't been tagged
+# yet — calls the same GitHub API endpoint release.yml's generate_release_notes
+# uses, without creating a release. Notes are computed since the latest
+# published release, up to `main`.
+.PHONY: generate-changelog
+generate-changelog:
+	@test -n "$(VERSION)" || { echo "usage: make generate-changelog VERSION=1.2.3"; exit 1; }
+	@gh api repos/{owner}/{repo}/releases/generate-notes \
+	  -f tag_name=v$(VERSION) \
+	  -f target_commitish=main \
+	  | jq -r .body
+
 # Refresh the local graphify knowledge graph against current main. Optional and
 # local-only — graphify-out/ is git-ignored and nothing in the build depends on
 # it. AST-only, so no API cost. See CLAUDE.md for what the graph is used for.

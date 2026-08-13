@@ -265,5 +265,6 @@ jobs:
       - name: Create GitHub Release (notes + SPA asset)
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          body_path: docs/release-notes/${{ github.ref_name }}.md
           generate_release_notes: true
           files: tradr-web-dist-${{ github.ref_name }}.tar.gz
