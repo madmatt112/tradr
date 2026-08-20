@@ -5,7 +5,13 @@ import { join } from 'node:path';
 
 import postgres from 'postgres';
 
-import { DEFAULT_REPORTING_TIMEZONE, EmailField } from '@tradr/shared';
+import {
+  DEFAULT_REPORTING_TIMEZONE,
+  EmailField,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PasswordField,
+} from '@tradr/shared';
 
 import {
   MIGRATIONS_DIR,
@@ -326,6 +332,31 @@ export function generatePassword(): string {
 }
 
 /**
+ * Check an operator-supplied `--password` against the SAME bounds the login
+ * endpoint enforces, returning the problem as a message or `undefined` when the
+ * value is usable. Pure, so the rule is unit-testable without a database.
+ *
+ * The rule comes from the shared `PasswordField` — deliberately NOT a second
+ * copy of the numbers. Before this check existed, `--password abc12` created an
+ * account and printed "Created", and `POST /api/auth/login` then answered 400:
+ * a silent lockout on the one path that exists to rescue an instance with
+ * registration closed, recoverable only through `reset-password`.
+ *
+ * Whitespace-only values are refused separately. Nine spaces satisfy the length
+ * rule but are not a password anyone can retype, and they are what an operator
+ * gets from a mistyped `--password ""`.
+ */
+export function validatePassword(password: string): string | undefined {
+  if (password.trim().length === 0) {
+    return 'A password cannot be empty or all whitespace.';
+  }
+  if (!PasswordField.safeParse(password).success) {
+    return `A password must be ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters — the same rule the login form applies.`;
+  }
+  return undefined;
+}
+
+/**
  * Directly set `users.password_hash` for `email` to a bcrypt hash of
  * `newPassword`, returning true iff a matching account existed. No token, no
  * email/delivery channel — the operator owns the box (REQ-8.1/8.4). Takes a
@@ -373,6 +404,16 @@ export async function runResetPassword(argv: string[]): Promise<number> {
     console.error(parsed.error ?? 'An email is required');
     console.error('Usage: tradr reset-password <email> [--password <value>]');
     return 2;
+  }
+  // Checked before the connection opens: a password the login path would refuse
+  // must leave no row behind. The generated path always satisfies the rule by
+  // construction (24 base64url characters), so it is not re-checked here.
+  if (parsed.password !== undefined) {
+    const problem = validatePassword(parsed.password);
+    if (problem) {
+      console.error(problem);
+      return 2;
+    }
   }
   const generated = parsed.password === undefined;
   const newPassword = parsed.password ?? generatePassword();
@@ -480,6 +521,16 @@ export async function runCreateUser(argv: string[]): Promise<number> {
   if (email === undefined) {
     console.error(`Not a valid email address: ${parsed.email}`);
     return 2;
+  }
+  // Checked before the connection opens: a password the login path would refuse
+  // must leave no row behind. The generated path always satisfies the rule by
+  // construction (24 base64url characters), so it is not re-checked here.
+  if (parsed.password !== undefined) {
+    const problem = validatePassword(parsed.password);
+    if (problem) {
+      console.error(problem);
+      return 2;
+    }
   }
   const generated = parsed.password === undefined;
   const newPassword = parsed.password ?? generatePassword();

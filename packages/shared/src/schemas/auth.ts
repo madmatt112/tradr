@@ -12,14 +12,25 @@ export const EmailField = z.string().trim().toLowerCase().email();
 // 32-byte CSPRNG token as lowercase hex — rejects junk before any DB work.
 export const TokenField = z.string().regex(/^[0-9a-f]{64}$/);
 
+// The password length rule, in ONE place. 8 is the minimum the sign-up form has
+// always asked for; 72 is bcrypt's byte ceiling, past which the hash silently
+// ignores the tail. Every path that accepts a password — login, register, reset
+// completion, and the `tradr create-user` / `tradr reset-password` CLI commands —
+// reads these, so a password one path accepts is a password the others accept.
+// Duplicating the numbers is how the CLI came to create accounts that could not
+// log in.
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 72;
+export const PasswordField = z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH);
+
 export const LoginSchema = z.object({
   email: z.string().email().trim().toLowerCase(),
-  password: z.string().min(8).max(72),
+  password: PasswordField,
 });
 
 export const RegisterSchema = z.object({
   email: z.string().email().trim().toLowerCase(),
-  password: z.string().min(8).max(72),
+  password: PasswordField,
   // Browser-detected reporting timezone. OPTIONAL and must stay that way:
   // scripted registrations and the existing e2e helpers post without it, and
   // an absent value falls back to a defined default server-side rather than
@@ -34,7 +45,7 @@ export const PasswordResetRequestSchema = z.object({
 
 export const PasswordResetCompleteSchema = z.object({
   token: TokenField,
-  password: z.string().min(8).max(72),
+  password: PasswordField,
 });
 
 export const VerifyEmailSchema = z.object({

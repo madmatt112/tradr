@@ -9,6 +9,8 @@
  */
 import { describe, it, expect } from 'vitest';
 
+import { LoginSchema, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@tradr/shared';
+
 import {
   diffStandard,
   diffPost,
@@ -17,6 +19,7 @@ import {
   parseEmailPasswordArgs,
   normalizeEmail,
   generatePassword,
+  validatePassword,
   type JournalEntry,
 } from './tradr';
 
@@ -185,6 +188,59 @@ describe('generatePassword', () => {
     expect(a.length).toBeGreaterThanOrEqual(16);
     expect(a).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('validatePassword', () => {
+  const ok = 'a'.repeat(PASSWORD_MIN_LENGTH);
+
+  it('accepts a password inside the bounds', () => {
+    expect(validatePassword(ok)).toBeUndefined();
+    expect(validatePassword('a'.repeat(PASSWORD_MAX_LENGTH))).toBeUndefined();
+    expect(validatePassword(generatePassword())).toBeUndefined();
+  });
+
+  it('rejects a password shorter than the minimum', () => {
+    expect(validatePassword('a'.repeat(PASSWORD_MIN_LENGTH - 1))).toBeDefined();
+    expect(validatePassword('abc12')).toBeDefined();
+  });
+
+  it('rejects a password longer than the maximum (bcrypt would ignore the tail)', () => {
+    expect(validatePassword('a'.repeat(PASSWORD_MAX_LENGTH + 1))).toBeDefined();
+  });
+
+  it('rejects empty and whitespace-only values', () => {
+    // `--password=` parses to '', and `--password "         "` is long enough to
+    // pass the length rule while being unusable.
+    expect(validatePassword('')).toBeDefined();
+    expect(validatePassword('   ')).toBeDefined();
+    expect(validatePassword(' '.repeat(PASSWORD_MIN_LENGTH + 1))).toBeDefined();
+  });
+
+  /**
+   * The point of the whole helper: the CLI and the login endpoint must agree.
+   * Anything the CLI accepts, `LoginSchema` must accept — otherwise the command
+   * creates an account that cannot log in.
+   */
+  it('agrees with LoginSchema, so an accepted password can always log in', () => {
+    const candidates = [
+      '',
+      '   ',
+      'abc12',
+      'a'.repeat(PASSWORD_MIN_LENGTH - 1),
+      ok,
+      'a-real-password-123',
+      'a'.repeat(PASSWORD_MAX_LENGTH),
+      'a'.repeat(PASSWORD_MAX_LENGTH + 1),
+      'a'.repeat(80),
+    ];
+    for (const password of candidates) {
+      if (validatePassword(password) === undefined) {
+        expect(LoginSchema.safeParse({ email: 'someone@example.com', password }).success).toBe(
+          true,
+        );
+      }
+    }
   });
 });
 
