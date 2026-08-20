@@ -9,7 +9,9 @@ import { RegisterSchema, LoginSchema } from '@tradr/shared/schemas/auth';
 
 import { db } from '@/db';
 import { users } from '@/db/schema';
+import { isRegistrationEnabled } from '@/lib/config';
 import { sessionCookieOptions } from '@/lib/cookie-policy';
+import { AppError } from '@/lib/errors';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 import { createRateLimiter } from '@/middleware/rate-limit.middleware';
@@ -45,6 +47,13 @@ const auth = new Hono();
  *       unavailable. `emailVerified` is `false` until the address is confirmed;
  *       when transactional email is not configured there is nothing to confirm
  *       and the flag stays false without blocking use.
+ *
+ *
+ *       An operator can close sign-up by setting `DISABLE_REGISTRATION=true`, in
+ *       which case every request here is refused with `403 REGISTRATION_DISABLED`
+ *       whatever the client, and no account is created. The default leaves
+ *       registration open, so an instance that does not set the variable behaves
+ *       as described above. Sign-in and password reset are never gated.
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -82,6 +91,7 @@ const auth = new Hono();
  *                     isAdmin: { type: boolean }
  *                     emailVerified: { type: boolean }
  *       400: { description: Validation error. }
+ *       403: { description: "Registration is closed on this instance (`REGISTRATION_DISABLED`)." }
  *       409: { description: That email is already registered. }
  *       429: { description: Rate limit exceeded. }
  */
@@ -91,6 +101,28 @@ auth.post(
   // register is a brute-force surface, so it hardens under degradation. The
   // aggregate is a bounded N×-degraded 3N, not the global budget (REQ-7.5, D8).
   createRateLimiter({ name: 'register', max: 5, windowMs: 15 * 60 * 1000, fallbackMax: 3 }),
+  // The registration gate. THIS is the control — a frontend that hides the form
+  // is courtesy, and a scripted client ignores it, so the refusal has to live on
+  // the server.
+  //
+  // Ordered AFTER the rate limiter so the brute-force budget above is completely
+  // unchanged, and BEFORE validation so a closed instance answers identically
+  // whatever the body: no field-level 400 and no 409 telling a caller whether an
+  // address is already registered.
+  //
+  // 403 rather than 404 (the route exists, and hiding it would leave the SPA
+  // unable to tell "closed" from "wrong URL"), rather than 503 (nothing is
+  // failing — this is a deliberate, indefinite posture, and 503 would page an
+  // operator's monitoring), and rather than 400/429 (both mean "try again
+  // differently"; this does not). The code is distinct so a client can branch on
+  // it, and the message says only that the instance is closed — never why, which
+  // is the operator's business and not the caller's.
+  async (c, next) => {
+    if (!isRegistrationEnabled()) {
+      throw new AppError(403, 'REGISTRATION_DISABLED', 'Registration is closed on this instance.');
+    }
+    await next();
+  },
   validate('json', RegisterSchema),
   async (c) => {
     // `timezone` is optional and absent for every scripted or e2e registration

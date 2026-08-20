@@ -11,8 +11,26 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useRegister } from '@/hooks/useAuth';
+import { useRegistrationEnabled } from '@/hooks/useRegistrationEnabled';
 import { useResendVerification } from '@/hooks/useResendVerification';
 import { detectBrowserTimezone } from '@/lib/browserTimezone';
+
+// Where someone sent here before launch can leave their address.
+//
+// READ AT RUNTIME, NEVER COMPILED IN. This SPA is the same build every
+// self-hoster runs, so a hardcoded URL would show an operator who closed signups
+// on their own private instance an invitation to somebody else's newsletter.
+// It comes from the existing /config.js seam (window.__TRADR_CONFIG__,
+// NEWSLETTER_URL) like every other deploy-time frontend setting, and it is
+// ABSENT by default: an unconfigured build gets the notice with no link.
+//
+// When it is set the link is an <a> and a new tab, not a router <Link>: it is a
+// different host, and REQ-9.6 wants this page to stay on the app domain rather
+// than bounce the visitor off the one they chose to open.
+function newsletterUrl(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return window.__TRADR_CONFIG__?.newsletterUrl || undefined;
+}
 
 // SF-3: this page is public and MUST NOT call useAuth() or mount the
 // ['auth','me'] query — the api client's global 401 interception would redirect
@@ -43,6 +61,7 @@ function RegisterPage() {
   const [pendingEmail, setPendingEmail] = useState('');
   const { resend, info } = useResendVerification();
   const registerAccount = useRegister();
+  const { registrationEnabled, isPending: configPending } = useRegistrationEnabled();
 
   const {
     register,
@@ -51,6 +70,60 @@ function RegisterPage() {
   } = useForm<RegisterFormInput>({
     resolver: zodResolver(RegisterFormSchema),
   });
+
+  // The gate is decided before anything below renders, and every hook above has
+  // already run, so the early returns cannot reorder them.
+  //
+  // THE PAGE WAITS ONE TICK RATHER THAN GUESSING. Painting the form and swapping
+  // it for the notice a moment later shows a closed instance a form it will
+  // never accept, which is the exact thing REQ-9.4 is about. The wait is bounded
+  // by `retry: false`, and it is usually zero: /login has already read the same
+  // ['config'] query for anyone who arrived through it.
+  if (configPending) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!registrationEnabled) {
+    // No newsletter configured — say signups are closed and stop there. The
+    // wording cannot mention a button that is not rendered, and it cannot
+    // promise a launch the operator of this instance never announced.
+    const newsletter = newsletterUrl();
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle>{newsletter ? 'Signups open at launch' : 'Signups are closed'}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {newsletter
+                ? "New accounts aren't open yet. Join the newsletter and we'll tell you the day they are."
+                : "This instance isn't accepting new accounts. Ask whoever runs it if you need one."}
+            </p>
+
+            {newsletter && (
+              <Button asChild className="w-full cursor-pointer">
+                <a href={newsletter} target="_blank" rel="noreferrer">
+                  Join the newsletter
+                </a>
+              </Button>
+            )}
+
+            <p className="text-center text-sm text-muted-foreground">
+              Already have an account?{' '}
+              <Link to="/login" className="underline">
+                Log in
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // SF-4: registration auto-logs-in, so this state has to survive the user
   // tabbing away to their mail client and back. It does, because nothing on this

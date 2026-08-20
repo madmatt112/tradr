@@ -33,15 +33,16 @@ docker compose exec api tradr migrate --status
 ```
 
 Exit codes: `0` schema current, `1` pending migrations, `2` cannot connect.
-The `tradr` CLI ships four subcommands, all runnable with
+The `tradr` CLI ships five subcommands, all runnable with
 `docker compose exec api tradr <subcommand>`:
 
-| Subcommand                                    | Does                                                                                                 |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `migrate --status`                            | Reports schema state via the exit codes above.                                                       |
-| `reset-password <email> [--password <value>]` | Resets a user's password from the server — the recovery path on an instance with no SMTP configured. |
-| `storage migrate-to-inline`                   | Moves object-storage-backed uploads back into the database.                                          |
-| `storage gc`                                  | Deletes orphaned upload blobs.                                                                       |
+| Subcommand                                    | Does                                                                                                                                         |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `migrate --status`                            | Reports schema state via the exit codes above.                                                                                               |
+| `create-user <email> [--password <value>]`    | Creates an account from the server — the way to make the first one when `DISABLE_REGISTRATION` is set. Never overwrites an existing account. |
+| `reset-password <email> [--password <value>]` | Resets a user's password from the server — the recovery path on an instance with no SMTP configured.                                         |
+| `storage migrate-to-inline`                   | Moves object-storage-backed uploads back into the database.                                                                                  |
+| `storage gc`                                  | Deletes orphaned upload blobs.                                                                                                               |
 
 ## Upgrades, migrations, and backups
 

@@ -133,6 +133,22 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.string().trim().toLowerCase().email().optional(),
   ),
+  // Close public sign-up. Default 'false' ⇒ registration WORKS on an unconfigured
+  // instance, which is why the name is negative: the SKIP_POST_MIGRATIONS /
+  // FEATURE_GATING / METRICS_ENABLED idiom above defaults every boolean to 'false',
+  // so a positively-named ALLOW_REGISTRATION would have to default to 'true' — the
+  // only such flag here, and a fail-CLOSED default for the one capability every
+  // self-hoster needs on first boot. NOT z.coerce.boolean(), which coerces the
+  // string 'false' to true and would shut sign-up off on every instance that
+  // followed the documented .env.example default.
+  //
+  // Set it to 'true' and POST /api/auth/register refuses; unset it and the endpoint
+  // behaves exactly as it always has. Flipping it is a restart, not a deploy — no
+  // code change and no frontend rebuild.
+  DISABLE_REGISTRATION: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Changelog (REQ-3). Both optional with defaults — zero new required config.
   // GitHub repo as an owner/repo slug, NEVER a URL. The negative lookahead
   // rejects whole-segment '.'/'..' while dots inside repo names stay legal
@@ -466,6 +482,17 @@ export function isStockQuoteConfigured(): boolean {
 /** True when admin-platform feature gating is enabled (REQ-5.1 — default off). */
 export function isFeatureGatingEnabled(): boolean {
   return config.FEATURE_GATING;
+}
+
+/**
+ * True when new accounts may be created — i.e. unless an operator set
+ * DISABLE_REGISTRATION. Reads `config` LIVE per call (the isEmailConfigured
+ * pattern) so no module captures the value at load time and a test can toggle
+ * it by direct mutation. Sign-in, password reset and every existing account are
+ * unaffected either way; only account CREATION is gated.
+ */
+export function isRegistrationEnabled(): boolean {
+  return !config.DISABLE_REGISTRATION;
 }
 
 /** True when the Prometheus exposition surface is enabled (REQ-1.1). */

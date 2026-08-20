@@ -6,13 +6,21 @@ import { join } from 'node:path';
 import postgres from 'postgres';
 
 import {
+  DEFAULT_REPORTING_TIMEZONE,
+  EmailField,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PasswordField,
+} from '@tradr/shared';
+
+import {
   MIGRATIONS_DIR,
   MIGRATIONS_LOCK_KEY,
   POST_MIGRATIONS_DIR,
   POST_MIGRATIONS_LOCK_KEY,
 } from '@/db/migrate';
 import { hashPassword } from '@/features/auth/auth.service';
-import { config } from '@/lib/config';
+import { config, isEmailConfigured } from '@/lib/config';
 
 import { runStorageGc, runStorageMigrateToInline } from './storage-maintenance.service';
 
@@ -282,17 +290,22 @@ export async function runStatus(): Promise<number> {
 // Password recovery (REQ-8, D7): admin-assisted direct-set, no delivery channel.
 // ---------------------------------------------------------------------------
 
-export interface ResetPasswordArgs {
+export interface EmailPasswordArgs {
   email?: string;
   password?: string;
   error?: string;
 }
 
 /**
- * Parse `reset-password <email> [--password <value>]`. Pure (no IO) so the
+ * Parse `<email> [--password <value>]` — the grammar `reset-password` and
+ * `create-user` share, so the two cannot drift apart. Pure (no IO) so the
  * dispatch is unit-testable. An absent `--password` means "generate one".
+ *
+ * `--password` is an OPT-IN: the default path generates a password and prints
+ * it once, so nothing secret reaches shell history unless the operator asks
+ * for it by name.
  */
-export function parseResetPasswordArgs(args: string[]): ResetPasswordArgs {
+export function parseEmailPasswordArgs(args: string[]): EmailPasswordArgs {
   let email: string | undefined;
   let password: string | undefined;
   for (let i = 0; i < args.length; i++) {
@@ -316,6 +329,31 @@ export function parseResetPasswordArgs(args: string[]): ResetPasswordArgs {
 /** A strong random password for the generated-and-displayed path (REQ-8.1). */
 export function generatePassword(): string {
   return crypto.randomBytes(18).toString('base64url');
+}
+
+/**
+ * Check an operator-supplied `--password` against the SAME bounds the login
+ * endpoint enforces, returning the problem as a message or `undefined` when the
+ * value is usable. Pure, so the rule is unit-testable without a database.
+ *
+ * The rule comes from the shared `PasswordField` — deliberately NOT a second
+ * copy of the numbers. Before this check existed, `--password abc12` created an
+ * account and printed "Created", and `POST /api/auth/login` then answered 400:
+ * a silent lockout on the one path that exists to rescue an instance with
+ * registration closed, recoverable only through `reset-password`.
+ *
+ * Whitespace-only values are refused separately. Nine spaces satisfy the length
+ * rule but are not a password anyone can retype, and they are what an operator
+ * gets from a mistyped `--password ""`.
+ */
+export function validatePassword(password: string): string | undefined {
+  if (password.trim().length === 0) {
+    return 'A password cannot be empty or all whitespace.';
+  }
+  if (!PasswordField.safeParse(password).success) {
+    return `A password must be ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters — the same rule the login form applies.`;
+  }
+  return undefined;
 }
 
 /**
@@ -361,11 +399,21 @@ export async function resetPassword(
 }
 
 export async function runResetPassword(argv: string[]): Promise<number> {
-  const parsed = parseResetPasswordArgs(argv);
+  const parsed = parseEmailPasswordArgs(argv);
   if (parsed.error || !parsed.email) {
     console.error(parsed.error ?? 'An email is required');
     console.error('Usage: tradr reset-password <email> [--password <value>]');
     return 2;
+  }
+  // Checked before the connection opens: a password the login path would refuse
+  // must leave no row behind. The generated path always satisfies the rule by
+  // construction (24 base64url characters), so it is not re-checked here.
+  if (parsed.password !== undefined) {
+    const problem = validatePassword(parsed.password);
+    if (problem) {
+      console.error(problem);
+      return 2;
+    }
   }
   const generated = parsed.password === undefined;
   const newPassword = parsed.password ?? generatePassword();
@@ -399,11 +447,129 @@ export async function runResetPassword(argv: string[]): Promise<number> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Account creation (REQ-8.3): the only way a first account can exist on an
+// instance that ships with registration closed.
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalise and validate an operator-supplied email, or `undefined` when it is
+ * not an address at all. Pure, so the normalisation is unit-testable.
+ *
+ * Uses the SAME `EmailField` the register and login endpoints parse with, which
+ * trims and lowercases before validating. That is not cosmetic: both endpoints
+ * store and look up the lowercase form, so `Owner@Example.com` inserted
+ * verbatim would be a row no login could ever match.
+ */
+export function normalizeEmail(raw: string): string | undefined {
+  const parsed = EmailField.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Insert a user with a bcrypt hash of `password`, returning true iff the row
+ * was created and false iff the email was already taken. Reuses the register
+ * path's `hashPassword`, so the account authenticates through the ordinary
+ * login route with no special-casing anywhere.
+ *
+ * REFUSES TO OVERWRITE: `ON CONFLICT (email) DO NOTHING` — creating
+ * is not resetting, and an existing account is left byte-for-byte untouched
+ * (no hash rewrite, no verified flag change, no session revocation). One
+ * statement, so the check and the insert cannot race and there is no partial
+ * write to roll back. Changing an existing password is `reset-password`'s job.
+ *
+ * `email` MUST already be normalised (trim + lowercase) — `runCreateUser` does
+ * that with the shared `EmailField`. Registration and login both store and look
+ * up the lowercase form, so an unnormalised row would exist and never
+ * authenticate: the exact silent failure this command must not produce.
+ *
+ * Field defaults mirror `registerUser` rather than leaning on column defaults:
+ *   - `email_verified` = `!isEmailConfigured()` — verified on an email-less
+ *     instance (nothing is ever demanded), unverified where a mailbox can be
+ *     confirmed, because running a command proves nothing about the mailbox
+ *     (the `reset-password` precedent). Login does not gate on it either way.
+ *   - `timezone` = the defined default, never NULL — NULL is reserved for rows
+ *     that predate the column.
+ * Everything else (is_admin, theme, onboarding, timestamps) takes its column
+ * default, exactly as an insert through `registerUser` does. Deliberately does
+ * NOT grant admin: `SEED_ADMIN_EMAIL` is the mechanism for that.
+ */
+export async function createUser(
+  sql: postgres.Sql,
+  email: string,
+  password: string,
+): Promise<boolean> {
+  // Bcrypt is slow by design — hash before touching the database.
+  const passwordHash = await hashPassword(password);
+  const inserted = await sql<{ id: string }[]>`
+    INSERT INTO users (email, password_hash, email_verified, timezone)
+    VALUES (${email}, ${passwordHash}, ${!isEmailConfigured()}, ${DEFAULT_REPORTING_TIMEZONE})
+    ON CONFLICT (email) DO NOTHING
+    RETURNING id
+  `;
+  return inserted.length > 0;
+}
+
+export async function runCreateUser(argv: string[]): Promise<number> {
+  const parsed = parseEmailPasswordArgs(argv);
+  if (parsed.error || !parsed.email) {
+    console.error(parsed.error ?? 'An email is required');
+    console.error('Usage: tradr create-user <email> [--password <value>]');
+    return 2;
+  }
+  const email = normalizeEmail(parsed.email);
+  if (email === undefined) {
+    console.error(`Not a valid email address: ${parsed.email}`);
+    return 2;
+  }
+  // Checked before the connection opens: a password the login path would refuse
+  // must leave no row behind. The generated path always satisfies the rule by
+  // construction (24 base64url characters), so it is not re-checked here.
+  if (parsed.password !== undefined) {
+    const problem = validatePassword(parsed.password);
+    if (problem) {
+      console.error(problem);
+      return 2;
+    }
+  }
+  const generated = parsed.password === undefined;
+  const newPassword = parsed.password ?? generatePassword();
+
+  // Pooler-safe one-shot connection, matching runResetPassword.
+  const sql = postgres(config.DIRECT_DATABASE_URL ?? config.DATABASE_URL, {
+    max: 1,
+    prepare: false,
+    onnotice: () => {},
+  });
+  try {
+    const created = await createUser(sql, email, newPassword);
+    if (!created) {
+      console.error(`An account already exists for ${email}. Nothing was changed.`);
+      console.error('Use `tradr reset-password` to set its password instead.');
+      return 1;
+    }
+    console.log(`Created ${email}.`);
+    if (generated) {
+      console.log(`Password: ${newPassword}`);
+    } else {
+      console.log('Password set from --password.');
+    }
+    return 0;
+  } catch (err) {
+    console.error('Cannot connect to the database.');
+    console.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  } finally {
+    await sql.end();
+  }
+}
+
 const USAGE = [
   'Usage:',
   '  tradr migrate --status',
   '  tradr storage migrate-to-inline',
   '  tradr storage gc',
+  '  tradr create-user <email> [--password <value>]',
   '  tradr reset-password <email> [--password <value>]',
 ];
 
@@ -434,6 +600,12 @@ async function main(): Promise<number> {
   }
   if (args[0] === 'storage' && args[1] === 'gc') {
     return runStorageGc();
+  }
+  // Deliberately NOT gated on DISABLE_REGISTRATION: closing public sign-up is
+  // exactly when an operator needs this, and reaching the CLI already means
+  // shell access to the server.
+  if (args[0] === 'create-user') {
+    return runCreateUser(args.slice(1));
   }
   if (args[0] === 'reset-password') {
     return runResetPassword(args.slice(1));

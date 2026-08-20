@@ -24,6 +24,7 @@ import calculatorRouter, {
 } from '@/features/calculator/calculator.route';
 import { changelogRouter } from '@/features/changelog/changelog.route';
 import { initChangelogCache } from '@/features/changelog/changelog.service';
+import { configRouter } from '@/features/config/config.route';
 import csvImport from '@/features/csv-import/csv-import.route';
 import { dashboardRoute } from '@/features/dashboard/dashboard.route';
 import { initDashboardCache } from '@/features/dashboard/dashboard.service';
@@ -96,6 +97,12 @@ app.use(csrfMiddleware);
 
 // Routes
 app.route('/api/health', health);
+// Public instance posture (newsletter REQ-9.4/9.5). Mounted next to health
+// rather than in the alphabetical block below so this file shows the whole
+// unauthenticated, un-gated surface in one place: these two routers are the
+// only ones a stranger can read without a session. configRouter deliberately
+// returns one field — see the allow-list note in config.route.ts.
+app.route('/api/config', configRouter);
 app.route('/api/auth', auth);
 // Password reset: a SECOND router on the same /api/auth base (the
 // positions/fillsRouter double-mount precedent below) so the frozen

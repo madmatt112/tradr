@@ -1755,7 +1755,7 @@
     },
     "/api/auth/register": {
       "post": {
-        "description": "Public. Creates a user and sets the `session` cookie, so a successful register leaves the caller signed in. Rate limited to 5 requests per 15 minutes per client, tightening to 3 while the shared rate-limit store is unavailable. `emailVerified` is `false` until the address is confirmed; when transactional email is not configured there is nothing to confirm and the flag stays false without blocking use.\n",
+        "description": "Public. Creates a user and sets the `session` cookie, so a successful register leaves the caller signed in. Rate limited to 5 requests per 15 minutes per client, tightening to 3 while the shared rate-limit store is unavailable. `emailVerified` is `false` until the address is confirmed; when transactional email is not configured there is nothing to confirm and the flag stays false without blocking use.\n\nAn operator can close sign-up by setting `DISABLE_REGISTRATION=true`, in which case every request here is refused with `403 REGISTRATION_DISABLED` whatever the client, and no account is created. The default leaves registration open, so an instance that does not set the variable behaves as described above. Sign-in and password reset are never gated.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1821,6 +1821,9 @@
           },
           "400": {
             "description": "Validation error."
+          },
+          "403": {
+            "description": "Registration is closed on this instance (`REGISTRATION_DISABLED`)."
           },
           "409": {
             "description": "That email is already registered."
@@ -2483,6 +2486,37 @@
         "summary": "Mark the changelog as viewed for the authenticated user.",
         "tags": [
           "Changelog"
+        ]
+      }
+    },
+    "/api/config": {
+      "get": {
+        "description": "Unauthenticated and cacheable (`Cache-Control - public, max-age=60`). Returns exactly one field, `registrationEnabled`, so the web app can render either the sign-up form or the \"signups open at launch\" notice instead of letting a visitor complete a form that the server will refuse. This surface is posture only - by design it never reports secrets, provider keys, database details, or which optional capabilities an instance has configured. The field list is an allow-list pinned by a test; it grows only by explicit decision.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "registrationEnabled": {
+                      "description": "False when the operator set DISABLE_REGISTRATION, in which case POST /api/auth/register answers 403 REGISTRATION_DISABLED. The server refusal is the control; this field only spares the visitor a wasted form.\n",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "registrationEnabled"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Instance posture."
+          }
+        },
+        "summary": "Public instance posture the SPA needs before rendering a form.",
+        "tags": [
+          "Platform"
         ]
       }
     },

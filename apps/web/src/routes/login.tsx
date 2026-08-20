@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useLogin } from '@/hooks/useAuth';
+import { useRegistrationEnabled } from '@/hooks/useRegistrationEnabled';
 
 // SF-3: this page is public and MUST NOT call useAuth() or mount the
 // ['auth','me'] query — the api client's global 401 interception would answer a
@@ -20,6 +21,7 @@ import { useLogin } from '@/hooks/useAuth';
 function LoginPage() {
   const login = useLogin();
   const navigate = useNavigate();
+  const { registrationEnabled } = useRegistrationEnabled();
   const [apiError, setApiError] = useState('');
   const expired = new URLSearchParams(window.location.search).get('expired');
 
@@ -101,12 +103,20 @@ function LoginPage() {
             </Link>
           </p>
 
-          <p className="mt-2 text-center text-sm text-muted-foreground">
-            Don't have an account?{' '}
-            <Link to="/register" className="underline">
-              Register
-            </Link>
-          </p>
+          {/* Hidden when this instance has registration closed (newsletter
+              REQ-9.4), so /register's launch notice is a backstop for a typed
+              or bookmarked URL rather than the normal way in. The hook fails
+              open, so an unconfigured self-hoster still sees this and so does a
+              visitor whose /api/config read failed. It is not the control — the
+              server refuses the POST either way. */}
+          {registrationEnabled && (
+            <p className="mt-2 text-center text-sm text-muted-foreground">
+              Don't have an account?{' '}
+              <Link to="/register" className="underline">
+                Register
+              </Link>
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -9,13 +9,17 @@
  */
 import { describe, it, expect } from 'vitest';
 
+import { LoginSchema, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@tradr/shared';
+
 import {
   diffStandard,
   diffPost,
   decodeLockKey,
   selectExitCode,
-  parseResetPasswordArgs,
+  parseEmailPasswordArgs,
+  normalizeEmail,
   generatePassword,
+  validatePassword,
   type JournalEntry,
 } from './tradr';
 
@@ -148,32 +152,32 @@ describe('selectExitCode', () => {
   });
 });
 
-describe('parseResetPasswordArgs', () => {
+describe('parseEmailPasswordArgs (reset-password / create-user share the grammar)', () => {
   it('parses a bare email with no password (generate path)', () => {
-    expect(parseResetPasswordArgs(['user@example.com'])).toEqual({ email: 'user@example.com' });
+    expect(parseEmailPasswordArgs(['user@example.com'])).toEqual({ email: 'user@example.com' });
   });
 
   it('parses --password <value>', () => {
-    expect(parseResetPasswordArgs(['user@example.com', '--password', 'secret123'])).toEqual({
+    expect(parseEmailPasswordArgs(['user@example.com', '--password', 'secret123'])).toEqual({
       email: 'user@example.com',
       password: 'secret123',
     });
   });
 
   it('parses --password=<value>', () => {
-    expect(parseResetPasswordArgs(['user@example.com', '--password=secret123'])).toEqual({
+    expect(parseEmailPasswordArgs(['user@example.com', '--password=secret123'])).toEqual({
       email: 'user@example.com',
       password: 'secret123',
     });
   });
 
   it('errors when no email is supplied', () => {
-    expect(parseResetPasswordArgs([]).error).toBeDefined();
-    expect(parseResetPasswordArgs(['--password', 'x']).error).toBeDefined();
+    expect(parseEmailPasswordArgs([]).error).toBeDefined();
+    expect(parseEmailPasswordArgs(['--password', 'x']).error).toBeDefined();
   });
 
   it('errors when --password has no value', () => {
-    expect(parseResetPasswordArgs(['user@example.com', '--password']).error).toBeDefined();
+    expect(parseEmailPasswordArgs(['user@example.com', '--password']).error).toBeDefined();
   });
 });
 
@@ -184,5 +188,74 @@ describe('generatePassword', () => {
     expect(a.length).toBeGreaterThanOrEqual(16);
     expect(a).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('validatePassword', () => {
+  const ok = 'a'.repeat(PASSWORD_MIN_LENGTH);
+
+  it('accepts a password inside the bounds', () => {
+    expect(validatePassword(ok)).toBeUndefined();
+    expect(validatePassword('a'.repeat(PASSWORD_MAX_LENGTH))).toBeUndefined();
+    expect(validatePassword(generatePassword())).toBeUndefined();
+  });
+
+  it('rejects a password shorter than the minimum', () => {
+    expect(validatePassword('a'.repeat(PASSWORD_MIN_LENGTH - 1))).toBeDefined();
+    expect(validatePassword('abc12')).toBeDefined();
+  });
+
+  it('rejects a password longer than the maximum (bcrypt would ignore the tail)', () => {
+    expect(validatePassword('a'.repeat(PASSWORD_MAX_LENGTH + 1))).toBeDefined();
+  });
+
+  it('rejects empty and whitespace-only values', () => {
+    // `--password=` parses to '', and `--password "         "` is long enough to
+    // pass the length rule while being unusable.
+    expect(validatePassword('')).toBeDefined();
+    expect(validatePassword('   ')).toBeDefined();
+    expect(validatePassword(' '.repeat(PASSWORD_MIN_LENGTH + 1))).toBeDefined();
+  });
+
+  /**
+   * The point of the whole helper: the CLI and the login endpoint must agree.
+   * Anything the CLI accepts, `LoginSchema` must accept — otherwise the command
+   * creates an account that cannot log in.
+   */
+  it('agrees with LoginSchema, so an accepted password can always log in', () => {
+    const candidates = [
+      '',
+      '   ',
+      'abc12',
+      'a'.repeat(PASSWORD_MIN_LENGTH - 1),
+      ok,
+      'a-real-password-123',
+      'a'.repeat(PASSWORD_MAX_LENGTH),
+      'a'.repeat(PASSWORD_MAX_LENGTH + 1),
+      'a'.repeat(80),
+    ];
+    for (const password of candidates) {
+      if (validatePassword(password) === undefined) {
+        expect(LoginSchema.safeParse({ email: 'someone@example.com', password }).success).toBe(
+          true,
+        );
+      }
+    }
+  });
+});
+
+describe('normalizeEmail', () => {
+  it('trims and lowercases, so the row matches what login looks up', () => {
+    expect(normalizeEmail('  Owner@Example.COM ')).toBe('owner@example.com');
+  });
+
+  it('leaves an already-normalised address alone', () => {
+    expect(normalizeEmail('owner@example.com')).toBe('owner@example.com');
+  });
+
+  it('rejects a value that is not an address (would create an unusable account)', () => {
+    expect(normalizeEmail('not-an-email')).toBeUndefined();
+    expect(normalizeEmail('')).toBeUndefined();
+    expect(normalizeEmail('@example.com')).toBeUndefined();
   });
 });

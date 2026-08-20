@@ -173,6 +173,9 @@ services:
       API_BASE_URL: ${API_BASE_URL:-}
       ADVISOR_NGINX_PROXY_TIMEOUT: ${ADVISOR_NGINX_PROXY_TIMEOUT:-180s}
       MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-20m}
+      # Optional link on /register's signups-closed notice (see
+      # DISABLE_REGISTRATION). Unset => the notice renders with no link.
+      NEWSLETTER_URL: ${NEWSLETTER_URL:-}
       # Observability (web container). ALL optional — the surface is ABSENT when
       # unset. The entrypoint (10-runtime-config.sh) reads these from container
       # env and omits the field when empty, so bare ${VAR:-} is safe; NO

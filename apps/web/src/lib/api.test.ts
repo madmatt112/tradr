@@ -300,14 +300,22 @@ describe('runtime-config seam (C3 / Req 8.5)', () => {
 // The interception's ONE sanctioned opt-out, and this list is what enforces it.
 //
 // `allowUnauthenticated` switches off the global 401 redirect for a single
-// request. It exists for one caller: the not-found page's presence check, whose
-// whole question is "is anyone signed in?" and for which a 401 is the answer
-// rather than a session ending. A second caller would be a request that
-// genuinely needs a session quietly losing the redirect a real expiry depends
-// on — and it would do so invisibly, because nothing about the request would
+// request. It is for callers whose whole question is asked WITHOUT a session and
+// for which a 401 is an answer rather than a session ending. What it must never
+// cover is a request that genuinely needs a session, quietly losing the redirect
+// a real expiry depends on — invisibly, because nothing about the request would
 // look wrong. A doc comment on the field cannot stop that; naming the sites can.
+//
+// Adding a line here is the decision, so make it deliberately: the test is meant
+// to red, not to be kept green.
 const SANCTIONED_ALLOW_UNAUTHENTICATED = [
-  'hooks/useAuth.ts', // the presence check, the one legitimate caller
+  'hooks/useAuth.ts', // the presence check — "is anyone signed in?"
+  // The public-config read behind the registration gate (newsletter REQ-9.4).
+  // Asked on /login and /register by a visitor who has no session and is not
+  // supposed to: a 401 there would announce an expiry to someone who never had
+  // one, and burn the one-shot latch the next real expiry needs. The read fails
+  // open, so losing the redirect costs nothing — it cannot hide a signup form.
+  'hooks/useRegistrationEnabled.ts',
   'lib/api.test.ts', // this guard, which has to spell the flag to look for it
   'lib/api.ts', // the declaration and the interception it opts out of
 ];

@@ -9,6 +9,7 @@ declare global {
       posthogPublicHost?: string; // PostHog ingestion host
       posthogPublicEnvironment?: string; // deployment label stamped on every event ('production', 'staging'); absent ⇒ unstamped
       appVersion?: string; // deploy-stamped version badge (prod "v1.2.3", staging "v1.2.3-abc1234"); absent ⇒ local dev
+      newsletterUrl?: string; // where /register sends people when registration is closed (newsletter REQ-9.6); absent ⇒ the notice renders with no link
     };
   }
 }

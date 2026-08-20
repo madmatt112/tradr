@@ -506,3 +506,86 @@ describe('registration verification issuance + emailVerified payload', () => {
     expect(await logoutRes.text()).toBe('{"success":true}');
   });
 });
+
+// The DISABLE_REGISTRATION gate. The server refusal is the whole control — a
+// frontend that hides the sign-up form is courtesy, and these tests drive raw
+// HTTP requests precisely because a scripted client skips the frontend.
+describe('registration gate (DISABLE_REGISTRATION)', () => {
+  // Direct mutation + restore, the isEmailConfigured pattern above:
+  // isRegistrationEnabled() reads config live, so no module captured this at
+  // load time.
+  afterEach(() => {
+    config.DISABLE_REGISTRATION = false;
+  });
+
+  // 1. The default. Unset ⇒ registration works exactly as it always has, which
+  //    is the whole reason the flag is named negatively — an unconfigured
+  //    self-hoster must be able to create the first account on first boot.
+  it('is off by default, so an unconfigured instance registers normally', async () => {
+    expect(config.DISABLE_REGISTRATION).toBe(false);
+    expect((await registerUser()).status).toBe(201);
+  });
+
+  // 2. Set ⇒ a raw request is refused, no session is issued, and no row lands.
+  it('refuses a raw request with 403 REGISTRATION_DISABLED and creates nothing', async () => {
+    config.DISABLE_REGISTRATION = true;
+    const email = uniqueEmail();
+
+    const res = await registerUser(email);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('REGISTRATION_DISABLED');
+    expect(getCookieValue(res, 'session')).toBeUndefined();
+
+    const rows = await db.select().from(users).where(eq(users.email, email));
+    expect(rows).toHaveLength(0);
+  });
+
+  // 3. The message says the instance is closed and nothing about WHY. An
+  //    operator's reason for closing sign-up is not the caller's business.
+  it('says only that the instance is closed', async () => {
+    config.DISABLE_REGISTRATION = true;
+    const body = await (await registerUser()).json();
+    expect(body.error.message).toBe('Registration is closed on this instance.');
+  });
+
+  // 4. The gate sits ahead of validation, so a closed instance answers the same
+  //    403 whatever the body — no field-level 400, and no 409 revealing that an
+  //    address is already registered.
+  it('refuses before validation, and without disclosing a taken address', async () => {
+    const taken = uniqueEmail();
+    expect((await registerUser(taken)).status).toBe(201);
+
+    config.DISABLE_REGISTRATION = true;
+    expect((await registerUser('not-an-email')).status).toBe(403);
+    expect((await registerUser(uniqueEmail(), 'short')).status).toBe(403);
+    expect((await registerUser(taken)).status).toBe(403);
+  });
+
+  // 5. Only account CREATION is gated. An existing account still signs in, so
+  //    closing sign-up never locks out the people already on the instance.
+  it('leaves login working for accounts that already exist', async () => {
+    const email = uniqueEmail();
+    expect((await registerUser(email)).status).toBe(201);
+
+    config.DISABLE_REGISTRATION = true;
+    expect((await loginUser(email)).status).toBe(200);
+  });
+
+  // 6. The register rate limiter still runs FIRST and is unchanged: 5/15min,
+  //    counted whether or not the gate then refuses. Ordering the gate ahead of
+  //    the limiter would have turned a closed instance into an unmetered
+  //    endpoint.
+  it('keeps the 5/15min register rate limiter ahead of the gate', async () => {
+    config.DISABLE_REGISTRATION = true;
+    const ip = uniqueIp();
+
+    for (let i = 0; i < 5; i++) {
+      expect((await registerUser(uniqueEmail(), 'password123', ip)).status).toBe(403);
+    }
+
+    const res = await registerUser(uniqueEmail(), 'password123', ip);
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBeDefined();
+  });
+});
