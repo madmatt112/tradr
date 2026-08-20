@@ -11,8 +11,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useRegister } from '@/hooks/useAuth';
+import { useRegistrationEnabled } from '@/hooks/useRegistrationEnabled';
 import { useResendVerification } from '@/hooks/useResendVerification';
 import { detectBrowserTimezone } from '@/lib/browserTimezone';
+
+// Where someone sent here before launch can leave their address. An <a> and a
+// new tab, not a router <Link>: it is a different host, and REQ-9.6 wants this
+// page to stay on the app domain rather than bounce the visitor off the one they
+// chose to open.
+const NEWSLETTER_URL = 'https://www.tradr.cloud/newsletter';
 
 // SF-3: this page is public and MUST NOT call useAuth() or mount the
 // ['auth','me'] query — the api client's global 401 interception would redirect
@@ -43,6 +50,7 @@ function RegisterPage() {
   const [pendingEmail, setPendingEmail] = useState('');
   const { resend, info } = useResendVerification();
   const registerAccount = useRegister();
+  const { registrationEnabled, isPending: configPending } = useRegistrationEnabled();
 
   const {
     register,
@@ -51,6 +59,53 @@ function RegisterPage() {
   } = useForm<RegisterFormInput>({
     resolver: zodResolver(RegisterFormSchema),
   });
+
+  // The gate is decided before anything below renders, and every hook above has
+  // already run, so the early returns cannot reorder them.
+  //
+  // THE PAGE WAITS ONE TICK RATHER THAN GUESSING. Painting the form and swapping
+  // it for the notice a moment later shows a closed instance a form it will
+  // never accept, which is the exact thing REQ-9.4 is about. The wait is bounded
+  // by `retry: false`, and it is usually zero: /login has already read the same
+  // ['config'] query for anyone who arrived through it.
+  if (configPending) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!registrationEnabled) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle>Signups open at launch</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              New accounts aren&apos;t open yet. Join the newsletter and we&apos;ll tell you the day
+              they are.
+            </p>
+
+            <Button asChild className="w-full cursor-pointer">
+              <a href={NEWSLETTER_URL} target="_blank" rel="noreferrer">
+                Join the newsletter
+              </a>
+            </Button>
+
+            <p className="text-center text-sm text-muted-foreground">
+              Already have an account?{' '}
+              <Link to="/login" className="underline">
+                Log in
+              </Link>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // SF-4: registration auto-logs-in, so this state has to survive the user
   // tabbing away to their mail client and back. It does, because nothing on this
