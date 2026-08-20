@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **83 environment variables**, of which **3 are required** —
+Tradr reads **84 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 83 variables, **52 ship unset** — either commented out in the
+Of the 84 variables, **52 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -60,6 +60,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `SESSION_SECRET` | **Required** | Generate (≥32 chars): `openssl rand -base64 24` |
+| `DISABLE_REGISTRATION` | `false` | Close public sign-up. `true` makes POST /api/auth/register refuse with 403 REGISTRATION_DISABLED, whatever the client. Sign-in, password reset and every existing account are unaffected — only account creation is gated. Use it to run a private instance once your own accounts exist. Reopening sign-up is this variable plus an api restart; nothing is rebuilt. |
 
 ## Server
 
