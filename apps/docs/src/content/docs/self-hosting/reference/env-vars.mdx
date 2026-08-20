@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **84 environment variables**, of which **3 are required** —
+Tradr reads **85 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 84 variables, **52 ship unset** — either commented out in the
+Of the 85 variables, **53 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -60,7 +60,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `SESSION_SECRET` | **Required** | Generate (≥32 chars): `openssl rand -base64 24` |
-| `DISABLE_REGISTRATION` | `false` | Close public sign-up. `true` makes POST /api/auth/register refuse with 403 REGISTRATION_DISABLED, whatever the client. Sign-in, password reset and every existing account are unaffected — only account creation is gated. Use it to run a private instance once your own accounts exist. Reopening sign-up is this variable plus an api restart; nothing is rebuilt. |
+| `DISABLE_REGISTRATION` | `false` | Close public sign-up. `true` makes POST /api/auth/register refuse with 403 REGISTRATION_DISABLED, whatever the client. Sign-in, password reset and every existing account are unaffected — only account creation is gated. Use it to run a private instance once your own accounts exist. Reopening sign-up is this variable plus an api restart; nothing is rebuilt. The SPA reads the same posture and shows a closed-signups notice on /register instead of a form it cannot submit; NEWSLETTER_URL (Web section) optionally adds a link to it. |
 
 ## Server
 
@@ -78,6 +78,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | --- | --- | --- |
 | `WEB_PORT` | `8080` | Host port the web container publishes (maps to container :80). |
 | `API_BASE_URL` | Optional | Upstream API base URL for the nginx reverse proxy. Leave blank to use the compose default (the internal `api` service). |
+| `NEWSLETTER_URL` | Optional | Where /register sends people when DISABLE_REGISTRATION closes sign-up. The web entrypoint writes it into /config.js, so the SPA reads it at container start and changing it needs no rebuild. Optional, and UNSET IS THE DEFAULT: with no URL the closed-signups notice still appears, it just carries no link. Set it only if you actually run a mailing list your visitors should join. |
 | `APP_VERSION` | Optional | Optional version string (e.g. v0.1.0). LEAVE THIS COMMENTED OUT. The release workflow bakes APP_VERSION into the api image, and GET /api/health reports it. The api reads this file through compose's `env_file:`, and env_file OVERRIDES the image's baked value — so an uncommented, blank APP_VERSION here erases the released version and /api/health silently drops its `version` field. Commented out, the image's own stamp survives. Set it only to override the stamp deliberately. |
 | `ADVISOR_NGINX_PROXY_TIMEOUT` | `180s` | nginx proxy read timeout for advisor streaming responses. MUST exceed the app ADVISOR_STREAM_TIMEOUT_MS below, or nginx will cut the stream early. |
 | `CSV_IMPORT_NGINX_PROXY_TIMEOUT` | `300s` | nginx proxy read timeout for the dedicated /api/csv-import/ route. A large within-cap synchronous import can exceed nginx's default 60s; this raises the timeout for that route only (other routes unchanged). Keep CSV_IMPORT_CLAIM_TIMEOUT_SECONDS (api) ≥ 2 × this value — the two live in different containers and are hand-synced. |

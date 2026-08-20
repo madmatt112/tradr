@@ -103,23 +103,85 @@ async function settle() {
   });
 }
 
+const NEWSLETTER_URL = 'https://newsletter.example.test/subscribe';
+
+/** Put a newsletter URL on the runtime-config seam, the way /config.js does. */
+function setNewsletterUrl(url: string | undefined) {
+  if (url === undefined) {
+    delete window.__TRADR_CONFIG__;
+    return;
+  }
+  window.__TRADR_CONFIG__ = { ...window.__TRADR_CONFIG__, newsletterUrl: url };
+}
+
+/**
+ * Record WHAT THE PAGE SHOWED, IN ORDER — not just what it ended on.
+ *
+ * The assertion this replaces could not fail. It checked the DOM once before the
+ * config read resolved and once after, and the router paints nothing on either
+ * of those two ticks: delete the `configPending` guard and both checks still saw
+ * no form, because the form came and went in between them. A MutationObserver
+ * sees the frames the polling missed.
+ *
+ * Each state is classified from the live DOM and consecutive duplicates collapse,
+ * so the result is a sequence of screens rather than a mutation count.
+ */
+type Screen = 'EMPTY' | 'LOADING' | 'FORM' | 'NOTICE';
+
+function recordRenderSequence() {
+  const states: Screen[] = [];
+
+  const classify = (): Screen => {
+    if (document.querySelector('#email')) return 'FORM';
+    const text = document.body.textContent ?? '';
+    if (text.includes('Signups open at launch') || text.includes('Signups are closed')) {
+      return 'NOTICE';
+    }
+    if (text.includes('Loading...')) return 'LOADING';
+    return 'EMPTY';
+  };
+
+  const sample = () => {
+    const state = classify();
+    if (states[states.length - 1] !== state) states.push(state);
+  };
+
+  sample();
+  const observer = new MutationObserver(sample);
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+  return {
+    states,
+    stop() {
+      sample();
+      observer.disconnect();
+      return states;
+    },
+  };
+}
+
 beforeEach(() => {
   // lib/api's redirect latch and session flag are module-scoped and a fresh page
   // load is what normally resets them; this pair is that reset.
   markSessionStarted();
   markSessionEnded();
+  // An unconfigured build has no /config.js at all. Start every case there so a
+  // test that wants the newsletter link has to ask for it.
+  setNewsletterUrl(undefined);
 });
 
 afterEach(() => {
   cleanup();
   fetchSpy.mockRestore();
   setRouter(null);
+  setNewsletterUrl(undefined);
 });
 
 describe('/register with registration closed', () => {
   beforeEach(() => stubConfig(() => configResponse(false)));
 
   it('shows the launch notice with a newsletter link, and no form', async () => {
+    setNewsletterUrl(NEWSLETTER_URL);
     const { router } = renderAt('/register');
 
     expect(
@@ -127,7 +189,7 @@ describe('/register with registration closed', () => {
     ).toBeTruthy();
 
     const link = screen.getByRole('link', { name: 'Join the newsletter' });
-    expect(link.getAttribute('href')).toBe('https://www.tradr.cloud/newsletter');
+    expect(link.getAttribute('href')).toBe(NEWSLETTER_URL);
     // REQ-9.6: the notice is IN the app. Reading it must not have moved anyone
     // off the address they opened.
     expect(router.state.location.pathname).toBe('/register');
@@ -142,16 +204,44 @@ describe('/register with registration closed', () => {
     expect(screen.getByRole('link', { name: 'Log in' })).toBeTruthy();
   });
 
-  it('never paints the form first — the closed instance sees the notice or nothing', async () => {
+  it('without a configured newsletter, says signups are closed and links nowhere', async () => {
+    // The default for every self-hosted build: no /config.js, so no URL. The
+    // notice still has to appear, and it has to read as a finished sentence with
+    // no button under it.
     renderAt('/register');
 
-    // Before the config read resolves. A page that guessed "open" would have the
-    // fields on screen here and swap them out a tick later.
-    expect(screen.queryByLabelText('Email')).toBeNull();
+    expect(
+      await screen.findByText('Signups are closed', { selector: '[data-slot="card-title"]' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This instance isn't accepting new accounts. Ask whoever runs it if you need one.",
+      ),
+    ).toBeTruthy();
 
-    expect(await screen.findByText('Signups open at launch')).toBeTruthy();
-    // And the fields never appeared on the way there.
+    // No newsletter anything — not the button, not the sentence that points at it.
+    expect(screen.queryByRole('link', { name: 'Join the newsletter' })).toBeNull();
+    expect(screen.queryByText(/newsletter/i)).toBeNull();
+    expect(screen.queryByText('Signups open at launch')).toBeNull();
+
+    // Still no form, and still a way back for an existing account.
     expect(screen.queryByLabelText('Email')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Log in' })).toBeTruthy();
+  });
+
+  it('never paints the form first — the closed instance sees the notice or nothing', async () => {
+    const recorder = recordRenderSequence();
+    renderAt('/register');
+
+    expect(await screen.findByText('Signups are closed')).toBeTruthy();
+    const states = recorder.stop();
+
+    // THE REQUIREMENT (REQ-9.4): the form is not one of the screens on the way.
+    // Without the `configPending` guard this reads EMPTY > FORM > NOTICE.
+    expect(states).not.toContain('FORM');
+    // And the recorder was genuinely watching: it caught the interstitial the
+    // guard paints, which is the frame the old assertion slept through.
+    expect(states).toEqual(['EMPTY', 'LOADING', 'NOTICE']);
   });
 
   it('hides the register link on the login page', async () => {

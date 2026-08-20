@@ -15,11 +15,22 @@ import { useRegistrationEnabled } from '@/hooks/useRegistrationEnabled';
 import { useResendVerification } from '@/hooks/useResendVerification';
 import { detectBrowserTimezone } from '@/lib/browserTimezone';
 
-// Where someone sent here before launch can leave their address. An <a> and a
-// new tab, not a router <Link>: it is a different host, and REQ-9.6 wants this
-// page to stay on the app domain rather than bounce the visitor off the one they
-// chose to open.
-const NEWSLETTER_URL = 'https://www.tradr.cloud/newsletter';
+// Where someone sent here before launch can leave their address.
+//
+// READ AT RUNTIME, NEVER COMPILED IN. This SPA is the same build every
+// self-hoster runs, so a hardcoded URL would show an operator who closed signups
+// on their own private instance an invitation to somebody else's newsletter.
+// It comes from the existing /config.js seam (window.__TRADR_CONFIG__,
+// NEWSLETTER_URL) like every other deploy-time frontend setting, and it is
+// ABSENT by default: an unconfigured build gets the notice with no link.
+//
+// When it is set the link is an <a> and a new tab, not a router <Link>: it is a
+// different host, and REQ-9.6 wants this page to stay on the app domain rather
+// than bounce the visitor off the one they chose to open.
+function newsletterUrl(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return window.__TRADR_CONFIG__?.newsletterUrl || undefined;
+}
 
 // SF-3: this page is public and MUST NOT call useAuth() or mount the
 // ['auth','me'] query — the api client's global 401 interception would redirect
@@ -77,23 +88,30 @@ function RegisterPage() {
   }
 
   if (!registrationEnabled) {
+    // No newsletter configured — say signups are closed and stop there. The
+    // wording cannot mention a button that is not rendered, and it cannot
+    // promise a launch the operator of this instance never announced.
+    const newsletter = newsletterUrl();
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
           <CardHeader>
-            <CardTitle>Signups open at launch</CardTitle>
+            <CardTitle>{newsletter ? 'Signups open at launch' : 'Signups are closed'}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              New accounts aren&apos;t open yet. Join the newsletter and we&apos;ll tell you the day
-              they are.
+              {newsletter
+                ? "New accounts aren't open yet. Join the newsletter and we'll tell you the day they are."
+                : "This instance isn't accepting new accounts. Ask whoever runs it if you need one."}
             </p>
 
-            <Button asChild className="w-full cursor-pointer">
-              <a href={NEWSLETTER_URL} target="_blank" rel="noreferrer">
-                Join the newsletter
-              </a>
-            </Button>
+            {newsletter && (
+              <Button asChild className="w-full cursor-pointer">
+                <a href={newsletter} target="_blank" rel="noreferrer">
+                  Join the newsletter
+                </a>
+              </Button>
+            )}
 
             <p className="text-center text-sm text-muted-foreground">
               Already have an account?{' '}

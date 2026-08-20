@@ -12,6 +12,9 @@
 #   POSTHOG_PUBLIC_ENVIRONMENT -> posthogPublicEnvironment  (deployment label
 #     stamped on every frontend event; absent => events are unstamped)
 #   APP_VERSION          -> appVersion   (corner version badge; absent => the SPA shows "localdev")
+#   NEWSLETTER_URL       -> newsletterUrl  (the link on /register's signups-closed
+#     notice; absent => the notice renders with no link, which is the right
+#     default for a self-hosted instance whose operator closed sign-up)
 #
 # APP_VERSION is BAKED into the image (Dockerfile.web ARG/ENV), not injected from
 # .env — see the metrics section at the bottom of this script.
@@ -72,6 +75,7 @@ emit posthogPublicKey   "${POSTHOG_PUBLIC_KEY:-}"
 emit posthogPublicHost  "${POSTHOG_PUBLIC_HOST:-}"
 emit posthogPublicEnvironment "${POSTHOG_PUBLIC_ENVIRONMENT:-}"
 emit appVersion         "${APP_VERSION:-}"
+emit newsletterUrl      "${NEWSLETTER_URL:-}"
 
 # Always-on image byte cap: emit the operator override or the shared default.
 # Guard the override — only a non-negative integer is safe to emit as a bare JSON
