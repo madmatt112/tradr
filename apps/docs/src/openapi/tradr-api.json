@@ -2489,6 +2489,37 @@
         ]
       }
     },
+    "/api/config": {
+      "get": {
+        "description": "Unauthenticated and cacheable (`Cache-Control - public, max-age=60`). Returns exactly one field, `registrationEnabled`, so the web app can render either the sign-up form or the \"signups open at launch\" notice instead of letting a visitor complete a form that the server will refuse. This surface is posture only - by design it never reports secrets, provider keys, database details, or which optional capabilities an instance has configured. The field list is an allow-list pinned by a test; it grows only by explicit decision.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "registrationEnabled": {
+                      "description": "False when the operator set DISABLE_REGISTRATION, in which case POST /api/auth/register answers 403 REGISTRATION_DISABLED. The server refusal is the control; this field only spares the visitor a wasted form.\n",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "registrationEnabled"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Instance posture."
+          }
+        },
+        "summary": "Public instance posture the SPA needs before rendering a form.",
+        "tags": [
+          "Platform"
+        ]
+      }
+    },
     "/api/csv-import/commit": {
       "post": {
         "description": "Second call of the preview→commit handshake. Consumes the single-use `token` minted by `/api/csv-import/preview` and atomically replays the staged positions/fills (firing the close-hook ledger entries inside one bulk transaction). Idempotent: re-committing an already-committed token returns the original summary, never a second import. A stale token (replaced by a newer preview), an expired token, a blocked preview, an in-flight commit, or unconfirmed near-total duplicates each return a specific 409 with a stable code; an unknown token returns 404. Set `confirmDuplicates: true` to import past a near-total-overlap (≥90%) duplicate block. Tier enforcement (gated non-admin free users): the commit refuses 403 when the lifetime CSV-import allowance is exhausted, when the target account is not the writable designation while over the account cap, or when the batch would exceed the position cap (atomic whole-batch refusal — the message names the cap and the batch size). A tier refusal leaves the staged preview INTACT: the same token is re-committable after re-designation/upgrade, no re-upload. Only successful commits consume the lifetime allowance — previews, refusals, and failed commits never do.\n",
