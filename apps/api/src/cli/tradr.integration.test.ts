@@ -32,10 +32,13 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
+import * as dbModule from '@/db';
 import { MIGRATIONS_LOCK_KEY, POST_MIGRATIONS_LOCK_KEY } from '@/db/migrate';
 import * as schema from '@/db/schema';
+import { loginUser } from '@/features/auth/auth.service';
+import { config } from '@/lib/config';
 
-import { gatherStatus, resetPassword } from './tradr';
+import { createUser, gatherStatus, resetPassword } from './tradr';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = path.resolve(__dirname, '../db/migrations');
@@ -453,4 +456,119 @@ describe('Req 6.8 — cross-session advisory-lock detection (connection A holds,
       await b.end();
     }
   }, 30_000);
+});
+
+describe('REQ-8.3 — create-user makes an account that logs in through the real auth path', () => {
+  const DB = `tradr_test_cli_createuser_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  it('creates a row whose defaults match the register path, and authenticates', async () => {
+    const sql = client(url);
+    try {
+      const email = 'owner@example.com';
+      expect(await createUser(sql, email, 'first-password-123')).toBe(true);
+
+      const [row] = await sql<
+        {
+          password_hash: string;
+          email_verified: boolean;
+          is_admin: boolean;
+          timezone: string | null;
+        }[]
+      >`
+        SELECT password_hash, email_verified, is_admin, timezone
+        FROM users WHERE email = ${email}
+      `;
+      // Same hashing as register — the account authenticates with no special case.
+      expect(await bcrypt.compare('first-password-123', row.password_hash)).toBe(true);
+      // isEmailConfigured() is false under the test env, so registerUser would
+      // write verified: true here too.
+      expect(row.email_verified).toBe(true);
+      // Never silently an admin — SEED_ADMIN_EMAIL is the mechanism for that.
+      expect(row.is_admin).toBe(false);
+      // Seeded, never NULL: NULL is reserved for rows predating the column.
+      expect(row.timezone).toBe('UTC');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('logs in through loginUser — the same service the login endpoint calls', async () => {
+    const sql = client(url);
+    const scratchDb = drizzle(sql, { schema });
+    try {
+      const email = 'login-me@example.com';
+      expect(await createUser(sql, email, 'a-real-password-123')).toBe(true);
+
+      // Point the auth service's db at this scratch database for the duration
+      // of the assertion. test-setup.ts re-binds `db` before every test and
+      // clears it after, so nothing leaks to a sibling test.
+      (dbModule as Record<string, unknown>).db = scratchDb;
+
+      const { user, token } = await loginUser(email, 'a-real-password-123');
+      expect(user.email).toBe(email);
+      expect(token).toMatch(/^[0-9a-f]{64}$/);
+
+      // A real session row was written, so the account is usable, not merely present.
+      const sessions = await sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM sessions WHERE user_id = ${user.id}
+      `;
+      expect(sessions[0].count).toBe('1');
+
+      await expect(loginUser(email, 'the-wrong-password')).rejects.toThrow();
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('refuses to overwrite an existing account, leaving it byte-for-byte untouched', async () => {
+    const sql = client(url);
+    try {
+      const email = 'taken@example.com';
+      expect(await createUser(sql, email, 'the-original-password')).toBe(true);
+      const [before] = await sql<{ password_hash: string; id: string }[]>`
+        SELECT id, password_hash FROM users WHERE email = ${email}
+      `;
+
+      // Second run: reports failure and writes nothing.
+      expect(await createUser(sql, email, 'a-clobbering-password')).toBe(false);
+
+      const rows = await sql<{ password_hash: string; id: string }[]>`
+        SELECT id, password_hash FROM users WHERE email = ${email}
+      `;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(before.id);
+      expect(rows[0].password_hash).toBe(before.password_hash);
+      expect(await bcrypt.compare('the-original-password', rows[0].password_hash)).toBe(true);
+      expect(await bcrypt.compare('a-clobbering-password', rows[0].password_hash)).toBe(false);
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('still creates the account with DISABLE_REGISTRATION set — that is the entire point', async () => {
+    const sql = client(url);
+    const original = config.DISABLE_REGISTRATION;
+    try {
+      config.DISABLE_REGISTRATION = true;
+      const email = 'closed-signups@example.com';
+      expect(await createUser(sql, email, 'works-anyway-123')).toBe(true);
+      const [row] = await sql<{ password_hash: string }[]>`
+        SELECT password_hash FROM users WHERE email = ${email}
+      `;
+      expect(await bcrypt.compare('works-anyway-123', row.password_hash)).toBe(true);
+    } finally {
+      config.DISABLE_REGISTRATION = original;
+      await sql.end();
+    }
+  });
 });

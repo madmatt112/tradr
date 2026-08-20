@@ -14,7 +14,8 @@ import {
   diffPost,
   decodeLockKey,
   selectExitCode,
-  parseResetPasswordArgs,
+  parseEmailPasswordArgs,
+  normalizeEmail,
   generatePassword,
   type JournalEntry,
 } from './tradr';
@@ -148,32 +149,32 @@ describe('selectExitCode', () => {
   });
 });
 
-describe('parseResetPasswordArgs', () => {
+describe('parseEmailPasswordArgs (reset-password / create-user share the grammar)', () => {
   it('parses a bare email with no password (generate path)', () => {
-    expect(parseResetPasswordArgs(['user@example.com'])).toEqual({ email: 'user@example.com' });
+    expect(parseEmailPasswordArgs(['user@example.com'])).toEqual({ email: 'user@example.com' });
   });
 
   it('parses --password <value>', () => {
-    expect(parseResetPasswordArgs(['user@example.com', '--password', 'secret123'])).toEqual({
+    expect(parseEmailPasswordArgs(['user@example.com', '--password', 'secret123'])).toEqual({
       email: 'user@example.com',
       password: 'secret123',
     });
   });
 
   it('parses --password=<value>', () => {
-    expect(parseResetPasswordArgs(['user@example.com', '--password=secret123'])).toEqual({
+    expect(parseEmailPasswordArgs(['user@example.com', '--password=secret123'])).toEqual({
       email: 'user@example.com',
       password: 'secret123',
     });
   });
 
   it('errors when no email is supplied', () => {
-    expect(parseResetPasswordArgs([]).error).toBeDefined();
-    expect(parseResetPasswordArgs(['--password', 'x']).error).toBeDefined();
+    expect(parseEmailPasswordArgs([]).error).toBeDefined();
+    expect(parseEmailPasswordArgs(['--password', 'x']).error).toBeDefined();
   });
 
   it('errors when --password has no value', () => {
-    expect(parseResetPasswordArgs(['user@example.com', '--password']).error).toBeDefined();
+    expect(parseEmailPasswordArgs(['user@example.com', '--password']).error).toBeDefined();
   });
 });
 
@@ -184,5 +185,21 @@ describe('generatePassword', () => {
     expect(a.length).toBeGreaterThanOrEqual(16);
     expect(a).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('normalizeEmail', () => {
+  it('trims and lowercases, so the row matches what login looks up', () => {
+    expect(normalizeEmail('  Owner@Example.COM ')).toBe('owner@example.com');
+  });
+
+  it('leaves an already-normalised address alone', () => {
+    expect(normalizeEmail('owner@example.com')).toBe('owner@example.com');
+  });
+
+  it('rejects a value that is not an address (would create an unusable account)', () => {
+    expect(normalizeEmail('not-an-email')).toBeUndefined();
+    expect(normalizeEmail('')).toBeUndefined();
+    expect(normalizeEmail('@example.com')).toBeUndefined();
   });
 });
