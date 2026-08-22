@@ -129,3 +129,21 @@ describe('deltaEOK (OKLab Euclidean distinctness)', () => {
     expect(deltaEOK(parse('oklch(0.6 0.2 27)'), parse('oklch(0.6 0.2 150)'))).toBeGreaterThan(0.05);
   });
 });
+
+describe('extractBlockBody selector escaping', () => {
+  it('locates a block whose selector contains regex metacharacters', () => {
+    const css = `:root { --a: 1; }\n:root[data-theme='light'] { --b: 2; }\n`;
+    const body = extractBlockBody(css, ":root[data-theme='light']");
+    expect(body).not.toBeNull();
+    expect(parseDeclarations(body).get('--b')).toBe('2');
+  });
+
+  it('does not let an unescaped dot match arbitrary characters', () => {
+    // Before the escape fix, ".dark" compiled to the regex /.dark\s*\{/ and
+    // would match "xdark {" — the dot must be literal.
+    const css = `xdark { --a: 1; }\n.dark { --b: 2; }\n`;
+    const body = extractBlockBody(css, '.dark');
+    expect(parseDeclarations(body).get('--b')).toBe('2');
+    expect(parseDeclarations(body).has('--a')).toBe(false);
+  });
+});
