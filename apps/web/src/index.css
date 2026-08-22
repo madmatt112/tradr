@@ -61,6 +61,12 @@
   --color-border: oklch(0.64 0 0);
   --color-input: oklch(0.64 0 0);
 
+  /* --- Hairline: decorative elevation lines only (visual-redesign). Sits
+         BELOW the >=3:1 separator floor by design - never a meaningful
+         separator; --color-border keeps that job. Values mirror the shared
+         token files (tokens.css --hairline). --- */
+  --color-hairline: oklch(0.9 0 0);
+
   /* --- Brand accent: terminal amber (R2.1) --- */
   --color-primary: oklch(0.74 0.15 75);
   --color-primary-foreground: oklch(0.2 0.02 75);
@@ -148,6 +154,9 @@
      background (0.30 on 0.16 bg is only ~1.42:1). */
   --color-border: oklch(0.5 0.006 265);
   --color-input: oklch(0.5 0.006 265);
+
+  /* --- Hairline (dark) --- */
+  --color-hairline: oklch(0.3 0.006 265);
 
   /* --- Brand accent (dark) --- */
   --color-primary: oklch(0.78 0.15 78);

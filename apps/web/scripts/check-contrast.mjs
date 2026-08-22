@@ -156,6 +156,7 @@ function composite(fg, alpha, bg) {
 // ---- token roles ----------------------------------------------------------
 // Net-new `@theme` roles (visual-design Task 2) for the R1.4 both-theme check.
 const NET_NEW_ROLES = [
+  '--color-hairline',
   '--color-gain',
   '--color-loss',
   '--color-flat',
