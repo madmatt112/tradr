@@ -112,6 +112,14 @@ jobs:
       - name: Check fonts (transfer budget + font-display + subset + reduced-motion)
         run: node apps/web/scripts/check-fonts.mjs
 
+      # CI-failing — the docs token mirror must match the web token source over
+      # the shared role map (the two files use different substrates by design:
+      # @theme --color-* vs bare --* dark-canonical, so equality is checked per
+      # role, per theme, on alias-resolved values); exits non-zero on any drift
+      # or missing role.
+      - name: Check token sync (web source vs docs mirror)
+        run: node apps/web/scripts/check-token-sync.mjs
+
   # The DB-bound half of the vitest workspace: the api + migrations projects.
   test-api:
     runs-on: ubuntu-latest

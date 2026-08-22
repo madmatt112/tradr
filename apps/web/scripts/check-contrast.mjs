@@ -49,7 +49,7 @@ const REPORT_MODE = false;
 // (which has no following `{`) is not mistaken for the `.dark` block. We then
 // pull `--name: value;` declarations out of each body.
 function extractBlockBody(css, header) {
-  const headerRe = new RegExp(`${header.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*\\{`);
+  const headerRe = new RegExp(`${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{`);
   const m = headerRe.exec(css);
   if (!m) return null;
   const open = css.indexOf('{', m.index);
