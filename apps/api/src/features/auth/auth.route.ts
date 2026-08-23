@@ -441,6 +441,12 @@ userPreferencesRouter.put('/users/me/timezone', validate('json', UserTimezoneSch
  *                   items: { type: string }
  *                   description: Surface keys already dismissed, as a set.
  *                   example: []
+ *                 sidebarPinned:
+ *                   type: boolean
+ *                   description: >
+ *                     Whether the nav rail is pinned to its expanded state.
+ *                     Absent until the user (or the client's one-time seed)
+ *                     has expressed a preference.
  *       401: { description: Authentication required. }
  */
 userPreferencesRouter.get('/users/me/onboarding', async (c) => {
@@ -483,6 +489,9 @@ userPreferencesRouter.get('/users/me/onboarding', async (c) => {
  *                   the whole set is never sent. Ignored once the set holds 64
  *                   keys.
  *                 example: partial-close
+ *               sidebarPinned:
+ *                 type: boolean
+ *                 description: Pin (true) or unpin (false) the expanded nav rail.
  *     responses:
  *       200: { description: 'The merged onboarding preference, in the same shape as the GET.' }
  *       400: { description: 'Unknown field, empty body, or an invalid status or timestamp.' }

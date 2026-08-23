@@ -82,6 +82,7 @@ async function getOnboarding(cookie: string) {
     status: string;
     coachMarksSeen: string[];
     calculatorFirstUsedAt?: string;
+    sidebarPinned?: boolean;
   };
 }
 
@@ -198,6 +199,43 @@ describe('PATCH /api/users/me/onboarding merges rather than replaces', () => {
       status: 'done',
       calculatorFirstUsedAt: at,
       coachMarksSeen: ['partial-close'],
+    });
+  });
+
+  it('sets sidebarPinned without disturbing the other fields, in both directions', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchOnboarding(cookie, { status: 'active' });
+    await patchOnboarding(cookie, { coachMarkSeen: 'csv-import' });
+
+    let res = await patchOnboarding(cookie, { sidebarPinned: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: 'active',
+      coachMarksSeen: ['csv-import'],
+      sidebarPinned: true,
+    });
+
+    // Unpinning is the same merge — false must round-trip, not read as absent.
+    res = await patchOnboarding(cookie, { sidebarPinned: false });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: 'active',
+      coachMarksSeen: ['csv-import'],
+      sidebarPinned: false,
+    });
+  });
+
+  it('leaves sidebarPinned untouched by unrelated patches', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchOnboarding(cookie, { sidebarPinned: true });
+
+    await patchOnboarding(cookie, { status: 'done' });
+    const res = await patchOnboarding(cookie, { coachMarkSeen: 'partial-close' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: 'done',
+      coachMarksSeen: ['partial-close'],
+      sidebarPinned: true,
     });
   });
 

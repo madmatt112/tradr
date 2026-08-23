@@ -27,6 +27,12 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 // ThemeToggle needs a QueryClient; irrelevant to the link conditional.
+// The pin preference is a useQuery + useMutation pair under the hood; pin the
+// mock EXPANDED so the label-text assertions below read the visible nav.
+vi.mock('@/features/onboarding/hooks/useSidebarPin', () => ({
+  useSidebarPin: () => ({ pinned: true, setPinned: () => {} }),
+}));
+
 vi.mock('@/components/layout/ThemeToggle', () => ({
   ThemeToggle: () => null,
 }));
@@ -70,7 +76,7 @@ afterEach(() => {
 });
 
 describe('Sidebar — Admin link conditional', () => {
-  it('renders the Admin link for admin users, below Settings, with cursor-pointer', () => {
+  it('renders the Admin link for admin users, closing the System group, with cursor-pointer', () => {
     mockAuth.user = { email: 'admin@example.com', isAdmin: true };
     const { container } = render(<Sidebar />);
 
@@ -82,7 +88,10 @@ describe('Sidebar — Admin link conditional', () => {
     const hrefs = Array.from(container.querySelectorAll('nav a')).map((a) =>
       a.getAttribute('href'),
     );
-    expect(hrefs.indexOf('/admin')).toBe(hrefs.indexOf('/settings') + 1);
+    // The desk nav's SYSTEM group closes with Admin (Settings → Changelog →
+    // Docs → Admin), so it is the last nav entry rather than Settings + 1.
+    expect(hrefs.indexOf('/admin')).toBeGreaterThan(hrefs.indexOf('/settings'));
+    expect(hrefs.indexOf('/admin')).toBe(hrefs.length - 1);
   });
 
   it('does NOT render the Admin link for non-admin users', () => {

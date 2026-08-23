@@ -1,24 +1,36 @@
 import { Link } from '@tanstack/react-router';
 import {
+  ArrowDownToLine,
+  BarChart3,
   BookOpen,
-  LineChart,
+  Calculator,
+  CreditCard,
+  Landmark,
+  LayoutDashboard,
+  List,
+  LogOut,
   Megaphone,
+  PanelLeftClose,
+  PanelLeftOpen,
   Receipt,
+  Settings,
   Shield,
-  Sigma,
   Sparkles,
-  Upload,
+  TrendingUp,
+  type LucideIcon,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
 
 import { ThemeToggle } from '@/components/layout/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { hasNewReleases, useChangelogReleases } from '@/features/changelog/hooks/useChangelog';
+import { useSidebarPin } from '@/features/onboarding/hooks/useSidebarPin';
 import { derivePresetRange } from '@/features/performance/utils/derivePresetRange';
 import { useAuth } from '@/hooks/useAuth';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 import { docsUrl } from '@/lib/docs';
 import { cn } from '@/lib/utils';
+import { useDrawerStore } from '@/stores/drawer.store';
 
 // Default search params for the Performance route. The route's
 // `validateSearch` requires `granularity`, `start`, and `end`; the sidebar
@@ -45,12 +57,73 @@ function buildPerformanceDefaults(tz: string): {
   return { granularity: range.granularity, start: range.start, end: range.end, tz };
 }
 
-const COLLAPSED_KEY = 'sidebar-collapsed';
+// The direction-B desk chrome: a 56px icon rail by default, pinnable to a
+// 208px labeled state. The pin is a per-user preference (useSidebarPin); the
+// side drawer opening auto-collapses the rail to icons and closing restores
+// the pin — derived (`pinned && !drawerOpen`), never juggled as state.
+const RAIL_WIDTH = 'w-14'; // 56px
+const EXPANDED_WIDTH = 'w-52'; // 208px
 
-const PERFORMANCE_NAV_CLASS = cn(
-  'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-  '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
+// One nav item in either chrome state. The accessible name is ALWAYS the
+// aria-label — the rail state has no inline label at all (its hover label is
+// the native title tooltip; a styled flyout cannot escape the nav's scroll
+// container) — so the name is identical across both states.
+const ITEM_EXPANDED = cn(
+  'cursor-pointer flex items-center gap-2.5 rounded-md border-l-2 border-transparent px-2 py-1.5',
+  'text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground',
+  '[&.active]:bg-secondary [&.active]:text-foreground [&.active]:border-primary [&.active]:rounded-l-none',
 );
+const ITEM_RAIL = cn(
+  'cursor-pointer relative grid h-[34px] w-[38px] place-items-center rounded-md',
+  'text-muted-foreground hover:bg-accent hover:text-foreground',
+  '[&.active]:bg-secondary [&.active]:text-foreground',
+  // The amber active tick, drawn just off the item's left edge (mock: 2px bar).
+  "[&.active]:before:absolute [&.active]:before:-left-[9px] [&.active]:before:top-2 [&.active]:before:bottom-2 [&.active]:before:w-0.5 [&.active]:before:bg-primary [&.active]:before:content-['']",
+);
+
+function itemClass(expanded: boolean): string {
+  return expanded ? ITEM_EXPANDED : ITEM_RAIL;
+}
+
+function ItemContent({
+  expanded,
+  label,
+  Icon,
+  badge,
+}: {
+  expanded: boolean;
+  label: string;
+  Icon: LucideIcon;
+  badge?: ReactNode;
+}) {
+  return (
+    <>
+      {/* The badge dot anchors to the icon, not the label — the rail state
+          renders no inline label at all. */}
+      <span className="relative">
+        <Icon className="h-4 w-4" aria-hidden="true" />
+        {badge}
+      </span>
+      {expanded && (
+        <span aria-hidden="true" className="truncate">
+          {label}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** Mono uppercase group label (expanded) / hairline divider (rail). */
+function GroupLabel({ expanded, label }: { expanded: boolean; label: string }) {
+  if (!expanded) {
+    return <div aria-hidden="true" className="mx-auto my-2 w-[22px] border-t border-hairline" />;
+  }
+  return (
+    <div className="px-2 pb-1 pt-3 font-mono text-xs uppercase tracking-[0.12em] text-muted-foreground/80">
+      {label}
+    </div>
+  );
+}
 
 export function Sidebar() {
   const { user, logout } = useAuth();
@@ -64,13 +137,18 @@ export function Sidebar() {
   // Badge data: error/loading mean no `data`, so the badge is simply absent
   // (REQ-5(a)(5)) — the hook's `retry: false` keeps failures quiet.
   const changelogReleases = useChangelogReleases();
-  const [collapsed, setCollapsed] = useState(() => {
-    return localStorage.getItem(COLLAPSED_KEY) === 'true';
-  });
+  const { pinned, setPinned } = useSidebarPin();
+  const drawerOpen = useDrawerStore((s) => s.isOpen);
 
-  useEffect(() => {
-    localStorage.setItem(COLLAPSED_KEY, String(collapsed));
-  }, [collapsed]);
+  // Auto-collapse while the drawer is open; the pin survives and the labeled
+  // state comes back on its own when the drawer closes.
+  const expanded = pinned && !drawerOpen;
+
+  const changelogBadge = hasNewReleases(changelogReleases.data) ? (
+    <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-primary">
+      <span className="sr-only">New updates available</span>
+    </span>
+  ) : undefined;
 
   return (
     // `sticky top-0 h-screen` decouples the rail from the page: as a plain flex
@@ -80,89 +158,117 @@ export function Sidebar() {
     // `align-items: stretch` from re-growing it.
     <aside
       className={cn(
-        'sticky top-0 flex h-screen flex-col border-r bg-card transition-[width] duration-200',
-        collapsed ? 'w-16' : 'w-60',
+        'sticky top-0 flex h-screen flex-col border-r border-hairline bg-card',
+        'transition-[width] duration-200 motion-reduce:duration-0',
+        expanded ? EXPANDED_WIDTH : RAIL_WIDTH,
       )}
     >
-      <div className="flex shrink-0 items-center justify-between border-b p-3">
-        {!collapsed && <span className="text-lg font-semibold">Tradr</span>}
-        <div className="flex items-center gap-1">
-          <ThemeToggle />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="cursor-pointer"
-            onClick={() => setCollapsed((c) => !c)}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? '»' : '«'}
-          </Button>
-        </div>
+      <div
+        className={cn(
+          'flex shrink-0 items-center py-3',
+          expanded ? 'justify-between px-3' : 'flex-col gap-1 px-0',
+        )}
+      >
+        {expanded ? (
+          <span className="flex items-baseline gap-1.5 text-base font-bold">
+            <span aria-hidden="true" className="text-xs text-primary">
+              ▴
+            </span>
+            Tradr
+          </span>
+        ) : (
+          <span aria-hidden="true" className="text-base text-primary">
+            ▴
+          </span>
+        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="cursor-pointer text-muted-foreground"
+          onClick={() => setPinned(!pinned)}
+          aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
+        >
+          {expanded ? (
+            <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+          ) : (
+            <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+          )}
+        </Button>
       </div>
 
       {/* `min-h-0` is what lets this shrink below its content height (a flex
           child's default `min-height: auto` would otherwise push the footer
           off the bottom); `overflow-y-auto` then scrolls the links themselves
-          on a short viewport, leaving the footer pinned. */}
-      <nav className="min-h-0 flex-1 overflow-y-auto p-2">
+          on a short viewport, leaving the footer pinned. (It is also why the
+          rail's hover labels are native title tooltips — a styled flyout could
+          not escape this scroll container.) */}
+      <nav
+        className={cn(
+          'min-h-0 flex-1 overflow-y-auto py-1',
+          expanded ? 'px-2' : 'flex flex-col items-center gap-1 px-0',
+        )}
+      >
         <Link
           to="/dashboard"
-          className={cn(
-            'flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Dashboard"
+          title={expanded ? undefined : 'Dashboard'}
+          className={itemClass(expanded)}
         >
-          <span>▦</span>
-          {!collapsed && <span>Dashboard</span>}
+          <ItemContent expanded={expanded} label="Dashboard" Icon={LayoutDashboard} />
         </Link>
         <Link
           to="/advisor"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Advisor"
+          title={expanded ? undefined : 'Advisor'}
+          className={itemClass(expanded)}
         >
-          <Sparkles className="h-4 w-4" aria-hidden="true" />
-          {!collapsed && <span>Advisor</span>}
+          <ItemContent expanded={expanded} label="Advisor" Icon={Sparkles} />
         </Link>
+
+        <GroupLabel expanded={expanded} label="Trade" />
         <Link
           to="/positions"
-          className={cn(
-            'flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Positions"
+          title={expanded ? undefined : 'Positions'}
+          className={itemClass(expanded)}
         >
-          <span>◈</span>
-          {!collapsed && <span>Positions</span>}
-        </Link>
-        <Link
-          to="/import"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
-        >
-          <Upload className="h-4 w-4" aria-hidden="true" />
-          {!collapsed && <span>Import</span>}
+          <ItemContent expanded={expanded} label="Positions" Icon={TrendingUp} />
         </Link>
         <Link
           to="/calculator"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Calculator"
+          title={expanded ? undefined : 'Calculator'}
+          className={itemClass(expanded)}
         >
-          <span>∑</span>
-          {!collapsed && <span>Calculator</span>}
+          <ItemContent expanded={expanded} label="Calculator" Icon={Calculator} />
         </Link>
+        <Link
+          to="/options"
+          aria-label="Options"
+          title={expanded ? undefined : 'Options'}
+          className={itemClass(expanded)}
+        >
+          <ItemContent expanded={expanded} label="Options" Icon={List} />
+        </Link>
+        <Link
+          to="/import"
+          aria-label="Import"
+          title={expanded ? undefined : 'Import'}
+          className={itemClass(expanded)}
+        >
+          <ItemContent expanded={expanded} label="Import" Icon={ArrowDownToLine} />
+        </Link>
+
+        <GroupLabel expanded={expanded} label="Review" />
         {timezone ? (
           <Link
             to="/performance"
             search={() => buildPerformanceDefaults(timezone)}
-            className={PERFORMANCE_NAV_CLASS}
+            aria-label="Performance"
+            title={expanded ? undefined : 'Performance'}
+            className={itemClass(expanded)}
           >
-            <LineChart className="h-4 w-4" aria-hidden="true" />
-            {!collapsed && <span>Performance</span>}
+            <ItemContent expanded={expanded} label="Performance" Icon={BarChart3} />
           </Link>
         ) : (
           // `role` and `tabIndex` are what make the inert state perceivable:
@@ -174,71 +280,60 @@ export function Sidebar() {
           <span
             role="link"
             aria-disabled="true"
+            aria-label="Performance"
+            title={expanded ? undefined : 'Performance'}
             tabIndex={0}
-            className={cn(PERFORMANCE_NAV_CLASS, 'pointer-events-none opacity-50')}
+            className={cn(itemClass(expanded), 'pointer-events-none opacity-50')}
           >
-            <LineChart className="h-4 w-4" aria-hidden="true" />
-            {!collapsed && <span>Performance</span>}
+            <ItemContent expanded={expanded} label="Performance" Icon={BarChart3} />
           </span>
         )}
         <Link
-          to="/options"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
-        >
-          <Sigma className="h-4 w-4" aria-hidden="true" />
-          {!collapsed && <span>Options</span>}
-        </Link>
-        <Link
           to="/accounting/expenses"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Accounting"
+          title={expanded ? undefined : 'Accounting'}
+          className={itemClass(expanded)}
         >
-          <Receipt className="h-4 w-4" aria-hidden="true" />
-          {!collapsed && <span>Accounting</span>}
+          <ItemContent expanded={expanded} label="Accounting" Icon={Receipt} />
         </Link>
         <Link
           to="/accounts"
-          className={cn(
-            'flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Accounts"
+          title={expanded ? undefined : 'Accounts'}
+          className={itemClass(expanded)}
         >
-          <span>⊞</span>
-          {!collapsed && <span>Accounts</span>}
+          <ItemContent expanded={expanded} label="Accounts" Icon={CreditCard} />
         </Link>
         <Link
           to="/brokerages"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Brokerages"
+          title={expanded ? undefined : 'Brokerages'}
+          className={itemClass(expanded)}
         >
-          <span>⌂</span>
-          {!collapsed && <span>Brokerages</span>}
+          <ItemContent expanded={expanded} label="Brokerages" Icon={Landmark} />
+        </Link>
+
+        <GroupLabel expanded={expanded} label="System" />
+        <Link
+          to="/settings"
+          aria-label="Settings"
+          title={expanded ? undefined : 'Settings'}
+          className={itemClass(expanded)}
+        >
+          <ItemContent expanded={expanded} label="Settings" Icon={Settings} />
         </Link>
         <Link
           to="/changelog"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
+          aria-label="Changelog"
+          title={expanded ? undefined : 'Changelog'}
+          className={itemClass(expanded)}
         >
-          {/* The dot anchors to the icon (relative wrapper), not the label —
-              the collapsed w-16 rail hides all label <span>s. */}
-          <span className="relative">
-            <Megaphone className="h-4 w-4" aria-hidden="true" />
-            {hasNewReleases(changelogReleases.data) && (
-              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-primary">
-                <span className="sr-only">New updates available</span>
-              </span>
-            )}
-          </span>
-          {!collapsed && <span>Changelog</span>}
+          <ItemContent
+            expanded={expanded}
+            label="Changelog"
+            Icon={Megaphone}
+            badge={changelogBadge}
+          />
         </Link>
         {/* The documentation lives on its own host, so this is an <a>, not a
             router <Link>. New tab: a reader following it is mid-task and should
@@ -247,50 +342,46 @@ export function Sidebar() {
           href={docsUrl('home')}
           target="_blank"
           rel="noreferrer"
-          title="Documentation"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-          )}
+          aria-label="Docs"
+          className={itemClass(expanded)}
         >
-          <BookOpen className="h-4 w-4" aria-hidden="true" />
-          {!collapsed && <span>Docs</span>}
+          <ItemContent expanded={expanded} label="Docs" Icon={BookOpen} />
         </a>
-        <Link
-          to="/settings"
-          className={cn(
-            'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-            '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-          )}
-        >
-          <span>⚙</span>
-          {!collapsed && <span>Settings</span>}
-        </Link>
         {user?.isAdmin && (
           <Link
             to="/admin"
-            className={cn(
-              'cursor-pointer flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent',
-              '[&.active]:bg-primary/10 [&.active]:text-primary [&.active]:font-medium',
-            )}
+            aria-label="Admin"
+            title={expanded ? undefined : 'Admin'}
+            className={itemClass(expanded)}
           >
-            <Shield className="h-4 w-4" aria-hidden="true" />
-            {!collapsed && <span>Admin</span>}
+            <ItemContent expanded={expanded} label="Admin" Icon={Shield} />
           </Link>
         )}
       </nav>
 
-      <div className="shrink-0 border-t p-3">
-        {!collapsed && user && (
-          <p className="mb-2 truncate text-xs text-muted-foreground">{user.email}</p>
+      {/* Bottom cluster: theme + session. In the rail state everything is
+          icon-sized; the accessible names never change. */}
+      <div
+        className={cn(
+          'shrink-0 border-t border-hairline p-2',
+          expanded ? 'px-3 py-3' : 'flex flex-col items-center gap-1',
         )}
-        <Button
-          variant="ghost"
-          size={collapsed ? 'icon-sm' : 'sm'}
-          className="w-full cursor-pointer"
-          onClick={() => logout.mutate()}
-        >
-          {collapsed ? '⏻' : 'Log out'}
-        </Button>
+      >
+        {expanded && user && (
+          <p className="mb-2 truncate font-mono text-xs text-muted-foreground">{user.email}</p>
+        )}
+        <div className={cn('flex items-center', expanded ? 'justify-between' : 'flex-col gap-1')}>
+          <ThemeToggle />
+          <Button
+            variant="ghost"
+            size={expanded ? 'sm' : 'icon-sm'}
+            className="cursor-pointer text-muted-foreground"
+            onClick={() => logout.mutate()}
+            aria-label="Log out"
+          >
+            {expanded ? 'Log out' : <LogOut className="h-4 w-4" aria-hidden="true" />}
+          </Button>
+        </div>
       </div>
     </aside>
   );

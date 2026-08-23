@@ -28,6 +28,12 @@ vi.mock('@/features/changelog/hooks/useChangelog', () => ({
   hasNewReleases: () => false,
 }));
 
+// The pin preference is a useQuery + useMutation pair under the hood; pin the
+// mock EXPANDED so the label-text assertions below read the visible nav.
+vi.mock('@/features/onboarding/hooks/useSidebarPin', () => ({
+  useSidebarPin: () => ({ pinned: true, setPinned: () => {} }),
+}));
+
 vi.mock('@/components/layout/ThemeToggle', () => ({ ThemeToggle: () => null }));
 
 // The stored reporting timezone is a useQuery; stub it so the sidebar mounts
