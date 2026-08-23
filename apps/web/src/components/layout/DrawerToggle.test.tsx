@@ -21,13 +21,13 @@ describe('DrawerToggle', () => {
     cleanup();
   });
 
-  it('renders the floating toggle with a button carrying the aria contract when isOpen is false', () => {
+  it('renders the inline toggle with a button carrying the aria contract when isOpen is false', () => {
     render(<DrawerToggle />);
     const wrapper = screen.getByTestId('drawer-toggle');
-    // Floating control, not a layout band: fixed at the viewport's top-right,
-    // never reserving a row of the page (the old h-12 top bar is gone).
-    expect(wrapper.className).toContain('fixed');
+    // An inline control at the end of the PageHeader strip — never a layout
+    // band of its own (the old h-12 top bar is gone).
     expect(wrapper.className).not.toContain('h-12');
+    expect(wrapper.className).not.toContain('fixed');
     const button = screen.getByRole('button', { name: /open side drawer/i });
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(button.getAttribute('aria-controls')).toBe('side-drawer');

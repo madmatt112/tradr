@@ -1,6 +1,7 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 
+import { DrawerToggle } from '@/components/layout/DrawerToggle';
 import { Numeric } from '@/components/Numeric';
 import {
   AlertDialog,
@@ -131,7 +132,7 @@ export function PositionDetailView({ positionId }: Props) {
             </p>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Button variant="outline" className="cursor-pointer" onClick={() => setEditOpen(true)}>
             Edit
           </Button>
@@ -188,6 +189,9 @@ export function PositionDetailView({ positionId }: Props) {
           >
             Delete
           </Button>
+          {/* The app-wide drawer opener — detail pages have no PageHeader, so
+              their own header row carries the slot. */}
+          <DrawerToggle />
         </div>
       </div>
 

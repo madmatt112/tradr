@@ -30,9 +30,11 @@ describe('PageHeader', () => {
     expect(screen.getByText('110 total')).toBeDefined();
   });
 
-  it('omits the right cluster entirely when nothing is passed', () => {
-    const { container } = render(<PageHeader page="Settings" />);
-    expect(container.querySelectorAll('header > div')).toHaveLength(1);
+  it('always carries the drawer opener in its trailing cluster', () => {
+    render(<PageHeader page="Settings" />);
+    // The app-wide drawer toggle lives at the end of every header strip — the
+    // slot the old 48px top bar existed for.
+    expect(screen.getByRole('button', { name: 'Open side drawer' })).toBeDefined();
   });
 });
 

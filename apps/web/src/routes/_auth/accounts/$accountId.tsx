@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from '@tanstack/react-router';
 
+import { DrawerToggle } from '@/components/layout/DrawerToggle';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AccountBalance } from '@/features/accounting/components/AccountBalance';
@@ -51,9 +52,14 @@ function AccountDetailPage({ accountId }: { accountId: string }) {
             <div className="text-sm text-muted-foreground">{account.brokerageName}</div>
           )}
         </div>
-        <Button asChild variant="outline" className="cursor-pointer">
-          <Link to="/accounts">Back</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" className="cursor-pointer">
+            <Link to="/accounts">Back</Link>
+          </Button>
+          {/* The app-wide drawer opener — this page has no PageHeader, so its
+              own header row carries the slot. */}
+          <DrawerToggle />
+        </div>
       </div>
 
       <AccountBalance account={account} />

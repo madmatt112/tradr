@@ -9,6 +9,7 @@ import {
 } from '@tradr/shared';
 
 import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
@@ -373,7 +374,14 @@ function DashboardPage(): ReactElement {
     // `useCreateAccount` invalidates ['accounts'], this observer refetches, and
     // the next render falls through to the grid — no reload, no manual swap.
     if (accounts.length === 0) {
-      return <ZeroState />;
+      return (
+        <>
+          {/* The header grammar covers the zero state too — without it a
+              fresh user would be the one person with no drawer opener. */}
+          <PageHeader page="Dashboard" />
+          <ZeroState />
+        </>
+      );
     }
   }
 

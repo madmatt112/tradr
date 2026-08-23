@@ -140,3 +140,51 @@ describe('drawer.store', () => {
     expect(readDrawerState()).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The inspect surface (visual-redesign task 7): transient, never persisted.
+// ---------------------------------------------------------------------------
+
+describe('drawer store — position inspect', () => {
+  const row = {
+    id: 'pos-1',
+    symbol: 'PLTR',
+  } as unknown as import('@tradr/shared').PositionListItem;
+
+  it('inspectPosition opens the drawer straight onto the position', () => {
+    useDrawerStore.setState({ isOpen: false, inspectedPosition: null });
+    useDrawerStore.getState().inspectPosition(row);
+    expect(useDrawerStore.getState().isOpen).toBe(true);
+    expect(useDrawerStore.getState().inspectedPosition?.id).toBe('pos-1');
+  });
+
+  it('close clears the inspected position with it', () => {
+    useDrawerStore.getState().inspectPosition(row);
+    useDrawerStore.getState().close();
+    expect(useDrawerStore.getState().isOpen).toBe(false);
+    expect(useDrawerStore.getState().inspectedPosition).toBeNull();
+  });
+
+  it('clearInspect returns to the tabs without closing the drawer', () => {
+    useDrawerStore.getState().inspectPosition(row);
+    useDrawerStore.getState().clearInspect();
+    expect(useDrawerStore.getState().isOpen).toBe(true);
+    expect(useDrawerStore.getState().inspectedPosition).toBeNull();
+  });
+
+  it('never persists inspect state — the stored shape stays version 1', () => {
+    useDrawerStore.getState().inspectPosition(row);
+    writeDrawerState({ isOpen: true, activeTab: 'open-positions' });
+    const stored = JSON.parse(window.localStorage.getItem(DRAWER_STORAGE_KEY)!) as Record<
+      string,
+      unknown
+    >;
+    expect(stored).toEqual({ isOpen: true, activeTab: 'open-positions', version: 1 });
+  });
+
+  it('reset drops the inspected position too', () => {
+    useDrawerStore.getState().inspectPosition(row);
+    useDrawerStore.getState().reset();
+    expect(useDrawerStore.getState().inspectedPosition).toBeNull();
+  });
+});

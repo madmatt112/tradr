@@ -1,9 +1,8 @@
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Numeric } from '@/components/Numeric';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -17,15 +16,18 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
-import { formatCurrency } from '@/lib/format';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
+import { cn } from '@/lib/utils';
+import { useDrawerStore } from '@/stores/drawer.store';
 
 import { usePositions } from '../hooks/usePositions';
 import { decodeOptionContract } from '../utils/optionContract';
+import { positionAgeDays } from '../utils/positionAge';
 import { shouldNavigateFromRowClick } from '../utils/rowNavigation';
 
 import { CreatePositionDialog } from './CreatePositionDialog';
 import { PositionRowActions } from './PositionRowActions';
+import { PositionSideChip, PositionStatusChip } from './PositionStatusChip';
 
 const STATUS_TABS = [
   { value: 'all', label: 'All' },
@@ -35,13 +37,20 @@ const STATUS_TABS = [
 ] as const;
 
 export function PositionList() {
-  const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const { data: accounts } = useAccounts();
   const { data: positions, isLoading } = usePositions(
     statusFilter === 'all' ? undefined : { status: statusFilter },
   );
+  const inspectPosition = useDrawerStore((s) => s.inspectPosition);
+  const inspectedId = useDrawerStore((s) => s.inspectedPosition?.id ?? null);
+  // The browse/inspect two-state: while the drawer is open the wide columns
+  // (Account, Entry, Exit, Fees, Age) yield so the table fits beside it — ONE
+  // state change drives both the drawer and the columns, so the width settles
+  // in a single reflow, and the drawer's own transition already honours
+  // reduced motion.
+  const drawerOpen = useDrawerStore((s) => s.isOpen);
 
   const hasAccounts = !!accounts?.length;
 
@@ -106,111 +115,130 @@ export function PositionList() {
       ) : !positions?.length ? (
         <div className="py-12 text-center text-muted-foreground">No positions found.</div>
       ) : (
-        <Table>
+        <Table className="text-sm">
           <TableHeader>
-            <TableRow>
+            <TableRow className="border-hairline">
               <TableHead>Symbol</TableHead>
               <TableHead>Side</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Account</TableHead>
-              <TableHead className="text-right">Entry Price</TableHead>
-              <TableHead className="text-right">Target Price</TableHead>
-              <TableHead className="text-right">Exit Price</TableHead>
-              <TableHead className="text-right">Target R/R</TableHead>
-              <TableHead className="text-right">Actual R/R</TableHead>
-              <TableHead className="text-right"># Open</TableHead>
-              <TableHead className="text-right"># Closed</TableHead>
+              {!drawerOpen && <TableHead>Account</TableHead>}
+              <TableHead className="text-right">Qty</TableHead>
+              {!drawerOpen && <TableHead className="text-right">Entry</TableHead>}
+              {!drawerOpen && <TableHead className="text-right">Exit</TableHead>}
               <TableHead className="text-right">P&L</TableHead>
-              <TableHead className="w-32 text-right">Actions</TableHead>
+              <TableHead className="text-right">R</TableHead>
+              {!drawerOpen && <TableHead className="text-right">Fees</TableHead>}
+              {!drawerOpen && <TableHead className="text-right">Age</TableHead>}
+              <TableHead className="w-10 text-right">
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {positions.map((pos) => {
               const optionContract =
                 pos.assetType === 'option' ? decodeOptionContract(pos.symbol) : null;
+              const qty = pos.status === 'closed' ? pos.closedUnits : pos.openUnits;
+              const age = positionAgeDays(pos.openedAt, pos.closedAt);
+              const selected = pos.id === inspectedId;
               return (
                 <TableRow
                   key={pos.id}
-                  className="cursor-pointer"
+                  className={cn(
+                    'h-[31px] cursor-pointer border-hairline',
+                    // The selected row wears the same amber tick as the active
+                    // nav item — one selection language everywhere.
+                    selected &&
+                      'bg-secondary shadow-[inset_2px_0_0_var(--color-primary)] hover:bg-secondary',
+                  )}
+                  data-state={selected ? 'selected' : undefined}
                   onClick={(e) => {
                     if (!shouldNavigateFromRowClick(e)) return;
-                    navigate({ to: '/positions/$positionId', params: { positionId: pos.id } });
+                    inspectPosition(pos);
                   }}
                 >
-                  <TableCell>
+                  <TableCell className="py-0 font-medium">
+                    {/* The symbol link stays the keyboard/deep-link path to the
+                        full detail page; the row click is the drawer inspect. */}
                     <Link
                       to="/positions/$positionId"
                       params={{ positionId: pos.id }}
-                      className="font-medium hover:underline"
+                      className="hover:underline"
                       title={pos.symbol}
                     >
                       {optionContract ? optionContract.underlying : pos.symbol}
                     </Link>
                     {optionContract && (
-                      <span className="block text-xs text-muted-foreground">
+                      <span className="block text-xs leading-none text-muted-foreground">
                         {optionContract.compactLabel}
                       </span>
                     )}
                   </TableCell>
-                  <TableCell>
-                    <Badge variant={pos.side === 'long' ? 'default' : 'secondary'}>
-                      {pos.side}
-                    </Badge>
+                  <TableCell className="py-0">
+                    <PositionSideChip side={pos.side} />
                   </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{pos.status}</Badge>
+                  <TableCell className="py-0">
+                    <PositionStatusChip status={pos.status} />
                   </TableCell>
-                  <TableCell>{pos.accountName}</TableCell>
-                  <TableCell className="text-right">
+                  {!drawerOpen && <TableCell className="py-0">{pos.accountName}</TableCell>}
+                  <TableCell className="py-0 text-right">
                     <Numeric
-                      value={pos.avgEntryPrice}
-                      kind="money"
-                      currency={pos.accountCurrency}
+                      value={qty === 0 && pos.status === 'draft' ? null : qty}
+                      kind="integer"
                       direction="none"
                     />
                   </TableCell>
-                  <TableCell className="text-right">
-                    <Numeric
-                      value={pos.targetPrice}
-                      kind="money"
-                      currency={pos.accountCurrency}
-                      direction="none"
-                    />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Numeric
-                      value={pos.avgExitPrice}
-                      kind="money"
-                      currency={pos.accountCurrency}
-                      direction="none"
-                    />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Numeric value={pos.targetRR} kind="decimal" direction="none" />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Numeric value={pos.actualRR} kind="decimal" direction="auto" />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Numeric value={pos.openUnits} kind="integer" direction="none" />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Numeric value={pos.closedUnits} kind="integer" direction="none" />
-                  </TableCell>
-                  <TableCell className="text-right" data-testid="position-pnl">
+                  {!drawerOpen && (
+                    <TableCell className="py-0 text-right">
+                      <Numeric
+                        value={pos.avgEntryPrice}
+                        kind="money"
+                        currency={pos.accountCurrency}
+                        direction="none"
+                      />
+                    </TableCell>
+                  )}
+                  {!drawerOpen && (
+                    <TableCell className="py-0 text-right">
+                      <Numeric
+                        value={pos.avgExitPrice}
+                        kind="money"
+                        currency={pos.accountCurrency}
+                        direction="none"
+                      />
+                    </TableCell>
+                  )}
+                  <TableCell className="py-0 text-right" data-testid="position-pnl">
                     <Numeric
                       value={pos.netPnl}
                       kind="money"
                       currency={pos.accountCurrency}
                       direction="auto"
                     />
-                    {pos.brokerageFees > 0 && (
-                      <span className="block text-xs text-muted-foreground">
-                        Fees: {formatCurrency(pos.brokerageFees, pos.accountCurrency)}
-                      </span>
-                    )}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="py-0 text-right">
+                    <Numeric value={pos.actualRR} kind="decimal" direction="auto" />
+                  </TableCell>
+                  {!drawerOpen && (
+                    <TableCell className="py-0 text-right">
+                      <Numeric
+                        value={pos.brokerageFees > 0 ? pos.brokerageFees : null}
+                        kind="money"
+                        currency={pos.accountCurrency}
+                        direction="none"
+                      />
+                    </TableCell>
+                  )}
+                  {!drawerOpen && (
+                    <TableCell className="py-0 text-right">
+                      {age !== null ? (
+                        <span className="font-mono text-xs text-muted-foreground">{age}d</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                  )}
+                  <TableCell className="py-0">
                     <PositionRowActions position={pos} />
                   </TableCell>
                 </TableRow>

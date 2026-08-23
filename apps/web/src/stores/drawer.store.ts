@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import type { PositionListItem } from '@tradr/shared';
+
 export type DrawerTab = 'open-positions' | 'quick-stats' | 'options-pricing' | 'recently-created';
 
 export const DRAWER_TABS: readonly DrawerTab[] = [
@@ -21,10 +23,25 @@ export interface DrawerStoreState {
   isOpen: boolean;
   activeTab: DrawerTab;
   legacyDetected: boolean;
+  /**
+   * The position being INSPECTED (visual-redesign task 7): a row click on the
+   * positions list opens the drawer straight into that position's fill ledger
+   * instead of the tab set. The whole LIST row is held, not just the id — the
+   * detail endpoint does not return accountCurrency, so the row is what the
+   * panel's money formatting is anchored to (its figures are also the instant
+   * first paint while the fills load). Transient by design — never persisted,
+   * so a page load or another tab always comes back to the tabs. `close()`
+   * clears it: inspect exists only while the drawer the row opened stays open.
+   */
+  inspectedPosition: PositionListItem | null;
   open: () => void;
   close: () => void;
   toggle: () => void;
   setActiveTab: (tab: DrawerTab) => void;
+  /** Open the drawer directly onto a position's inspect surface. */
+  inspectPosition: (position: PositionListItem) => void;
+  /** Leave the inspect surface (back to the tabs) without closing the drawer. */
+  clearInspect: () => void;
   /**
    * Return the LIVE store to what a fresh page load with no stored state would
    * produce. Used by the session teardown (`lib/sessionTeardown`).
@@ -43,10 +60,14 @@ export interface DrawerStoreState {
   reset: () => void;
 }
 
-const DEFAULT_DRAWER_STATE: Pick<DrawerStoreState, 'isOpen' | 'activeTab' | 'legacyDetected'> = {
+const DEFAULT_DRAWER_STATE: Pick<
+  DrawerStoreState,
+  'isOpen' | 'activeTab' | 'legacyDetected' | 'inspectedPosition'
+> = {
   isOpen: false,
   activeTab: 'open-positions',
   legacyDetected: false,
+  inspectedPosition: null,
 };
 
 function isDrawerTab(value: unknown): value is DrawerTab {
@@ -135,9 +156,15 @@ export const useDrawerStore = create<DrawerStoreState>((set) => {
     isOpen: initial.isOpen,
     activeTab: initial.activeTab,
     legacyDetected: initial.legacyDetected,
+    inspectedPosition: null,
     open: () => set({ isOpen: true }),
-    close: () => set({ isOpen: false }),
-    toggle: () => set((s) => ({ isOpen: !s.isOpen })),
+    // Closing always leaves inspect too — the surface only exists inside the
+    // drawer the row opened.
+    close: () => set({ isOpen: false, inspectedPosition: null }),
+    toggle: () =>
+      set((s) => (s.isOpen ? { isOpen: false, inspectedPosition: null } : { isOpen: true })),
+    inspectPosition: (position) => set({ isOpen: true, inspectedPosition: position }),
+    clearInspect: () => set({ inspectedPosition: null }),
     setActiveTab: (tab) => {
       if (!isDrawerTab(tab)) return;
       set({ activeTab: tab });

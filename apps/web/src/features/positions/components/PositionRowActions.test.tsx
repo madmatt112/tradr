@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PositionListItem } from '@tradr/shared';
 
-import { TooltipProvider } from '@/components/ui/tooltip';
 import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
 
 import { useDeletePosition, useOpenPosition, useReopenPosition } from '../hooks/usePosition';
@@ -59,32 +59,41 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-// __root.tsx provides TooltipProvider app-wide; supply one for isolated renders.
 function renderActions(overrides: Partial<PositionListItem> = {}) {
-  return render(
-    <TooltipProvider>
-      <PositionRowActions position={makePosition(overrides)} />
-    </TooltipProvider>,
-  );
+  return render(<PositionRowActions position={makePosition(overrides)} />);
 }
 
-function action(name: string): HTMLButtonElement {
-  return screen.getByRole('button', { name }) as HTMLButtonElement;
+/** Open the row's ⋯ menu. The trigger's accessible name carries the symbol so
+ * a screen reader can tell one row's menu from the next. */
+async function openMenu(symbol = 'AAPL'): Promise<void> {
+  await userEvent.click(screen.getByRole('button', { name: `Actions for ${symbol}` }));
 }
 
-describe('PositionRowActions — actions are inline buttons, not a menu', () => {
-  it('exposes each action as its own button with an accessible name', () => {
+function menuItem(name: string | RegExp): HTMLElement {
+  return screen.getByRole('menuitem', { name });
+}
+
+function queryMenuItem(name: string | RegExp): HTMLElement | null {
+  return screen.queryByRole('menuitem', { name });
+}
+
+// The redesign folds the old icon strip into one ⋯ menu (visual-redesign
+// task 7): the desk table spends its width on data, and destructive Delete
+// sits a deliberate click deep rather than permanently exposed at 31px rows.
+describe('PositionRowActions — one row menu', () => {
+  it('exposes the actions as menu items behind a per-row trigger', async () => {
     renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 40 });
-    expect(action('Add to position')).toBeTruthy();
-    expect(action('Reduce position')).toBeTruthy();
-    expect(action('Delete')).toBeTruthy();
-    // No dropdown trigger stands between the user and the actions.
+    // Collapsed: only the trigger renders — no always-on action buttons.
     expect(screen.queryByRole('menuitem')).toBeNull();
+    await openMenu();
+    expect(menuItem('Add to position')).toBeTruthy();
+    expect(menuItem('Reduce position')).toBeTruthy();
+    expect(menuItem('Delete')).toBeTruthy();
   });
 
-  // A balancing exit auto-closes server-side (R7 amendment), so "−" then All is
-  // the close; a dedicated button could never be reached in an enabled state.
-  it('offers no Close action in any status', () => {
+  // A balancing exit auto-closes server-side (R7 amendment), so "Reduce" then
+  // All is the close; a dedicated item could never be reached enabled.
+  it('offers no Close action in any status', async () => {
     for (const overrides of [
       { status: 'draft' as const },
       { status: 'open' as const, totalEntryQuantity: 100, totalExitQuantity: 100 },
@@ -92,94 +101,108 @@ describe('PositionRowActions — actions are inline buttons, not a menu', () => 
       { status: 'closed' as const },
     ]) {
       renderActions(overrides);
-      expect(screen.queryByRole('button', { name: 'Close position' })).toBeNull();
+      await openMenu();
+      expect(queryMenuItem('Close position')).toBeNull();
       cleanup();
     }
   });
 
   // A draft is a plan with no units, so there is nothing to add to or reduce.
-  it('offers Add to position only on an open position', () => {
+  it('offers Add to position only on an open position', async () => {
     renderActions({ status: 'open' });
-    expect(action('Add to position')).toBeTruthy();
+    await openMenu();
+    expect(menuItem('Add to position')).toBeTruthy();
     cleanup();
 
     renderActions({ status: 'draft' });
-    expect(screen.queryByRole('button', { name: 'Add to position' })).toBeNull();
+    await openMenu();
+    expect(queryMenuItem('Add to position')).toBeNull();
     cleanup();
 
     renderActions({ status: 'closed', closedAt: `${TODAY_UTC}T13:00:00.000Z` });
-    expect(screen.queryByRole('button', { name: 'Add to position' })).toBeNull();
+    await openMenu();
+    expect(queryMenuItem('Add to position')).toBeNull();
   });
 
-  it('leaves a draft row with only Open position and Delete', () => {
+  it('leaves a draft row with only Open position and Delete', async () => {
     renderActions({ status: 'draft', totalEntryQuantity: 0, totalExitQuantity: 0 });
-    const labels = screen
-      .getAllByRole('button')
-      .map((b) => b.getAttribute('aria-label'))
-      .filter(Boolean);
+    await openMenu();
+    const labels = screen.getAllByRole('menuitem').map((i) => i.textContent);
     expect(labels).toEqual(['Open position', 'Delete']);
   });
 
-  // Exit fills 409 on a draft (R5-AC3), so the "−" button is open-only.
-  it('offers Reduce position only on an open position', () => {
+  // Exit fills 409 on a draft (R5-AC3), so Reduce is open-only.
+  it('offers Reduce position only on an open position', async () => {
     renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 0 });
-    expect(action('Reduce position').disabled).toBe(false);
+    await openMenu();
+    expect(menuItem('Reduce position').getAttribute('aria-disabled')).toBeNull();
     cleanup();
 
     renderActions({ status: 'draft', totalEntryQuantity: 100 });
-    expect(screen.queryByRole('button', { name: 'Reduce position' })).toBeNull();
+    await openMenu();
+    expect(queryMenuItem(/Reduce position/)).toBeNull();
     cleanup();
 
     renderActions({ status: 'closed', closedAt: `${TODAY_UTC}T13:00:00.000Z` });
-    expect(screen.queryByRole('button', { name: 'Reduce position' })).toBeNull();
+    await openMenu();
+    expect(queryMenuItem(/Reduce position/)).toBeNull();
   });
 
-  it('disables Reduce position when nothing is left open to reduce', () => {
+  it('disables Reduce position when nothing is left open to reduce, and says why', async () => {
     renderActions({ status: 'open', totalEntryQuantity: 100, totalExitQuantity: 100 });
-    expect(action('Reduce position').disabled).toBe(true);
+    await openMenu();
+    const item = menuItem(/Reduce position/);
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    // The strip's tooltip explanation moved inline into the item label.
+    expect(item.textContent).toContain('nothing open');
   });
 });
 
-// R11-AC4: Open is shown-and-disabled on a draft, never hidden.
+// R11-AC4: Open is offered on a draft, never hidden.
 describe('PositionRowActions — lifecycle gating', () => {
-  // Play is never disabled on a draft — with no entry fill it collects one
+  // Open is never disabled on a draft — with no entry fill it collects one
   // first, so a freshly created draft is never stranded in the list.
-  it('enables Open position on a draft that has an entry fill', () => {
+  it('enables Open position on a draft that has an entry fill', async () => {
     renderActions({ status: 'draft', totalEntryQuantity: 100, totalExitQuantity: 0 });
-    expect(action('Open position').disabled).toBe(false);
+    await openMenu();
+    expect(menuItem('Open position').getAttribute('aria-disabled')).toBeNull();
   });
 
-  it('enables Open position on a draft with no fills yet', () => {
+  it('enables Open position on a draft with no fills yet', async () => {
     renderActions({ status: 'draft', totalEntryQuantity: 0, totalExitQuantity: 0 });
-    expect(action('Open position').disabled).toBe(false);
+    await openMenu();
+    expect(menuItem('Open position').getAttribute('aria-disabled')).toBeNull();
   });
 
-  it('does not offer Open position on a non-draft position', () => {
+  it('does not offer Open position on a non-draft position', async () => {
     renderActions({ status: 'open' });
-    expect(screen.queryByRole('button', { name: 'Open position' })).toBeNull();
+    await openMenu();
+    expect(queryMenuItem('Open position')).toBeNull();
   });
 
-  it('offers Reopen for a closed position opened today in the account timezone', () => {
+  it('offers Reopen for a closed position opened today in the account timezone', async () => {
     renderActions({
       status: 'closed',
       accountTimezone: 'UTC',
       openedAt: `${TODAY_UTC}T09:00:00.000Z`,
     });
-    expect(action('Reopen')).toBeTruthy();
+    await openMenu();
+    expect(menuItem('Reopen')).toBeTruthy();
   });
 
-  it('hides Reopen for a closed position opened on a previous day', () => {
+  it('hides Reopen for a closed position opened on a previous day', async () => {
     renderActions({
       status: 'closed',
       accountTimezone: 'UTC',
       openedAt: '2020-01-01T09:00:00.000Z',
     });
-    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
+    await openMenu();
+    expect(queryMenuItem('Reopen')).toBeNull();
   });
 });
 
 describe('PositionRowActions — actions fire the right mutation', () => {
-  it('Open position calls the open mutation when an entry fill already exists', () => {
+  it('Open position calls the open mutation when an entry fill already exists', async () => {
     const mutate = vi.fn();
     vi.mocked(useOpenPosition).mockReturnValue({
       mutate,
@@ -187,15 +210,16 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     } as unknown as ReturnType<typeof useOpenPosition>);
 
     renderActions({ status: 'draft', totalEntryQuantity: 100 });
-    fireEvent.click(action('Open position'));
+    await openMenu();
+    await userEvent.click(menuItem('Open position'));
 
     expect(mutate).toHaveBeenCalledWith({});
     expect(screen.queryByTestId('fill-dialog')).toBeNull();
   });
 
-  // The server rejects an open with no entry fill, so play collects one first
+  // The server rejects an open with no entry fill, so Open collects one first
   // rather than sitting disabled.
-  it('Open position on an empty draft collects the entry instead of mutating', () => {
+  it('Open position on an empty draft collects the entry instead of mutating', async () => {
     const mutate = vi.fn();
     vi.mocked(useOpenPosition).mockReturnValue({
       mutate,
@@ -203,13 +227,14 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     } as unknown as ReturnType<typeof useOpenPosition>);
 
     renderActions({ status: 'draft', totalEntryQuantity: 0 });
-    fireEvent.click(action('Open position'));
+    await openMenu();
+    await userEvent.click(menuItem('Open position'));
 
     expect(screen.getByTestId('fill-dialog')).toBeTruthy();
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  it('opens the position once that entry fill saves', () => {
+  it('opens the position once that entry fill saves', async () => {
     const mutate = vi.fn();
     vi.mocked(useOpenPosition).mockReturnValue({
       mutate,
@@ -217,13 +242,14 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     } as unknown as ReturnType<typeof useOpenPosition>);
 
     renderActions({ status: 'draft', totalEntryQuantity: 0 });
-    fireEvent.click(action('Open position'));
+    await openMenu();
+    await userEvent.click(menuItem('Open position'));
     fireEvent.click(screen.getByTestId('fill-dialog-added'));
 
     expect(mutate).toHaveBeenCalledWith({});
   });
 
-  it('does not open the position if the entry dialog is cancelled', () => {
+  it('does not open the position if the entry dialog is cancelled', async () => {
     const mutate = vi.fn();
     vi.mocked(useOpenPosition).mockReturnValue({
       mutate,
@@ -231,15 +257,16 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     } as unknown as ReturnType<typeof useOpenPosition>);
 
     renderActions({ status: 'draft', totalEntryQuantity: 0 });
-    fireEvent.click(action('Open position'));
+    await openMenu();
+    await userEvent.click(menuItem('Open position'));
     fireEvent.click(screen.getByTestId('fill-dialog-cancel'));
 
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  // "+" on an open position must not chain an open — that intent belongs to
-  // play alone, and an open position has nothing to transition to.
-  it('does not open the position when a fill is added via "+"', () => {
+  // "Add to position" must not chain an open — that intent belongs to Open
+  // alone, and an open position has nothing to transition to.
+  it('does not open the position when a fill is added via Add to position', async () => {
     const mutate = vi.fn();
     vi.mocked(useOpenPosition).mockReturnValue({
       mutate,
@@ -247,13 +274,14 @@ describe('PositionRowActions — actions fire the right mutation', () => {
     } as unknown as ReturnType<typeof useOpenPosition>);
 
     renderActions({ status: 'open', totalEntryQuantity: 100 });
-    fireEvent.click(action('Add to position'));
+    await openMenu();
+    await userEvent.click(menuItem('Add to position'));
     fireEvent.click(screen.getByTestId('fill-dialog-added'));
 
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  it('Reopen calls the reopen mutation', () => {
+  it('Reopen calls the reopen mutation', async () => {
     const mutate = vi.fn();
     vi.mocked(useReopenPosition).mockReturnValue({
       mutate,
@@ -265,21 +293,23 @@ describe('PositionRowActions — actions fire the right mutation', () => {
       accountTimezone: 'UTC',
       openedAt: `${TODAY_UTC}T09:00:00.000Z`,
     });
-    fireEvent.click(action('Reopen'));
+    await openMenu();
+    await userEvent.click(menuItem('Reopen'));
 
     expect(mutate).toHaveBeenCalledWith({});
   });
 
-  it('Add to position opens the fill dialog rather than mutating', () => {
+  it('Add to position opens the fill dialog rather than mutating', async () => {
     renderActions({ status: 'open' });
-    fireEvent.click(action('Add to position'));
+    await openMenu();
+    await userEvent.click(menuItem('Add to position'));
 
     expect(screen.getByTestId('fill-dialog')).toBeTruthy();
   });
 });
 
 describe('PositionRowActions — delete confirmation', () => {
-  it('confirms before deleting, then calls the delete mutation', () => {
+  it('confirms before deleting, then calls the delete mutation', async () => {
     const mutate = vi.fn();
     vi.mocked(useDeletePosition).mockReturnValue({
       mutate,
@@ -287,24 +317,25 @@ describe('PositionRowActions — delete confirmation', () => {
     } as unknown as ReturnType<typeof useDeletePosition>);
 
     renderActions({ status: 'open' });
-    fireEvent.click(action('Delete'));
+    await openMenu();
+    await userEvent.click(menuItem('Delete'));
 
-    // The icon click alone must not delete — the dialog stands between.
+    // The menu selection alone must not delete — the dialog stands between.
     expect(mutate).not.toHaveBeenCalled();
 
-    // Scope to the dialog: the row's own trash icon is also named "Delete".
     const dialog = screen.getByRole('alertdialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     expect(mutate).toHaveBeenCalledTimes(1);
   });
 
-  it('carries the closed-position tax warning', () => {
+  it('carries the closed-position tax warning', async () => {
     renderActions({
       status: 'closed',
       accountTimezone: 'UTC',
       openedAt: '2020-01-01T09:00:00.000Z',
     });
-    fireEvent.click(action('Delete'));
+    await openMenu();
+    await userEvent.click(menuItem('Delete'));
 
     expect(screen.getByText(/removes its realized P&L from the account balance/i)).toBeTruthy();
     expect(screen.getByText(/including prior tax years/i)).toBeTruthy();
@@ -312,9 +343,10 @@ describe('PositionRowActions — delete confirmation', () => {
   });
 
   // R4 amendment: the confirmation dialog SHALL name the position.
-  it('names the position in both the closed and non-closed copy', () => {
+  it('names the position in both the closed and non-closed copy', async () => {
     renderActions({ status: 'open', symbol: 'MSFT' });
-    fireEvent.click(action('Delete'));
+    await openMenu('MSFT');
+    await userEvent.click(menuItem('Delete'));
     expect(screen.getByText(/"MSFT"/)).toBeTruthy();
     cleanup();
 
@@ -324,13 +356,15 @@ describe('PositionRowActions — delete confirmation', () => {
       accountTimezone: 'UTC',
       openedAt: '2020-01-01T09:00:00.000Z',
     });
-    fireEvent.click(action('Delete'));
+    await openMenu('NVDA260321C120');
+    await userEvent.click(menuItem('Delete'));
     expect(screen.getByText(/"NVDA260321C120"/)).toBeTruthy();
   });
 
-  it('keeps the lighter copy on a non-closed position', () => {
+  it('keeps the lighter copy on a non-closed position', async () => {
     renderActions({ status: 'open' });
-    fireEvent.click(action('Delete'));
+    await openMenu();
+    await userEvent.click(menuItem('Delete'));
 
     expect(screen.getByText(/Are you sure you want to delete "AAPL"\?/i)).toBeTruthy();
     expect(screen.queryByText(/wash-sale classification/i)).toBeNull();
