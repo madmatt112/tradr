@@ -145,11 +145,17 @@ function StatsSummaryWidget() {
   return (
     <div className="flex flex-col gap-3">
       {tierWindowNotice}
+      {/* The desk stat-tile grammar: mono uppercase labels over larger
+          semibold figures. Five tiles — everything the stats payload carries;
+          the mock's extra tiles (expectancy, max DD, open risk) need data the
+          API does not serve yet and are backlog, not this re-skin. */}
       <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
         {tiles.map((tile) => (
-          <div key={tile.label} className="flex flex-col">
-            <dt className="text-sm text-muted-foreground">{tile.label}</dt>
-            <dd className="font-medium">{tile.render()}</dd>
+          <div key={tile.label} className="flex flex-col gap-1">
+            <dt className="font-mono text-xs uppercase tracking-[0.1em] text-muted-foreground">
+              {tile.label}
+            </dt>
+            <dd className="text-xl font-semibold">{tile.render()}</dd>
           </div>
         ))}
       </dl>

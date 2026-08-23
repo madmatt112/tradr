@@ -66,17 +66,21 @@ export function WidgetCard({
       tabIndex={-1}
       data-widget-id={widget.id}
       data-widget-type={widget.type}
-      className="relative flex h-full flex-col overflow-hidden rounded-md border bg-card text-card-foreground shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      // Flat, crisp desk surface: hairline border, no elevation shadow.
+      className="relative flex h-full flex-col overflow-hidden rounded-md border border-hairline bg-card text-card-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <header
         data-drag-zone={draggable ? 'true' : undefined}
-        className={`flex select-none items-center justify-between gap-2 border-b px-3 py-2 ${
+        className={`flex select-none items-center justify-between gap-2 border-b border-hairline px-3 py-1.5 ${
           draggable
             ? `${WIDGET_DRAG_HANDLE_CLASS} cursor-grab touch-none active:cursor-grabbing`
             : ''
         }`}
       >
-        <h3 id={titleId} className="truncate text-sm font-medium">
+        <h3
+          id={titleId}
+          className="truncate font-mono text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground"
+        >
           {def.displayName}
         </h3>
         <span id={descId} className="sr-only">
