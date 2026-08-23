@@ -2,6 +2,7 @@ import { useState, type ReactElement, type ReactNode } from 'react';
 
 import type { WidgetPlacement, WidgetType } from '@tradr/shared';
 
+import { PageHeader } from '@/components/layout/PageHeader';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -76,53 +77,57 @@ export function DashboardHeader({
   const [confirmingReset, setConfirmingReset] = useState(false);
 
   return (
-    <header data-slot="dashboard-header" className="flex items-center justify-between gap-2">
-      <div className="flex items-center gap-2">
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        {coachMark}
-      </div>
-      <div className="flex items-center gap-2">
-        <AddWidgetPopover placedTypes={placedTypes} onAdd={onAdd} />
-        {onResetLayout ? (
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              data-slot="dashboard-reset-layout"
-              className="cursor-pointer"
-              disabled={resetBusy}
-              onClick={() => setConfirmingReset(true)}
-            >
-              Reset layout
-            </Button>
-            <AlertDialog open={confirmingReset} onOpenChange={setConfirmingReset}>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Reset dashboard layout</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Every widget goes back to its default position and size, and any widget you
-                    removed comes back. Your trading data is not affected.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="cursor-pointer"
-                    data-slot="dashboard-reset-confirm"
-                    onClick={() => {
-                      setConfirmingReset(false);
-                      onResetLayout();
-                    }}
-                  >
-                    Reset layout
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </>
-        ) : null}
-      </div>
-    </header>
+    // The wrapper div (not PageHeader itself) carries the data-slot the
+    // dashboard tests anchor on.
+    <div data-slot="dashboard-header">
+      <PageHeader
+        page="Dashboard"
+        chips={coachMark}
+        right={
+          <div className="flex items-center gap-2">
+            <AddWidgetPopover placedTypes={placedTypes} onAdd={onAdd} />
+            {onResetLayout ? (
+              <Button
+                type="button"
+                variant="outline"
+                data-slot="dashboard-reset-layout"
+                className="cursor-pointer"
+                disabled={resetBusy}
+                onClick={() => setConfirmingReset(true)}
+              >
+                Reset layout
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
+      {onResetLayout ? (
+        <AlertDialog open={confirmingReset} onOpenChange={setConfirmingReset}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Reset dashboard layout</AlertDialogTitle>
+              <AlertDialogDescription>
+                Every widget goes back to its default position and size, and any widget you removed
+                comes back. Your trading data is not affected.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="cursor-pointer"
+                data-slot="dashboard-reset-confirm"
+                onClick={() => {
+                  setConfirmingReset(false);
+                  onResetLayout();
+                }}
+              >
+                Reset layout
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
+    </div>
   );
 }
 

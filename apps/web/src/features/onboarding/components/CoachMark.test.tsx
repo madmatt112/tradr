@@ -41,6 +41,13 @@ vi.mock('../hooks/useOnboarding', () => ({
 }));
 vi.mock('../hooks/useWalkthrough', () => ({ useIsWalkthroughRunning: vi.fn() }));
 
+// The device latch is keyed by the signed-in user's id; a static stub keeps
+// the component mountable without the auth stack. localStorage is cleared in
+// beforeEach, so the latch never leaks between tests.
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'user-1', email: 'test@example.com' } }),
+}));
+
 import { CoachMark, type CoachMarkSurface } from './CoachMark';
 
 const mockQuery = vi.mocked(useOnboardingQuery);
@@ -67,6 +74,9 @@ function preference(coachMarksSeen: string[] = []): OnboardingState {
 }
 
 beforeEach(() => {
+  // The device latch persists in localStorage; without this, one test's
+  // dismissal hides the mark for every test after it.
+  localStorage.clear();
   patchMutate = vi.fn();
   mockPatch.mockReturnValue({ mutate: patchMutate } as unknown as ReturnType<
     typeof useOnboardingPatch
@@ -250,6 +260,40 @@ describe('CoachMark', () => {
 // copy names is a control the surface actually renders, checked against that
 // surface's source.
 // ---------------------------------------------------------------------------
+
+describe('CoachMark device latch (visual-redesign task 6)', () => {
+  it('stays dismissed across a reload even when the PATCH never lands', async () => {
+    const user = userEvent.setup();
+    render(<CoachMark surface="dashboard-widgets" />);
+    expect(mark('dashboard-widgets')).not.toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Got it' }));
+    expect(mark('dashboard-widgets')).toBeNull();
+    cleanup();
+
+    // A fresh mount with the server record still unchanged models the next
+    // page load after a failed or in-flight PATCH — the resurrection this
+    // latch exists to end.
+    seePreference(preference());
+    render(<CoachMark surface="dashboard-widgets" />);
+    expect(mark('dashboard-widgets')).toBeNull();
+  });
+
+  it('does not hide the mark from a different user on the same device', async () => {
+    const user = userEvent.setup();
+    render(<CoachMark surface="dashboard-widgets" />);
+    await user.click(screen.getByRole('button', { name: 'Got it' }));
+    cleanup();
+
+    // Another account's id in the latch must not match: the latch stores WHO
+    // dismissed, so a shared machine cannot silence a mark the second user
+    // never saw.
+    localStorage.setItem('coach-mark-dismissed:dashboard-widgets', 'someone-else');
+    seePreference(preference());
+    render(<CoachMark surface="dashboard-widgets" />);
+    expect(mark('dashboard-widgets')).not.toBeNull();
+  });
+});
 
 describe('CoachMark copy is accurate against the shipped UI', () => {
   function bodyOf(surface: CoachMarkSurface): string {

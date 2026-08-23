@@ -201,6 +201,9 @@ function setOnboarding(
 let fetchSpy: MockInstance | null = null;
 
 beforeEach(() => {
+  // The coach mark's device latch persists in localStorage now; without this
+  // an outside click in one test silences the mark for every test after it.
+  localStorage.clear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(uuidv5Batch).mockClear();
   // Cases 1-7 predate the zero-state and must keep behaving exactly as they
@@ -802,7 +805,9 @@ describe('_auth.dashboard route — the widget coach mark', () => {
     const header = anchor!.closest('[data-slot="dashboard-header"]');
     expect(header).not.toBeNull();
     // Beside the heading specifically: same parent, heading first.
-    expect(anchor!.parentElement!.querySelector('h1')?.textContent).toBe('Dashboard');
+    // The desk header grammar prefixes the aria-hidden ▴ mark, so the text
+    // CONTAINS the name rather than equalling it.
+    expect(anchor!.parentElement!.querySelector('h1')?.textContent).toContain('Dashboard');
   });
 
   it('stays off the zero-state, which has one thing to say and is entitled to say it', () => {

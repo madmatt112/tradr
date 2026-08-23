@@ -84,10 +84,44 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { useAuth } from '@/hooks/useAuth';
 import { docsUrl, type DocsPage } from '@/lib/docs';
 
 import { useOnboardingQuery, useOnboardingPatch } from '../hooks/useOnboarding';
 import { useIsWalkthroughRunning } from '../hooks/useWalkthrough';
+
+// ═══ THE DEVICE-SIDE DISMISSAL LATCH ═══
+//
+// The server's `coachMarksSeen` set stays the source of truth — it is what
+// makes a dismissal follow the user to another machine. But the PATCH that
+// records a dismissal can fail or still be in flight when the page next
+// loads, and either way the mark used to RESURRECT: dismissed with "Got it",
+// back again on the next visit. A one-shot prompt that comes back is the one
+// thing it must never do, so each dismissal also latches in localStorage.
+//
+// The latch stores the dismissing USER'S id, and only matches for that user.
+// localStorage is per-device, not per-account: a bare boolean would leak one
+// user's dismissal to the next account on a shared machine, permanently
+// hiding a mark the second user never saw (nothing self-heals — the latch
+// always wins for hiding). Keyed by id, another user's latch simply does not
+// match. No logout teardown needed for the same reason.
+const LATCH_PREFIX = 'coach-mark-dismissed:';
+
+function readLatch(surface: CoachMarkSurface, userId: string): boolean {
+  try {
+    return localStorage.getItem(`${LATCH_PREFIX}${surface}`) === userId;
+  } catch {
+    return false;
+  }
+}
+
+function writeLatch(surface: CoachMarkSurface, userId: string): void {
+  try {
+    localStorage.setItem(`${LATCH_PREFIX}${surface}`, userId);
+  } catch {
+    /* private mode — the server record is still being written */
+  }
+}
 
 /**
  * The four surfaces that get a mark. The string IS the stored key, so renaming
@@ -168,6 +202,7 @@ export interface CoachMarkProps {
 
 export function CoachMark({ surface, available = true }: CoachMarkProps) {
   const { data: preference } = useOnboardingQuery();
+  const { user } = useAuth();
   const patch = useOnboardingPatch();
   const walkthroughRunning = useIsWalkthroughRunning();
   const [dismissed, setDismissed] = useState(false);
@@ -181,14 +216,19 @@ export function CoachMark({ surface, available = true }: CoachMarkProps) {
   // lands here too, which is right: onboarding is never worth an error state.
   const seen = preference?.coachMarksSeen.includes(surface) ?? true;
 
-  if (!available || walkthroughRunning || dismissed || seen) return null;
+  // The device latch — this user already dismissed the mark HERE, whatever
+  // became of the write that was supposed to record it.
+  const latched = user != null && readLatch(surface, user.id);
+
+  if (!available || walkthroughRunning || dismissed || seen || latched) return null;
 
   function dismiss() {
     // Local first, so the mark is gone on this render rather than when the
-    // write lands. The mutation carries its own error toast; if it fails, the
-    // stored set is unchanged and the mark returns on the next visit, which is
-    // the honest outcome — nothing was recorded.
+    // write lands, and latched on this device so it STAYS gone across reloads
+    // even when the PATCH fails or never returns. The server record remains
+    // authoritative for every other device.
     setDismissed(true);
+    if (user != null) writeLatch(surface, user.id);
     patch.mutate({ coachMarkSeen: surface });
   }
 
