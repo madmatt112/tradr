@@ -11,9 +11,9 @@
    the var(--*) references below resolve, and — because customCss is injected
    AFTER Starlight's own styles — these overrides win at equal specificity.
 
-   Brand rule (design-system.md): amber is the sole accent; green/red are
-   RESERVED for gain/loss data. So the accent maps to amber and the "tip" aside
-   (our Self-hosted callout) is re-themed cool-blue rather than the stock green.
+   Brand rule (design-system.md): amber is the sole accent and it is SCARCE —
+   active nav, links, the one active TOC mark. Callouts spend the info/success/
+   warning status tones, never amber. Green/red are RESERVED for gain/loss data.
    Focus rings use the dedicated cool-blue --focus token, never amber.
    ============================================================================ */
 
@@ -64,6 +64,24 @@
   --sl-color-bg-inline-code: var(--secondary);
 }
 
+/* --- Chrome surfaces (both themes — these tokens swap themselves in light).
+       The top bar and sidebar sit on the page background separated by hairlines
+       rather than on a raised nav surface; links and active markers use the
+       AA-checked amber-as-text token; code blocks sit one step BELOW the page
+       background (near-black) with a hairline frame. --- */
+:root {
+  --sl-color-bg-nav: var(--bg);
+  --sl-color-bg-sidebar: var(--bg);
+  --sl-color-hairline-shade: var(--hairline);
+  --sl-color-text-accent: var(--accent-text);
+
+  --tradr-code-bg: oklch(0.13 0.005 265); /* below --bg (0.16), same cool cast */
+}
+
+:root[data-theme='light'] {
+  --tradr-code-bg: var(--secondary); /* light has no "below white" — quiet fill */
+}
+
 /* --- Focus indicator: cool-blue --focus, never amber (matches global.css) --- */
 :focus-visible {
   outline: 2px solid var(--focus);
@@ -79,14 +97,167 @@ summary {
   cursor: pointer;
 }
 
-/* --- Aside convention re-theme (see components/*.astro):
-       - `note`  = "Hosted only"  → keeps the amber accent (default note color).
-       - `tip`   = "Self-hosted"  → re-themed cool-blue so the reserved green is
-         not used for chrome. Green/red stay for P&L data only. --- */
-.starlight-aside--tip {
+/* --- Sidebar: the app's selection grammar. The active item gets the amber
+       left tick + quiet secondary fill; everything else is muted until hover.
+       Group labels become mono eyebrows, matching the eyebrow treatment across
+       surfaces. The 2px tick space is reserved on every item (transparent when
+       inactive) so activating a link never shifts its text. --- */
+.sidebar-content .top-level a.large {
+  font-size: var(--sl-text-sm);
+  font-weight: 400;
+  color: var(--muted-fg);
+}
+
+.sidebar-content summary .group-label .large {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+}
+
+.sidebar-content a {
+  color: var(--muted-fg);
+  border-inline-start: 2px solid transparent;
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+
+.sidebar-content a:hover,
+.sidebar-content a:focus {
+  color: var(--fg);
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+  color: var(--fg);
+  background-color: var(--secondary);
+  border-inline-start-color: var(--primary);
+  font-weight: 550;
+}
+
+/* Starlight draws a vertical tree line beside nested lists; the sidebar reads
+   flat under its group eyebrows instead. */
+.sidebar-content ul ul li {
+  border-inline-start-color: transparent;
+}
+
+/* --- "On this page": mono eyebrow heading; the active heading link is the ONE
+       amber mark in the content area (it inherits --sl-color-text-accent). --- */
+.right-sidebar-panel h2 {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+}
+
+/* --- Search pill: hairline pill in the top bar with a mono shortcut chip --- */
+site-search button[data-open-modal] {
+  color: var(--muted-fg);
+}
+
+site-search button[data-open-modal]:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+site-search button[data-open-modal] > kbd {
+  background-color: transparent;
+  border: 1px solid var(--hairline);
+  padding-block: 0;
+}
+
+site-search button[data-open-modal] kbd {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+}
+
+/* --- Content links: amber with a soft underline that solidifies on hover --- */
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklch, var(--sl-color-text-accent) 40%, transparent);
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-color: var(--sl-color-text-accent);
+}
+
+/* --- Headings: tighter tracking, matching the app's display type --- */
+.sl-markdown-content :is(h1, h2, h3),
+h1#_top {
+  letter-spacing: -0.02em;
+}
+
+/* --- Link cards (docs home): raised card surface, amber affordance arrow --- */
+.sl-link-card {
+  background-color: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 0.75rem;
+  box-shadow: none;
+}
+
+.sl-link-card .title {
+  font-size: var(--sl-text-base);
+}
+
+.sl-link-card .icon {
+  color: var(--accent-text);
+}
+
+.sl-link-card:hover {
+  background: var(--secondary);
+  border-color: var(--border);
+}
+
+/* --- Callouts: status tones only, NEVER amber (see components/*.astro):
+       - `note`    = generic + "Hosted only" → info blue
+       - `tip`     = "Self-hosted"           → success teal
+       - `caution`                           → warning
+       - `danger`                            → danger (hue-separated from loss)
+       Treatment: no fill — a 40% tone hairline + 3px tone tick, and a mono
+       uppercase title. Green/red stay reserved for P&L data. --- */
+.starlight-aside {
+  border: 1px solid color-mix(in oklch, var(--sl-color-asides-border) 40%, transparent);
+  border-inline-start: 3px solid var(--sl-color-asides-border);
+  border-radius: 0.5rem;
+  background-color: transparent;
+  padding: 0.75rem 1rem;
+  color: var(--sl-color-gray-2);
+}
+
+.starlight-aside--note {
   --sl-color-asides-text-accent: var(--info);
   --sl-color-asides-border: var(--info);
-  background-color: color-mix(in oklch, var(--info) 12%, var(--bg));
+}
+
+.starlight-aside--tip {
+  --sl-color-asides-text-accent: var(--success);
+  --sl-color-asides-border: var(--success);
+}
+
+.starlight-aside--caution {
+  --sl-color-asides-text-accent: var(--warning);
+  --sl-color-asides-border: var(--warning);
+}
+
+.starlight-aside--danger {
+  --sl-color-asides-text-accent: var(--danger-text);
+  --sl-color-asides-border: var(--danger);
+}
+
+.starlight-aside__title {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.starlight-aside__icon {
+  display: none;
 }
 
 /* --- Theme-paired screenshots (components/Screenshot.astro). Starlight's inline
