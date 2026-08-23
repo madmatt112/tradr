@@ -4432,6 +4432,10 @@
                       },
                       "type": "array"
                     },
+                    "sidebarPinned": {
+                      "description": "Whether the nav rail is pinned to its expanded state. Absent until the user (or the client's one-time seed) has expressed a preference.\n",
+                      "type": "boolean"
+                    },
                     "status": {
                       "description": "`pending` not started, `active` running, `skipped` dismissed (recoverable — set it back to start again), `done` completed.\n",
                       "enum": [
@@ -4478,6 +4482,10 @@
                     "example": "partial-close",
                     "maxLength": 64,
                     "type": "string"
+                  },
+                  "sidebarPinned": {
+                    "description": "Pin (true) or unpin (false) the expanded nav rail.",
+                    "type": "boolean"
                   },
                   "status": {
                     "enum": [
