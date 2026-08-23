@@ -66,11 +66,16 @@ const ROW_USER = 'flex justify-start';
 const ROW_ASSISTANT = 'flex justify-end';
 const STACK = 'flex min-w-0 max-w-[85%] flex-col gap-1';
 const BUBBLE = 'min-w-0 rounded-xl px-4 py-3 break-words';
-const BUBBLE_USER = 'bg-primary text-primary-foreground';
+// The desk bubbles (visual-redesign task 8): the user speaks on a neutral
+// secondary surface — amber never encodes data, and painting every question
+// in the accent spent it wholesale. Each bubble tightens the corner nearest
+// its speaker (the mock's 10/10/10/3 grammar).
+const BUBBLE_USER = 'rounded-bl-sm bg-secondary text-foreground';
 // Deliberately a bordered card, NOT a grey fill: `muted` and `secondary` hold
 // the same value in both themes, and MarkdownRenderer's inline code and code
 // fallback are `bg-muted` — on a muted bubble they would vanish into it.
-const BUBBLE_ASSISTANT = 'border border-border bg-card';
+// Hairline, per the desk surface grammar.
+const BUBBLE_ASSISTANT = 'rounded-br-sm border border-hairline bg-card';
 // Quiet enough to read as an attribution rather than content. Aligned to the
 // bubble's own edge, so it sits over the side its speaker occupies.
 const LABEL = 'px-1 text-xs text-muted-foreground';
@@ -194,6 +199,34 @@ function renderImageParts(message: Message, conversationId: string) {
   );
 }
 
+/** The answer's compact provenance row (visual-redesign task 8): one chip per
+ * distinct tool the message called, derived from the tool_call parts already
+ * in the transcript. The inline tool cards above show the work verbatim; this
+ * is the desk summary at the end of the answer. */
+function CitesRow({ message }: { message: Message }) {
+  const names = [
+    ...new Set(
+      message.contentParts
+        .filter((p): p is { type: 'tool_call'; id: string; name: string } => p.type === 'tool_call')
+        .map((p) => p.name.replaceAll('_', ' ')),
+    ),
+  ];
+  if (names.length === 0) return null;
+  return (
+    <div
+      data-testid="cites-row"
+      className="mt-2 flex flex-wrap gap-1.5 font-mono text-xs text-muted-foreground"
+    >
+      <span className="py-0.5">used:</span>
+      {names.map((name) => (
+        <span key={name} className="rounded-full border border-hairline px-2 py-0.5">
+          {name}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // Walks an assistant message's parts in order, rendering each by type. tool_call
 // names are indexed by id so tool_result cards can resolve their typed card.
 function renderAssistantParts(message: Message, conversationId: string) {
@@ -284,6 +317,7 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
               <span className={`${LABEL} text-right`}>Advisor</span>
               <div data-role="assistant" className={`${BUBBLE} ${BUBBLE_ASSISTANT}`}>
                 {renderAssistantParts(message, conversationId)}
+                <CitesRow message={message} />
               </div>
             </div>
           </div>

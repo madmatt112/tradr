@@ -16,6 +16,8 @@ import type { Persona } from '@tradr/shared/schemas/advisor';
 const navigateMock = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock,
+  // The context strip's settings link renders inside the page now.
+  Link: ({ children, ...rest }: { children?: React.ReactNode }) => <a {...rest}>{children}</a>,
 }));
 
 // Conversation list query — drives empty-state vs. populated.
