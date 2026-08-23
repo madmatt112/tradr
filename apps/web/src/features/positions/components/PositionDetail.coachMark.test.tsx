@@ -38,6 +38,12 @@ vi.mock('../hooks/usePosition', () => ({
   useReopenPosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 
+// CoachMark reads the signed-in user's id for its device latch; a static stub
+// keeps the surface mountable without the auth stack.
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'user-1', email: 'test@example.com' } }),
+}));
+
 vi.mock('./FillDialog', () => ({ FillDialog: () => null }));
 vi.mock('./FillTable', () => ({ FillTable: () => null }));
 vi.mock('./PositionEditDialog', () => ({ PositionEditDialog: () => null }));
@@ -115,6 +121,7 @@ function mockDetail(overrides: Partial<PositionDetail> = {}) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   // A user who has dismissed nothing: every reason the mark could withhold
   // itself for is off, so `available` is the only one left in play.
   const preference: OnboardingState = { status: 'active', coachMarksSeen: [] };
