@@ -25,37 +25,10 @@ import { ThemeToggle } from '@/components/layout/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { hasNewReleases, useChangelogReleases } from '@/features/changelog/hooks/useChangelog';
 import { useSidebarPin } from '@/features/onboarding/hooks/useSidebarPin';
-import { derivePresetRange } from '@/features/performance/utils/derivePresetRange';
 import { useAuth } from '@/hooks/useAuth';
-import { useUserTimezone } from '@/hooks/useUserTimezone';
 import { docsUrl } from '@/lib/docs';
 import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
-
-// Default search params for the Performance route. The route's
-// `validateSearch` requires `granularity`, `start`, and `end`; the sidebar
-// is the entry point so it has to seed sensible defaults. We use the
-// `monthly` preset (12m window) anchored at the user's STORED reporting
-// timezone.
-//
-// `tz` is a parameter rather than something this function derives: it comes
-// from `useUserTimezone()`, and a hook cannot be read from module scope. The
-// caller reads it inside the component and passes it down.
-function buildPerformanceDefaults(tz: string): {
-  granularity: 'day' | 'week' | 'month' | 'year';
-  start: string;
-  end: string;
-  tz: string;
-} {
-  const range = derivePresetRange(
-    'monthly',
-    { earliestClosedAt: null, mostRecentClosedAt: null, totalClosedPositions: 0 },
-    new Date(),
-    tz,
-    0,
-  );
-  return { granularity: range.granularity, start: range.start, end: range.end, tz };
-}
 
 // The direction-B desk chrome: a 56px icon rail by default, pinnable to a
 // 208px labeled state. The pin is a per-user preference (useSidebarPin); the
@@ -127,13 +100,6 @@ function GroupLabel({ expanded, label }: { expanded: boolean; label: string }) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  // The stored reporting timezone anchors the Performance route's default
-  // window. `undefined` until the preference query settles — and unlike the
-  // widgets there is no query here to disable, only a destination to seed, so
-  // the item is inert until there is a correct destination. Linking with the
-  // browser's zone (or a client-side 'UTC') is exactly the per-device bucketing
-  // the stored preference exists to replace.
-  const timezone = useUserTimezone();
   // Badge data: error/loading mean no `data`, so the badge is simply absent
   // (REQ-5(a)(5)) — the hook's `retry: false` keeps failures quiet.
   const changelogReleases = useChangelogReleases();
@@ -260,34 +226,17 @@ export function Sidebar() {
         </Link>
 
         <GroupLabel expanded={expanded} label="Review" />
-        {timezone ? (
-          <Link
-            to="/performance"
-            search={() => buildPerformanceDefaults(timezone)}
-            aria-label="Performance"
-            title={expanded ? undefined : 'Performance'}
-            className={itemClass(expanded)}
-          >
-            <ItemContent expanded={expanded} label="Performance" Icon={BarChart3} />
-          </Link>
-        ) : (
-          // `role` and `tabIndex` are what make the inert state perceivable:
-          // `aria-disabled` on a bare <span> is announced to nobody, and
-          // without a tab stop a keyboard user skips the item entirely and
-          // never learns it is there. Focusable-but-disabled (rather than
-          // removed from the tab order) is the pattern that keeps the nav's
-          // tab sequence stable across the in-flight window.
-          <span
-            role="link"
-            aria-disabled="true"
-            aria-label="Performance"
-            title={expanded ? undefined : 'Performance'}
-            tabIndex={0}
-            className={cn(itemClass(expanded), 'pointer-events-none opacity-50')}
-          >
-            <ItemContent expanded={expanded} label="Performance" Icon={BarChart3} />
-          </span>
-        )}
+        {/* A plain link: the Performance route derives its own monthly-preset
+            defaults at the boundary now, so the nav no longer seeds a search
+            window or sits inert while the stored timezone loads. */}
+        <Link
+          to="/performance"
+          aria-label="Performance"
+          title={expanded ? undefined : 'Performance'}
+          className={itemClass(expanded)}
+        >
+          <ItemContent expanded={expanded} label="Performance" Icon={BarChart3} />
+        </Link>
         <Link
           to="/accounting/expenses"
           aria-label="Accounting"

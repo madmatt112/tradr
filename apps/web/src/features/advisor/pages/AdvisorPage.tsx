@@ -229,8 +229,12 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
         >
           <PanelLeft className="size-4" />
         </Button>
-        <h1 className="flex items-center gap-2 text-lg font-medium">
-          <Sparkles className="size-5" /> Advisor
+        {/* The desk header grammar (task 8 re-skins the rest of this row). */}
+        <h1 className="flex items-baseline gap-1.5 font-mono text-sm font-semibold lowercase">
+          <span aria-hidden="true" className="text-primary">
+            ▴
+          </span>
+          Advisor
         </h1>
         <Button
           type="button"

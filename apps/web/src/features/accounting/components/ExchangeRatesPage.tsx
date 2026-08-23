@@ -10,6 +10,7 @@ import {
   type PreviewRateChangeResponse,
 } from '@tradr/shared/schemas/accounting';
 
+import { PageHeader } from '@/components/layout/PageHeader';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -168,8 +169,8 @@ export function ExchangeRatesPage({ initialBase, initialQuote }: ExchangeRatesPa
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Exchange Rates</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <PageHeader page="Exchange Rates" className="mb-2" />
+        <p className="text-sm text-muted-foreground">
           Manage the rates used to convert account balances into your display currency.
         </p>
       </div>

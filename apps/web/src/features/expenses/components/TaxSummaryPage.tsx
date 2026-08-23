@@ -8,6 +8,7 @@ import {
 import type { TaxJurisdiction } from '@tradr/shared/schemas/expense';
 
 import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/layout/PageHeader';
 import {
   Accordion,
   AccordionContent,
@@ -132,13 +133,13 @@ export function TaxSummaryPage() {
 
   return (
     <div className="space-y-6">
+      <div>
+        <PageHeader page="Tax Summary" className="mb-2" />
+        <p className="text-sm text-muted-foreground">
+          Realised P&amp;L, tracked expenses, and flagged positions for the selected year.
+        </p>
+      </div>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Tax Summary</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Realised P&amp;L, tracked expenses, and flagged positions for the selected year.
-          </p>
-        </div>
         <div className="flex items-end gap-3">
           <div className="space-y-1">
             <label htmlFor="tax-summary-year" className="text-xs text-muted-foreground">

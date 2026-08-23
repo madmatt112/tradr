@@ -8,6 +8,7 @@
 import { useEffect, useRef } from 'react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { ReleaseCard } from '../components/ReleaseCard';
@@ -77,7 +78,7 @@ export function ChangelogPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Changelog</h1>
+      <PageHeader page="Changelog" />
       {body}
     </div>
   );

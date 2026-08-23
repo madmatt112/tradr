@@ -49,13 +49,6 @@ vi.mock('@tanstack/react-router', () => ({
   },
 }));
 
-// The stored reporting timezone. The real hook is a useQuery and would throw
-// without a provider; `value: undefined` reproduces the in-flight window.
-const timezoneState = vi.hoisted(() => ({ value: undefined as string | undefined }));
-vi.mock('@/hooks/useUserTimezone', () => ({
-  useUserTimezone: () => timezoneState.value,
-}));
-
 // useAuth pulls in TanStack Query + Router internals; stub it with a static
 // shape so the sidebar mounts standalone.
 vi.mock('@/hooks/useAuth', () => ({
@@ -132,7 +125,6 @@ beforeEach(() => {
   linkSearch.clear();
   localStorage.clear();
   changelogState.result = { data: undefined, isError: false };
-  timezoneState.value = 'Europe/Berlin';
   pinState.pinned = true;
   pinState.calls = [];
   useDrawerStore.setState({ isOpen: false });
@@ -238,69 +230,24 @@ describe('Sidebar — Performance link', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The default performance window is anchored at the user's STORED reporting
-// timezone, never at the browser's: a per-device guess would hand the same user
-// a different window — and different figures inside it — on every machine.
+// The Performance route derives its own monthly-preset defaults at the route
+// boundary now (visual-redesign 2.4), so the nav item is a PLAIN link: no
+// seeded search window, no inert state while the stored timezone loads.
 // ---------------------------------------------------------------------------
 
-describe('Sidebar — Performance defaults anchor at the stored timezone', () => {
-  it('seeds the search params with the stored zone', () => {
-    timezoneState.value = 'Asia/Tokyo';
+describe('Sidebar — Performance link is plain', () => {
+  it('seeds no search params', () => {
     const { container, root } = mountWith(<Sidebar />);
 
-    const search = linkSearch.get('/performance');
-    expect(typeof search).toBe('function');
-    const params = (
-      search as () => { granularity: string; start: string; end: string; tz: string }
-    )();
-
-    expect(params.tz).toBe('Asia/Tokyo');
-    // The rest of the monthly preset still comes through unchanged.
-    expect(params.granularity).toBe('month');
-    expect(params.start).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(params.end).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(linkSearch.get('/performance')).toBeUndefined();
 
     unmount(container, root);
   });
 
-  it('derives a different window for a different stored zone', () => {
-    timezoneState.value = 'Pacific/Kiritimati';
-    const first = mountWith(<Sidebar />);
-    const kiritimati = (linkSearch.get('/performance') as () => { start: string })();
-    unmount(first.container, first.root);
-
-    timezoneState.value = 'Pacific/Midway';
-    const second = mountWith(<Sidebar />);
-    const midway = (linkSearch.get('/performance') as () => { start: string })();
-    unmount(second.container, second.root);
-
-    // +14 vs -11 puts the month boundaries on different UTC instants — proof
-    // the zone actually reaches `derivePresetRange` rather than being ignored.
-    expect(kiritimati.start).not.toBe(midway.start);
-  });
-
-  it('renders an inert Performance item while the stored zone is in flight', () => {
-    timezoneState.value = undefined;
+  it('renders no inert placeholder — the link is always navigable', () => {
     const { container, root } = mountWith(<Sidebar />);
 
-    // No destination exists yet, so there must be no navigable link…
-    const performanceLink = Array.from(container.querySelectorAll('a')).find(
-      (a) => a.getAttribute('href') === '/performance',
-    );
-    expect(performanceLink).toBeUndefined();
-    expect(linkSearch.has('/performance')).toBe(false);
-
-    // …but the nav item stays in place so the rail does not reflow.
-    const inert = container.querySelector('nav span[aria-disabled="true"]');
-    expect(inert).not.toBeNull();
-    expect(inert?.textContent).toContain('Performance');
-
-    // The inert state has to be perceivable and reachable, not just visually
-    // dimmed: `aria-disabled` on a role-less span is announced to nobody, and
-    // with no tab stop a keyboard user skips the item without learning it
-    // exists.
-    expect(inert?.getAttribute('role')).toBe('link');
-    expect(inert?.getAttribute('tabindex')).toBe('0');
+    expect(container.querySelector('nav span[aria-disabled="true"]')).toBeNull();
 
     unmount(container, root);
   });
