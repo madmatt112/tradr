@@ -23,24 +23,37 @@ declare const __TRADR_VERSION__: string;
 const version = __TRADR_VERSION__;
 ---
 
+{/* "the <a" must stay on one line: Astro drops the newline between them. */}
 <div class="version-banner">
-  These docs describe Tradr <strong>v{version}</strong>. Running an older release? Check the
-  <a href="https://github.com/madmatt112/tradr/releases">release notes</a> for what changed.
+  These docs describe Tradr <strong>v{version}</strong>. Running an older release? Check
+  the <a href="https://github.com/madmatt112/tradr/releases">release notes</a> for what changed.
 </div>
 
 <style>
+  /* Machine-adjacent strip: mono on the popover surface, left-aligned with the
+     top bar, version in the foreground weight, link in the amber text token. */
   .version-banner {
-    padding: 0.5rem var(--sl-nav-pad-x, 1rem);
-    background-color: var(--sl-color-bg-nav);
-    border-bottom: 1px solid var(--sl-color-hairline-shade);
-    color: var(--sl-color-gray-2);
-    font-size: var(--sl-text-xs);
+    padding: 0.4375rem var(--sl-nav-pad-x, 1rem);
+    background-color: var(--popover);
+    border-bottom: 1px solid var(--hairline);
+    color: var(--muted-fg);
+    font-family: var(--font-mono);
+    font-size: 0.71875rem;
     line-height: 1.5;
-    text-align: center;
     text-wrap: balance;
   }
 
+  .version-banner strong {
+    color: var(--fg);
+    font-weight: 500;
+  }
+
   .version-banner a {
-    color: var(--sl-color-text-accent);
+    color: var(--accent-text);
+    text-decoration: none;
+  }
+
+  .version-banner a:hover {
+    text-decoration: underline;
   }
 </style>
