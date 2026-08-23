@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useState } from 'react';
 
+import { AuthScreen } from '@/components/layout/AuthScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
@@ -54,7 +55,7 @@ function VerifyEmailPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <AuthScreen>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Verify your email</CardTitle>
@@ -108,7 +109,7 @@ function VerifyEmailPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </AuthScreen>
   );
 }
 

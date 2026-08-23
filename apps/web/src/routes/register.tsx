@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { RegisterSchema } from '@tradr/shared';
 
+import { AuthScreen } from '@/components/layout/AuthScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -81,9 +82,9 @@ function RegisterPage() {
   // ['config'] query for anyone who arrived through it.
   if (configPending) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <AuthScreen>
         <div className="text-muted-foreground">Loading...</div>
-      </div>
+      </AuthScreen>
     );
   }
 
@@ -93,7 +94,7 @@ function RegisterPage() {
     // promise a launch the operator of this instance never announced.
     const newsletter = newsletterUrl();
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <AuthScreen>
         <Card className="w-full max-w-sm">
           <CardHeader>
             <CardTitle>{newsletter ? 'Signups open at launch' : 'Signups are closed'}</CardTitle>
@@ -121,7 +122,7 @@ function RegisterPage() {
             </p>
           </CardContent>
         </Card>
-      </div>
+      </AuthScreen>
     );
   }
 
@@ -132,7 +133,7 @@ function RegisterPage() {
   // "Continue to dashboard" button is the only exit.
   if (pendingEmail) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <AuthScreen>
         <Card className="w-full max-w-sm">
           <CardHeader>
             <CardTitle>Check your email</CardTitle>
@@ -165,7 +166,7 @@ function RegisterPage() {
             </Button>
           </CardContent>
         </Card>
-      </div>
+      </AuthScreen>
     );
   }
 
@@ -197,7 +198,7 @@ function RegisterPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <AuthScreen>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Create an account</CardTitle>
@@ -267,7 +268,7 @@ function RegisterPage() {
           </p>
         </CardContent>
       </Card>
-    </div>
+    </AuthScreen>
   );
 }
 
