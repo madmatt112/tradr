@@ -8,6 +8,7 @@ import {
   type PasswordResetRequestInput,
 } from '@tradr/shared/schemas/auth';
 
+import { AuthScreen } from '@/components/layout/AuthScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -57,7 +58,7 @@ function ForgotPasswordPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <AuthScreen>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Reset your password</CardTitle>
@@ -111,7 +112,7 @@ function ForgotPasswordPage() {
           </p>
         </CardContent>
       </Card>
-    </div>
+    </AuthScreen>
   );
 }
 

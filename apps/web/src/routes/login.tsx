@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form';
 
 import { LoginSchema, type LoginInput } from '@tradr/shared';
 
+import { AuthScreen } from '@/components/layout/AuthScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -45,7 +46,7 @@ function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <AuthScreen>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Log in</CardTitle>
@@ -119,7 +120,7 @@ function LoginPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </AuthScreen>
   );
 }
 

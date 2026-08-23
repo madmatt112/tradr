@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { PasswordResetCompleteSchema } from '@tradr/shared/schemas/auth';
 
+import { AuthScreen } from '@/components/layout/AuthScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -78,7 +79,7 @@ function ResetPasswordPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <AuthScreen>
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Set a new password</CardTitle>
@@ -160,7 +161,7 @@ function ResetPasswordPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </AuthScreen>
   );
 }
 
