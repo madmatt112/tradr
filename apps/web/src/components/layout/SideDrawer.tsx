@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { OpenPositionsTab } from '@/features/drawer/components/OpenPositionsTab';
 import { OptionsPricingTab } from '@/features/drawer/components/OptionsPricingTab';
+import { PositionInspectPanel } from '@/features/drawer/components/PositionInspectPanel';
 import { QuickStatsTab } from '@/features/drawer/components/QuickStatsTab';
 import { RecentlyCreatedTab } from '@/features/drawer/components/RecentlyCreatedTab';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
@@ -100,6 +101,7 @@ export function SideDrawer() {
   const activeTab = useDrawerStore((s) => s.activeTab);
   const setActiveTab = useDrawerStore((s) => s.setActiveTab);
   const close = useDrawerStore((s) => s.close);
+  const inspectedPosition = useDrawerStore((s) => s.inspectedPosition);
   const isMobile = useMediaQuery('(max-width: 767px)');
   const showBackdrop = useMediaQuery('(max-width: 1023px)');
   const [skipTransition, setSkipTransition] = useState(false);
@@ -156,11 +158,12 @@ export function SideDrawer() {
     });
   }, []);
 
-  // EFFECT 3: focus management on `isOpen` transitions.
+  // EFFECT 3: focus management on `isOpen` transitions. The inspect surface
+  // has no tab strip, so its close control is the focus target there.
   useEffect(() => {
     if (isOpen) {
       const activeTrigger = drawerRef.current?.querySelector<HTMLElement>(
-        '[role="tab"][data-state="active"]',
+        '[role="tab"][data-state="active"], [data-slot="inspect-close"]',
       );
       activeTrigger?.focus();
     } else {
@@ -191,12 +194,20 @@ export function SideDrawer() {
     };
   }, [isMobile, isOpen]);
 
-  // EFFECT 6: Escape closes on mobile only.
+  // EFFECT 6: Escape. The TABBED drawer closes on mobile only (a desktop
+  // sidebar the user parked open should not vanish under a stray Escape); the
+  // INSPECT surface closes on every viewport — the row click that opened it is
+  // a transient look, and the mock labels its close control "esc".
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      const state = useDrawerStore.getState();
+      if (state.inspectedPosition !== null) {
+        state.close();
+        return;
+      }
       if (!isMobileRef.current) return;
-      useDrawerStore.getState().close();
+      state.close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -238,8 +249,14 @@ export function SideDrawer() {
             skipTransition && '!transition-none',
           )}
         >
-          <DrawerHeader activeTab={activeTab} setActiveTab={setActiveTab} onClose={close} />
-          <DrawerBody activeTab={activeTab} />
+          {inspectedPosition !== null ? (
+            <PositionInspectPanel position={inspectedPosition} onClose={close} />
+          ) : (
+            <>
+              <DrawerHeader activeTab={activeTab} setActiveTab={setActiveTab} onClose={close} />
+              <DrawerBody activeTab={activeTab} />
+            </>
+          )}
         </aside>
       </FocusScopePrimitive.Root>
     </>,

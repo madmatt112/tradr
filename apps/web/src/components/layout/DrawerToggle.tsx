@@ -6,12 +6,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
 
-// The drawer's opener, floating at the top-right of the viewport. It used to
-// sit alone in a 48px top bar that existed for nothing else — the bar is gone
-// (visual-redesign task 4) and the control now floats where the drawer slides
-// in from, until the shared PageHeader (task 5) gives it a proper slot. Fixed
-// positioning keeps it out of the document flow; z-20 sits under the drawer's
-// overlay (z-30) so the open drawer covers it.
+// The drawer's opener. It used to sit alone in a 48px top bar that existed
+// for nothing else — the bar is gone (visual-redesign task 4) and the control
+// now sits inline at the end of every PageHeader strip, which is the slot
+// that bar was standing in for. Deep-link pages without a PageHeader carry no
+// opener; the drawer itself stays mounted app-wide, so one opened elsewhere
+// still works there.
 export function DrawerToggle() {
   const isOpen = useDrawerStore((s) => s.isOpen);
   const open = useDrawerStore((s) => s.open);
@@ -22,7 +22,7 @@ export function DrawerToggle() {
       data-testid="drawer-toggle"
       aria-hidden={isOpen}
       className={cn(
-        'fixed right-3 top-3 z-20 transition-opacity duration-200 ease-out motion-reduce:duration-0',
+        'transition-opacity duration-200 ease-out motion-reduce:duration-0',
         isOpen && 'pointer-events-none opacity-0',
       )}
     >

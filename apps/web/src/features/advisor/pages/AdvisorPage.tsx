@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 import type { BillingModel } from '@tradr/shared';
 
 import { EmptyState } from '@/components/EmptyState';
+import { DrawerToggle } from '@/components/layout/DrawerToggle';
 import { Button } from '@/components/ui/button';
 
 import { hasAllowanceHeadroom } from '../../billing/tier-usage';
@@ -245,6 +246,9 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
         >
           New conversation
         </Button>
+        {/* The app-wide drawer opener — the advisor keeps its own header row,
+            so it carries the slot. */}
+        <DrawerToggle />
       </header>
 
       <div className="flex min-h-0 flex-1">

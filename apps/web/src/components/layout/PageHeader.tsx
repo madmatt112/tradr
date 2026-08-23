@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import { DrawerToggle } from '@/components/layout/DrawerToggle';
 import { cn } from '@/lib/utils';
 
 // The desk page-header grammar (visual-redesign 2.3): a mono `▴ page-name`
@@ -40,11 +41,12 @@ export function PageHeader({
         </h1>
         {chips}
       </div>
-      {right != null && (
-        <div className="flex items-center gap-3 font-mono text-xs text-muted-foreground">
-          {right}
-        </div>
-      )}
+      <div className="flex items-center gap-3 font-mono text-xs text-muted-foreground">
+        {right}
+        {/* The app-wide drawer opener lives at the end of every page-header
+            strip — the slot the old 48px top bar existed for. */}
+        <DrawerToggle />
+      </div>
     </header>
   );
 }
