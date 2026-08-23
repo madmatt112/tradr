@@ -95,7 +95,12 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
               data-testid={`conversation-${conversation.id}`}
               className={cn(
                 'group flex items-center gap-1 rounded-md px-2 py-1.5',
-                isActive ? 'bg-accent' : 'hover:bg-accent/50',
+                // The desk selection language: the active conversation wears
+                // the same secondary fill + amber tick as the nav and the
+                // inspected table row.
+                isActive
+                  ? 'bg-secondary shadow-[inset_2px_0_0_var(--color-primary)]'
+                  : 'hover:bg-accent/50',
               )}
             >
               {isEditing ? (
@@ -138,7 +143,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                     onClick={() => onSelect(conversation.id)}
                   >
                     <span className="block truncate text-sm font-medium">{conversation.title}</span>
-                    <span className="block text-xs text-muted-foreground">
+                    <span className="block font-mono text-xs text-muted-foreground">
                       {relativeTime(conversation.updatedAt)}
                     </span>
                   </button>

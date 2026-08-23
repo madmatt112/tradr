@@ -132,10 +132,40 @@ describe('Transcript chat bubbles', () => {
     expect(userBubble.className).not.toContain('text-right');
     expect(assistantBubble.className).not.toContain('text-right');
 
-    // Distinct fills, so the speakers are told apart by colour as well as side.
-    expect(userBubble.className).toContain('bg-primary');
+    // Distinct fills, so the speakers are told apart by colour as well as
+    // side. The desk re-skin keeps both NEUTRAL: the user speaks on the
+    // secondary surface (amber never encodes data), the advisor on a hairline
+    // card — neither ever wears the accent.
+    expect(userBubble.className).toContain('bg-secondary');
     expect(assistantBubble.className).toContain('bg-card');
+    expect(userBubble.className).not.toContain('bg-primary');
     expect(assistantBubble.className).not.toContain('bg-primary');
+  });
+
+  it("summarises an answer's tool calls as a cites row, one chip per distinct tool", () => {
+    conversationMessages = [
+      partsMessage('a1', [
+        { type: 'text', text: 'answer' },
+        { type: 'tool_call', id: 'c1', name: 'get_positions', arguments: {} },
+        { type: 'tool_result', toolCallId: 'c1', status: 'ok', content: {} },
+        // The same tool called twice collapses to one chip.
+        { type: 'tool_call', id: 'c2', name: 'get_positions', arguments: {} },
+        { type: 'tool_result', toolCallId: 'c2', status: 'ok', content: {} },
+      ]),
+    ];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const row = document.querySelector('[data-testid="cites-row"]')!;
+    expect(row).not.toBeNull();
+    expect(row.textContent).toContain('used:');
+    // Underscores humanised; duplicates collapsed.
+    expect(row.textContent?.match(/get positions/g)).toHaveLength(1);
+  });
+
+  it('renders no cites row for an answer that called no tools', () => {
+    conversationMessages = [textMessage({ id: 'a1', role: 'assistant', text: 'answer' })];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+    expect(document.querySelector('[data-testid="cites-row"]')).toBeNull();
   });
 
   it('labels each bubble with its speaker, on that speaker’s side', () => {

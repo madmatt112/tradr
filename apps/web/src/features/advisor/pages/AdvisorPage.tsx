@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { hasAllowanceHeadroom } from '../../billing/tier-usage';
 import { useTierState } from '../../billing/useTierState';
 import { billingKeys, useBillingConfig } from '../../billing/useWalletBalance';
+import { AdvisorContextStrip } from '../components/AdvisorContextStrip';
 import { Composer, type ComposerSubmit } from '../components/Composer';
 import { ConversationList } from '../components/ConversationList';
 import { PlatformModelPicker } from '../components/PlatformModelPicker';
@@ -264,6 +265,15 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
 
         {/* Right pane — transcript + composer (or empty/no-key state). */}
         <section className="flex min-w-0 flex-1 flex-col">
+          {canStartConversation ? (
+            <AdvisorContextStrip
+              conversation={
+                activeId !== null
+                  ? (conversations.data?.items.find((c) => c.id === activeId) ?? null)
+                  : null
+              }
+            />
+          ) : null}
           <div className="min-h-0 flex-1 overflow-y-auto">
             {activeId ? (
               <Transcript conversationId={activeId} onRetry={onRetry} />
