@@ -13,6 +13,7 @@ import { Link } from '@tanstack/react-router';
 import { ShieldOff } from 'lucide-react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { useAuth } from '@/hooks/useAuth';
 
 import { useAdminStats } from '../hooks/useAdminStats';
@@ -53,6 +54,7 @@ export function AdminPage() {
 
   return (
     <div className="space-y-8">
+      <PageHeader page="Admin" className="mb-0" />
       <section aria-labelledby="admin-stats-heading">
         <h2 id="admin-stats-heading" className="mb-4 text-lg font-semibold">
           Stats

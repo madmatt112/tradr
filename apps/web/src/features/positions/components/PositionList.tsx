@@ -1,6 +1,7 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 
+import { PageHeader } from '@/components/layout/PageHeader';
 import { Numeric } from '@/components/Numeric';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -57,32 +58,34 @@ export function PositionList() {
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Positions</h1>
-        {hasAccounts ? (
-          // `data-tour` is the walkthrough's anchor for the log-a-position
-          // step. Only on the enabled branch: a tour that reached this step has
-          // an account, and highlighting a disabled button would be a dead end.
-          <Button
-            data-tour="position-new"
-            className="cursor-pointer"
-            onClick={() => handleDialogOpenChange(true)}
-          >
-            New Position
-          </Button>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button className="cursor-pointer" disabled>
-                  New Position
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Create an account first</TooltipContent>
-          </Tooltip>
-        )}
-      </div>
+      <PageHeader
+        page="Positions"
+        right={
+          hasAccounts ? (
+            // `data-tour` is the walkthrough's anchor for the log-a-position
+            // step. Only on the enabled branch: a tour that reached this step has
+            // an account, and highlighting a disabled button would be a dead end.
+            <Button
+              data-tour="position-new"
+              className="cursor-pointer"
+              onClick={() => handleDialogOpenChange(true)}
+            >
+              New Position
+            </Button>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <Button className="cursor-pointer" disabled>
+                    New Position
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Create an account first</TooltipContent>
+            </Tooltip>
+          )
+        }
+      />
 
       <Tabs value={statusFilter} onValueChange={setStatusFilter} className="mb-4">
         <TabsList>

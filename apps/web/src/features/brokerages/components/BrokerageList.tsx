@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import type { Brokerage } from '@tradr/shared';
 
+import { PageHeader } from '@/components/layout/PageHeader';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -60,18 +61,20 @@ export function BrokerageList() {
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Brokerages</h1>
-        <Button
-          className="cursor-pointer"
-          onClick={() => {
-            setEditBrokerage(null);
-            setDialogOpen(true);
-          }}
-        >
-          New Brokerage
-        </Button>
-      </div>
+      <PageHeader
+        page="Brokerages"
+        right={
+          <Button
+            className="cursor-pointer"
+            onClick={() => {
+              setEditBrokerage(null);
+              setDialogOpen(true);
+            }}
+          >
+            New Brokerage
+          </Button>
+        }
+      />
 
       {!brokerages?.length ? (
         <div className="py-12 text-center text-muted-foreground">

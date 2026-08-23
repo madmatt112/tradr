@@ -59,8 +59,11 @@ function buildResponse(): PerformanceResponse {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-const runLoader = (params: PerformanceQueryInput): Promise<unknown> =>
-  (Route.options as any).loader({ deps: { params } });
+const runLoader = (params: Partial<PerformanceQueryInput>): Promise<unknown> =>
+  (Route.options as any).loader({ deps: { search: params } });
+
+const runValidateSearch = (raw: Record<string, unknown>): unknown =>
+  ((Route.options as any).validateSearch as { parse: (v: unknown) => unknown }).parse(raw);
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 /** Every path `api.get` was called with, in order. */
@@ -116,5 +119,32 @@ describe('performance route loader — respects the rejected-timezone record', (
 
     expect(requestedPaths()).toHaveLength(1);
     expect(requestedPaths()[0]).toContain('tz=Europe%2FLondon');
+  });
+});
+
+// A bare `/performance` used to crash to the root error boundary: the strict
+// query schema requires granularity/start/end and TanStack Router turns a
+// validateSearch throw into a SearchParamError. The route is deep-link-safe
+// now — partial searches parse, garbage degrades to "absent", and the loader
+// prefetches nothing until the component derives a complete window.
+describe('performance route — deep-link-safe search (visual-redesign 2.4)', () => {
+  it('parses an empty search instead of throwing', () => {
+    expect(runValidateSearch({})).toEqual({});
+  });
+
+  it('degrades a mangled granularity to absent instead of crashing', () => {
+    expect(runValidateSearch({ granularity: 'fortnight' })).toEqual({});
+  });
+
+  it('keeps partial params that are usable', () => {
+    expect(runValidateSearch({ currency: 'USD' })).toEqual({ currency: 'USD' });
+  });
+
+  it('prefetches nothing for an incomplete window', async () => {
+    getMock.mockResolvedValue(buildResponse());
+
+    await runLoader({ currency: 'USD' });
+
+    expect(requestedPaths()).toHaveLength(0);
   });
 });

@@ -3,6 +3,7 @@ import { ReceiptText } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/layout/PageHeader';
 import {
   Select,
   SelectContent,
@@ -96,13 +97,13 @@ export function FeeRollupPage() {
 
   return (
     <div className="space-y-6">
+      <div>
+        <PageHeader page="Fee Rollup" className="mb-2" />
+        <p className="text-sm text-muted-foreground">
+          Recorded fill fees aggregated by account and currency for the selected year.
+        </p>
+      </div>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Fee Rollup</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Recorded fill fees aggregated by account and currency for the selected year.
-          </p>
-        </div>
         <div className="flex items-end gap-3">
           <div className="space-y-1">
             <label htmlFor="fee-rollup-year" className="text-xs text-muted-foreground">

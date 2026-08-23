@@ -1,13 +1,58 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useEffect } from 'react';
+import { z } from 'zod';
 
 import type { PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
-import { PerformanceQuerySchema } from '@tradr/shared/schemas/performance';
+import { GranularitySchema } from '@tradr/shared/schemas/performance';
 
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Skeleton } from '@/components/ui/skeleton';
 import { PerformancePage } from '@/features/performance/components/PerformancePage';
+import { buildPerformanceDefaults } from '@/features/performance/utils/buildPerformanceDefaults';
+import { useUserTimezone } from '@/hooks/useUserTimezone';
 import { api } from '@/lib/api';
 import { isTimezoneRejected } from '@/lib/invalidTimezone';
 import { queryClient } from '@/lib/queryClient';
+
+// ---- Deep-link-safe search parsing -----------------------------------------
+// A bare `/performance` used to CRASH to the root error boundary: the strict
+// PerformanceQuerySchema requires granularity/start/end, and TanStack Router
+// turns a validateSearch throw into a SearchParamError. The route now accepts
+// a PARTIAL search — every field optional, and `.catch(undefined)` so even a
+// mangled value degrades to "absent" instead of a crash — and derives the
+// monthly-preset defaults at the boundary (anchored at the STORED reporting
+// timezone) when the window is incomplete. Garbage that still parses as a
+// string (a bad date) flows to the API, whose 400 lands in the page's own
+// banner stack rather than a generic error screen.
+const PerformanceSearchSchema = z.object({
+  granularity: GranularitySchema.optional().catch(undefined),
+  start: z.string().optional().catch(undefined),
+  end: z.string().optional().catch(undefined),
+  tz: z.string().optional().catch(undefined),
+  currency: z.string().optional().catch(undefined),
+});
+
+type PerformanceSearch = z.infer<typeof PerformanceSearchSchema>;
+
+/** The window is usable once all three required params are present. */
+function isComplete(search: PerformanceSearch): search is PerformanceSearch & {
+  granularity: NonNullable<PerformanceSearch['granularity']>;
+  start: string;
+  end: string;
+} {
+  return search.granularity !== undefined && search.start !== undefined && search.end !== undefined;
+}
+
+/** A complete search resolved to the shape the API + page consume. */
+function toParams(search: PerformanceSearch): PerformanceQueryInput {
+  return {
+    granularity: search.granularity!,
+    start: search.start!,
+    end: search.end!,
+    tz: search.tz ?? 'UTC',
+    ...(search.currency !== undefined ? { currency: search.currency } : {}),
+  };
+}
 
 // ---- Shared query options --------------------------------------------------
 // The component-side hook (`usePerformance`, Task 26) layers session-scoped
@@ -31,13 +76,17 @@ function buildPath(params: PerformanceQueryInput): string {
 }
 
 export const Route = createFileRoute('/_auth/performance')({
-  validateSearch: PerformanceQuerySchema,
+  validateSearch: PerformanceSearchSchema,
   // Re-trigger the loader whenever any search param changes so the prefetch
   // tracks the URL one-to-one. Without `loaderDeps`, TanStack Router would
   // skip subsequent loader calls for the same path.
-  loaderDeps: ({ search }) => ({ params: search }),
+  loaderDeps: ({ search }) => ({ search }),
   loader: async ({ deps }) => {
-    const params = deps.params as PerformanceQueryInput;
+    // An incomplete window has nothing to prefetch — the component is about
+    // to derive defaults and replace the URL, which re-runs this loader with
+    // the complete search.
+    if (!isComplete(deps.search)) return null;
+    const params = toParams(deps.search);
     // Best-effort prefetch. Errors are intentionally swallowed here so the
     // component's `usePerformance` hook owns error rendering (banner stack,
     // empty states). Throwing from the loader would bubble to the root error
@@ -56,13 +105,37 @@ export const Route = createFileRoute('/_auth/performance')({
 });
 
 function PerformanceRouteComponent() {
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  // The stored reporting timezone anchors the derived default window;
+  // `undefined` only while the preference query is in flight (on terminal
+  // failure the hook degrades to a browser-detected zone and says so).
+  const timezone = useUserTimezone();
+  const complete = isComplete(search);
+
+  useEffect(() => {
+    if (complete || timezone === undefined) return;
+    // Derive the monthly preset and REPLACE the bare URL so back does not
+    // return to the redirecting state. Anything usable in the partial search
+    // (a currency, an explicit tz) survives the merge.
+    void navigate({
+      search: {
+        ...buildPerformanceDefaults(timezone),
+        ...(search.tz !== undefined ? { tz: search.tz } : {}),
+        ...(search.currency !== undefined ? { currency: search.currency } : {}),
+      },
+      replace: true,
+    });
+  }, [complete, timezone, navigate, search.tz, search.currency]);
+
   // Snapshot the validated search params for the cleanup closure. We capture
   // here (not inside the cleanup) so that an in-flight effect-cleanup cancels
   // the *exact* params it was issued under, not whatever the URL has become
   // by the time the user navigates away.
-  const params = Route.useSearch() as PerformanceQueryInput;
+  const params = complete ? toParams(search) : null;
 
   useEffect(() => {
+    if (params === null) return;
     return () => {
       // `exact: true` is load-bearing — without it, this would cancel every
       // performance query (including ones the user hasn't navigated away
@@ -74,5 +147,18 @@ function PerformanceRouteComponent() {
     };
   }, [params]);
 
-  return <PerformancePage params={params} />;
+  return (
+    <>
+      <PageHeader page="Performance" />
+      {params !== null ? (
+        <PerformancePage params={params} />
+      ) : (
+        // The one-render window while defaults derive (or the zone loads).
+        <div data-testid="performance-page" className="space-y-4">
+          <Skeleton className="h-9 w-72" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      )}
+    </>
+  );
 }

@@ -9,6 +9,7 @@ import {
 import type { Expense } from '@tradr/shared/schemas/expense';
 
 import { EmptyState } from '@/components/EmptyState';
+import { PageHeader } from '@/components/layout/PageHeader';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -130,13 +131,13 @@ export function ExpensesPage() {
 
   return (
     <div className="space-y-6">
+      <div>
+        <PageHeader page="Expenses" className="mb-2" />
+        <p className="text-sm text-muted-foreground">
+          Track deductible expenses for your tax summary.
+        </p>
+      </div>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Expenses</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Track deductible expenses for your tax summary.
-          </p>
-        </div>
         <div className="flex items-end gap-3">
           <div className="space-y-1">
             <label htmlFor="expense-year" className="text-xs text-muted-foreground">

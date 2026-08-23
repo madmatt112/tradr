@@ -1,6 +1,7 @@
 import { createFileRoute, Link, Outlet, redirect, useLocation } from '@tanstack/react-router';
 import { Bot, CircleQuestionMark, Settings as SettingsIcon, User, Wallet } from 'lucide-react';
 
+import { PageHeader } from '@/components/layout/PageHeader';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 // Single composition point for the Settings shell. New tabs are added by
@@ -24,7 +25,7 @@ function SettingsLayout() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+      <PageHeader page="Settings" className="mb-0" />
       <Tabs value={active} orientation="vertical" className="flex-row">
         <TabsList variant="line" className="shrink-0">
           {SETTINGS_TABS.map((tab) => {
