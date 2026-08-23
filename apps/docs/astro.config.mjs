@@ -110,9 +110,12 @@ export default defineConfig({
       pagefind: true,
       // Says which version these pages describe, on every page. Starlight 0.41
       // has no site-wide banner option, so this overrides the per-page one —
-      // see the component for why.
+      // see the component for why. SiteTitle renders the `▴ Tradr docs`
+      // wordmark, whose three differently-styled parts CSS cannot carve out of
+      // the default single-text-node title.
       components: {
         Banner: './src/components/VersionBanner.astro',
+        SiteTitle: './src/components/SiteTitle.astro',
       },
       // Excludes the generated API operation pages from the search index — see
       // the file for why. The API overview page stays indexed.
