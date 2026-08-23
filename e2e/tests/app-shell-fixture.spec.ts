@@ -59,7 +59,7 @@ test.describe('mockAppShell', () => {
       // assertion — no list of endpoints to keep in step with the app here,
       // because the app itself decides what it asks for.
       await page.goto(url);
-      await expect(page.getByTestId('drawer-topbar')).toBeVisible();
+      await expect(page.getByTestId('drawer-toggle')).toBeVisible();
       // The shell paints well before it has finished asking for things — the
       // widgets fetch after their grid mounts. Without a wait the test can end
       // while the last requests are still in flight, and a backstop throw after
@@ -221,7 +221,7 @@ test.describe('mockAppShell', () => {
     await mockSession(page);
 
     await page.goto('/dashboard');
-    await expect(page.getByTestId('drawer-topbar')).toBeVisible();
+    await expect(page.getByTestId('drawer-toggle')).toBeVisible();
 
     // Stands in for the endpoint the fixture does not know about yet, asked for
     // late. `evaluate` returns as soon as the timer is set, so the request

@@ -6,6 +6,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
 
+// The drawer's opener, floating at the top-right of the viewport. It used to
+// sit alone in a 48px top bar that existed for nothing else — the bar is gone
+// (visual-redesign task 4) and the control now floats where the drawer slides
+// in from, until the shared PageHeader (task 5) gives it a proper slot. Fixed
+// positioning keeps it out of the document flow; z-20 sits under the drawer's
+// overlay (z-30) so the open drawer covers it.
 export function DrawerToggle() {
   const isOpen = useDrawerStore((s) => s.isOpen);
   const open = useDrawerStore((s) => s.open);
@@ -13,11 +19,11 @@ export function DrawerToggle() {
 
   return (
     <div
-      data-testid="drawer-topbar"
+      data-testid="drawer-toggle"
       aria-hidden={isOpen}
       className={cn(
-        'flex justify-end border-b items-center px-4 transition-[height] duration-200 ease-out motion-reduce:duration-0 overflow-hidden',
-        isOpen ? 'h-0 border-b-0' : 'h-12',
+        'fixed right-3 top-3 z-20 transition-opacity duration-200 ease-out motion-reduce:duration-0',
+        isOpen && 'pointer-events-none opacity-0',
       )}
     >
       {!isOpen && (
@@ -27,7 +33,7 @@ export function DrawerToggle() {
           }}
           variant="ghost"
           size="icon-sm"
-          className="cursor-pointer"
+          className="cursor-pointer text-muted-foreground"
           onClick={open}
           aria-label="Open side drawer"
           aria-expanded={false}

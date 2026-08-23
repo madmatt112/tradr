@@ -80,6 +80,23 @@ describe('OnboardingStateSchema', () => {
     },
   );
 
+  it('omits sidebarPinned entirely when absent rather than defaulting it', () => {
+    // Absence is load-bearing: it means "never expressed", which is what lets
+    // the client seed the pin once from the legacy localStorage value without
+    // overwriting a choice made on another device.
+    const result = OnboardingStateSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.sidebarPinned).toBeUndefined();
+  });
+
+  it('round-trips sidebarPinned in both directions', () => {
+    for (const value of [true, false]) {
+      const result = OnboardingStateSchema.safeParse({ sidebarPinned: value });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.sidebarPinned).toBe(value);
+    }
+  });
+
   it('omits calculatorFirstUsedAt entirely when absent rather than nulling it', () => {
     const result = OnboardingStateSchema.safeParse({});
     expect(result.success).toBe(true);
@@ -128,6 +145,11 @@ describe('OnboardingPatchSchema', () => {
         .success,
     ).toBe(true);
     expect(OnboardingPatchSchema.safeParse({ coachMarkSeen: 'csv-import' }).success).toBe(true);
+    expect(OnboardingPatchSchema.safeParse({ sidebarPinned: false }).success).toBe(true);
+  });
+
+  it('rejects a non-boolean sidebarPinned', () => {
+    expect(OnboardingPatchSchema.safeParse({ sidebarPinned: 'true' }).success).toBe(false);
   });
 
   // The mirror image of the state schema above, and deliberately so: this

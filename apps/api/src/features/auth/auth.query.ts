@@ -107,14 +107,16 @@ export function updateUserOnboarding(db: DB, userId: string, patch: OnboardingPa
       END`;
   }
 
-  // status and calculatorFirstUsedAt are plain scalars, so one `||` sets both.
-  // It runs after the coach-mark clause only because that clause reads the
-  // column directly; the two touch disjoint keys, so the order is immaterial.
-  const scalars: Record<string, string> = {};
+  // status, calculatorFirstUsedAt and sidebarPinned are plain scalars, so one
+  // `||` sets them all. It runs after the coach-mark clause only because that
+  // clause reads the column directly; they touch disjoint keys, so the order
+  // is immaterial.
+  const scalars: Record<string, string | boolean> = {};
   if (patch.status !== undefined) scalars.status = patch.status;
   if (patch.calculatorFirstUsedAt !== undefined) {
     scalars.calculatorFirstUsedAt = patch.calculatorFirstUsedAt;
   }
+  if (patch.sidebarPinned !== undefined) scalars.sidebarPinned = patch.sidebarPinned;
   if (Object.keys(scalars).length > 0) {
     merged = sql`${merged} || ${JSON.stringify(scalars)}::jsonb`;
   }

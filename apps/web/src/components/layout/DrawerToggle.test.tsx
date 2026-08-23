@@ -21,10 +21,13 @@ describe('DrawerToggle', () => {
     cleanup();
   });
 
-  it('renders top-bar with h-12 and a button with correct aria attributes when isOpen is false', () => {
+  it('renders the floating toggle with a button carrying the aria contract when isOpen is false', () => {
     render(<DrawerToggle />);
-    const topbar = screen.getByTestId('drawer-topbar');
-    expect(topbar.className).toContain('h-12');
+    const wrapper = screen.getByTestId('drawer-toggle');
+    // Floating control, not a layout band: fixed at the viewport's top-right,
+    // never reserving a row of the page (the old h-12 top bar is gone).
+    expect(wrapper.className).toContain('fixed');
+    expect(wrapper.className).not.toContain('h-12');
     const button = screen.getByRole('button', { name: /open side drawer/i });
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(button.getAttribute('aria-controls')).toBe('side-drawer');
@@ -37,15 +40,14 @@ describe('DrawerToggle', () => {
     expect(useDrawerStore.getState().isOpen).toBe(true);
   });
 
-  it('collapses the top-bar to h-0 border-b-0 and removes the button when isOpen is true', () => {
+  it('hides the toggle and removes the button when isOpen is true', () => {
     useDrawerStore.setState({ isOpen: true });
     render(<DrawerToggle />);
-    const topbar = screen.getByTestId('drawer-topbar');
-    expect(topbar.className).toContain('h-0');
-    expect(topbar.className).toContain('border-b-0');
-    expect(
-      screen.queryByRole('button', { name: /open side drawer/i }),
-    ).toBeNull();
+    const wrapper = screen.getByTestId('drawer-toggle');
+    expect(wrapper.className).toContain('opacity-0');
+    expect(wrapper.className).toContain('pointer-events-none');
+    expect(wrapper.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.queryByRole('button', { name: /open side drawer/i })).toBeNull();
   });
 
   it('attaches the button to the ref provided via DrawerToggleRefContext', () => {

@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 // Onboarding PREFERENCE state — whether the user has opted out of, dismissed
-// or finished the walkthrough, and which one-shot coach marks they have already
-// dismissed — stored as the `users.onboarding` jsonb column.
+// or finished the walkthrough, which one-shot coach marks they have already
+// dismissed, and whether the nav rail is pinned expanded — stored as the
+// `users.onboarding` jsonb column (the per-user UI-preference channel).
 //
 // PREFERENCE ONLY. Per-item checklist completion is NEVER stored here — it is
 // derived at read time from the user's real data (account count, position
@@ -55,6 +56,12 @@ export const OnboardingStateSchema = z.object({
   // Surface keys, treated as a set. Order is not meaningful and duplicates are
   // prevented by the server-side merge, not by the type.
   coachMarksSeen: z.array(z.string()).default([]),
+  // Whether the nav rail is pinned to its expanded (labeled) state. Optional
+  // WITHOUT a default, like `calculatorFirstUsedAt`: absence means the user
+  // has never expressed a preference, which is what lets the client seed it
+  // once from the pre-redesign `sidebar-collapsed` localStorage value without
+  // ever overwriting a choice made on another device.
+  sidebarPinned: z.boolean().optional(),
 });
 
 // The RESOLVED state: what every reader gets after parsing. Nothing is
@@ -101,10 +108,12 @@ export const OnboardingPatchSchema = z
     status: OnboardingStatusSchema.optional(),
     calculatorFirstUsedAt: z.string().datetime().optional(),
     coachMarkSeen: z.string().min(1).max(COACH_MARK_KEY_MAX_LENGTH).optional(),
+    sidebarPinned: z.boolean().optional(),
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0, {
-    message: 'Provide at least one of status, calculatorFirstUsedAt or coachMarkSeen',
+    message:
+      'Provide at least one of status, calculatorFirstUsedAt, coachMarkSeen or sidebarPinned',
   });
 
 export type OnboardingPatch = z.infer<typeof OnboardingPatchSchema>;

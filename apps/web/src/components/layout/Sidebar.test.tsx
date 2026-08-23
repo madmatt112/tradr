@@ -25,12 +25,13 @@ vi.mock('@tanstack/react-router', () => ({
     children,
     className,
     search,
+    ...rest
   }: {
     to: string;
     children: React.ReactNode;
     className?: string;
     search?: unknown;
-  }) => {
+  } & Record<string, unknown>) => {
     linkSearch.set(to, search);
     return (
       <a
@@ -40,6 +41,7 @@ vi.mock('@tanstack/react-router', () => ({
           e.preventDefault();
           linkClicks.push({ to });
         }}
+        {...rest}
       >
         {children}
       </a>
@@ -84,6 +86,24 @@ vi.mock('@/features/changelog/hooks/useChangelog', async (importOriginal) => {
   };
 });
 
+// The pin preference is a useQuery + useMutation pair under the hood; stub it
+// with a controllable value. Most suites run EXPANDED (labels in the DOM) so
+// text assertions read naturally; the rail-state suite flips it.
+const pinState = vi.hoisted(() => ({
+  pinned: true,
+  calls: [] as boolean[],
+}));
+vi.mock('@/features/onboarding/hooks/useSidebarPin', () => ({
+  useSidebarPin: () => ({
+    pinned: pinState.pinned,
+    setPinned: (next: boolean) => {
+      pinState.calls.push(next);
+    },
+  }),
+}));
+
+import { useDrawerStore } from '@/stores/drawer.store';
+
 import { Sidebar } from './Sidebar';
 
 // ---------------------------------------------------------------------------
@@ -113,6 +133,9 @@ beforeEach(() => {
   localStorage.clear();
   changelogState.result = { data: undefined, isError: false };
   timezoneState.value = 'Europe/Berlin';
+  pinState.pinned = true;
+  pinState.calls = [];
+  useDrawerStore.setState({ isOpen: false });
 });
 
 function releasesData(publishedAt: string, lastViewedAt: string) {
@@ -164,18 +187,22 @@ describe('Sidebar — Performance link', () => {
     unmount(container, root);
   });
 
-  it('renders the Performance link after Calculator and before Accounts', () => {
+  it('renders the Performance link heading the Review group, after the Trade group', () => {
     const { container, root } = mountWith(<Sidebar />);
 
     const hrefs = Array.from(container.querySelectorAll('nav a')).map((a) =>
       a.getAttribute('href'),
     );
     const calcIdx = hrefs.indexOf('/calculator');
+    const importIdx = hrefs.indexOf('/import');
     const perfIdx = hrefs.indexOf('/performance');
     const acctIdx = hrefs.indexOf('/accounts');
 
+    // The desk nav groups: Performance opens REVIEW, directly after TRADE's
+    // last item (Import), with Accounts later in the same group.
     expect(calcIdx).toBeGreaterThanOrEqual(0);
-    expect(perfIdx).toBe(calcIdx + 1);
+    expect(importIdx).toBeGreaterThan(calcIdx);
+    expect(perfIdx).toBe(importIdx + 1);
     expect(acctIdx).toBeGreaterThan(perfIdx);
 
     unmount(container, root);
@@ -280,17 +307,17 @@ describe('Sidebar — Performance defaults anchor at the stored timezone', () =>
 });
 
 describe('Sidebar — Changelog link + new-updates badge', () => {
-  it('renders the Changelog link before Settings, with cursor-pointer', () => {
+  it('renders the Changelog link in the System group after Settings, with cursor-pointer', () => {
     const { container, root } = mountWith(<Sidebar />);
 
     const hrefs = Array.from(container.querySelectorAll('nav a')).map((a) =>
       a.getAttribute('href'),
     );
     expect(hrefs.indexOf('/changelog')).toBeGreaterThanOrEqual(0);
-    // Ordering, not adjacency — which is what this test's name has always
-    // claimed. The Docs link now sits between the two, and pinning `+ 1` would
-    // make every future nav insertion look like a regression in the changelog.
-    expect(hrefs.indexOf('/settings')).toBeGreaterThan(hrefs.indexOf('/changelog'));
+    // Ordering, not adjacency. The desk nav's SYSTEM group runs Settings →
+    // Changelog → Docs, so Changelog sits after Settings now; pinning `+ 1`
+    // would make every future nav insertion look like a regression here.
+    expect(hrefs.indexOf('/changelog')).toBeGreaterThan(hrefs.indexOf('/settings'));
 
     const link = Array.from(container.querySelectorAll('a')).find(
       (a) => a.getAttribute('href') === '/changelog',
@@ -338,6 +365,85 @@ describe('Sidebar — Changelog link + new-updates badge', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The two chrome states (visual-redesign task 4): a 56px icon rail by default,
+// pinnable to the 208px labeled state, auto-collapsing while the drawer is
+// open. Accessible names never depend on the state — they are aria-labels.
+// ---------------------------------------------------------------------------
+
+describe('Sidebar — rail and expanded chrome states', () => {
+  it('unpinned renders the icon rail: no inline labels, aria-labels intact', () => {
+    pinState.pinned = false;
+    const { container, root } = mountWith(<Sidebar />);
+
+    const aside = container.querySelector('aside');
+    expect(aside?.className).toContain('w-14');
+
+    // No visible label text in the rail…
+    const dashboard = Array.from(container.querySelectorAll('a')).find(
+      (a) => a.getAttribute('href') === '/dashboard',
+    );
+    expect(dashboard?.textContent).toBe('');
+    // …but the accessible name and the hover label are both present.
+    expect(dashboard?.getAttribute('aria-label')).toBe('Dashboard');
+    expect(dashboard?.getAttribute('title')).toBe('Dashboard');
+
+    unmount(container, root);
+  });
+
+  it('pinned renders the labeled state: 208px, visible labels, group headings', () => {
+    pinState.pinned = true;
+    const { container, root } = mountWith(<Sidebar />);
+
+    const aside = container.querySelector('aside');
+    expect(aside?.className).toContain('w-52');
+
+    const dashboard = Array.from(container.querySelectorAll('a')).find(
+      (a) => a.getAttribute('href') === '/dashboard',
+    );
+    expect(dashboard?.textContent).toContain('Dashboard');
+    // No title tooltip while the label is visible.
+    expect(dashboard?.getAttribute('title')).toBeNull();
+
+    // The TRADE / REVIEW / SYSTEM group headings are in the DOM.
+    const text = container.querySelector('nav')?.textContent ?? '';
+    expect(text).toContain('Trade');
+    expect(text).toContain('Review');
+    expect(text).toContain('System');
+
+    unmount(container, root);
+  });
+
+  it('the pin control toggles the preference', () => {
+    pinState.pinned = false;
+    const { container, root } = mountWith(<Sidebar />);
+
+    const expand = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.getAttribute('aria-label') === 'Expand sidebar',
+    );
+    expect(expand).toBeDefined();
+    act(() => {
+      expand!.click();
+    });
+    expect(pinState.calls).toEqual([true]);
+
+    unmount(container, root);
+  });
+
+  it('auto-collapses to the rail while the drawer is open, even when pinned', () => {
+    pinState.pinned = true;
+    useDrawerStore.setState({ isOpen: true });
+    const { container, root } = mountWith(<Sidebar />);
+
+    const aside = container.querySelector('aside');
+    expect(aside?.className).toContain('w-14');
+    // The pin itself is untouched — collapse is derived, not written back.
+    expect(pinState.calls).toEqual([]);
+
+    unmount(container, root);
+  });
+});
+
 // jsdom computes no layout, so these assert the class contract that keeps the
 // rail pinned to the viewport instead of stretching to the height of <main> —
 // the arrangement that used to scroll the Log out button out of sight on long
@@ -373,7 +479,9 @@ describe('Sidebar — pinned to the viewport, not the page', () => {
       (b) => b.textContent === 'Log out',
     );
     expect(logout).toBeDefined();
-    expect(logout?.parentElement?.className).toContain('shrink-0');
+    // The footer wraps the session row in an inner flex div now; the
+    // uncompressible boundary is the closest shrink-0 ancestor.
+    expect(logout?.closest('.shrink-0')).not.toBeNull();
 
     unmount(container, root);
   });

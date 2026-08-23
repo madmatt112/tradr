@@ -116,25 +116,28 @@ test.describe('drawer mobile', () => {
     await expect(page.getByTestId('side-drawer')).toHaveAttribute('data-state', 'closed');
 
     // 3) Body-scroll-lock with scroll restoration (per v4-6).
-    // Scroll the page to 250 BEFORE opening; assert the body lock captures
-    // the scroll offset and restores it on close.
-    await page.evaluate(() => window.scrollTo(0, 250));
+    // Scroll the page to 200 BEFORE opening; assert the body lock captures
+    // the scroll offset and restores it on close. (200, not 250: removing the
+    // old 48px drawer top bar shortened the page, and 250 now overshoots the
+    // maximum scroll offset at this viewport — the intent is any non-zero
+    // offset, captured and restored exactly.)
+    await page.evaluate(() => window.scrollTo(0, 200));
     // The lock reads scrollY at open-time, so the scroll must have settled.
-    await expect.poll(async () => page.evaluate(() => window.scrollY), { timeout: 2000 }).toBe(250);
+    await expect.poll(async () => page.evaluate(() => window.scrollY), { timeout: 2000 }).toBe(200);
 
     // Open via dispatchEvent (NOT .click()): the mobile DrawerToggle is inline
     // at the top of <main> (not sticky), so a real click would auto-scroll the
     // off-screen toggle into view and reset scrollY to 0 — the body lock would
-    // then capture 0 instead of 250. Dispatching the click fires the toggle's
+    // then capture 0 instead of 200. Dispatching the click fires the toggle's
     // onClick without moving the scroll position.
     await page.getByRole('button', { name: /open side drawer/i }).dispatchEvent('click');
     await expect(page.getByTestId('side-drawer')).toHaveAttribute('data-state', 'open');
     expect(await page.evaluate(() => document.body.style.position)).toBe('fixed');
-    expect(await page.evaluate(() => document.body.style.top)).toBe('-250px');
+    expect(await page.evaluate(() => document.body.style.top)).toBe('-200px');
 
     // Close drawer — body lock releases, browser restores scroll position.
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('side-drawer')).toHaveAttribute('data-state', 'closed');
-    await expect.poll(async () => page.evaluate(() => window.scrollY), { timeout: 2000 }).toBe(250);
+    await expect.poll(async () => page.evaluate(() => window.scrollY), { timeout: 2000 }).toBe(200);
   });
 });
