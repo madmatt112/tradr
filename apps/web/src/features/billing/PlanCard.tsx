@@ -20,6 +20,7 @@ import type { TierLimits, TierState } from '@tradr/shared';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 import { formatCurrency } from '@/lib/format';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 import { cn } from '@/lib/utils';
@@ -43,6 +44,11 @@ const LEVERS: Array<{ key: keyof TierLimits; label: string }> = [
   { key: 'images', label: 'Advisor image uploads / month' },
   { key: 'csvImports', label: 'CSV imports (lifetime)' },
 ];
+
+// The levers that only mean something while the advisor is offered. On an
+// instance that has withdrawn it (DISABLE_ADVISOR) they come off the upgrade
+// summary and the usage bars rather than advertising a quota nobody can spend.
+const ADVISOR_LEVERS: ReadonlySet<keyof TierLimits> = new Set(['platformTurns', 'images']);
 
 function leverValue(key: keyof TierLimits, value: number | null): string {
   if (value === null) return 'Unlimited';
@@ -106,6 +112,7 @@ export function PlanCard({
 }: PlanCardProps) {
   // 'polling' → refetching every pollIntervalMs; 'capped' → the persistent
   // non-error still-confirming state; 'idle' → the normal card.
+  const advisorEnabled = useAdvisorEnabled();
   const [phase, setPhase] = useState<'idle' | 'polling' | 'capped'>(
     confirming ? 'polling' : 'idle',
   );
@@ -155,7 +162,8 @@ export function PlanCard({
 
   const { subscription } = state;
   const showUpgrade = state.tier === 'free' && state.gatingEnabled && state.purchasable;
-  const bars = usageBars(state);
+  const levers = advisorEnabled ? LEVERS : LEVERS.filter((l) => !ADVISOR_LEVERS.has(l.key));
+  const bars = usageBars(state).filter((b) => advisorEnabled || !ADVISOR_LEVERS.has(b.key));
 
   const onUpgrade = () => {
     captureClientEvent('upgrade_cta_clicked', { surface: 'plan-card' }); // D17
@@ -207,7 +215,7 @@ export function PlanCard({
         {showUpgrade && (
           <div className="space-y-3" data-testid="plan-upgrade">
             <ul className="space-y-1 text-sm text-muted-foreground" data-testid="lever-summary">
-              {LEVERS.map(({ key, label }) => (
+              {levers.map(({ key, label }) => (
                 <li key={key} className="flex justify-between gap-4">
                   <span>{label}</span>
                   <span>

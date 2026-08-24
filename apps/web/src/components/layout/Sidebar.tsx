@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { hasNewReleases, useChangelogReleases } from '@/features/changelog/hooks/useChangelog';
 import { useSidebarPin } from '@/features/onboarding/hooks/useSidebarPin';
 import { useAuth } from '@/hooks/useAuth';
+import { useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 import { docsUrl } from '@/lib/docs';
 import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
@@ -99,6 +100,7 @@ function GroupLabel({ expanded, label }: { expanded: boolean; label: string }) {
 }
 
 export function Sidebar() {
+  const advisorEnabled = useAdvisorEnabled();
   const { user, logout } = useAuth();
   // Badge data: error/loading mean no `data`, so the badge is simply absent
   // (REQ-5(a)(5)) — the hook's `retry: false` keeps failures quiet.
@@ -182,14 +184,16 @@ export function Sidebar() {
         >
           <ItemContent expanded={expanded} label="Dashboard" Icon={LayoutDashboard} />
         </Link>
-        <Link
-          to="/advisor"
-          aria-label="Advisor"
-          title={expanded ? undefined : 'Advisor'}
-          className={itemClass(expanded)}
-        >
-          <ItemContent expanded={expanded} label="Advisor" Icon={Sparkles} />
-        </Link>
+        {advisorEnabled && (
+          <Link
+            to="/advisor"
+            aria-label="Advisor"
+            title={expanded ? undefined : 'Advisor'}
+            className={itemClass(expanded)}
+          >
+            <ItemContent expanded={expanded} label="Advisor" Icon={Sparkles} />
+          </Link>
+        )}
 
         <GroupLabel expanded={expanded} label="Trade" />
         <Link

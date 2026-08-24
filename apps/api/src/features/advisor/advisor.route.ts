@@ -4,7 +4,8 @@ import { bodyLimit } from 'hono/body-limit';
 
 import { ADVISOR_MAX_IMAGES_PER_MESSAGE, MAX_IMAGE_BYTES_DEFAULT } from '@tradr/shared';
 
-import { config } from '@/lib/config';
+import { config, isAdvisorEnabled } from '@/lib/config';
+import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { authMiddleware } from '@/middleware/auth.middleware';
 import { createRateLimiter } from '@/middleware/rate-limit.middleware';
@@ -50,6 +51,22 @@ type AuthEnv = {
 const advisorRouter = new Hono<AuthEnv>();
 
 advisorRouter.use(authMiddleware);
+
+// Operator posture gate (DISABLE_ADVISOR). Mounted after auth so an anonymous
+// caller still gets the usual 401 and the gate never becomes an unauthenticated
+// probe; mounted before every route, the smoke endpoint included, so "withdrawn"
+// means the whole namespace — conversations, keys, personas, consent, the
+// options-chain viewer and the image proxy — not a curated subset that drifts
+// as handlers are added. 403 rather than 404 for the same reason as
+// REGISTRATION_DISABLED: the routes exist, and the SPA must be able to tell
+// "withdrawn" from "wrong URL". The message says only that the advisor is not
+// offered here — never why.
+advisorRouter.use(async (_c, next) => {
+  if (!isAdvisorEnabled()) {
+    throw new AppError(403, 'ADVISOR_DISABLED', 'The advisor is not available on this instance.');
+  }
+  await next();
+});
 
 // Smoke endpoint (v4-3) — permanent router-mount sanity check.
 advisorRouter.get('/_health', (c) => c.json({ ok: true, router: 'advisor' }));

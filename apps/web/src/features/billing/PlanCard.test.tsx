@@ -93,6 +93,13 @@ function tierState(overrides: Partial<TierState> = {}): TierState {
   };
 }
 
+// The instance posture (GET /api/config): the advisor levers come off the card
+// on an instance that withdrew the advisor. Mutable so one describe flips it.
+const posture = { advisorEnabled: true };
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => posture.advisorEnabled,
+}));
+
 function renderCard(props: PlanCardProps = {}) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -252,6 +259,34 @@ describe('PlanCard states', () => {
     expect(screen.queryByTestId('usage-platformTurns')).toBeNull();
     expect(screen.queryByTestId('usage-images')).toBeNull();
     expect(screen.queryByTestId('usage-csvImports')).toBeNull();
+  });
+});
+
+describe('PlanCard on an instance that withdrew the advisor', () => {
+  afterEach(() => {
+    posture.advisorEnabled = true;
+  });
+
+  it('drops the advisor levers from the Free-vs-Pro summary; the others stay', async () => {
+    posture.advisorEnabled = false;
+    vi.mocked(api.get).mockResolvedValue(tierState());
+    renderCard();
+
+    const summary = await screen.findByTestId('lever-summary');
+    expect(summary.textContent).toContain('Connected accounts');
+    expect(summary.textContent).toContain('Positions');
+    expect(summary.textContent).toContain('CSV imports');
+    expect(summary.textContent).not.toContain('Advisor turns');
+    expect(summary.textContent).not.toContain('Advisor image uploads');
+  });
+
+  it('keeps every lever where the advisor is offered (the default)', async () => {
+    vi.mocked(api.get).mockResolvedValue(tierState());
+    renderCard();
+
+    const summary = await screen.findByTestId('lever-summary');
+    expect(summary.textContent).toContain('Advisor turns / month');
+    expect(summary.textContent).toContain('Advisor image uploads / month');
   });
 });
 

@@ -1,9 +1,10 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
 import { MarketDataKeyCard } from '@/features/advisor/components/MarketDataKeyCard';
 import { PersonaList } from '@/features/advisor/components/PersonaList';
 import { ProviderKeyCard } from '@/features/advisor/components/ProviderKeyCard';
 import { TradeDataConsentToggle } from '@/features/advisor/components/TradeDataConsentToggle';
+import { isAdvisorEnabledForRoute } from '@/hooks/useRegistrationEnabled';
 
 function SettingsAdvisor() {
   return (
@@ -37,5 +38,13 @@ function SettingsAdvisor() {
 }
 
 export const Route = createFileRoute('/_auth/settings/advisor')({
+  // On an instance that has withdrawn the advisor the tab is not rendered, so
+  // only a typed or stale URL lands here. Send it to `/settings`, whose own
+  // redirect picks the first tab this instance shows.
+  beforeLoad: async () => {
+    if (!(await isAdvisorEnabledForRoute())) {
+      throw redirect({ to: '/settings' });
+    }
+  },
   component: SettingsAdvisor,
 });

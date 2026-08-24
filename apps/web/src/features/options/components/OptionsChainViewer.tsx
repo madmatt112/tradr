@@ -25,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 
 import { useOptionsChain, type OptionContract } from '../hooks/useOptionsChain';
 import {
@@ -68,7 +69,20 @@ interface OptionsChainViewerProps {
   direction?: string;
 }
 
-export function OptionsChainViewer({ onSelectContract, direction }: OptionsChainViewerProps = {}) {
+/**
+ * The chain viewer is served by `/api/advisor/options-chain`, so it goes with
+ * the advisor: on an instance that has withdrawn it (DISABLE_ADVISOR) the card
+ * is absent from the options page and the calculator alike — not an error
+ * state, since nothing is wrong, and not an empty state pointing at a settings
+ * tab that no longer exists.
+ */
+export function OptionsChainViewer(props: OptionsChainViewerProps = {}) {
+  const advisorEnabled = useAdvisorEnabled();
+  if (!advisorEnabled) return null;
+  return <OptionsChainViewerCard {...props} />;
+}
+
+function OptionsChainViewerCard({ onSelectContract, direction }: OptionsChainViewerProps) {
   const [symbolInput, setSymbolInput] = useState('');
   const [expiry, setExpiry] = useState<string | undefined>(undefined);
   const [side, setSide] = useState<ChainSide>(() => sideForDirection(direction));

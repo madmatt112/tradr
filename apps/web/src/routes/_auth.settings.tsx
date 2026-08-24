@@ -3,6 +3,7 @@ import { Bot, CircleQuestionMark, Settings as SettingsIcon, User, Wallet } from 
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { isAdvisorEnabledForRoute, useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 
 // Single composition point for the Settings shell. New tabs are added by
 // extending this array (REQ-7.11). `route` is the absolute path each tab owns.
@@ -18,17 +19,27 @@ const SETTINGS_TABS = [
   { id: 'help', label: 'Help', icon: CircleQuestionMark, route: '/settings/help' },
 ] as const;
 
+/**
+ * The tabs this instance shows. The Advisor tab goes with the advisor itself
+ * (DISABLE_ADVISOR): its every control — provider keys, the market-data key,
+ * consent, personas — talks to routes the server refuses.
+ */
+function visibleTabs(advisorEnabled: boolean) {
+  return advisorEnabled ? SETTINGS_TABS : SETTINGS_TABS.filter((t) => t.id !== 'advisor');
+}
+
 function SettingsLayout() {
   const { pathname } = useLocation();
-  // Active tab is driven by the URL (REQ-7.2). Fall back to advisor.
-  const active = SETTINGS_TABS.find((t) => pathname.startsWith(t.route))?.id ?? 'advisor';
+  const tabs = visibleTabs(useAdvisorEnabled());
+  // Active tab is driven by the URL (REQ-7.2). Fall back to the first tab.
+  const active = tabs.find((t) => pathname.startsWith(t.route))?.id ?? tabs[0].id;
 
   return (
     <div className="space-y-6">
       <PageHeader page="Settings" className="mb-0" />
       <Tabs value={active} orientation="vertical" className="flex-row">
         <TabsList variant="line" className="shrink-0">
-          {SETTINGS_TABS.map((tab) => {
+          {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <TabsTrigger key={tab.id} value={tab.id} asChild className="cursor-pointer">
@@ -49,10 +60,11 @@ function SettingsLayout() {
 }
 
 export const Route = createFileRoute('/_auth/settings')({
-  beforeLoad: ({ location }) => {
-    // `/settings` itself has no content — redirect to the default tab (REQ-7.2).
+  beforeLoad: async ({ location }) => {
+    // `/settings` itself has no content — redirect to the default tab (REQ-7.2):
+    // Advisor where it is offered, otherwise the first tab that is.
     if (location.pathname === '/settings' || location.pathname === '/settings/') {
-      throw redirect({ to: '/settings/advisor' });
+      throw redirect({ to: visibleTabs(await isAdvisorEnabledForRoute())[0].route });
     }
   },
   component: SettingsLayout,

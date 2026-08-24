@@ -36,6 +36,12 @@ vi.mock('../hooks/useOptionsChain', () => ({
   useOptionsChain: (...a: unknown[]) => useOptionsChainMock(...a),
 }));
 
+// The instance posture (GET /api/config): the viewer goes with the advisor.
+const posture = { advisorEnabled: true };
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => posture.advisorEnabled,
+}));
+
 import { OptionsChainViewer } from './OptionsChainViewer';
 import { OptionsPage } from './OptionsPage';
 
@@ -47,6 +53,17 @@ function renderWithClient(ui: React.ReactNode) {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  posture.advisorEnabled = true;
+});
+
+describe('OptionsChainViewer on an instance that withdrew the advisor', () => {
+  it('renders nothing — no card, no input, no settings CTA', () => {
+    posture.advisorEnabled = false;
+    useOptionsChainMock.mockReturnValue({ isLoading: false, isError: false, data: undefined });
+    const { container } = renderWithClient(<OptionsChainViewer />);
+    expect(container.innerHTML).toBe('');
+    expect(useOptionsChainMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('OptionsChainViewer', () => {

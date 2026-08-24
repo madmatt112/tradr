@@ -58,6 +58,13 @@ vi.mock('@/hooks/useAuth', () => ({
   }),
 }));
 
+// The instance posture (GET /api/config) is a useQuery; stub it so the sidebar
+// mounts standalone. Mutable so one test can withdraw the advisor.
+const posture = { advisorEnabled: true };
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => posture.advisorEnabled,
+}));
+
 // ThemeToggle needs a QueryClient (useAppTheme → useQueryClient); irrelevant
 // here — same mock the admin-link suite already uses.
 vi.mock('@/components/layout/ThemeToggle', () => ({
@@ -124,10 +131,30 @@ beforeEach(() => {
   linkClicks.length = 0;
   linkSearch.clear();
   localStorage.clear();
+  posture.advisorEnabled = true;
   changelogState.result = { data: undefined, isError: false };
   pinState.pinned = true;
   pinState.calls = [];
   useDrawerStore.setState({ isOpen: false });
+});
+
+// DISABLE_ADVISOR — the Advisor item goes with the advisor. Courtesy, not
+// control: the server refuses every /api/advisor route regardless.
+describe('Sidebar on an instance that withdrew the advisor', () => {
+  it('renders the Advisor item where the advisor is offered (the default)', () => {
+    const { container, root } = mountWith(<Sidebar />);
+    expect(container.querySelector('a[aria-label="Advisor"]')).toBeTruthy();
+    unmount(container, root);
+  });
+
+  it('omits the Advisor item, and only that item, when withdrawn', () => {
+    posture.advisorEnabled = false;
+    const { container, root } = mountWith(<Sidebar />);
+    expect(container.querySelector('a[aria-label="Advisor"]')).toBeNull();
+    expect(container.querySelector('a[aria-label="Dashboard"]')).toBeTruthy();
+    expect(container.querySelector('a[aria-label="Positions"]')).toBeTruthy();
+    unmount(container, root);
+  });
 });
 
 function releasesData(publishedAt: string, lastViewedAt: string) {

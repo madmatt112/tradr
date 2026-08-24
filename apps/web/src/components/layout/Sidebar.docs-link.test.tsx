@@ -23,6 +23,11 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({ user: { email: 'someone@example.com', isAdmin: false } }),
 }));
 
+// The instance posture (GET /api/config) is a useQuery; irrelevant here.
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => true,
+}));
+
 vi.mock('@/features/changelog/hooks/useChangelog', () => ({
   useChangelogReleases: () => ({ data: undefined }),
   hasNewReleases: () => false,

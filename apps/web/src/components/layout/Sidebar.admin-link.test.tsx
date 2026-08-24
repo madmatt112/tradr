@@ -37,6 +37,11 @@ vi.mock('@/components/layout/ThemeToggle', () => ({
   ThemeToggle: () => null,
 }));
 
+// The instance posture (GET /api/config) is a useQuery; irrelevant here.
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => true,
+}));
+
 // The stored reporting timezone is a useQuery; stub it so the sidebar mounts
 // standalone and the Performance item is navigable.
 vi.mock('@/hooks/useUserTimezone', () => ({

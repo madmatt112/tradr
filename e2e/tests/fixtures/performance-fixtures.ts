@@ -474,6 +474,14 @@ export async function mockAppShell(page: Page): Promise<void> {
   // FIRST, so it is reached LAST — see the doc comment above.
   await failOnUnstubbedRequest(page);
 
+  // The public instance posture, read by the sidebar on every authenticated
+  // view (and by the settings shell and the plan card) to decide whether the
+  // advisor is offered. App-shell surface for the same reason as the timezone
+  // below. Both `true` is the self-hosted default, so no spec sees a surface
+  // hidden out from under it.
+  await page.route('**/api/config', (route) =>
+    route.fulfill(json({ registrationEnabled: true, advisorEnabled: true })),
+  );
   await page.route('**/api/dashboard/layout', (route) =>
     route.fulfill(json(DEFAULT_DASHBOARD_LAYOUT)),
   );

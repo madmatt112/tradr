@@ -30,6 +30,15 @@ vi.mock('@/features/accounting/components/ExchangeRatesPage', () => ({
   ExchangeRatesPage: () => <div data-slot="exchange-rates" />,
 }));
 
+// The instance posture (GET /api/config), switchable per test: the Advisor tab
+// and the `/settings` default redirect both follow it.
+const posture = { advisorEnabled: true };
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => posture.advisorEnabled,
+  useRegistrationEnabled: () => ({ registrationEnabled: true, isPending: false }),
+  isAdvisorEnabledForRoute: async () => posture.advisorEnabled,
+}));
+
 import { Route as SettingsLayoutRoute } from '../_auth.settings';
 import { Route as AdvisorRoute } from '../_auth.settings.advisor';
 import { Route as ProfileRoute } from '../_auth.settings.profile';
@@ -81,9 +90,16 @@ function buildRouter(initialPath: string) {
     path: '/help',
     component: helpOpts.component,
   });
+  // A stub, not the real Billing tab (which polls the tier): it exists only as
+  // the redirect target when the advisor is withdrawn.
+  const billing = createRoute({
+    getParentRoute: () => settingsLayout as any,
+    path: '/billing',
+    component: () => <div data-testid="billing-stub" />,
+  });
 
   const routeTree = rootRoute.addChildren([
-    settingsLayout.addChildren([advisor, profile, account, help]),
+    settingsLayout.addChildren([advisor, billing, profile, account, help]),
   ]);
 
   return createRouter({
@@ -108,6 +124,7 @@ function renderAt(initialPath: string) {
 afterEach(() => {
   cleanup();
   logoutMutate.mockClear();
+  posture.advisorEnabled = true;
 });
 
 // ---- Tests ----------------------------------------------------------------
@@ -128,6 +145,19 @@ describe('Settings tabbed layout', () => {
       expect(router.state.location.pathname).toBe('/settings/advisor');
     });
     expect(screen.getByText('Manage provider keys and personas for the AI advisor.')).toBeTruthy();
+  });
+
+  // DISABLE_ADVISOR: the tab goes with the advisor, and `/settings` no longer
+  // lands on a tab the instance does not show.
+  it('case 2b: with the advisor withdrawn, the tab is absent and /settings picks the next tab', async () => {
+    posture.advisorEnabled = false;
+    const { router } = renderAt('/settings');
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/settings/billing');
+    });
+    expect(screen.queryByRole('tab', { name: /Advisor/i })).toBeNull();
+    expect(screen.getByRole('tab', { name: /Profile/i })).toBeTruthy();
   });
 
   it('case 3: Account tab Logout button calls logout.mutate', async () => {

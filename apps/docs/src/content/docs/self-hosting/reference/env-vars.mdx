@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **85 environment variables**, of which **3 are required** —
+Tradr reads **86 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 85 variables, **53 ship unset** — either commented out in the
+Of the 86 variables, **53 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -61,6 +61,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | --- | --- | --- |
 | `SESSION_SECRET` | **Required** | Generate (≥32 chars): `openssl rand -base64 24` |
 | `DISABLE_REGISTRATION` | `false` | Close public sign-up. `true` makes POST /api/auth/register refuse with 403 REGISTRATION_DISABLED, whatever the client. Sign-in, password reset and every existing account are unaffected — only account creation is gated. Use it to run a private instance once your own accounts exist. Reopening sign-up is this variable plus an api restart; nothing is rebuilt. The SPA reads the same posture and shows a closed-signups notice on /register instead of a form it cannot submit; NEWSLETTER_URL (Web section) optionally adds a link to it. |
+| `DISABLE_ADVISOR` | `false` | Withdraw the AI advisor from this instance. `true` makes every /api/advisor route refuse with 403 ADVISOR_DISABLED — conversations, provider and market data keys, personas, trade-data consent and the options-chain lookup — and the SPA hides the Advisor navigation, pages and settings tab. Nothing is deleted: stored conversations and keys are untouched and return when the variable is cleared. Like DISABLE_REGISTRATION it is an operator posture plus an api restart; nothing is rebuilt. Leave it unset to offer the advisor. |
 
 ## Server
 
