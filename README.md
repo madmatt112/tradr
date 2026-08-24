@@ -1,8 +1,13 @@
-<h1 align="center">▴ Tradr</h1>
+<!-- The banner is a generated SVG with the type converted to outlines —
+     GitHub strips webfonts from README images, so live text would render in
+     system fonts. One dark banner serves both GitHub themes. -->
+<p align="center">
+  <img src=".github/assets/banner.svg" alt="Tradr — the open-source trading journal with nothing to hide" width="1280">
+</p>
 
 <p align="center">
-  <strong>The open-source trading journal that shows its work.</strong><br>
-  Log every fill, size the trade before you take it, and ask an AI advisor about your own P&amp;L.
+  <strong>Log every fill, size the trade before you take it, and ask an AI advisor about your own P&amp;L.</strong><br>
+  Self-hostable in one command. The journal shows its work.
 </p>
 
 <p align="center">
@@ -11,9 +16,14 @@
   <a href="https://github.com/madmatt112/tradr/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/madmatt112/tradr?sort=semver"></a>
 </p>
 
-<!-- Screenshot slot: a real capture of a seeded instance goes here. Do not use
-     the marketing hero mock — its figures are illustrative sample data, and an
-     invented equity curve in the README of a finance tool is a credibility risk. -->
+<!-- Screenshot rule: a real capture of a seeded instance, always. Never the
+     marketing hero mock — its figures are illustrative sample data, and an
+     invented equity curve in the README of a finance tool is a credibility
+     risk. Re-shoot from a seeded local instance (pnpm seed;
+     dev@example.com / devpass123) when the dashboard changes. -->
+<p align="center">
+  <img src=".github/assets/dashboard.png" alt="The Tradr dashboard: stats summary, open positions, monthly P&L chart and account balances for the seeded demo account" width="1280">
+</p>
 
 Tradr is a self-hostable journal for options and equities traders. It records the whole
 arc of a position — draft, scale-in, partial close — with every fill, fee, and note
@@ -52,7 +62,7 @@ TLS, against your own Postgres, or on a different port, see the
 
 ## Status
 
-**v0.5.x — pre-1.0, and moving quickly.** What that promises:
+**v0.9.x — pre-1.0, and moving quickly.** What that promises:
 
 - **The HTTP API is not stable yet.** Breaking endpoint changes can land in any release
   until v1.0.0. Pin a tag rather than tracking `:latest` if that matters to you.
