@@ -1,6 +1,6 @@
 {
   "name": "@tradr/bench",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "private": true,
   "type": "module",
   "description": "Performance benchmark harness (run via apps/api script `pnpm bench:performance`).",
