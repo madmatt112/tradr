@@ -44,6 +44,11 @@ exclude_path = [
   "apps/docs/src",
   "apps/docs/dist",
   "apps/web/dist",
+  # The SPA shell. Its only links are root-relative asset paths (`/favicon.svg`,
+  # `/config.js`) that Vite serves from apps/web/public at runtime; on disk they
+  # resolve to nothing and lychee reports them as broken. There is no outbound
+  # link in this file to lose.
+  "apps/web/index.html",
   "pnpm-lock.yaml",
   "CHANGELOG.md",
 ]
