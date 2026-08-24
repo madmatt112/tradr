@@ -32,7 +32,7 @@
 // renders its cards on reload (not an empty bubble), and streaming + reload use
 // the same components. User text is plain text — no Markdown.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import type {
@@ -344,9 +344,21 @@ function PendingUserBubble({ message }: { message: PendingUserMessage }) {
   );
 }
 
+// The API pages messages newest-first (its cursor walks older); a transcript
+// reads oldest-first like any chat, with the in-flight turn at the bottom.
+// Mirrors the server's (createdAt, id) order key, reversed.
+function compareChronological(a: Message, b: Message): number {
+  const byTime = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  if (byTime !== 0) return byTime;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 export function Transcript({ conversationId, onRetry }: TranscriptProps) {
   const { data } = useConversation(conversationId);
-  const messages = data?.messages ?? [];
+  const messages = useMemo(
+    () => [...(data?.messages ?? [])].sort(compareChronological),
+    [data?.messages],
+  );
 
   // Narrow slice subscription. useShallow re-renders only when this object's
   // fields change, not on cross-conversation store mutations (design v3-9).

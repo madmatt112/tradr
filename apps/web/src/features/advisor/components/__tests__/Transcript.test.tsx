@@ -571,3 +571,41 @@ describe('Transcript — in-flight turn', () => {
     expect(document.querySelectorAll('[data-role="assistant"]')).toHaveLength(1);
   });
 });
+
+describe('Transcript — ordering', () => {
+  it('renders oldest-first with the in-flight turn last, though the API pages newest-first', () => {
+    conversationMessages = [
+      {
+        ...textMessage({ id: 'a2', role: 'assistant', text: 'second reply' }),
+        createdAt: '2026-08-24T10:00:03.000Z',
+      },
+      {
+        ...textMessage({ id: 'u2', role: 'user', text: 'second question' }),
+        createdAt: '2026-08-24T10:00:02.000Z',
+      },
+      {
+        ...textMessage({ id: 'a1', role: 'assistant', text: 'first reply' }),
+        createdAt: '2026-08-24T10:00:01.000Z',
+      },
+      {
+        ...textMessage({ id: 'u1', role: 'user', text: 'first question' }),
+        createdAt: '2026-08-24T10:00:00.000Z',
+      },
+    ];
+    streamSlice = { kind: 'pending' };
+    userMessageSlice = { clientMessageId: 'cm-3', text: 'third question', attachments: [] };
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const texts = Array.from(document.querySelectorAll('[data-role]')).map((el) =>
+      el.textContent?.replace('Thinking…', '').trim(),
+    );
+    expect(texts).toEqual([
+      'first question',
+      'first reply',
+      'second question',
+      'second reply',
+      'third question',
+      '',
+    ]);
+  });
+});
