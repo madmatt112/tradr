@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@tradr/shared/schemas/advisor';
 
 // eslint-disable-next-line import-x/order -- import-x/order miscounts groups in this file because the component import is intentionally placed after vi.mock() (hoisting).
-import type { BillingMode, StreamState, ToolActivity } from '../../stores/stream.store';
+import type {
+  BillingMode,
+  PendingUserMessage,
+  StreamState,
+  ToolActivity,
+} from '../../stores/stream.store';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -21,21 +26,25 @@ vi.mock('../../hooks/useConversations', () => ({
 let streamSlice: StreamState = { kind: 'idle' };
 let toolSlice: ToolActivity[] = [];
 let billingModeSlice: BillingMode | undefined;
+let userMessageSlice: PendingUserMessage | undefined;
 // The component calls useStreamStore(useShallow(selector)); apply the selector
 // to a state object exposing the single conversation's slice + tool activity +
-// billing-mode disclosure (matching the real store's initial shape).
+// billing-mode disclosure + pending user message (matching the real store's
+// initial shape).
 vi.mock('../../stores/stream.store', () => ({
   useStreamStore: (
     selector: (s: {
       byConversation: Record<string, StreamState>;
       toolsByConversation: Record<string, ToolActivity[]>;
       billingModeByConversation: Record<string, BillingMode>;
+      userMessageByConversation: Record<string, PendingUserMessage>;
     }) => unknown,
   ) =>
     selector({
       byConversation: { [CID]: streamSlice },
       toolsByConversation: { [CID]: toolSlice },
       billingModeByConversation: billingModeSlice ? { [CID]: billingModeSlice } : {},
+      userMessageByConversation: userMessageSlice ? { [CID]: userMessageSlice } : {},
     }),
 }));
 vi.mock('zustand/shallow', () => ({
@@ -103,6 +112,7 @@ beforeEach(() => {
   streamSlice = { kind: 'idle' };
   toolSlice = [];
   billingModeSlice = undefined;
+  userMessageSlice = undefined;
 });
 
 afterEach(() => {
@@ -471,5 +481,93 @@ describe('Transcript', () => {
     mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
     expect(document.querySelector('[data-testid="stream-entry"]')).toBeNull();
     expect(document.body.textContent).toContain('persisted reply');
+  });
+});
+
+describe('Transcript — in-flight turn', () => {
+  const sent: PendingUserMessage = {
+    clientMessageId: 'cm-1',
+    text: 'what is my win rate?',
+    attachments: [],
+  };
+  const activity = () => document.querySelector('[data-testid="stream-activity"]');
+
+  it('shows the sent message and a thinking indicator before any frame arrives', () => {
+    streamSlice = { kind: 'pending' };
+    userMessageSlice = sent;
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const pending = document.querySelector('[data-testid="pending-user-message"]')!;
+    expect(pending.textContent).toBe('what is my win rate?');
+    // Same side and label as a persisted user message.
+    expect(pending.parentElement!.parentElement!.className).toContain('justify-start');
+    expect(pending.previousElementSibling!.textContent).toBe('Me');
+    expect(document.querySelector('[data-testid="stream-entry"]')).not.toBeNull();
+    expect(activity()!.textContent).toContain('Thinking…');
+  });
+
+  it('labels the indicator by what the advisor is doing: tools → Working, tokens → Responding', () => {
+    streamSlice = { kind: 'pending' };
+    userMessageSlice = sent;
+    toolSlice = [
+      { id: 'tc-1', name: 'trade_data_stats', argumentsPreview: '{}', status: 'pending' },
+    ];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+    expect(activity()!.textContent).toContain('Working…');
+
+    act(() => mounted!.root.unmount());
+    mounted = null;
+    streamSlice = { kind: 'streaming', text: 'Your win rate' };
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+    expect(document.body.textContent).toContain('Your win rate');
+    expect(activity()!.textContent).toContain('Responding…');
+  });
+
+  it('renders submitted image attachments inline on the pending message', () => {
+    streamSlice = { kind: 'pending' };
+    userMessageSlice = {
+      ...sent,
+      attachments: [{ format: 'png', dataBase64: 'iVBORw0KGgo=' }],
+    };
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    const img = document.querySelector('[data-testid="pending-user-message"] img')!;
+    expect(img.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
+  });
+
+  it('offers a retry with no-response copy when the turn failed before any output', () => {
+    streamSlice = { kind: 'error', text: '', errorCode: 'INSUFFICIENT_CREDITS' };
+    userMessageSlice = sent;
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    expect(document.querySelector('[data-testid="pending-user-message"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('No response — retry?');
+    expect(activity()).toBeNull();
+  });
+
+  it('hides the indicator once the turn is done, before the persisted copy lands', () => {
+    streamSlice = { kind: 'done', text: 'final', messageId: 'a9' };
+    userMessageSlice = sent;
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    expect(document.querySelector('[data-testid="stream-entry"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="pending-user-message"]')).not.toBeNull();
+    expect(activity()).toBeNull();
+  });
+
+  it('drops the pending pair together once the persisted turn is in the cache', () => {
+    streamSlice = { kind: 'done', text: 'final', messageId: 'a9' };
+    userMessageSlice = sent;
+    conversationMessages = [
+      textMessage({ id: 'u9', role: 'user', text: 'what is my win rate?' }),
+      textMessage({ id: 'a9', role: 'assistant', text: 'final' }),
+    ];
+    mount(<Transcript conversationId={CID} onRetry={vi.fn()} />);
+
+    expect(document.querySelector('[data-testid="pending-user-message"]')).toBeNull();
+    expect(document.querySelector('[data-testid="stream-entry"]')).toBeNull();
+    // Exactly one copy of each side of the turn.
+    expect(document.querySelectorAll('[data-role="user"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-role="assistant"]')).toHaveLength(1);
   });
 });

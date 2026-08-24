@@ -19,7 +19,7 @@
 // button that opens a new conversation with the same draft pre-filled.
 
 import { Link } from '@tanstack/react-router';
-import { Paperclip, Send, X } from 'lucide-react';
+import { Loader2, Paperclip, Send, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -79,6 +79,8 @@ export interface ComposerProps {
   visionEnabled: boolean;
   /** Disabled while a stream is in flight (REQ-1.6e) or no key is configured. */
   disabled?: boolean;
+  /** True while the submitted turn is in flight — the send button shows a spinner. */
+  pending?: boolean;
   /**
    * Error code from the most recent submission, surfaced by the parent.
    * `CONVERSATION_TOO_LONG` changes the composer's own rendering (REQ-1.15); the
@@ -167,6 +169,7 @@ export function Composer({
   defaultPersonaId,
   visionEnabled,
   disabled = false,
+  pending = false,
   errorCode,
   tierState,
   remedies,
@@ -535,11 +538,20 @@ export function Composer({
         <Button
           type="button"
           aria-label="Send message"
+          aria-busy={pending || undefined}
           disabled={!canSend}
           className="ml-auto cursor-pointer"
           onClick={submit}
         >
-          <Send className="size-4" />
+          {pending ? (
+            <Loader2
+              data-testid="send-spinner"
+              className="size-4 animate-spin"
+              aria-hidden="true"
+            />
+          ) : (
+            <Send className="size-4" />
+          )}
           Send
         </Button>
       </div>

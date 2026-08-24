@@ -92,6 +92,7 @@ vi.mock('../../hooks/useAdvisorStream', () => ({
 }));
 
 import { AdvisorPage } from '../../pages/AdvisorPage';
+import { NEW_CONVERSATION_ID, useStreamStore } from '../../stores/stream.store';
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -376,5 +377,87 @@ describe('AdvisorPage', () => {
       );
       expect(tierInvalidations.length).toBe(1);
     });
+  });
+});
+
+describe('AdvisorPage — first-turn feedback', () => {
+  const sent = { clientMessageId: 'cm-1', text: 'first question', attachments: [] };
+
+  afterEach(() => {
+    useStreamStore.setState({
+      byConversation: {},
+      toolsByConversation: {},
+      billingModeByConversation: {},
+      userMessageByConversation: {},
+    });
+  });
+
+  it('mounts the transcript on the new pane the moment a first turn is in flight', async () => {
+    renderPage({ conversationId: null, isNew: true });
+    expect(screen.getByTestId('empty-state')).toBeTruthy();
+
+    act(() => useStreamStore.getState().start(NEW_CONVERSATION_ID, sent));
+
+    expect(await screen.findByTestId('transcript')).toBeTruthy();
+    expect(screen.getByTestId('pending-user-message').textContent).toBe('first question');
+    expect(screen.getByTestId('stream-activity').textContent).toContain('Thinking…');
+    expect(screen.queryByTestId('empty-state')).toBeNull();
+  });
+
+  it('adopts the finished first turn under the server id before navigating to it', async () => {
+    conversationsValue = {
+      data: { items: [] },
+      refetch: vi.fn().mockResolvedValue({ data: { items: [{ id: 'conv-new' }] } }),
+    };
+    mutateAsyncMock.mockImplementation(async () => {
+      const store = useStreamStore.getState();
+      store.start(NEW_CONVERSATION_ID, sent);
+      store.appendToken(NEW_CONVERSATION_ID, 'answer');
+      store.setDone(NEW_CONVERSATION_ID, 'a1');
+    });
+    renderPage({ conversationId: null, isNew: true });
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'first question' } });
+    fireEvent.click(screen.getByLabelText('Send message'));
+
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith({
+        to: '/advisor/$id',
+        params: { id: 'conv-new' },
+        replace: true,
+      }),
+    );
+    const state = useStreamStore.getState();
+    expect(state.byConversation['conv-new']).toEqual({
+      kind: 'done',
+      text: 'answer',
+      messageId: 'a1',
+    });
+    expect(state.userMessageByConversation['conv-new']?.text).toBe('first question');
+  });
+
+  it('clears a finished placeholder entry once a real conversation is on screen', () => {
+    const store = useStreamStore.getState();
+    store.start(NEW_CONVERSATION_ID, sent);
+    store.appendToken(NEW_CONVERSATION_ID, 'answer');
+    store.setDone(NEW_CONVERSATION_ID, 'a1');
+    renderPage({ conversationId: 'conv-1' });
+    expect(useStreamStore.getState().byConversation[NEW_CONVERSATION_ID]).toBeUndefined();
+  });
+
+  it('leaves an in-flight placeholder turn alone when another conversation is opened', () => {
+    useStreamStore.getState().start(NEW_CONVERSATION_ID, sent);
+    renderPage({ conversationId: 'conv-1' });
+    expect(useStreamStore.getState().byConversation[NEW_CONVERSATION_ID]).toEqual({
+      kind: 'pending',
+    });
+    expect(useStreamStore.getState().userMessageByConversation[NEW_CONVERSATION_ID]).toEqual(sent);
+  });
+
+  it('spins the send button while the turn is in flight', () => {
+    streamValue = { mutateAsync: mutateAsyncMock, isPending: true, error: undefined };
+    renderPage({ conversationId: 'conv-1' });
+    expect(screen.getByTestId('send-spinner')).toBeTruthy();
+    expect(screen.getByLabelText('Send message').getAttribute('aria-busy')).toBe('true');
   });
 });

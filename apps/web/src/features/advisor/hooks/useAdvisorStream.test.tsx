@@ -4,14 +4,17 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { readSseStream } from '../lib/sse';
+import { readSseStream, SsePreStreamError } from '../lib/sse';
 import { useStreamStore } from '../stores/stream.store';
 
 import { useAdvisorStream, type StreamSubmitInput } from './useAdvisorStream';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('../lib/sse', () => ({ readSseStream: vi.fn() }));
+vi.mock('../lib/sse', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/sse')>()),
+  readSseStream: vi.fn(),
+}));
 
 const CONV_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -30,7 +33,12 @@ function makeWrapper(qc: QueryClient) {
 }
 
 afterEach(() => {
-  useStreamStore.setState({ byConversation: {}, toolsByConversation: {} });
+  useStreamStore.setState({
+    byConversation: {},
+    toolsByConversation: {},
+    billingModeByConversation: {},
+    userMessageByConversation: {},
+  });
   vi.restoreAllMocks();
   vi.mocked(readSseStream).mockReset();
 });
@@ -125,5 +133,57 @@ describe('useAdvisorStream', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(readSseStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the turn pending and records the user message before the first frame', async () => {
+    let seenMidStream: unknown;
+    vi.mocked(readSseStream).mockImplementation(async (_url, opts) => {
+      seenMidStream = useStreamStore.getState().byConversation[CONV_ID];
+      opts.onDone('msg-1');
+      return { messageId: 'msg-1', deduped: false };
+    });
+    const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+
+    const { result } = renderHook(() => useAdvisorStream(), { wrapper: makeWrapper(qc) });
+    await result.current.mutateAsync(makeInput());
+
+    expect(seenMidStream).toEqual({ kind: 'pending' });
+    expect(useStreamStore.getState().userMessageByConversation[CONV_ID]).toEqual({
+      clientMessageId: '22222222-2222-2222-2222-222222222222',
+      text: 'hello',
+      attachments: [],
+    });
+  });
+
+  it('moves a pre-stream refusal into the error state (no indicator left running)', async () => {
+    vi.mocked(readSseStream).mockRejectedValue(
+      new SsePreStreamError(402, 'INSUFFICIENT_CREDITS', 'out of credits'),
+    );
+    const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+
+    const { result } = renderHook(() => useAdvisorStream(), { wrapper: makeWrapper(qc) });
+    await expect(result.current.mutateAsync(makeInput())).rejects.toThrow('out of credits');
+
+    expect(useStreamStore.getState().byConversation[CONV_ID]).toEqual({
+      kind: 'error',
+      text: '',
+      errorCode: 'INSUFFICIENT_CREDITS',
+    });
+    // The sent message stays on screen next to the retry control.
+    expect(useStreamStore.getState().userMessageByConversation[CONV_ID]?.text).toBe('hello');
+  });
+
+  it('a failure with no error frame and no code lands as STREAM_DISCONNECTED', async () => {
+    vi.mocked(readSseStream).mockRejectedValue(new Error('boom'));
+    const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+
+    const { result } = renderHook(() => useAdvisorStream(), { wrapper: makeWrapper(qc) });
+    await expect(result.current.mutateAsync(makeInput())).rejects.toThrow('boom');
+
+    expect(useStreamStore.getState().byConversation[CONV_ID]).toEqual({
+      kind: 'error',
+      text: '',
+      errorCode: 'STREAM_DISCONNECTED',
+    });
   });
 });

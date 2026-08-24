@@ -6,9 +6,13 @@
 //
 // New-conversation flow (REQ-1.8): the page never navigates to `/advisor/{id}`
 // before the server has confirmed the conversation exists. The first send on a
-// new conversation streams against the `new` endpoint; once the stream and the
-// conversation-list refetch confirm the server-assigned id, the URL is replaced
-// (replace: true) so the back button never lands on `/advisor/new`.
+// new conversation streams against the `new` endpoint, and the transcript is
+// mounted against that placeholder id so the user's message and the streaming
+// reply show up immediately. Once the stream and the conversation-list refetch
+// confirm the server-assigned id, the store entry is adopted under that id and
+// the URL is replaced (replace: true) so the back button never lands on
+// `/advisor/new` and the finished turn stays on screen while the persisted
+// messages load.
 //
 // This module is lazy-loaded at the route boundary (the route files import it
 // via React.lazy) so the advisor bundle — and the syntax highlighter it pulls in
@@ -38,6 +42,7 @@ import { useAdvisorStream } from '../hooks/useAdvisorStream';
 import { useConversations } from '../hooks/useConversations';
 import { useListPersonas } from '../hooks/usePersonas';
 import { useProviderKeys } from '../hooks/useProviderKeys';
+import { NEW_CONVERSATION_ID, useStreamStore } from '../stores/stream.store';
 
 // System fallback persona id (REQ-7 default-resolution order). Used only when the
 // user has not marked a default and no persona is otherwise selectable.
@@ -59,6 +64,13 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
   const tierQuery = useTierState();
   const stream = useAdvisorStream();
   const queryClient = useQueryClient();
+  // Whether a first turn is in flight (or finished / failed) under the
+  // new-conversation placeholder — mounts the transcript on the new pane.
+  const newTurnActive = useStreamStore(
+    (s) => (s.byConversation[NEW_CONVERSATION_ID]?.kind ?? 'idle') !== 'idle',
+  );
+  const adoptStream = useStreamStore((s) => s.adopt);
+  const resetStream = useStreamStore((s) => s.reset);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   // The clientMessageId of the in-flight submission, retained so the retry button
@@ -115,6 +127,18 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
 
   const activeId = isNew ? null : conversationId;
 
+  // Once a real conversation is on screen a finished placeholder entry has
+  // served its purpose (it was adopted under the real id before navigation);
+  // clear it so the next visit to the new pane starts empty. A turn still in
+  // flight is left alone — the user may have clicked another conversation while
+  // it streams, and it is adopted and navigated to when it completes.
+  useEffect(() => {
+    if (activeId === null) return;
+    const kind = useStreamStore.getState().byConversation[NEW_CONVERSATION_ID]?.kind;
+    if (kind === 'pending' || kind === 'streaming') return;
+    resetStream(NEW_CONVERSATION_ID);
+  }, [activeId, resetStream]);
+
   // REQ-8.9b preselect: a no-BYOK user with allowance headroom gets the
   // allowance model preselected instead of an empty picker (an empty start
   // auto-refuses a zero-credit first turn with INSUFFICIENT_CREDITS on the most
@@ -130,7 +154,7 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
   const runSubmit = async (submission: ComposerSubmit) => {
     setLastSubmit(submission);
     const personaId = submission.personaId ?? defaultPersonaId;
-    const targetId = activeId ?? 'new';
+    const targetId = activeId ?? NEW_CONVERSATION_ID;
 
     // Capture the known conversation ids BEFORE streaming so we can identify the
     // newly-created conversation by set-difference after the refetch (avoids the
@@ -179,6 +203,9 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
       const refetched = await conversations.refetch();
       const newIds = (refetched.data?.items ?? []).filter((c) => !knownIds.has(c.id));
       if (newIds.length === 1) {
+        // Carry the finished turn over to the real id so the transcript there
+        // renders it straight away instead of waiting on the detail query.
+        adoptStream(NEW_CONVERSATION_ID, newIds[0].id);
         await navigate({
           to: '/advisor/$id',
           params: { id: newIds[0].id },
@@ -277,6 +304,8 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
           <div className="min-h-0 flex-1 overflow-y-auto">
             {activeId ? (
               <Transcript conversationId={activeId} onRetry={onRetry} />
+            ) : canStartConversation && newTurnActive ? (
+              <Transcript conversationId={NEW_CONVERSATION_ID} onRetry={onRetry} />
             ) : !canStartConversation ? (
               <div className="p-6" data-testid="no-key-banner">
                 <EmptyState
@@ -323,6 +352,7 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
                 defaultPersonaId={defaultPersonaId}
                 visionEnabled={false}
                 disabled={composerDisabled}
+                pending={stream.isPending}
                 errorCode={errorCode}
                 tierState={tierState}
                 remedies={{
