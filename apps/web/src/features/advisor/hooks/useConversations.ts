@@ -13,6 +13,8 @@ import type { Conversation, ConversationListItem, Message } from '@tradr/shared/
 
 import { api } from '@/lib/api';
 
+import { NEW_CONVERSATION_ID } from '../stores/stream.store';
+
 // Query-key factory. Detail key matches useAdvisorStream's invalidation target
 // (['advisor', 'conversation', id]) so a streamed reply and a manual refetch
 // share one cache entry.
@@ -40,12 +42,16 @@ export function useConversations() {
   });
 }
 
-/** REQ-2.3 — a conversation plus its latest messages. */
+/**
+ * REQ-2.3 — a conversation plus its latest messages. Never fetches for the
+ * new-conversation placeholder id: that transcript has no persisted messages
+ * yet and renders from the stream store alone.
+ */
 export function useConversation(id: string) {
   return useQuery<ConversationDetail>({
     queryKey: conversationKeys.detail(id),
     queryFn: () => api.get<ConversationDetail>(`/advisor/conversations/${id}`),
-    enabled: id.length > 0,
+    enabled: id.length > 0 && id !== NEW_CONVERSATION_ID,
   });
 }
 

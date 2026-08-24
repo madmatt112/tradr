@@ -6,11 +6,23 @@
 // token append re-renders only this component, never the whole page, and never
 // on a sibling conversation's token.
 //
-// Handoff (design v4-9): while the store slice is `streaming`/`error`, or `done`
-// but the persisted message with the recorded `messageId` is not yet in the
-// query cache, the live store text is shown. Once the persisted assistant
-// message arrives, the persisted copy is rendered instead — no flash of empty
-// content during the persist-then-invalidate window.
+// Handoff (design v4-9): while the store slice is `pending`/`streaming`/`error`,
+// or `done` but the persisted message with the recorded `messageId` is not yet
+// in the query cache, the live store entry is shown. Once the persisted
+// assistant message arrives, the persisted copy is rendered instead — no flash
+// of empty content during the persist-then-invalidate window.
+//
+// The in-flight turn is shown as a PAIR: the user's own message (recorded in the
+// store at submit, so it appears the instant it is sent) followed by the
+// assistant bubble, which carries a thinking/responding indicator for as long
+// as the turn is in flight — before the first token, and through the silent
+// windows while tools run. Both hand off to the persisted copies together: the
+// server writes them in one transaction, so the assistant `messageId` landing
+// in the cache means the user message is there too.
+//
+// The transcript follows the stream: it scrolls its scroll container (the
+// parent element AdvisorPage wraps it in) to the end as content arrives, unless
+// the user has scrolled up to read something earlier.
 //
 // Per-part rendering (REQ-14.1, 14.5): assistant messages carry `text` /
 // `tool_call` / `tool_result` parts. We walk them IN ORDER — `text` →
@@ -20,6 +32,7 @@
 // renders its cards on reload (not an empty bubble), and streaming + reload use
 // the same components. User text is plain text — no Markdown.
 
+import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/shallow';
 
 import type {
@@ -33,7 +46,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { isApiCrossOrigin, resolveApiUrl } from '@/lib/api';
 
 import { useConversation } from '../hooks/useConversations';
-import { useStreamStore, type StreamState, type ToolActivity } from '../stores/stream.store';
+import {
+  useStreamStore,
+  type PendingUserMessage,
+  type StreamState,
+  type ToolActivity,
+} from '../stores/stream.store';
 
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { GenericToolCard, safeStringify } from './tool-cards/GenericToolCard';
@@ -276,6 +294,56 @@ function StreamingToolAffordance({ tool }: { tool: ToolActivity }) {
   );
 }
 
+// Three-dot activity indicator for the in-flight assistant bubble. Announced
+// once via role=status; the dots themselves are decoration.
+function StreamActivity({ label }: { label: string }) {
+  return (
+    <div
+      data-testid="stream-activity"
+      role="status"
+      className="mt-1 flex items-center gap-2 text-sm text-muted-foreground"
+    >
+      <span aria-hidden="true" className="flex items-center gap-1">
+        <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.3s]" />
+        <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:-0.15s]" />
+        <span className="size-1.5 animate-bounce rounded-full bg-current" />
+      </span>
+      {label}
+    </div>
+  );
+}
+
+// The user's message for the in-flight turn, rendered from the store until the
+// persisted copy takes over. Attachments are the submitted bytes, shown inline.
+function PendingUserBubble({ message }: { message: PendingUserMessage }) {
+  return (
+    <div className={ROW_USER}>
+      <div className={STACK}>
+        <span className={`${LABEL} text-left`}>Me</span>
+        <div
+          data-role="user"
+          data-testid="pending-user-message"
+          className={`${BUBBLE} ${BUBBLE_USER} whitespace-pre-wrap`}
+        >
+          {message.text}
+          {message.attachments.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {message.attachments.map((a, i) => (
+                <img
+                  key={i}
+                  src={`data:image/${a.format};base64,${a.dataBase64}`}
+                  alt="Attached image"
+                  className="max-h-48 max-w-full rounded-md"
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Transcript({ conversationId, onRetry }: TranscriptProps) {
   const { data } = useConversation(conversationId);
   const messages = data?.messages ?? [];
@@ -289,17 +357,50 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
   const billingMode = useStreamStore(
     useShallow((s) => s.billingModeByConversation?.[conversationId]),
   );
+  const userMessage = useStreamStore(
+    useShallow((s) => s.userMessageByConversation?.[conversationId]),
+  );
 
   // Handoff: suppress the live store entry once the persisted assistant message
   // it represents is in the cache (matched by the done-recorded messageId).
   const persistedIds = new Set(messages.map((m) => m.id));
+  const inFlight = stream.kind === 'pending' || stream.kind === 'streaming';
   const showStreamEntry =
-    stream.kind === 'streaming' ||
+    inFlight ||
     stream.kind === 'error' ||
     (stream.kind === 'done' && !persistedIds.has(stream.messageId));
+  const streamText = stream.kind === 'idle' || stream.kind === 'pending' ? '' : stream.text;
+  const activityLabel =
+    streamText.length > 0
+      ? 'Responding…'
+      : tools.some((t) => t.status === 'pending')
+        ? 'Working…'
+        : 'Thinking…';
+
+  // Follow the stream. The scroll container is the parent AdvisorPage wraps the
+  // transcript in; `follow` turns off when the user scrolls up from the end and
+  // back on when they return to it. Runs on every change in what is rendered.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const followRef = useRef(true);
+  useEffect(() => {
+    const scroller = rootRef.current?.parentElement;
+    if (!scroller) return;
+    const onScroll = () => {
+      followRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, []);
+  const contentSignature = `${messages.length}:${stream.kind}:${streamText.length}:${tools.length}`;
+  useEffect(() => {
+    if (!followRef.current) return;
+    // jsdom has no scrollIntoView; the optional call keeps tests honest.
+    endRef.current?.scrollIntoView?.({ block: 'end' });
+  }, [contentSignature]);
 
   return (
-    <div data-testid="transcript" className="flex flex-col gap-4 p-4">
+    <div ref={rootRef} data-testid="transcript" className="flex flex-col gap-4 p-4">
       {messages.map((message) =>
         message.role === 'user' ? (
           <div key={message.id} className={ROW_USER}>
@@ -324,6 +425,8 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
         ),
       )}
 
+      {showStreamEntry && userMessage && <PendingUserBubble message={userMessage} />}
+
       {showStreamEntry && (
         <div className={ROW_ASSISTANT}>
           <div className={STACK}>
@@ -347,11 +450,17 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
                 <StreamingToolAffordance key={t.id} tool={t} />
               ))}
 
-              {stream.text.length > 0 && <MarkdownRenderer content={stream.text} />}
+              {streamText.length > 0 && <MarkdownRenderer content={streamText} />}
+
+              {inFlight && <StreamActivity label={activityLabel} />}
 
               {stream.kind === 'error' && (
                 <div data-testid="stream-error" className="mt-2 flex items-center gap-3">
-                  <span className="text-sm text-destructive">Response interrupted — retry?</span>
+                  <span className="text-sm text-destructive">
+                    {streamText.length > 0 || tools.length > 0
+                      ? 'Response interrupted — retry?'
+                      : 'No response — retry?'}
+                  </span>
                   <Button
                     type="button"
                     size="sm"
@@ -367,6 +476,8 @@ export function Transcript({ conversationId, onRetry }: TranscriptProps) {
           </div>
         </div>
       )}
+
+      <div ref={endRef} aria-hidden="true" />
     </div>
   );
 }

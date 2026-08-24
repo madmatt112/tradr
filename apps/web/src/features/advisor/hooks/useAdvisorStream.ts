@@ -14,7 +14,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { StreamRequestInput } from '@tradr/shared/schemas/advisor';
 
 import { resolveApiUrl } from '../../../lib/api';
-import { readSseStream } from '../lib/sse';
+import { readSseStream, SsePreStreamError } from '../lib/sse';
 import { useStreamStore } from '../stores/stream.store';
 
 export interface StreamSubmitInput extends StreamRequestInput {
@@ -24,7 +24,7 @@ export interface StreamSubmitInput extends StreamRequestInput {
 export function useAdvisorStream() {
   // Per-action selectors. Zustand returns a stable reference for actions assigned
   // at store init, so these never re-render the caller on per-token store changes.
-  const reset = useStreamStore((s) => s.reset);
+  const start = useStreamStore((s) => s.start);
   const appendToken = useStreamStore((s) => s.appendToken);
   const addToolCall = useStreamStore((s) => s.addToolCall);
   const addToolResult = useStreamStore((s) => s.addToolResult);
@@ -39,7 +39,13 @@ export function useAdvisorStream() {
     networkMode: 'always',
     mutationFn: async (input: StreamSubmitInput) => {
       const { conversationId, ...body } = input;
-      reset(conversationId);
+      // Clears the previous turn and records the user's message so the
+      // transcript shows it (and a thinking indicator) before any frame lands.
+      start(conversationId, {
+        clientMessageId: body.clientMessageId,
+        text: body.text,
+        attachments: body.attachments ?? [],
+      });
       return readSseStream(
         resolveApiUrl(`/advisor/conversations/${conversationId}/messages/stream`),
         {
@@ -65,6 +71,18 @@ export function useAdvisorStream() {
           onDone: (messageId) => setDone(conversationId, messageId),
         },
       );
+    },
+    onError: (error, vars) => {
+      // A failure that never reached an SSE `error` frame — a pre-stream JSON
+      // refusal (402/403/5xx), a malformed frame, or a missing body — would
+      // otherwise leave the slice stuck in `pending`/`streaming` with the
+      // thinking indicator running forever. Move it to `error` so the
+      // transcript offers a retry; a frame-delivered error is already there.
+      const slice = useStreamStore.getState().byConversation[vars.conversationId];
+      if (slice?.kind === 'error') return;
+      const code =
+        error instanceof SsePreStreamError && error.code ? error.code : 'STREAM_DISCONNECTED';
+      setError(vars.conversationId, code);
     },
     onSuccess: (_data, vars) => {
       // Invalidate ONLY the conversation query — never persona/key queries, and
