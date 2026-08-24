@@ -220,6 +220,18 @@
   background-color: var(--color-primary);
   border-radius: var(--radius-md, 0.375rem);
 }
+/* gridstack stacks its own furniture with raw z-indexes — 100/101 on the resize
+   handles, 10000 on whatever is being dragged — which are numbers chosen
+   against a bare page, not against this app's `z-50` dialog overlay. Left in
+   the root stacking context they beat that overlay, so with
+   `alwaysShowResizeHandle` on, every handle on the board paints over an open
+   modal at full brightness while the widgets themselves dim underneath.
+   `isolation` scopes those numbers to the grid. The grid's own z-index stays
+   `auto`, so the whole board now passes under any portalled overlay, and the
+   handles still stack correctly against the widgets they belong to. */
+.grid-stack {
+  isolation: isolate;
+}
 /* Corner grips, not direction arrows.
    gridstack ships a double-headed arrow per corner, which reads as an
    instruction about which way the widget may move — six of them at once is
@@ -227,6 +239,10 @@
    strokes say "there is a grip here" and stop talking. The strokes run
    PARALLEL to the corner they sit in, so the texture points into the corner
    rather than across it.
+   `transform: none` is load-bearing: gridstack rotates each corner handle by
+   ±45deg to aim its own arrow, and that rotation would land these already
+   diagonal strokes upright — orthogonal to the corner, reading as anything but
+   a grip.
    The mask is a `data:` URI, which cannot read a CSS variable, so it is used
    as an alpha mask and painted through with the token colour. */
 .grid-stack > .grid-stack-item > .ui-resizable-nw,
@@ -236,18 +252,19 @@
   background-image: none;
   background-color: var(--color-muted-foreground);
   opacity: 0.55;
+  transform: none;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
   -webkit-mask-position: center;
   mask-position: center;
 }
-/* `╲` corners — top-left and bottom-right. */
+/* `╱` corners — top-left and bottom-right. */
 .grid-stack > .grid-stack-item > .ui-resizable-nw,
 .grid-stack > .grid-stack-item > .ui-resizable-se {
   -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 14 14 6M11 15l4-4"/></svg>');
   mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 14 14 6M11 15l4-4"/></svg>');
 }
-/* `╱` corners — top-right and bottom-left. */
+/* `╲` corners — top-right and bottom-left. */
 .grid-stack > .grid-stack-item > .ui-resizable-ne,
 .grid-stack > .grid-stack-item > .ui-resizable-sw {
   -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" stroke="black" stroke-linecap="round" stroke-width="1.6" viewBox="0 0 20 20"><path d="M6 6l8 8M5 11l4 4"/></svg>');
