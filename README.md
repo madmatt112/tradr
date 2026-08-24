@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <strong>Log every fill, size the trade before you take it, and ask an AI advisor about your own P&amp;L.</strong><br>
+  <strong>Log every fill, size the trade before you take it, and see what your record actually says.</strong><br>
   Self-hostable in one command. The journal shows its work.
 </p>
 
@@ -29,9 +29,9 @@ Tradr is a self-hostable journal for options and equities traders. It records th
 arc of a position — draft, scale-in, partial close — with every fill, fee, and note
 attached, then shows you what your record actually says.
 
-It runs as a complete manual journal with **no keys configured at all**. The AI advisor
-and every external integration are opt-in, and nothing phones home until you switch it
-on. It never places an order.
+It runs as a complete manual journal with **no keys configured at all**. Every external
+integration is opt-in, and nothing phones home until you switch it on. It never places an
+order.
 
 ## How to run it
 
@@ -62,7 +62,7 @@ TLS, against your own Postgres, or on a different port, see the
 
 ## Status
 
-**v0.9.x — pre-1.0, and moving quickly.** What that promises:
+**v0.11.x — pre-1.0, and moving quickly.** What that promises:
 
 - **The HTTP API is not stable yet.** Breaking endpoint changes can land in any release
   until v1.0.0. Pin a tag rather than tracking `:latest` if that matters to you.
@@ -88,8 +88,6 @@ in-product.
   with reconciliation.
 - **Performance** — equity curve built from net P&L, broken down daily through all-time.
 - **Options tools** — chain lookup, OCC symbol parsing, Black-Scholes pricing with full Greeks.
-- **AI advisor** — conversation grounded in your own trade history, opt-in and off by
-  default. Bring your own Anthropic or OpenAI key; self-hosted, it is never metered.
 - **CSV import** — bring years of history from any broker with a column-mapping step.
   Direct read-only broker connections are on the roadmap, not shipped.
 
@@ -102,7 +100,7 @@ generates all three:
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `POSTGRES_PASSWORD` | Database password. Compose builds the API's `DATABASE_URL` from the `POSTGRES_*` values — do not set `DATABASE_URL` yourself. |
 | `SESSION_SECRET`    | Signs auth session cookies (≥32 chars).                                                                                       |
-| `ENCRYPTION_KEY`    | 32-byte hex key encrypting stored provider keys at rest (AES-256-GCM).                                                        |
+| `ENCRYPTION_KEY`    | 32-byte hex key encrypting stored API keys at rest (AES-256-GCM).                                                             |
 
 `ENCRYPTION_KEY_FINGERPRINT` is optional but recommended — it makes a wrong-key boot fail
 fast and loudly instead of failing later when a stored key won't decrypt.

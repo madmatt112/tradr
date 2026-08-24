@@ -1,0 +1,8 @@
+# Cloudflare Pages redirects for docs.tradr.cloud.
+#
+# The advisor pages were removed from the user guide while the advisor is
+# withdrawn from the hosted app (DISABLE_ADVISOR). The old URLs were linked from
+# the app and may be indexed, so they land on the guide rather than a 404.
+# Temporary (302) on purpose: the pages come back with the advisor.
+/user-guide/ai-advisor/ /user-guide/getting-started/ 302
+/user-guide/explanation/how-the-advisor-works/ /user-guide/getting-started/ 302

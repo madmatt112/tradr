@@ -6,10 +6,10 @@
 // means the published numbers and the enforced numbers are two independent
 // facts, and only one of them stops a request.
 //
-// The Pro platform-turn allowance is the exception: it reads
-// `FEATURE_GATING_ADVISOR_TURNS_PER_MONTH` at check time rather than being a
-// literal, so its shipped value comes from the compose default instead. That is
-// also read rather than typed.
+// The cap table also carries the advisor allowances (`platformTurns`, `images`).
+// They are deliberately NOT documented here: the advisor is withdrawn from the
+// hosted app (DISABLE_ADVISOR) and the user guide no longer describes it. Add
+// the rows back when it returns.
 //
 // Usage: node scripts/gen-plan-limits.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -19,16 +19,13 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, '../../..');
 const LIMITS = join(repoRoot, 'apps/api/src/features/billing/tier-limits.constants.ts');
-const COMPOSE = join(repoRoot, 'docker-compose.yml');
 const OUT = join(scriptDir, '../src/content/docs/user-guide/reference/plan-limits.mdx');
 
 /** Human wording for each cap, in the order the page presents them. */
 const ROWS = [
   ['accounts', 'Accounts', 'Brokerage accounts you can track at once.'],
   ['positions', 'Positions', 'Stored positions across every account.'],
-  ['lookbackMonths', 'History window', 'How far back the performance charts and the advisor can read.', 'months'],
-  ['platformTurns', 'Advisor turns / month', 'Advisor replies using the platform key. Turns on your own key are never capped.'],
-  ['images', 'Advisor images / month', 'Charts and screenshots you can attach to an advisor conversation.'],
+  ['lookbackMonths', 'History window', 'How far back the performance charts can read.', 'months'],
   ['csvImports', 'CSV imports / month', 'Import runs, not rows.'],
 ];
 
@@ -65,16 +62,6 @@ const source = readFileSync(LIMITS, 'utf8');
 const pro = readLimits(source, "if (tier === 'pro')");
 const free = readLimits(source, '  return {\n    accounts: 1');
 
-// The Pro allowance is env-fed. Read the shipped default from compose rather
-// than restating it.
-const composeDefault = readFileSync(COMPOSE, 'utf8').match(
-  /FEATURE_GATING_ADVISOR_TURNS_PER_MONTH:\s*\$\{FEATURE_GATING_ADVISOR_TURNS_PER_MONTH:-(\d+)\}/,
-);
-if (!composeDefault) {
-  throw new Error('gen-plan-limits: could not read the advisor-turn default from docker-compose.yml');
-}
-pro.platformTurns = composeDefault[1];
-
 for (const [key] of ROWS) {
   if (free[key] === undefined || pro[key] === undefined) {
     throw new Error(`gen-plan-limits: no value parsed for "${key}" — generator is stale`);
@@ -85,7 +72,7 @@ const out = [];
 out.push('---');
 out.push('title: Plan limits');
 out.push(
-  'description: What the Free and Pro plans allow on the hosted app — accounts, positions, history window, advisor turns, images, and CSV imports. Self-hosted instances have no limits.',
+  'description: What the Free and Pro plans allow on the hosted app — accounts, positions, history window, and CSV imports. Self-hosted instances have no limits.',
 );
 out.push('---');
 out.push('');
@@ -119,19 +106,10 @@ for (const [, label, meaning] of ROWS) {
 out.push('');
 out.push('Monthly counters reset at the start of each calendar month, measured in UTC.');
 out.push('');
-out.push('## Bringing your own key');
-out.push('');
-out.push('The advisor-turn cap applies to turns that run on the platform key. Add your own');
-out.push('provider key in **Settings** and those turns are uncapped on either plan — you are');
-out.push('paying the provider directly. See [Use the AI advisor](/user-guide/ai-advisor/).');
-out.push('');
 out.push('## Next steps');
 out.push('');
 out.push("- [Hosted vs self-hosted](/user-guide/explanation/hosted-vs-self-hosted/) — what's different.");
-out.push('- [Use the AI advisor](/user-guide/ai-advisor/) — platform key versus your own.');
 out.push('');
 
 writeFileSync(OUT, out.join('\n'));
-console.log(
-  `gen-plan-limits: wrote ${OUT} (${ROWS.length} limits; Pro advisor turns from the compose default).`,
-);
+console.log(`gen-plan-limits: wrote ${OUT} (${ROWS.length} limits).`);

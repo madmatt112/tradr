@@ -20,7 +20,6 @@ export const DOCS = {
   importHistory: '/user-guide/import-history/',
   metricsGlossary: '/user-guide/reference/metrics-glossary/',
   accounts: '/user-guide/accounts/',
-  advisor: '/user-guide/ai-advisor/',
   selfHosting: '/self-hosting/docker-compose/',
   envVars: '/self-hosting/reference/env-vars/',
   backupRestore: '/self-hosting/backup-restore/',
