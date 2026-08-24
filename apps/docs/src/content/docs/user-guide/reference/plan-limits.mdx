@@ -1,6 +1,6 @@
 ---
 title: Plan limits
-description: What the Free and Pro plans allow on the hosted app — accounts, positions, history window, advisor turns, images, and CSV imports. Self-hosted instances have no limits.
+description: What the Free and Pro plans allow on the hosted app — accounts, positions, history window, and CSV imports. Self-hosted instances have no limits.
 ---
 
 import SelfHosted from "@/components/SelfHosted.astro";
@@ -24,28 +24,17 @@ checks against, so what is published here is what is enforced.
 | **Accounts** | 1 | Unlimited |
 | **Positions** | 1,000 | Unlimited |
 | **History window** | 6 months | Unlimited |
-| **Advisor turns / month** | 25 | 200 |
-| **Advisor images / month** | 20 | 500 |
 | **CSV imports / month** | 10 | Unlimited |
 
 ## What each limit means
 
 - **Accounts** — Brokerage accounts you can track at once.
 - **Positions** — Stored positions across every account.
-- **History window** — How far back the performance charts and the advisor can read.
-- **Advisor turns / month** — Advisor replies using the platform key. Turns on your own key are never capped.
-- **Advisor images / month** — Charts and screenshots you can attach to an advisor conversation.
+- **History window** — How far back the performance charts can read.
 - **CSV imports / month** — Import runs, not rows.
 
 Monthly counters reset at the start of each calendar month, measured in UTC.
 
-## Bringing your own key
-
-The advisor-turn cap applies to turns that run on the platform key. Add your own
-provider key in **Settings** and those turns are uncapped on either plan — you are
-paying the provider directly. See [Use the AI advisor](/user-guide/ai-advisor/).
-
 ## Next steps
 
 - [Hosted vs self-hosted](/user-guide/explanation/hosted-vs-self-hosted/) — what's different.
-- [Use the AI advisor](/user-guide/ai-advisor/) — platform key versus your own.

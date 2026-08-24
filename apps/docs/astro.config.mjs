@@ -106,7 +106,7 @@ export default defineConfig({
     starlight({
       title: 'Tradr docs',
       description:
-        'Documentation for Tradr — the open-source trading journal with an AI advisor. User guide for the hosted app plus self-hosting and development guides.',
+        'Documentation for Tradr — the open-source trading journal. User guide for the hosted app plus self-hosting and development guides.',
       pagefind: true,
       // Says which version these pages describe, on every page. Starlight 0.41
       // has no site-wide banner option, so this overrides the per-page one —
@@ -173,7 +173,6 @@ export default defineConfig({
             { label: 'Customise the dashboard', slug: 'user-guide/dashboard' },
             { label: 'Accounts & the multi-currency ledger', slug: 'user-guide/accounts' },
             { label: 'Review performance & P&L', slug: 'user-guide/performance' },
-            { label: 'Use the AI advisor', slug: 'user-guide/ai-advisor' },
             { label: 'Options tools', slug: 'user-guide/options-tools' },
             { label: 'Import your history', slug: 'user-guide/import-history' },
             { label: 'Accounting & tax', slug: 'user-guide/accounting-tax' },
@@ -226,10 +225,6 @@ export default defineConfig({
             {
               label: "Hosted vs self-hosted: what's different",
               slug: 'user-guide/explanation/hosted-vs-self-hosted',
-            },
-            {
-              label: 'How the AI advisor reasons',
-              slug: 'user-guide/explanation/how-the-advisor-works',
             },
             {
               label: 'Why journaling improves your trading',

@@ -291,55 +291,7 @@ The dashboard is a **drag-and-drop widget grid**. Use **Add Widget** to add a
 panel and **Reset layout** to start over. Your layout is saved to your account.
 See [Customise the dashboard](/user-guide/dashboard/).
 
-## Step 7 — Ask the AI advisor
-
-The advisor is a conversational assistant. It can analyse trade ideas and, if you
-opt in, reason over your own trade history.
-
-The walkthrough inside the app stops at Step 6. The advisor is an extra, and this
-step is optional.
-
-:::note[Not on the hosted app yet]
-The advisor is switched off on app.tradr.cloud while it is reworked, so this step
-applies to self-hosted instances only for now.
-:::
-
-<HostedOnly>
-  The advisor needs either **wallet credits** (buy a credit pack and pay per use
-  against your balance) **or** your own API key. Bring your own key (**BYOK**)
-  means you paste a provider key in settings and the provider bills you directly.
-  Credits are bought under **Settings → Billing**; a key of your own goes under
-  **Settings → Advisor**. Without one of the two, the advisor is unavailable —
-  nothing breaks.
-</HostedOnly>
-
-<SelfHosted>
-  There are no wallet credits. You or your operator supply an LLM API key. Use
-  either a platform key in the server's `.env` or your own BYOK key in settings.
-  See [How the AI advisor
-  works](/user-guide/explanation/how-the-advisor-works/).
-</SelfHosted>
-
-Once a key or credits are in place:
-
-1. Open **Settings → Advisor**. Add a provider key there if you are bringing
-   your own.
-2. Turn on **trade-data access** in the same place if you want personalised
-   answers. This is optional, and it is off until you turn it on.
-3. Open the **Advisor**.
-4. Ask something concrete, such as _"Review my AAPL position — was the
-   risk/reward reasonable?"_
-
-**Expected result:** the advisor streams back a response token by token. With
-trade-data access on, it can reference the position you logged. You can also
-upload a chart screenshot for the advisor to read, which needs a vision-capable
-model.
-
-> Turning trade-data access on lets the advisor send your trade data to a
-> third-party provider. Turning it off stops new reads and removes the stored
-> structured trade data.
-
-## Step 8 — Review your performance
+## Step 7 — Review your performance
 
 1. Open **Performance**.
 2. Choose a timeframe: **Daily**, **Weekly**, **Monthly**, **Yearly**, **YTD**,
