@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import app from '@/app';
-import { config } from '@/lib/config';
+import { config, envSchema } from '@/lib/config';
 
 // GET /api/config — the public posture endpoint (REQ-9.4/9.5, NFR-Security).
 //
@@ -62,6 +62,15 @@ describe('GET /api/config', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ registrationEnabled: true, advisorEnabled: false });
+  });
+
+  // 2c. The SHIPPED default is withdrawn: an instance that never set the
+  //     variable does not offer the advisor. The test env opts in (vitest pins
+  //     DISABLE_ADVISOR=false), so this asks the schema directly rather than the
+  //     running config. Flip this assertion when the advisor returns.
+  it('withdraws the advisor by default (schema default, not the test env)', () => {
+    expect(envSchema.shape.DISABLE_ADVISOR.parse(undefined)).toBe(true);
+    expect(envSchema.shape.DISABLE_REGISTRATION.parse(undefined)).toBe(false);
   });
 
   // 3. THE TRIPWIRE. The response key set EQUALS the allow-list — a second

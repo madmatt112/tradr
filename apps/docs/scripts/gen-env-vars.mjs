@@ -238,7 +238,18 @@ function render(sections, required) {
 }
 
 const required = requiredSecrets();
-const sections = parse(readFileSync(ENV_EXAMPLE, 'utf8'));
+// The advisor is withdrawn while it is reworked (DISABLE_ADVISOR defaults to
+// true) and the docs no longer describe it, so its settings are left out of the
+// reference: every key named ADVISOR (the switch itself included — it is
+// documented inline in .env.example for an operator who opts back in) and the
+// section that exists only for it. They are still read by the api. Drop this
+// filter when the advisor returns.
+const HIDDEN_KEY = /ADVISOR|^(ANTHROPIC|OPENAI)_API_KEY$/;
+const HIDDEN_SECTION = /^Advisor\b/;
+const sections = parse(readFileSync(ENV_EXAMPLE, 'utf8'))
+  .filter((s) => !HIDDEN_SECTION.test(s.name))
+  .map((s) => ({ ...s, keys: s.keys.filter((k) => !HIDDEN_KEY.test(k.name)) }))
+  .filter((s) => s.keys.length > 0);
 const keyCount = sections.reduce((n, s) => n + s.keys.length, 0);
 
 // Guard against a silently-broken parse: the file has never had fewer than 70

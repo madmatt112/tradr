@@ -32,18 +32,6 @@ const GROUPS = [
   ],
   ['Trading', ['positions', 'fills']],
   ['Money', ['ledger_entries', 'expenses', 'exchange_rates', 'wallets', 'wallet_transactions']],
-  [
-    'Advisor',
-    [
-      'advisor_conversations',
-      'advisor_messages',
-      'advisor_summaries',
-      'advisor_personas',
-      'advisor_provider_keys',
-      'advisor_turn_counters',
-      'advisor_image_counters',
-    ],
-  ],
   ['Import', ['csv_import_staging', 'csv_import_counters']],
   ['Billing', ['billing_customers', 'subscriptions', 'usage_records', 'webhook_events']],
   [
@@ -124,7 +112,15 @@ if (tables.length < 20) {
 
 const byName = new Map(tables.map((t) => [t.name, t]));
 const grouped = new Set(GROUPS.flatMap(([, names]) => names));
-const other = tables.map((t) => t.name).filter((n) => !grouped.has(n)).sort();
+// The advisor is withdrawn while it is reworked (DISABLE_ADVISOR defaults to
+// true) and the docs no longer describe it, so its tables are left out of the
+// reference rather than surfacing under "Other". They still exist in the
+// schema. Restore the "Advisor" group above when the advisor returns.
+const hidden = (n) => n.startsWith('advisor_');
+const other = tables
+  .map((t) => t.name)
+  .filter((n) => !grouped.has(n) && !hidden(n))
+  .sort();
 const groups = other.length > 0 ? [...GROUPS, ['Other', other]] : GROUPS;
 
 const out = [];
@@ -160,15 +156,27 @@ for (const [groupName, names] of groups) {
   out.push('');
   for (const name of present) {
     const table = byName.get(name);
+    // Columns that only exist for the withdrawn advisor — named for it, or
+    // pointing at one of its hidden tables — stay out with the tables. The
+    // foreign keys that would reference those tables go with them (below).
+    const hiddenFks = Object.values(table.foreignKeys ?? {}).filter((fk) => hidden(fk.tableTo));
+    const hiddenColumns = new Set([
+      ...Object.keys(table.columns).filter((c) => c.startsWith('advisor_')),
+      ...hiddenFks.flatMap((fk) => fk.columnsFrom ?? []),
+    ]);
+    const visibleFks = Object.fromEntries(
+      Object.entries(table.foreignKeys ?? {}).filter(([, fk]) => !hidden(fk.tableTo)),
+    );
     out.push(`### \`${name}\``);
     out.push('');
     out.push('| Column | Type | Notes |');
     out.push('| --- | --- | --- |');
     for (const [colName, col] of Object.entries(table.columns)) {
+      if (hiddenColumns.has(colName)) continue;
       out.push(columnRow(colName, col));
     }
     out.push('');
-    const fks = foreignKeyLines(table);
+    const fks = foreignKeyLines({ ...table, foreignKeys: visibleFks });
     if (fks.length > 0) {
       out.push('**References**');
       out.push('');

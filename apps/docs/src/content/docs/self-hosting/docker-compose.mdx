@@ -8,8 +8,8 @@ import HostedOnly from '@/components/HostedOnly.astro';
 This guide takes you from a fresh server to a running Tradr instance with Docker
 Compose, then covers verifying health, updating, and backing up. Self-hosting is
 a first-class path: the self-hosted build is the real product, and it runs as a
-complete manual trading journal with **no optional keys configured** — the AI
-advisor and external integrations are opt-in.
+complete manual trading journal with **no optional keys configured** — every
+external integration is opt-in.
 
 ## The three-container model
 
@@ -30,8 +30,7 @@ default.
 - **Docker with Compose v2** — the `docker compose` (space, not hyphen)
   subcommand. Check with `docker compose version`.
 - **~2 GB RAM minimum** (2–4 GB recommended). Postgres + Node + Nginx use
-  ~500–700 MB under load; concurrent AI advisor requests add memory pressure. A
-  1 GB VPS risks the OOM killer under load.
+  ~500–700 MB under load. A 1 GB VPS risks the OOM killer under load.
 - **A small VPS or homelab box.** Any host that runs Docker Compose works —
   Hetzner/DigitalOcean/Linode droplets, or Synology, Unraid, TrueNAS, Coolify,
   and Portainer setups.
@@ -132,23 +131,11 @@ All of these are optional. When an integration's config is absent the feature is
 simply **absent, not broken** — a fresh clone with none set runs identically,
 makes no outbound calls, and logs no errors. Configure only what you want.
 
-### LLM keys for the AI advisor
-
-Platform-provided keys let any user on your instance use the advisor without
-their own key. Absent, the advisor stays **BYOK-only** (each user pastes their
-own key in-app).
-
-```
-ANTHROPIC_API_KEY=      # Claude
-OPENAI_API_KEY=         # OpenAI
-```
-
 ### Wallet billing and Pro subscriptions (Stripe)
 
-Only needed if you want users to buy advisor credits or subscribe to Pro. **Both**
-the secret key and the webhook signing secret are required to enable the purchase
-+ webhook path; with them unset there is no purchase UI and the advisor stays
-BYOK-only.
+Only needed if you want users to buy credits or subscribe to Pro. **Both** the
+secret key and the webhook signing secret are required to enable the purchase +
+webhook path; with them unset there is no purchase UI.
 
 ```
 STRIPE_SECRET_KEY=
@@ -161,13 +148,10 @@ Pro is purchasable only when `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, **and
 `STRIPE_PRO_PRICE_ID` are all set. Full webhook-endpoint and Customer-Portal setup
 is documented inline in `.env.example`.
 
-### Market data and delayed quotes
+### Symbol search and delayed quotes
 
-The advisor fetches market data when a tool-use-capable provider is selected;
-`UNUSUAL_WHALES_BASE_URL` only exists to point the server at a test stub — leave
-it unset in production to use the real host. Symbol autocomplete needs **no key**
-(it is backed by the public SEC ticker file); only the delayed last-price lookup
-needs one:
+Symbol autocomplete needs **no key** (it is backed by the public SEC ticker
+file); only the delayed last-price lookup needs one:
 
 ```
 STOCK_QUOTE_API_KEY=      # API Ninjas — enables the delayed last-price affordance
@@ -220,8 +204,6 @@ stack does not couple them for you:
   or oversized CSVs are rejected by nginx before the api can size them.
 - `CSV_IMPORT_CLAIM_TIMEOUT_SECONDS` (api) must be **≥ 2 ×**
   `CSV_IMPORT_NGINX_PROXY_TIMEOUT` (web).
-- `ADVISOR_NGINX_PROXY_TIMEOUT` (web) must **exceed** `ADVISOR_STREAM_TIMEOUT_MS`
-  (api), or nginx cuts advisor streams early.
 
 The defaults already satisfy these; only revisit them if you change one side.
 

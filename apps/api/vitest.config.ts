@@ -23,6 +23,8 @@ export default defineConfig({
       // the predicates; POSTHOG_HOST='' resolves to its default via the preprocess.
       POSTHOG_API_KEY: '',
       POSTHOG_HOST: '',
+      // Opt back in to the advisor for the suites (see vitest.workspace.ts).
+      DISABLE_ADVISOR: 'false',
     },
   },
 });

@@ -149,16 +149,17 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
-  // Withdraw the AI advisor from an instance. Same idiom as DISABLE_REGISTRATION:
-  // an operator posture, not a capability check — the code path exists and is
-  // configured, the operator has chosen not to offer it. `true` makes every
+  // The AI advisor is withdrawn BY DEFAULT while it is reworked — on every
+  // instance, hosted or self-hosted. Same idiom as DISABLE_REGISTRATION: an
+  // operator posture, not a capability check — the code path exists and may be
+  // configured, it is just not offered. While set (the default) every
   // /api/advisor/* route (conversations, keys, personas, consent, the options
-  // chain lookup) answer 403 ADVISOR_DISABLED, and /api/config reports
-  // `advisorEnabled: false` so the SPA hides the surface. Defaults to enabled so
-  // self-hosted and staging instances are untouched.
+  // chain lookup) answers 403 ADVISOR_DISABLED, and /api/config reports
+  // `advisorEnabled: false` so the SPA hides the surface. An operator opts back
+  // in with DISABLE_ADVISOR=false. Flip this default when the advisor returns.
   DISABLE_ADVISOR: z
     .enum(['true', 'false'])
-    .default('false')
+    .default('true')
     .transform((v) => v === 'true'),
   // Changelog (REQ-3). Both optional with defaults — zero new required config.
   // GitHub repo as an owner/repo slug, NEVER a URL. The negative lookahead

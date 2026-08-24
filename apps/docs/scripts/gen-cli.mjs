@@ -112,11 +112,11 @@ const DETAILS = {
   },
   'storage migrate-to-inline': {
     title: 'storage migrate-to-inline',
-    summary: 'Pull advisor images out of object storage and back into the database.',
+    summary: 'Pull stored images out of object storage and back into the database.',
     body: [
       'Only relevant if object storage was configured and you want to turn it off.',
       'It rewrites every image that lives as a bucket pointer back to inline data, so',
-      'the backend can be disabled without stranding a conversation.',
+      'the backend can be disabled without stranding an image.',
       '',
       '```bash',
       'docker compose exec api tradr storage migrate-to-inline',
@@ -127,14 +127,14 @@ const DETAILS = {
       'continues rather than aborting.',
       '',
       '**Self-hosted instances do not need this.** With no object storage configured,',
-      'advisor images are already stored inline.',
+      'images are already stored inline.',
     ],
   },
   'storage gc': {
     title: 'storage gc',
     summary: 'Delete bucket objects no conversation references any more.',
     body: [
-      'Reclaims objects orphaned by deleted conversations and retried uploads. Like',
+      'Reclaims objects orphaned by deleted records and retried uploads. Like',
       '`migrate-to-inline`, it applies only to an instance with object storage',
       'configured.',
       '',

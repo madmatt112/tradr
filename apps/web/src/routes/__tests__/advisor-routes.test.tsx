@@ -37,6 +37,16 @@ vi.mock('@/features/advisor/pages/AdvisorPage', () => ({
   ),
 }));
 
+// The advisor routes redirect to the dashboard unless the instance offers the
+// advisor, and the posture read fails CLOSED. Stub it as an opted-in instance —
+// the tree shape is what is under test here, not the gate (see
+// advisor-disabled-redirect.test.tsx for that).
+vi.mock('@/hooks/useRegistrationEnabled', () => ({
+  useAdvisorEnabled: () => true,
+  useRegistrationEnabled: () => ({ registrationEnabled: true, isPending: false }),
+  isAdvisorEnabledForRoute: async () => true,
+}));
+
 import { routeTree } from '@/routeTree.gen';
 
 // ---- Harness --------------------------------------------------------------

@@ -98,6 +98,10 @@ const apiEnv: Record<string, string> = {
   // trusted proxy the limiter keys every request off the shared socket IP, so a
   // suite registering >5 users trips 429 (advisor-tools.spec.ts relies on this).
   TRUSTED_PROXIES: process.env.TRUSTED_PROXIES ?? '127.0.0.1',
+  // The advisor is withdrawn by default (DISABLE_ADVISOR defaults to true) while
+  // it is reworked. The advisor specs exercise code that is still shipped, so
+  // the suite opts back in exactly as an operator would.
+  DISABLE_ADVISOR: 'false',
   // ─── Transactional email pass-through (transactional-email Task 17) ──────
   // Mailpit being reachable does NOT configure the API — these exports do.
   // Every default is '' (config.ts's empty-tolerant preprocess: all-empty ⇒

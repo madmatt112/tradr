@@ -216,8 +216,8 @@ tail of this API: `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
 10-second ceiling would report no latency at all for the slowest path.
 
 Latency is measured to **response start**, when the headers flush, not to
-connection close. For the advisor's streaming responses the two differ by
-minutes, and only response start is meaningful.
+connection close. For a streaming response the two can differ by minutes, and
+only response start is meaningful.
 
 ## Every scrape is a database probe
 
