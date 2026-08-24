@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 
-import { isRegistrationEnabled } from '@/lib/config';
+import { isAdvisorEnabled, isRegistrationEnabled } from '@/lib/config';
 
 // ---------------------------------------------------------------------------
 // Public configuration (REQ-9.4/9.5).
@@ -19,8 +19,14 @@ import { isRegistrationEnabled } from '@/lib/config';
 // EVERY self-hosted instance, so any such field publishes which providers,
 // object storage, billing and database a stranger's deployment has wired.
 // REQ-9.5 makes that a hard boundary; config.test.ts asserts the response key
-// set EQUALS ['registrationEnabled'], so adding a second field reds the build
-// rather than leaking quietly.
+// set EQUALS the allow-list, so adding a field reds the build rather than
+// leaking quietly.
+//
+// The allow-list holds OPERATOR POSTURES only — deliberate choices an operator
+// made about what the instance offers (sign-up closed, advisor withdrawn).
+// Both are already visible to anyone who tries the surface, so reporting them
+// early costs nothing. Neither says anything about which providers, keys or
+// infrastructure the instance has.
 // ---------------------------------------------------------------------------
 
 // One minute. The value is boot-time config, so it only ever changes across a
@@ -41,13 +47,15 @@ const configRouter = new Hono();
  *     summary: Public instance posture the SPA needs before rendering a form.
  *     description: >
  *       Unauthenticated and cacheable (`Cache-Control - public, max-age=60`).
- *       Returns exactly one field, `registrationEnabled`, so the web app can
- *       render either the sign-up form or the "signups open at launch" notice
- *       instead of letting a visitor complete a form that the server will
- *       refuse. This surface is posture only - by design it never reports
- *       secrets, provider keys, database details, or which optional
- *       capabilities an instance has configured. The field list is an
- *       allow-list pinned by a test; it grows only by explicit decision.
+ *       Returns the operator postures the web app needs before it renders:
+ *       `registrationEnabled`, so it shows the sign-up form or the "signups
+ *       open at launch" notice instead of a form the server will refuse, and
+ *       `advisorEnabled`, so it hides the advisor navigation, routes and
+ *       settings on an instance that has withdrawn it. This surface is posture
+ *       only - by design it never reports secrets, provider keys, database
+ *       details, or which optional capabilities an instance has configured.
+ *       The field list is an allow-list pinned by a test; it grows only by
+ *       explicit decision.
  *     tags: [Platform]
  *     responses:
  *       200:
@@ -56,7 +64,7 @@ const configRouter = new Hono();
  *           application/json:
  *             schema:
  *               type: object
- *               required: [registrationEnabled]
+ *               required: [registrationEnabled, advisorEnabled]
  *               additionalProperties: false
  *               properties:
  *                 registrationEnabled:
@@ -66,10 +74,21 @@ const configRouter = new Hono();
  *                     which case POST /api/auth/register answers 403
  *                     REGISTRATION_DISABLED. The server refusal is the control;
  *                     this field only spares the visitor a wasted form.
+ *                 advisorEnabled:
+ *                   type: boolean
+ *                   description: >
+ *                     False when the operator set DISABLE_ADVISOR, in which
+ *                     case every /api/advisor/* route answers 403
+ *                     ADVISOR_DISABLED. The server refusal is the control;
+ *                     this field lets the web app hide the surface instead of
+ *                     showing pages that cannot work.
  */
 configRouter.get('/', (c) => {
   c.header('Cache-Control', CACHE_CONTROL);
-  return c.json({ registrationEnabled: isRegistrationEnabled() }, 200);
+  return c.json(
+    { registrationEnabled: isRegistrationEnabled(), advisorEnabled: isAdvisorEnabled() },
+    200,
+  );
 });
 
 export { configRouter };

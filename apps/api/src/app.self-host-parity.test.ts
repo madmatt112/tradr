@@ -18,6 +18,7 @@ import app from '@/app';
 import { poolerDriverOptions } from '@/db';
 import {
   config,
+  isAdvisorEnabled,
   isDirectDatabaseConfigured,
   isEmailConfigured,
   isFeatureGatingEnabled,
@@ -42,6 +43,15 @@ describe('self-host default parity (REQ-1.6) — every gated capability off', ()
 
   it('object storage is absent ⇒ advisor images stay base64-in-JSONB (no pointer)', () => {
     expect(getObjectStorage()).toBeNull();
+  });
+
+  // DISABLE_ADVISOR is an operator posture, not a gated capability: unset, the
+  // advisor is offered, exactly as before the switch existed. A hosted
+  // deployment opts OUT; nothing opts in.
+  it('advisor is offered by default (DISABLE_ADVISOR unset)', async () => {
+    expect(isAdvisorEnabled()).toBe(true);
+    const body = await (await app.request('/api/config')).json();
+    expect(body.advisorEnabled).toBe(true);
   });
 
   it('rate limiting stays process-local (Redis unconfigured ⇒ MapStore)', () => {

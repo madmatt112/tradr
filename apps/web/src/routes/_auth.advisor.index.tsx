@@ -1,5 +1,7 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 import { lazy, Suspense } from 'react';
+
+import { isAdvisorEnabledForRoute } from '@/hooks/useRegistrationEnabled';
 
 // INDEX route, deliberately — NOT `_auth.advisor.tsx`. Flat-file dot nesting makes
 // `_auth.advisor` the parent of `_auth.advisor.$id` and `_auth.advisor.new`, and a
@@ -25,6 +27,19 @@ function AdvisorIndexRoute() {
   );
 }
 
+/**
+ * Shared by the three advisor routes: on an instance that has withdrawn the
+ * advisor (DISABLE_ADVISOR), a typed or bookmarked /advisor URL lands on the
+ * dashboard instead of a page whose every request the server would refuse.
+ * Courtesy, not control — the 403 is the control.
+ */
+export async function redirectWhenAdvisorDisabled(): Promise<void> {
+  if (!(await isAdvisorEnabledForRoute())) {
+    throw redirect({ to: '/dashboard' });
+  }
+}
+
 export const Route = createFileRoute('/_auth/advisor/')({
+  beforeLoad: redirectWhenAdvisorDisabled,
   component: AdvisorIndexRoute,
 });

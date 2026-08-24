@@ -16,11 +16,12 @@ import { config } from '@/lib/config';
  * EQUALITY against this array, not containment, so adding a second field to the
  * response reds the build and forces the decision to be made deliberately.
  */
-const ALLOWED_KEYS = ['registrationEnabled'];
+const ALLOWED_KEYS = ['registrationEnabled', 'advisorEnabled'];
 
 describe('GET /api/config', () => {
   afterEach(() => {
     config.DISABLE_REGISTRATION = false;
+    config.DISABLE_ADVISOR = false;
     config.STRIPE_SECRET_KEY = undefined;
     config.STRIPE_WEBHOOK_SECRET = undefined;
     config.STRIPE_PRO_PRICE_ID = undefined;
@@ -39,7 +40,7 @@ describe('GET /api/config', () => {
     const res = await app.request('/api/config');
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ registrationEnabled: true });
+    expect(await res.json()).toEqual({ registrationEnabled: true, advisorEnabled: true });
   });
 
   // 2. The other state. isRegistrationEnabled() reads config live, so no module
@@ -50,7 +51,17 @@ describe('GET /api/config', () => {
     const res = await app.request('/api/config');
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ registrationEnabled: false });
+    expect(await res.json()).toEqual({ registrationEnabled: false, advisorEnabled: true });
+  });
+
+  // 2b. The advisor posture, independently of sign-up. Same live read.
+  it('reports the advisor withdrawn when the operator set DISABLE_ADVISOR', async () => {
+    config.DISABLE_ADVISOR = true;
+
+    const res = await app.request('/api/config');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ registrationEnabled: true, advisorEnabled: false });
   });
 
   // 3. THE TRIPWIRE. The response key set EQUALS the allow-list — a second
@@ -106,7 +117,7 @@ describe('GET /api/config', () => {
     const raw = await res.text();
 
     expect(res.status).toBe(200);
-    expect(raw).toBe(JSON.stringify({ registrationEnabled: true }));
+    expect(raw).toBe(JSON.stringify({ registrationEnabled: true, advisorEnabled: true }));
     for (const secret of [
       'sk_test_secret_value',
       'whsec_secret_value',

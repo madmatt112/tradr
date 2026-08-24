@@ -149,6 +149,17 @@ export const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Withdraw the AI advisor from an instance. Same idiom as DISABLE_REGISTRATION:
+  // an operator posture, not a capability check — the code path exists and is
+  // configured, the operator has chosen not to offer it. `true` makes every
+  // /api/advisor/* route (conversations, keys, personas, consent, the options
+  // chain lookup) answer 403 ADVISOR_DISABLED, and /api/config reports
+  // `advisorEnabled: false` so the SPA hides the surface. Defaults to enabled so
+  // self-hosted and staging instances are untouched.
+  DISABLE_ADVISOR: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   // Changelog (REQ-3). Both optional with defaults — zero new required config.
   // GitHub repo as an owner/repo slug, NEVER a URL. The negative lookahead
   // rejects whole-segment '.'/'..' while dots inside repo names stay legal
@@ -493,6 +504,16 @@ export function isFeatureGatingEnabled(): boolean {
  */
 export function isRegistrationEnabled(): boolean {
   return !config.DISABLE_REGISTRATION;
+}
+
+/**
+ * Whether this instance offers the AI advisor. Read live (never captured at
+ * module load) so tests and a config reload see the current value. Posture,
+ * not capability: an instance with no provider key still reports `true` — the
+ * advisor is offered, it just has nothing to talk to until a key is added.
+ */
+export function isAdvisorEnabled(): boolean {
+  return !config.DISABLE_ADVISOR;
 }
 
 /** True when the Prometheus exposition surface is enabled (REQ-1.1). */

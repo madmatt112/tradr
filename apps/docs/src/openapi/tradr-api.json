@@ -2491,7 +2491,7 @@
     },
     "/api/config": {
       "get": {
-        "description": "Unauthenticated and cacheable (`Cache-Control - public, max-age=60`). Returns exactly one field, `registrationEnabled`, so the web app can render either the sign-up form or the \"signups open at launch\" notice instead of letting a visitor complete a form that the server will refuse. This surface is posture only - by design it never reports secrets, provider keys, database details, or which optional capabilities an instance has configured. The field list is an allow-list pinned by a test; it grows only by explicit decision.\n",
+        "description": "Unauthenticated and cacheable (`Cache-Control - public, max-age=60`). Returns the operator postures the web app needs before it renders: `registrationEnabled`, so it shows the sign-up form or the \"signups open at launch\" notice instead of a form the server will refuse, and `advisorEnabled`, so it hides the advisor navigation, routes and settings on an instance that has withdrawn it. This surface is posture only - by design it never reports secrets, provider keys, database details, or which optional capabilities an instance has configured. The field list is an allow-list pinned by a test; it grows only by explicit decision.\n",
         "responses": {
           "200": {
             "content": {
@@ -2499,13 +2499,18 @@
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "advisorEnabled": {
+                      "description": "False when the operator set DISABLE_ADVISOR, in which case every /api/advisor/* route answers 403 ADVISOR_DISABLED. The server refusal is the control; this field lets the web app hide the surface instead of showing pages that cannot work.\n",
+                      "type": "boolean"
+                    },
                     "registrationEnabled": {
                       "description": "False when the operator set DISABLE_REGISTRATION, in which case POST /api/auth/register answers 403 REGISTRATION_DISABLED. The server refusal is the control; this field only spares the visitor a wasted form.\n",
                       "type": "boolean"
                     }
                   },
                   "required": [
-                    "registrationEnabled"
+                    "registrationEnabled",
+                    "advisorEnabled"
                   ],
                   "type": "object"
                 }
