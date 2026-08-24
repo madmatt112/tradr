@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **86 environment variables**, of which **3 are required** —
+Tradr reads **71 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 86 variables, **53 ship unset** — either commented out in the
+Of the 71 variables, **43 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -61,7 +61,6 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | --- | --- | --- |
 | `SESSION_SECRET` | **Required** | Generate (≥32 chars): `openssl rand -base64 24` |
 | `DISABLE_REGISTRATION` | `false` | Close public sign-up. `true` makes POST /api/auth/register refuse with 403 REGISTRATION_DISABLED, whatever the client. Sign-in, password reset and every existing account are unaffected — only account creation is gated. Use it to run a private instance once your own accounts exist. Reopening sign-up is this variable plus an api restart; nothing is rebuilt. The SPA reads the same posture and shows a closed-signups notice on /register instead of a form it cannot submit; NEWSLETTER_URL (Web section) optionally adds a link to it. |
-| `DISABLE_ADVISOR` | `false` | Withdraw the AI advisor from this instance. `true` makes every /api/advisor route refuse with 403 ADVISOR_DISABLED — conversations, provider and market data keys, personas, trade-data consent and the options-chain lookup — and the SPA hides the Advisor navigation, pages and settings tab. Nothing is deleted: stored conversations and keys are untouched and return when the variable is cleared. Like DISABLE_REGISTRATION it is an operator posture plus an api restart; nothing is rebuilt. Leave it unset to offer the advisor. |
 
 ## Server
 
@@ -81,9 +80,8 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `API_BASE_URL` | Optional | Upstream API base URL for the nginx reverse proxy. Leave blank to use the compose default (the internal `api` service). |
 | `NEWSLETTER_URL` | Optional | Where /register sends people when DISABLE_REGISTRATION closes sign-up. The web entrypoint writes it into /config.js, so the SPA reads it at container start and changing it needs no rebuild. Optional, and UNSET IS THE DEFAULT: with no URL the closed-signups notice still appears, it just carries no link. Set it only if you actually run a mailing list your visitors should join. |
 | `APP_VERSION` | Optional | Optional version string (e.g. v0.1.0). LEAVE THIS COMMENTED OUT. The release workflow bakes APP_VERSION into the api image, and GET /api/health reports it. The api reads this file through compose's `env_file:`, and env_file OVERRIDES the image's baked value — so an uncommented, blank APP_VERSION here erases the released version and /api/health silently drops its `version` field. Commented out, the image's own stamp survives. Set it only to override the stamp deliberately. |
-| `ADVISOR_NGINX_PROXY_TIMEOUT` | `180s` | nginx proxy read timeout for advisor streaming responses. MUST exceed the app ADVISOR_STREAM_TIMEOUT_MS below, or nginx will cut the stream early. |
 | `CSV_IMPORT_NGINX_PROXY_TIMEOUT` | `300s` | nginx proxy read timeout for the dedicated /api/csv-import/ route. A large within-cap synchronous import can exceed nginx's default 60s; this raises the timeout for that route only (other routes unchanged). Keep CSV_IMPORT_CLAIM_TIMEOUT_SECONDS (api) ≥ 2 × this value — the two live in different containers and are hand-synced. |
-| `MAX_UPLOAD_SIZE` | `20m` | nginx client_max_body_size for uploads. Must accommodate ADVISOR_MAX_IMAGES_PER_MESSAGE images per request, or large uploads 413. OPERATOR CONSTRAINT: keep MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (below), or oversized CSV imports are rejected by nginx before the api can size them. |
+| `MAX_UPLOAD_SIZE` | `20m` | nginx client_max_body_size for uploads. Must accommodate the largest upload a single request can carry, or large uploads 413. OPERATOR CONSTRAINT: keep MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (below), or oversized CSV imports are rejected by nginx before the api can size them. |
 
 ## Metrics (Prometheus exposition)
 
@@ -93,26 +91,13 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `METRICS_PORT` | `9464` | Port the metrics listener binds inside the api container. Chosen to collide with neither the api port (3100), WEB_PORT, nor Fly's internal_port. Nothing publishes it: docker-compose.yml deliberately adds no ports: mapping for the api service — only web publishes a host port — and that omission is what keeps the surface off the public internet. Scrape it from another container on the same compose network, or over 6PN on Fly. |
 | `METRICS_HOST` | `0.0.0.0` | Address the metrics listener binds to. The default is deliberate, not lazy: 127.0.0.1 would bind the CONTAINER's own loopback and be unreachable from a Prometheus elsewhere on the compose network, and a Fly scrape arrives over 6PN rather than loopback. Binding all interfaces is already private in both documented deployments precisely because nothing publishes the port. Residual threat model: the listener becomes reachable from outside only if an operator adds a ports: mapping for the api service or runs it with host networking. This variable exists so those operators can narrow the bind to a specific interface instead of widening their exposure. |
 
-## Advisor — encryption
+## Encryption of stored API keys
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `ENCRYPTION_KEY` | **Required** | Generate the active key: `openssl rand -hex 32` |
 | `ENCRYPTION_KEY_PREVIOUS` | Optional | Previous key, kept during rotation so existing ciphertext can still decrypt. |
 | `ENCRYPTION_KEY_FINGERPRINT` | Optional | Safety check: sha256 of the raw key bytes. If set, the app aborts on startup if it doesn't match the loaded ENCRYPTION_KEY — guards against deploying with the wrong key. Generate from your key: `openssl rand -hex 32 \| xxd -r -p \| openssl dgst -sha256 -binary \| xxd -p -c 32` |
-
-## Advisor — streaming/limits
-
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `ADVISOR_STREAM_TIMEOUT_MS` | `120000` | Keep below ADVISOR_NGINX_PROXY_TIMEOUT (180s) so the app times out first. |
-| `ADVISOR_MAX_IMAGES_PER_MESSAGE` | `4` | Max images per message. Keep MAX_UPLOAD_SIZE large enough for this many. |
-| `ADVISOR_BUILTIN_PERSONA_PROMPT_DEFAULT_TRADING_ADVISOR` | Optional | Optional: override built-in persona system prompts |
-| `ADVISOR_BUILTIN_PERSONA_PROMPT_RISK_COACH` | Optional | — |
-| `ADVISOR_BUILTIN_PERSONA_PROMPT_CHART_REVIEWER` | Optional | — |
-| `UNUSUAL_WHALES_BASE_URL` | Optional | Optional: Unusual Whales API base URL. Defaults to the real host; override only for an out-of-process E2E pointing the server at a local stub. |
-| `GEMINI_BASE_URL` | Optional | Optional: OpenAI-compatible base URLs for the Gemini / OpenRouter advisor adapters. Default to the real hosts; override only for an out-of-process E2E pointing the server at a local stub. |
-| `OPENROUTER_BASE_URL` | Optional | — |
 
 ## CSV import (api container)
 
@@ -129,7 +114,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `STRIPE_SECRET_KEY` | Optional | ALL optional. When unconfigured the billing feature is ABSENT (not broken): no purchase UI, advisor stays BYOK-only. Both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required to enable the purchase + webhook path. Stripe secret key (server-side). Required for purchases. Optional. |
+| `STRIPE_SECRET_KEY` | Optional | ALL optional. When unconfigured the billing feature is ABSENT (not broken): no purchase UI. Both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required to enable the purchase + webhook path. Stripe secret key (server-side). Required for purchases. Optional. |
 | `STRIPE_WEBHOOK_SECRET` | Optional | Stripe webhook signing secret. Required for the webhook path. Optional. |
 | `STRIPE_PUBLISHABLE_KEY` | Optional | Stripe publishable key. Unused by the redirect checkout flow (reserved). Optional. |
 
@@ -138,8 +123,6 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `STRIPE_PRO_PRICE_ID` | Optional | Pro subscription Price id — the Price the subscription checkout sells RIGHT NOW. Pro is purchasable only when STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and this var are ALL set ('' is read as unset). Optional. SETUP: `1. In the Stripe Dashboard, create ONE Product for your Pro plan. && 2. On that Product, create a recurring monthly Price. && 3. Set STRIPE_PRO_PRICE_ID to that Price id (price_...). && 4. To change the price you sell: create a new Price on the same Product, && point this var at it and restart the api container — a CONFIGURATION && change, never a deploy. && 5. Grandfathering is Stripe-natural: existing subscriptions keep the Price && they subscribed at; only NEW checkouts sell the configured Price.` |
-| `ANTHROPIC_API_KEY` | Optional | DUNNING HORIZON (support bound): past-due grace follows your Stripe dunning configuration, bounded app-side at 28 days from entering past_due. A dunning configuration longer than 28 days is UNSUPPORTED — Pro lapses mid-dunning. UNCONFIGURING STRIPE: removing the Stripe keys while live subscriptions exist is UNSUPPORTED — cancel or migrate the subscriptions first. (Subscription state still renders from the local mirror, but purchase, Portal, and webhook updates are unavailable until the keys return.) WEBHOOK ENDPOINT (operational spec): register ONE endpoint for /api/billing/webhook and PIN its API version to 2025-10-29 (clover). An endpoint left on an older API version renders subscription payloads whose fields the app cannot read (period end / invoice linkage arrive undefined) — a hard misconfiguration. Register EXACTLY these events: `checkout.session.completed (existing — credit packs) && checkout.session.async_payment_succeeded (existing) && charge.dispute.created (existing) && charge.refunded (existing) && customer.subscription.created (subscription mirror) && customer.subscription.updated (subscription mirror) && customer.subscription.deleted (subscription mirror) && invoice.paid (dunning recovery) && invoice.payment_failed (past-due anchor)` CUSTOMER PORTAL (operator duties): subscription self-service uses the Stripe Customer Portal DEFAULT configuration — set it in the Dashboard as follows: `cancel at period end: ON, payment-method update: ON, invoice history: ON, && immediate cancel: OFF, plan switches: OFF (there is one plan).` Platform LLM keys (per provider). Absent ⇒ advisor stays BYOK-only. Optional. |
-| `OPENAI_API_KEY` | Optional | — |
 | `MIN_RESERVATION_CREDITS` | `1` | Minimum available credits required to pass the pre-stream gate. Optional (default 1). |
 | `RESERVATION_TTL_MS` | `600000` | Reservation hold TTL (ms) for crash-recovery. MUST be strictly greater than the per-turn wall-clock budget (480000ms). Optional (default 600000). |
 | `PRICING_MARKUP` | `1.2` | Pricing markup over raw provider cost, as a decimal string (1.2 = 20%). Optional. |
@@ -149,7 +132,6 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `FEATURE_GATING` | `false` | Feature gating. Default OFF — self-hosters are unrestricted unless this is explicitly enabled. Must be exactly 'true' or 'false'. |
-| `FEATURE_GATING_ADVISOR_TURNS_PER_MONTH` | `200` | The PRO platform-turn allowance (its ONE meaning): committed platform-key advisor turns per UTC calendar month for Pro users when gating is ON. The default 200 equals the previous flat cap, so existing deployments keep their configured intent. Server config, never client input. Must be a positive integer. |
 | `SEED_ADMIN_EMAIL` | Optional | First-admin bootstrap: register normally, set SEED_ADMIN_EMAIL to that account's email, then restart (`docker compose up -d` re-creates the container). At startup, IF the instance has zero admins, this email is promoted to admin. It is a bootstrap mechanism, not a standing override — a later demotion is not undone. SQL fallback (emails are stored lowercase; use the lowercase form): `UPDATE users SET is_admin = true WHERE email = '<you>';` |
 
 ## Changelog (api container)
@@ -196,18 +178,16 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `REDIS_URL` | Optional | ALL optional — SELF-HOSTERS LEAVE EVERYTHING BELOW UNSET. Each capability is a no-op when its config is absent/empty: with none configured the stack behaves EXACTLY as today (advisor images inline base64-in-JSONB, process-local rate limiter, same-origin SameSite=Lax cookies, migrations over DATABASE_URL, prepared statements on). These are only needed to run the managed offering. An empty value is treated as unset. PRIVACY POSTURE: object storage and split-origin add NO third-party trackers — advisor images move from one operator-controlled store (Postgres) to another (the operator's own bucket), never to a shared/third-party surface. Object- storage credentials and REDIS_URL are SECRETS: server-side env only, never emitted to the frontend /config.js seam. Centralized rate-limit store (REQ-7). Set to a redis:// URL to share one rate limit across N API containers; unset ⇒ process-local in-memory limiter. Optional. |
+| `REDIS_URL` | Optional | ALL optional — SELF-HOSTERS LEAVE EVERYTHING BELOW UNSET. Each capability is a no-op when its config is absent/empty: with none configured the stack behaves EXACTLY as today (uploaded images inline base64-in-JSONB, process-local rate limiter, same-origin SameSite=Lax cookies, migrations over DATABASE_URL, prepared statements on). These are only needed to run the managed offering. An empty value is treated as unset. PRIVACY POSTURE: object storage and split-origin add NO third-party trackers — uploaded images move from one operator-controlled store (Postgres) to another (the operator's own bucket), never to a shared/third-party surface. Object- storage credentials and REDIS_URL are SECRETS: server-side env only, never emitted to the frontend /config.js seam. Centralized rate-limit store (REQ-7). Set to a redis:// URL to share one rate limit across N API containers; unset ⇒ process-local in-memory limiter. Optional. |
 | `DIRECT_DATABASE_URL` | Optional | Non-pooled direct DB URL for migrations + CLI (REQ-9.1). Required only when the app runs behind a transaction-mode pooler; unset ⇒ migrations use DATABASE_URL. Optional. |
 | `DB_TRANSACTION_POOLER` | Optional | App-pool prepared-statement mode. Set 'true' behind a transaction-mode pooler so the driver uses prepare:false (REQ-9.2); unset/'false' ⇒ prepared statements on, exactly as today. Must be exactly 'true' or 'false'. Optional (default false). |
-| `OBJECT_STORAGE_ENDPOINT` | Optional | Object storage for advisor images (REQ-2). All FOUR of ENDPOINT + BUCKET + ACCESS_KEY_ID + SECRET_ACCESS_KEY are required to enable it; partial/unset ⇒ images stay inline base64-in-JSONB as today. S3-compatible (Cloudflare R2 / AWS S3 / MinIO). All optional. |
+| `OBJECT_STORAGE_ENDPOINT` | Optional | Object storage for uploaded images (REQ-2). All FOUR of ENDPOINT + BUCKET + ACCESS_KEY_ID + SECRET_ACCESS_KEY are required to enable it; partial/unset ⇒ images stay inline base64-in-JSONB as today. S3-compatible (Cloudflare R2 / AWS S3 / MinIO). All optional. |
 | `OBJECT_STORAGE_BUCKET` | Optional | — |
 | `OBJECT_STORAGE_REGION` | Optional | — |
 | `OBJECT_STORAGE_ACCESS_KEY_ID` | Optional | — |
 | `OBJECT_STORAGE_SECRET_ACCESS_KEY` | Optional | — |
 | `OBJECT_STORAGE_FORCE_PATH_STYLE` | Optional | Path-style addressing (needed for MinIO). Must be 'true' or 'false'. Optional (default true). |
 | `CORS_ALLOWED_ORIGINS` | Optional | Split-origin CORS allow-list (REQ-5), comma-separated exact origins (never '*' for credentialed requests). Non-empty ⇒ CORS + SameSite=None;Secure cookies + anti-CSRF turn on together; unset ⇒ same-origin only, SameSite=Lax, exactly as today. Implies TLS on both origins. Optional. |
-| `ADVISOR_IMAGE_MAX_BYTES` | Optional | Operator-tunable per-image advisor byte cap override (REQ-4.6), in encoded bytes. Unset ⇒ the built-in shared-schema default. Optional. |
-| `ADVISOR_MAX_REQUEST_BYTES` | Optional | Stream-route request body floor (REQ-4), in bytes. Unset ⇒ a value DERIVED from the per-image cap × ADVISOR_MAX_IMAGES_PER_MESSAGE + framing. Optional. |
 
 ## Next steps
 

@@ -45,13 +45,25 @@ describe('self-host default parity (REQ-1.6) — every gated capability off', ()
     expect(getObjectStorage()).toBeNull();
   });
 
-  // DISABLE_ADVISOR is an operator posture, not a gated capability: unset, the
-  // advisor is offered, exactly as before the switch existed. A hosted
-  // deployment opts OUT; nothing opts in.
-  it('advisor is offered by default (DISABLE_ADVISOR unset)', async () => {
+  // DISABLE_ADVISOR is an operator posture, not a gated capability, and it
+  // defaults to WITHDRAWN while the advisor is reworked — on every instance,
+  // self-hosted included. The test env opts back in (vitest.workspace.ts pins
+  // DISABLE_ADVISOR=false) so the advisor suites keep exercising shipped code;
+  // this asserts the pin is what makes it true, and that the shipped template
+  // agrees with the schema default.
+  it('advisor is withdrawn by default; the test env opts in explicitly', async () => {
+    expect(process.env.DISABLE_ADVISOR).toBe('false');
     expect(isAdvisorEnabled()).toBe(true);
     const body = await (await app.request('/api/config')).json();
     expect(body.advisorEnabled).toBe(true);
+
+    config.DISABLE_ADVISOR = true;
+    try {
+      expect(isAdvisorEnabled()).toBe(false);
+      expect((await (await app.request('/api/config')).json()).advisorEnabled).toBe(false);
+    } finally {
+      config.DISABLE_ADVISOR = false;
+    }
   });
 
   it('rate limiting stays process-local (Redis unconfigured ⇒ MapStore)', () => {

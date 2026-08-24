@@ -36,8 +36,6 @@ a query you write against these tables may need updating on any release.
 | `tax_jurisdiction` | `varchar(8)` | — |
 | `theme` | `varchar(8)` | not null, default `'system'` |
 | `buying_power_basis` | `varchar(7)` | not null, default `'cash'` |
-| `advisor_default_persona_id` | `text` | — |
-| `advisor_trade_data_consent` | `boolean` | not null, default `false` |
 | `writable_account_id` | `uuid` | — |
 | `changelog_viewed_at` | `timestamp with time zone` | — |
 | `onboarding` | `jsonb` | not null, default `'{}'::jsonb` |
@@ -273,126 +271,6 @@ a query you write against these tables may need updating on any release.
 - `user_id` → `users.id` on delete cascade
 - `usage_record_id` → `usage_records.id` on delete no action
 
-## Advisor
-
-### `advisor_conversations`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid` | primary key, default `gen_random_uuid()` |
-| `user_id` | `uuid` | not null |
-| `title` | `varchar(200)` | not null |
-| `persona_id` | `text` | — |
-| `provider_id` | `varchar(16)` | not null |
-| `model` | `varchar(64)` | not null |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `user_id` → `users.id` on delete cascade
-- `persona_id` → `advisor_personas.id` on delete set null
-
-### `advisor_messages`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid` | primary key, default `gen_random_uuid()` |
-| `conversation_id` | `uuid` | not null |
-| `role` | `varchar(16)` | not null |
-| `content_parts` | `jsonb` | not null |
-| `prompt_tokens` | `integer` | — |
-| `completion_tokens` | `integer` | — |
-| `client_message_id` | `uuid` | — |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `conversation_id` → `advisor_conversations.id` on delete cascade
-
-### `advisor_summaries`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid` | primary key, default `gen_random_uuid()` |
-| `conversation_id` | `uuid` | not null |
-| `prose` | `text` | not null |
-| `trade_data_figures` | `text` | — |
-| `covered_through_message_id` | `uuid` | — |
-| `covered_through_created_at` | `timestamp with time zone` | not null |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `conversation_id` → `advisor_conversations.id` on delete cascade
-
-### `advisor_personas`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `text` | primary key |
-| `user_id` | `uuid` | — |
-| `name` | `varchar(80)` | not null |
-| `description` | `varchar(500)` | — |
-| `system_prompt` | `text` | not null |
-| `is_builtin` | `boolean` | not null, default `false` |
-| `is_default` | `boolean` | not null, default `false` |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `user_id` → `users.id` on delete cascade
-
-### `advisor_provider_keys`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid` | primary key, default `gen_random_uuid()` |
-| `user_id` | `uuid` | not null |
-| `provider_id` | `varchar(16)` | not null |
-| `encrypted_key` | `text` | not null |
-| `key_version` | `smallint` | not null |
-| `default_model` | `varchar(64)` | not null |
-| `key_hint_tail` | `varchar(8)` | not null |
-| `last_used_at` | `timestamp with time zone` | — |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `user_id` → `users.id` on delete cascade
-
-### `advisor_turn_counters`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `user_id` | `uuid` | not null |
-| `period_key` | `varchar(7)` | not null |
-| `turn_count` | `integer` | not null, default `0` |
-| `allowance_turns` | `integer` | not null, default `0` |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `user_id` → `users.id` on delete cascade
-
-### `advisor_image_counters`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `user_id` | `uuid` | not null |
-| `period_key` | `varchar(7)` | not null |
-| `image_count` | `integer` | not null, default `0` |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `user_id` → `users.id` on delete cascade
-
 ## Import
 
 ### `csv_import_staging`
@@ -471,8 +349,6 @@ a query you write against these tables may need updating on any release.
 | --- | --- | --- |
 | `id` | `uuid` | primary key, default `gen_random_uuid()` |
 | `user_id` | `uuid` | not null |
-| `conversation_id` | `uuid` | — |
-| `message_id` | `uuid` | — |
 | `provider_id` | `varchar(16)` | not null |
 | `model` | `varchar(64)` | not null |
 | `input_tokens` | `bigint` | not null |
@@ -484,8 +360,6 @@ a query you write against these tables may need updating on any release.
 **References**
 
 - `user_id` → `users.id` on delete cascade
-- `conversation_id` → `advisor_conversations.id` on delete set null
-- `message_id` → `advisor_messages.id` on delete set null
 
 ### `webhook_events`
 

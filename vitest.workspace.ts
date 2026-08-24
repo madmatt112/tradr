@@ -45,6 +45,12 @@ export default defineWorkspace([
         // OBJECT_STORAGE_FORCE_PATH_STYLE, FEATURE_GATING) are pinned 'false', NOT '':
         // z.enum().default() only fires on `undefined`, so '' fails the enum and would
         // boot-crash envSchema.parse — 'false' is the genuine deactivated (off) value.
+        //
+        // The advisor is WITHDRAWN by default (DISABLE_ADVISOR defaults to 'true')
+        // while it is reworked. The advisor suites exercise code that is still
+        // shipped, so the test env opts back in exactly as an operator would; the
+        // default-posture tests flip `config.DISABLE_ADVISOR` explicitly.
+        DISABLE_ADVISOR: 'false',
         REDIS_URL: '',
         DIRECT_DATABASE_URL: '',
         DB_TRANSACTION_POOLER: 'false',

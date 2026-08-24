@@ -15,13 +15,13 @@ Two things, and they live in different places.
 
 | What | Where | Lost without it |
 | --- | --- | --- |
-| **Your data** | the `pgdata` Docker volume | Accounts, positions, fills, ledger entries, advisor conversations |
+| **Your data** | the `pgdata` Docker volume | Accounts, positions, fills, ledger entries, notes |
 | **Your secrets** | the `.env` file | The ability to read part of a restored database — see below |
 
-The database holds everything the application stores. A self-hosted instance also
-writes advisor images inline into the database, because object storage is a hosted
-capability and stays unconfigured here. So a plain `pg_dump` is a complete backup
-of your data. There is no second data store, and no proprietary format.
+The database holds everything the application stores, uploaded images included:
+object storage is a hosted capability and stays unconfigured here. So a plain
+`pg_dump` is a complete backup of your data. There is no second data store, and
+no proprietary format.
 
 ### Back up `.env` too, and keep `ENCRYPTION_KEY`
 

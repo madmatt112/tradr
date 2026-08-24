@@ -57,28 +57,30 @@ export function useRegistrationEnabled(): { registrationEnabled: boolean; isPend
  * Whether this instance offers the AI advisor. Gates the sidebar entry, the
  * settings tab, the plan card's advisor rows and the options-chain viewer.
  *
- * Same contract as {@link useRegistrationEnabled}: courtesy, not control (the
- * control is the 403 ADVISOR_DISABLED every /api/advisor route answers), and it
- * FAILS OPEN — an older API that does not report the field, or a blipped
- * request, must not make a self-hosted instance hide a feature its server
- * offers.
+ * Courtesy, not control, like {@link useRegistrationEnabled}: the control is
+ * the 403 ADVISOR_DISABLED every /api/advisor route answers. Unlike
+ * registration it FAILS CLOSED — the advisor is withdrawn by default while it
+ * is reworked (DISABLE_ADVISOR defaults to true), so "not yet known" and "could
+ * not ask" both mean the surface stays hidden rather than flashing an Advisor
+ * item that then disappears. An operator who opted in and hits a blip sees the
+ * item return on the next successful read.
  */
 export function useAdvisorEnabled(): boolean {
   const { data } = useQuery(instanceConfigQuery);
-  return data?.advisorEnabled ?? true;
+  return data?.advisorEnabled ?? false;
 }
 
 /**
  * The same question for a route `beforeLoad`, which runs outside React. Reads
  * through the singleton QueryClient so the answer is shared with the hooks
  * above and a navigation never re-fetches what the sidebar already holds.
- * Fails open on any error for the reasons in {@link useAdvisorEnabled}.
+ * Fails closed on any error for the reasons in {@link useAdvisorEnabled}.
  */
 export async function isAdvisorEnabledForRoute(): Promise<boolean> {
   try {
     const data = await queryClient.ensureQueryData(instanceConfigQuery);
-    return data.advisorEnabled ?? true;
+    return data.advisorEnabled ?? false;
   } catch {
-    return true;
+    return false;
   }
 }

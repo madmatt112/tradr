@@ -12,8 +12,8 @@ not do and leaves to you.
 ## What is at stake
 
 Tradr holds your **trading history**: positions, fills, account balances, and
-whatever you wrote in your notes. On an instance where the advisor is used, it
-also holds **provider API keys**, which can spend money.
+whatever you wrote in your notes. It may also hold **API keys** you have pasted
+in, which can spend money.
 
 It does **not** hold brokerage credentials, and it cannot place orders. There is
 no broker connection — trades arrive by CSV or by hand. A compromised Tradr
@@ -43,9 +43,9 @@ This is worth knowing rather than glossing: it means the protection lives in the
 code, and it is why an instance should run a released version rather than an
 arbitrary commit.
 
-## Provider API keys
+## API keys
 
-Keys you paste in for the advisor are encrypted at rest with **AES-256-GCM**,
+Keys you paste in are encrypted at rest with **AES-256-GCM**,
 using `ENCRYPTION_KEY`. GCM authenticates as well as encrypts, so a modified
 ciphertext fails to decrypt rather than producing wrong plaintext.
 
@@ -68,14 +68,9 @@ Each of these is off until you turn it on:
 
 | Configured | What is sent |
 | --- | --- |
-| An LLM key | Advisor conversations, and the position data the advisor was asked about, to that provider |
 | Analytics | Product events — no trade data, users identified by an opaque id |
 | Email | Address and message content to your SMTP server |
 | Market data | The symbols you look up |
-
-The advisor is the one to think hardest about: using it means sending trading
-data to a model provider, under that provider's terms. That is inherent to the
-feature, not something Tradr adds.
 
 ## Network exposure
 

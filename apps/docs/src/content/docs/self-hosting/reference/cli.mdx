@@ -19,7 +19,7 @@ docker compose exec api tradr --help
 | Command | Does |
 | --- | --- |
 | `tradr migrate --status` | Report whether the database schema is current. |
-| `tradr storage migrate-to-inline` | Pull advisor images out of object storage and back into the database. |
+| `tradr storage migrate-to-inline` | Pull stored images out of object storage and back into the database. |
 | `tradr storage gc` | Delete bucket objects no conversation references any more. |
 | `tradr create-user <email> [--password <value>]` | Create an account from the server, without opening registration. |
 | `tradr reset-password <email> [--password <value>]` | Set a user's password from the server. |
@@ -52,7 +52,7 @@ The exit codes make it usable as a health gate in a deploy script. See
 
 Only relevant if object storage was configured and you want to turn it off.
 It rewrites every image that lives as a bucket pointer back to inline data, so
-the backend can be disabled without stranding a conversation.
+the backend can be disabled without stranding an image.
 
 ```bash
 docker compose exec api tradr storage migrate-to-inline
@@ -63,11 +63,11 @@ image whose object has gone missing is marked unrecoverable and the run
 continues rather than aborting.
 
 **Self-hosted instances do not need this.** With no object storage configured,
-advisor images are already stored inline.
+images are already stored inline.
 
 ## `storage gc`
 
-Reclaims objects orphaned by deleted conversations and retried uploads. Like
+Reclaims objects orphaned by deleted records and retried uploads. Like
 `migrate-to-inline`, it applies only to an instance with object storage
 configured.
 

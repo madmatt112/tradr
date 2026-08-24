@@ -51,7 +51,7 @@ const spec = swaggerJSDoc({
       title: 'Tradr API',
       version: apiPkg.version ?? '0.0.0',
       description:
-        'HTTP API for Tradr — the open-source trading journal with an AI advisor.\n\n' +
+        'HTTP API for Tradr — the open-source trading journal.\n\n' +
         'This reference is generated from the `@swagger` JSDoc blocks that live next to ' +
         'each route in the API source, so it always matches the endpoints the app actually ' +
         'serves. All routes are mounted under `/api`. The same API backs both the hosted ' +
@@ -87,6 +87,18 @@ spec.paths = Object.fromEntries(
   ),
 );
 const droppedKeys = Object.keys(rawPaths).length - Object.keys(spec.paths).length;
+
+// The advisor is withdrawn while it is reworked (DISABLE_ADVISOR defaults to
+// true; every /api/advisor route answers 403) and the docs no longer describe
+// it, so its endpoints and tag are left out of the published reference. The
+// `@swagger` blocks stay with the routes; drop this filter when it returns.
+const HIDDEN_PATH = /^\/api\/advisor(\/|$)/;
+spec.paths = Object.fromEntries(
+  Object.entries(spec.paths).filter(([key]) => !HIDDEN_PATH.test(key)),
+);
+if (Array.isArray(spec.tags)) {
+  spec.tags = spec.tags.filter((tag) => !/advisor/i.test(tag?.name ?? ''));
+}
 
 const pathCount = Object.keys(spec.paths).length;
 if (pathCount === 0) {
