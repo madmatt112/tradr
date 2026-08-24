@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Tradr favicon. Amber baked for standalone use (transparent bg, adapts to the tab).
+       Canonical color = the app token oklch(0.78 0.15 78); #e6a23c is the hex approximation. -->
+  <path d="M12 7 H8 V25 H12" stroke="#e6a23c" stroke-width="2.3"/>
+  <path d="M20 7 H24 V25 H20" stroke="#e6a23c" stroke-width="2.3"/>
+  <path d="M16 11 L20.5 19 H11.5 Z" fill="#e6a23c"/>
+</svg>
