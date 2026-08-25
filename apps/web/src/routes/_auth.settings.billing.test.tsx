@@ -104,8 +104,16 @@ function renderRoute(initialEntry: string) {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+// Advisor withdrawn by default (useAdvisorEnabled fails closed); tests that
+// exercise the opted-in state flip this before calling renderRoute.
+let advisorEnabled = false;
+
 beforeEach(() => {
+  advisorEnabled = false;
   vi.mocked(api.get).mockImplementation((path: string) => {
+    if (path === '/config') {
+      return Promise.resolve({ registrationEnabled: true, advisorEnabled });
+    }
     if (path === '/billing/config') {
       return Promise.resolve({ enabled: false, packs: [], models: [] });
     }
@@ -122,29 +130,42 @@ afterEach(() => {
 });
 
 describe('billing route — gating off, no subscription (REQ-11.7 state 4)', () => {
-  it("renders byte-identical today's billing-disabled output, with no plan card", async () => {
+  it('renders no credit mentions with the advisor withdrawn (default), no plan card', async () => {
     const { qc } = renderRoute('/settings/billing');
 
-    await screen.findByTestId('billing-disabled');
+    await screen.findByText('Manage your subscription.');
     // Wait until the tier read settled too, so the assertion covers the FINAL
     // output, not a still-loading intermediate.
     await waitFor(() => expect(qc.getQueryState(billingKeys.tier())?.status).toBe('success'));
 
     expect(screen.queryByTestId('plan-card')).toBeNull();
     expect(screen.queryByTestId('subscription-confirming')).toBeNull();
+    expect(screen.queryByTestId('billing-disabled')).toBeNull();
+    expect(screen.queryByTestId('billing-panel')).toBeNull();
+    expect(screen.queryByText(/credit/i)).toBeNull();
 
-    // Byte-identical pin: exactly the pre-plan-tiers markup of
-    // _auth.settings.billing.tsx's disabled state.
     const tab = document.querySelector('[data-slot="settings-billing"]');
     expect(tab).not.toBeNull();
     expect(tab!.outerHTML).toBe(
       '<div class="space-y-8" data-slot="settings-billing">' +
         '<div><h2 class="text-lg font-medium">Billing</h2>' +
-        '<p class="text-sm text-muted-foreground">View your credit balance, buy credits, and review usage.</p>' +
+        '<p class="text-sm text-muted-foreground">Manage your subscription.</p>' +
         '</div>' +
-        '<p class="text-sm text-muted-foreground" data-testid="billing-disabled">Billing is not enabled on this instance.</p>' +
         '</div>',
     );
+  });
+});
+
+describe('billing route — advisor enabled (opted in)', () => {
+  it('shows the credit purchase copy and graceful-absence notice when Stripe is unconfigured', async () => {
+    advisorEnabled = true;
+    renderRoute('/settings/billing');
+
+    await screen.findByTestId('billing-disabled');
+    expect(
+      screen.getByText('View your credit balance, buy credits, and review usage.'),
+    ).toBeTruthy();
+    expect(screen.queryByTestId('billing-panel')).toBeNull();
   });
 });
 
@@ -163,7 +184,7 @@ describe('billing route — ?subscription=confirming (REQ-2.6)', () => {
     // as a boolean. Validation must be total: no error boundary, no banner.
     renderRoute('/settings/billing?subscription=true');
 
-    expect(await screen.findByTestId('billing-disabled')).toBeTruthy();
+    expect(await screen.findByText('Manage your subscription.')).toBeTruthy();
     expect(screen.queryByTestId('subscription-confirming')).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import { BillingPanel } from '@/features/billing/BillingPanel';
 import { PlanCard } from '@/features/billing/PlanCard';
 import { UsageHistory } from '@/features/billing/UsageHistory';
 import { useBillingConfig } from '@/features/billing/useWalletBalance';
+import { useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 
 // Stripe Checkout returns to `?subscription=confirming` (REQ-2.6); the cancel
 // return is the bare tab. Total validation: the router JSON-parses search
@@ -17,13 +18,20 @@ const BillingSearchSchema = z.object({
 function SettingsBilling() {
   const { subscription } = Route.useSearch();
   const { data: config, isLoading } = useBillingConfig();
+  // Credits fund platform (non-BYOK) advisor usage — with the advisor
+  // withdrawn by default (useRegistrationEnabled.useAdvisorEnabled), there is
+  // nothing to buy or spend them on, so the whole purchase surface stays
+  // hidden alongside the advisor itself.
+  const advisorEnabled = useAdvisorEnabled();
 
   return (
     <div className="space-y-8" data-slot="settings-billing">
       <div>
         <h2 className="text-lg font-medium">Billing</h2>
         <p className="text-sm text-muted-foreground">
-          View your credit balance, buy credits, and review usage.
+          {advisorEnabled
+            ? 'View your credit balance, buy credits, and review usage.'
+            : 'Manage your subscription.'}
         </p>
       </div>
 
@@ -34,20 +42,21 @@ function SettingsBilling() {
           surfaces below only. */}
       <PlanCard confirming={subscription === 'confirming'} />
 
-      {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : config?.enabled ? (
-        <>
-          <BillingPanel packs={config.packs} />
-          <UsageHistory />
-        </>
-      ) : (
-        // Graceful absence (REQ-7.4): Stripe is not configured on this instance,
-        // so there is nothing to purchase. The rest of settings is unaffected.
-        <p className="text-sm text-muted-foreground" data-testid="billing-disabled">
-          Billing is not enabled on this instance.
-        </p>
-      )}
+      {advisorEnabled &&
+        (isLoading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : config?.enabled ? (
+          <>
+            <BillingPanel packs={config.packs} />
+            <UsageHistory />
+          </>
+        ) : (
+          // Graceful absence (REQ-7.4): Stripe is not configured on this instance,
+          // so there is nothing to purchase. The rest of settings is unaffected.
+          <p className="text-sm text-muted-foreground" data-testid="billing-disabled">
+            Billing is not enabled on this instance.
+          </p>
+        ))}
     </div>
   );
 }

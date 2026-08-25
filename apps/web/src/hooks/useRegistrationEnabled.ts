@@ -55,7 +55,9 @@ export function useRegistrationEnabled(): { registrationEnabled: boolean; isPend
 
 /**
  * Whether this instance offers the AI advisor. Gates the sidebar entry, the
- * settings tab, the plan card's advisor rows and the options-chain viewer.
+ * settings tab, the plan card's advisor rows, the options-chain viewer, and
+ * the billing tab's credit purchase/usage surface (credits only fund platform
+ * advisor usage, so they have nothing to buy or spend on without it).
  *
  * Courtesy, not control, like {@link useRegistrationEnabled}: the control is
  * the 403 ADVISOR_DISABLED every /api/advisor route answers. Unlike
