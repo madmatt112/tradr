@@ -199,7 +199,10 @@ export function extractSubscriptionMirror(sub: Stripe.Subscription): ExtractedSu
     stripeCustomerId: resolveId(sub.customer),
     stripeSubscriptionId: sub.id,
     status: sub.status,
-    cancelAtPeriodEnd: sub.cancel_at_period_end,
+    // Flexible billing mode (Stripe's default for new subscriptions) records a
+    // Portal "cancel at period end" as `cancel_at` = period end with the boolean
+    // left false, so either signal counts as a scheduled cancellation.
+    cancelAtPeriodEnd: sub.cancel_at_period_end || sub.cancel_at != null,
     currentPeriodEnd: new Date(periodEndSeconds * 1000),
     priceId: price?.id ?? null,
     priceUnitAmount: price?.unit_amount ?? null,

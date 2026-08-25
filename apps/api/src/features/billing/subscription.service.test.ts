@@ -249,6 +249,7 @@ interface FakeSubOverrides {
   customer?: unknown;
   status?: string;
   cancelAtPeriodEnd?: boolean;
+  cancelAtSec?: number | null;
   createdSec?: number;
   items?: unknown[];
 }
@@ -260,6 +261,7 @@ function fakeSub(over: FakeSubOverrides = {}): Stripe.Subscription {
     customer: over.customer ?? 'cus_1',
     status: over.status ?? 'active',
     cancel_at_period_end: over.cancelAtPeriodEnd ?? false,
+    cancel_at: over.cancelAtSec ?? null,
     created: over.createdSec ?? BASE_SEC,
     items: {
       data: over.items ?? [
@@ -676,6 +678,18 @@ describe('extractSubscriptionMirror — clover extraction (D6)', () => {
     expect(mirror.priceId).toBeNull();
     expect(mirror.priceUnitAmount).toBeNull();
     expect(mirror.priceCurrency).toBeNull();
+  });
+
+  it('treats a flexible-mode cancel_at (boolean false) as a scheduled cancellation', () => {
+    const sub = fakeSub({ cancelAtPeriodEnd: false, cancelAtSec: 1_700_100_000 });
+
+    expect(extractSubscriptionMirror(sub).cancelAtPeriodEnd).toBe(true);
+  });
+
+  it('mirrors cancelAtPeriodEnd false when neither cancel signal is set', () => {
+    const sub = fakeSub({ cancelAtPeriodEnd: false, cancelAtSec: null });
+
+    expect(extractSubscriptionMirror(sub).cancelAtPeriodEnd).toBe(false);
   });
 
   it('mirrors a null unit_amount as null (the card omits the price line)', () => {
