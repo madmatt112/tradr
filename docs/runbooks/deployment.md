@@ -96,7 +96,8 @@ Two pairs of settings must be kept consistent or requests fail:
 - **nginx timeout ↔ app stream timeout.** `ADVISOR_NGINX_PROXY_TIMEOUT`
   (default `180s`, consumed by the `web`/nginx container) MUST exceed
   `ADVISOR_STREAM_TIMEOUT_MS` (default `120000`, the app). If nginx is shorter
-  it cuts advisor streaming responses early. The app should time out first.
+  it cuts streaming responses early. The app should time out first. Only
+  matters on an instance that opted in with `DISABLE_ADVISOR=false`.
 - **upload size ↔ images per message.** `MAX_UPLOAD_SIZE` (default `20m`,
   nginx `client_max_body_size`) must be large enough to carry
   `ADVISOR_MAX_IMAGES_PER_MESSAGE` (default `4`) images in one request, or large
@@ -122,8 +123,8 @@ terminate TLS — it is out of scope.
 
 ## Encryption key: pinning, mismatch crash-loop, and rotation
 
-The advisor encrypts stored provider keys with `ENCRYPTION_KEY` (AES-256-GCM,
-BYOK). Key material is loaded once at bootstrap.
+Stored API keys are encrypted with `ENCRYPTION_KEY` (AES-256-GCM, BYOK). Key
+material is loaded once at bootstrap.
 
 ### Pin the fingerprint
 

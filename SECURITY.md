@@ -45,7 +45,7 @@ We ask that you give us reasonable time to remediate before any public disclosur
 
 - **The Tradr software** (this repository) — anything affecting self-hosted or hosted deployments:
   authentication/session handling, authorization/row-scoping, injection, secret handling (BYOK key
-  encryption), the Stripe webhook path, the IBKR OAuth flow, the AI advisor's data access, etc.
+  encryption), the Stripe webhook path, the IBKR OAuth flow, trade-data access paths, etc.
 - **The hosted platform (`tradr.cloud`)** — report platform-specific issues the same way.
 
 Out of scope: findings that require a fully compromised host or physical access (a self-hosted single-server
