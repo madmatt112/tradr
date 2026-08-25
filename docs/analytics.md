@@ -53,20 +53,19 @@ fire-and-forget after the operation commits. Properties are identifiers, enums,
 or counts only — never prices, quantities, P&L, balances, or any financial
 value.
 
-| Event                          | When                                     | Properties                         |
-| ------------------------------ | ---------------------------------------- | ---------------------------------- |
-| `user_signed_up`               | New account registered                   | —                                  |
-| `user_logged_in`               | Successful email+password login          | —                                  |
-| `email_verified`               | Verification link consumed               | —                                  |
-| `password_reset_completed`     | Password reset finished                  | —                                  |
-| `account_created`              | Trading account created                  | —                                  |
-| `account_deleted`              | Trading account deleted                  | —                                  |
-| `position_created`             | Position opened                          | `assetType`                        |
-| `position_closed`              | Position closed                          | `assetType`                        |
-| `csv_import_completed`         | CSV trade import committed               | `positionsCreated`, `fillsCreated` |
-| `checkout_session_created`     | Stripe checkout started (wallet credits) | `packId`                           |
-| `credits_purchased`            | Credits granted after payment (webhook)  | `packId`                           |
-| `advisor_conversation_started` | First turn of a new advisor conversation | —                                  |
+| Event                      | When                                     | Properties                         |
+| -------------------------- | ---------------------------------------- | ---------------------------------- |
+| `user_signed_up`           | New account registered                   | —                                  |
+| `user_logged_in`           | Successful email+password login          | —                                  |
+| `email_verified`           | Verification link consumed               | —                                  |
+| `password_reset_completed` | Password reset finished                  | —                                  |
+| `account_created`          | Trading account created                  | —                                  |
+| `account_deleted`          | Trading account deleted                  | —                                  |
+| `position_created`         | Position opened                          | `assetType`                        |
+| `position_closed`          | Position closed                          | `assetType`                        |
+| `csv_import_completed`     | CSV trade import committed               | `positionsCreated`, `fillsCreated` |
+| `checkout_session_created` | Stripe checkout started (wallet credits) | `packId`                           |
+| `credits_purchased`        | Credits granted after payment (webhook)  | `packId`                           |
 
 ### Person profile (`identify`)
 

@@ -48,7 +48,7 @@ Tradr with their trading history, and it should be the most precise prose we wri
 **Out of scope — trader-facing narrative:**
 
 - Marketing copy
-- "Why journaling improves your trading", "How the advisor reasons"
+- "Why journaling improves your trading", "Hosted vs self-hosted: what's different"
 - The **introduction** of a tutorial, where a human voice earns attention
 
 Do not retrofit. The best existing pages were written before this guide and are
@@ -71,8 +71,8 @@ should be run" or "You will want to run".
 **4. Use the active voice.** Name the actor. "The api runs migrations on startup",
 not "migrations are run on startup".
 
-**5. Use the present tense for what the system does.** "The advisor reads your trade
-history", not "will read".
+**5. Use the present tense for what the system does.** "The importer maps your
+columns", not "will map".
 
 **6. One term per meaning.** Use [`TERMS.md`](TERMS.md). Never vary a term for
 elegance — a synonym reads as a different thing.
