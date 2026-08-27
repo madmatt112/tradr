@@ -38,8 +38,11 @@ order.
 **Self-hosted, with the quickstart below** — free and completely unlimited, forever. No
 feature is fenced off; plan gating is a single deployment setting that ships **off**.
 
-A managed option at `app.tradr.cloud` is planned and **not open yet**, so self-hosting is
-the way to run Tradr today. Nothing about the self-hosted build depends on it.
+**Hosted at [app.tradr.cloud](https://app.tradr.cloud)**, if you'd rather not run a
+server. It is the same software from the same releases, with backups and upgrades handled
+for you. The free plan is capped ([what the caps
+are](https://docs.tradr.cloud/user-guide/reference/plan-limits/)); Pro lifts them for $10
+a month. Nothing in the self-hosted build depends on it, and your data exports either way.
 
 ## Quickstart
 
