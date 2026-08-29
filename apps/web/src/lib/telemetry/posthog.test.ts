@@ -89,6 +89,12 @@ describe('initPostHogClient', () => {
     expect(opts.persistence).toBe('memory');
     expect(opts.disable_surveys).toBe(true);
     expect(opts.advanced_disable_toolbar_metrics).toBe(true);
+    // No /flags request. Its POST body carries `$initial_current_url` RAW —
+    // fragment and all — plus `$initial_referrer`, and it is the one vendor
+    // request before_send never sees, so the only fix is not to make it. Pinned
+    // here because the jsdom harness in posthog.leak.test.ts cannot reproduce
+    // the request either way.
+    expect(opts.advanced_disable_feature_flags).toBe(true);
     expect(typeof opts.before_send).toBe('function');
     // Web vitals is the one autocapture-family surface deliberately kept on;
     // network timing stays off. Pinned so the choice stays explicit rather than
@@ -410,5 +416,129 @@ describe('module loading', () => {
     // the SDK into the entry chunk. A type-only `typeof import()` is erased.
     // Anchored to line starts so comments mentioning the pattern don't match.
     expect(posthogSource).not.toMatch(/^\s*import\s+[^;\n]*\bfrom\s+['"]posthog-js['"]/m);
+  });
+});
+
+// The carriers: posthog-js synthesizes the raw entry
+// href and document.referrer into `$session_entry_*` on EVERY event of a session,
+// and nests the raw href again one object deep inside each `$web_vitals` metric.
+// scrubEvent used to walk only the top-level property bag, so all of it went out
+// unscrubbed — including the emailed reset token in the fragment.
+//
+// posthog.leak.test.ts proves the end-to-end behaviour against the real SDK on the
+// wire; these pin the individual shapes, which is where a regression would land.
+describe('scrubEvent — depth-agnostic URL guards', () => {
+  const ORIGIN = window.location.origin;
+
+  it('strips the fragment from $session_entry_url and drops the session-entry referrer family', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({
+      properties: {
+        $session_entry_url: `${ORIGIN}/reset-password?src=email#token=deadbeefcafe1234`,
+        $session_entry_referrer: 'https://mail.example.com/inbox/42',
+        $session_entry_referring_domain: 'mail.example.com',
+        $session_entry_ph_keyword: 'tradr journal',
+        ph_keyword: 'tradr journal',
+      } as Record<string, unknown>,
+    });
+
+    const props = out!.properties as Record<string, unknown>;
+    // Query kept, fragment gone — the query carries analytics signal, the
+    // fragment carries the token.
+    expect(props.$session_entry_url).toBe(`${ORIGIN}/reset-password?src=email`);
+    expect(props.$session_entry_referrer).toBeUndefined();
+    expect(props.$session_entry_ph_keyword).toBeUndefined();
+    expect(props.ph_keyword).toBeUndefined();
+    // The bare hostname survives — no path, no query, and channel reporting reads it.
+    expect(props.$session_entry_referring_domain).toBe('mail.example.com');
+  });
+
+  it('strips the fragment from the $current_url NESTED inside a $web_vitals metric', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    // The shape posthog-js builds: one object per metric, each carrying its own
+    // copy of the raw href.
+    const out = scrubEvent({
+      event: '$web_vitals',
+      properties: {
+        $web_vitals_FCP_event: {
+          name: 'FCP',
+          value: 1234,
+          $current_url: `${ORIGIN}/verify-email#token=deadbeefcafe1234`,
+        },
+        $web_vitals_LCP_event: {
+          name: 'LCP',
+          value: 2345,
+          $current_url: `${ORIGIN}/verify-email#token=deadbeefcafe1234`,
+        },
+      } as Record<string, unknown>,
+    });
+
+    const props = out!.properties as Record<string, unknown>;
+    for (const key of ['$web_vitals_FCP_event', '$web_vitals_LCP_event']) {
+      const metric = props[key] as Record<string, unknown>;
+      expect(metric.$current_url).toBe(`${ORIGIN}/verify-email`);
+      // Timing data is untouched — the point is the URL, not the metric.
+      expect(typeof metric.value).toBe('number');
+    }
+  });
+
+  it('rewrites an own-origin object KEY that carries a fragment ($heatmap_data)', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    // $heatmap_data is keyed BY the page URL, so a value-only walk cannot reach
+    // it. Heatmaps are off in production today, but one project toggle turns them
+    // on with no deploy.
+    const out = scrubEvent({
+      properties: {
+        $heatmap_data: {
+          [`${ORIGIN}/reset-password#token=deadbeefcafe1234`]: [{ x: 1, y: 2, type: 'click' }],
+        },
+      } as Record<string, unknown>,
+    });
+
+    const heatmap = (out!.properties as Record<string, unknown>).$heatmap_data as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(heatmap)).toEqual([`${ORIGIN}/reset-password`]);
+    expect(JSON.stringify(heatmap)).not.toContain('deadbeefcafe1234');
+  });
+
+  it('leaves a foreign-origin string and free text containing a # alone', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({
+      properties: {
+        // Own-origin matching is what makes the value rule safe to apply to
+        // strings the SDK did not build: unrelated text keeps its '#'.
+        note: 'ticket #42 is the follow-up',
+        elsewhere: 'https://docs.example.com/guide#section-3',
+      } as Record<string, unknown>,
+    });
+
+    const props = out!.properties as Record<string, unknown>;
+    expect(props.note).toBe('ticket #42 is the follow-up');
+    expect(props.elsewhere).toBe('https://docs.example.com/guide#section-3');
+  });
+
+  it('passes free-text survey subtrees through verbatim', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    // A bug report that opens with a pasted app URL and continues into prose
+    // containing a '#' must not be truncated at that '#'. Inert today
+    // (disable_surveys), pinned so the feedback surface inherits it.
+    const body = `${window.location.origin}/positions/abc broke — see step #3 in my notes`;
+    const out = scrubEvent({
+      properties: {
+        $survey_response_2: body,
+        $survey_questions: [{ question: 'What broke?', response: body }],
+      } as Record<string, unknown>,
+    });
+
+    const props = out!.properties as Record<string, unknown>;
+    expect(props.$survey_response_2).toBe(body);
+    expect((props.$survey_questions as Array<{ response: string }>)[0].response).toBe(body);
   });
 });
