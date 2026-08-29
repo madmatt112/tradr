@@ -72,6 +72,17 @@ async function registerUser(req: APIRequestContext, label: string): Promise<Seed
     data: { name: `${label} account`, currency: 'USD' },
   });
   expect(accountRes.status(), `POST /accounts for ${email}`).toBe(201);
+  // And past the checklist too. With an account and onboarding still pending
+  // the dashboard mounts the "Get set up" checklist IN the grid — a seventh,
+  // locked item in the top-right slot, with Stats Summary narrowed to eight
+  // columns beside it. Every case here characterises the six-widget default
+  // layout (item counts, the full-width band's drag behaviour), so the seeded
+  // user is retired from onboarding the way a finished checklist retires
+  // itself. The checklist's own e2e coverage is in user-onboarding.spec.ts.
+  const onboardingRes = await req.patch('/api/users/me/onboarding', {
+    data: { status: 'done' },
+  });
+  expect(onboardingRes.status(), `PATCH onboarding for ${email}`).toBe(200);
   return { email, userId: body.user.id };
 }
 

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { DashboardLayoutResponse, WidgetPlacement } from '@tradr/shared';
+import type { GridItemHTMLElement } from 'gridstack';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -220,6 +221,19 @@ afterEach(() => {
   fetchSpy = null;
   vi.restoreAllMocks();
 });
+
+/** The gridstack item wrapping the card of one widget type, once the grid is up. */
+function gridItemOf(container: HTMLElement, type: string): GridItemHTMLElement {
+  const card = container.querySelector(`section[data-widget-type="${type}"]`);
+  const item = card?.closest('.grid-stack-item') as GridItemHTMLElement | null;
+  expect(item, `grid item for ${type}`).not.toBeNull();
+  return item!;
+}
+
+/** The grid's aside item — the checklist's slot — or null when there is none. */
+function asideItem(container: HTMLElement): GridItemHTMLElement | null {
+  return container.querySelector('[data-grid-aside]') as GridItemHTMLElement | null;
+}
 
 // ---- Tests ----------------------------------------------------------------
 
@@ -550,7 +564,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     calculatorFirstUsedAt: '2026-05-01T00:00:00.000Z',
   });
 
-  it('a user with an account and pending onboarding sees the checklist ABOVE the grid', async () => {
+  it('a user with an account and pending onboarding sees the checklist IN the grid, locked top-right', async () => {
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
@@ -564,11 +578,40 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(screen.getByText('Close it and see the stats')).toBeTruthy();
 
     await waitFor(() => {
-      expect(container.querySelector('[data-grid-mode]')).not.toBeNull();
+      expect(asideItem(container)).not.toBeNull();
     });
-    const grid = container.querySelector('[data-grid-mode]')!;
-    // Above the grid, not merely present somewhere on the page.
-    expect(checklist.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // One item among the widgets — not a card bolted on above them — locked in
+    // the top-right slot at the right-rail width and the Stats Summary's height.
+    const aside = asideItem(container)!;
+    expect(aside.contains(checklist)).toBe(true);
+    expect(aside.gridstackNode).toMatchObject({
+      x: 8,
+      y: 0,
+      w: 4,
+      h: 6,
+      locked: true,
+      noMove: true,
+      noResize: true,
+    });
+    // Stats Summary narrows to sit beside it; the rest of the default layout
+    // is where it was.
+    expect(gridItemOf(container, 'stats-summary').gridstackNode).toMatchObject({
+      x: 0,
+      y: 0,
+      w: 8,
+      h: 6,
+    });
+    expect(gridItemOf(container, 'account-balances').gridstackNode).toMatchObject({
+      x: 8,
+      y: 6,
+      w: 4,
+      h: 12,
+    });
+    // Making room is a view of the stored layout, never a write to it.
+    expect(layoutMockValue.scheduleLayoutWrite).not.toHaveBeenCalled();
+    // Exactly one mount: nothing above the grid.
+    expect(screen.getAllByTestId('activation-checklist')).toHaveLength(1);
+    expect(container.querySelector('[data-grid-mode]')!.contains(checklist)).toBe(true);
   });
 
   it('the empty-layout branch mounts it too, and keeps its own empty state', () => {
@@ -582,7 +625,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(screen.getByRole('button', { name: /Use the default layout/i })).toBeTruthy();
   });
 
-  it('a retired (done) user with accounts sees no checklist and no reserved space', () => {
+  it('a retired (done) user with accounts sees no checklist and the grid keeps its full width', async () => {
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('done');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
@@ -590,15 +633,17 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     expect(screen.queryByTestId('activation-checklist')).toBeNull();
     expect(screen.queryByTestId('activation-checklist-loading')).toBeNull();
     expect(screen.queryByTestId('activation-checklist-reopen')).toBeNull();
-    // The slot is present but EMPTY, and `empty:hidden` is what keeps it out of
-    // the flow. Without it the wrapper would still count as a child of the
-    // surrounding `space-y-*` and open a permanent gap between the header and
-    // the grid — for the majority of users, who are exactly the ones this
-    // branch is for.
-    const slot = container.querySelector('[data-slot="activation-checklist-slot"]')!;
-    expect(slot).not.toBeNull();
-    expect(slot.childNodes.length).toBe(0);
-    expect(slot.className).toContain('empty:hidden');
+    await waitFor(() => {
+      expect(container.querySelector('[data-grid-mode]')).not.toBeNull();
+    });
+    // No slot is held for the majority, who are exactly who this branch is for.
+    expect(asideItem(container)).toBeNull();
+    expect(gridItemOf(container, 'stats-summary').gridstackNode).toMatchObject({
+      x: 0,
+      y: 0,
+      w: 12,
+      h: 6,
+    });
   });
 
   it('a SKIPPED user with accounts still reaches the reopen row — dismissal stays recoverable', () => {
@@ -621,12 +666,14 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('active', { checklist: allDone, setStatus });
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
-    renderRoute();
+    const renderResult = renderRoute();
     await waitFor(() => {
       expect(setStatus).toHaveBeenCalledWith('done');
     });
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('activation-checklist')).toBeNull();
+    // And the grid never held a slot for a checklist that was already finished.
+    expect(asideItem(renderResult.container)).toBeNull();
   });
 
   it('no flash: nothing is rendered when the route falls through with the status still unknown', () => {
@@ -668,22 +715,18 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
   });
 });
 
-// ---- The checklist slot's reserved geometry --------------------------------
+// ---- The checklist's loading state holds the card's grid item ---------------
 //
-// `ActivationChecklist` paints a four-row card skeleton while its derived reads
-// are in flight, and that skeleton is 28px SHORTER than the card that replaces
-// it (210px vs 238px — the arithmetic is on `ChecklistSlot`). Mounted bare above
-// the widget grid, the swap dropped the whole grid by that much, once per load,
-// for every user still mid-onboarding — exactly the loading-state layout jump
-// the design system forbids. The checklist is correct and untouched; the slot
-// it mounts into reserves the settled height.
-//
-// jsdom computes no layout, so these cases pin the two things it CAN see: the
-// reservation is declared against the skeleton's own test id, and the skeleton
-// and the settled card occupy ONE element — a reservation on a box that is
-// replaced rather than refilled would reserve nothing.
+// `ActivationChecklist` paints a skeleton while its derived reads are in
+// flight. Mounted bare above the widget grid it was once 28px shorter than the
+// card that replaced it, and the whole grid dropped by that much, once per
+// load, for every user still mid-onboarding — the loading-state layout jump the
+// design system forbids. In the grid the geometry is the item's, not the
+// content's, and the skeleton matches the card row for row besides. jsdom
+// computes no layout, so these cases pin what it CAN see: the skeleton mounts
+// in the aside item, and the card then refills that SAME item.
 
-describe('_auth.dashboard route — the checklist slot reserves its height', () => {
+describe('_auth.dashboard route — the checklist skeleton holds the same grid item as the card', () => {
   const populated = {
     widgets: sixDefaultWidgets,
     theme: 'light',
@@ -697,12 +740,7 @@ describe('_auth.dashboard route — the checklist slot reserves its height', () 
     closedPositionCount: 0,
   });
 
-  // The settled card's outer height. If the card's rows, padding or header
-  // change, this and `ChecklistSlot`'s class change together — that is what this
-  // constant is for.
-  const RESERVED = 'has-data-[testid=activation-checklist-loading]:min-h-[238px]';
-
-  it('reserves the settled card height while the skeleton is up, on the same element that then holds the card', () => {
+  it('mounts the skeleton in the aside slot, and the card refills that same item', async () => {
     layoutMockValue = baseLayout({ data: populated });
     // Preference landed, gated reads still in flight: the one window in which
     // the skeleton is on screen.
@@ -710,41 +748,39 @@ describe('_auth.dashboard route — the checklist slot reserves its height', () 
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     const { container, rerenderRoute } = renderRoute();
 
-    const slot = container.querySelector('[data-slot="activation-checklist-slot"]')!;
-    expect(slot).not.toBeNull();
+    await waitFor(() => {
+      expect(asideItem(container)).not.toBeNull();
+    });
+    const slot = asideItem(container)!;
     expect(slot.contains(screen.getByTestId('activation-checklist-loading'))).toBe(true);
-    expect(slot.className).toContain(RESERVED);
+    expect(slot.gridstackNode).toMatchObject({ x: 8, y: 0, w: 4, h: 6 });
 
     // The positions read lands and the card replaces the skeleton.
     setOnboarding('pending', { checklist: someChecklist });
     rerenderRoute();
 
     expect(screen.queryByTestId('activation-checklist-loading')).toBeNull();
-    // SAME node — the card refills the reserved box rather than replacing it,
-    // which is the only arrangement in which reserving anything helps.
-    const after = container.querySelector('[data-slot="activation-checklist-slot"]')!;
+    // SAME item — the grid was told nothing changed, so nothing around it moved.
+    const after = asideItem(container)!;
     expect(after).toBe(slot);
     expect(after.contains(screen.getByTestId('activation-checklist'))).toBe(true);
   });
 
-  it('reserves on the empty-layout branch too — the same skeleton mounts there', () => {
+  it('mounts the skeleton on the empty-layout branch too, above the empty state', () => {
     layoutMockValue = baseLayout({ data: emptyLayout });
     setOnboarding('pending', { checklist: undefined });
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
-    const { container } = renderRoute();
+    renderRoute();
 
-    const slot = container.querySelector('[data-slot="activation-checklist-slot"]')!;
-    expect(slot).not.toBeNull();
-    expect(slot.contains(screen.getByTestId('activation-checklist-loading'))).toBe(true);
-    expect(slot.className).toContain(RESERVED);
+    expect(screen.getByTestId('activation-checklist-loading')).toBeTruthy();
     // And the branch's own content is unchanged.
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
   });
 
   it('does not reintroduce the flash of four unticked boxes', () => {
-    // The reservation must not tempt anyone into rendering the card early to
-    // fill it. While the reads are in flight the user sees a skeleton and the
-    // four item labels are nowhere on screen.
+    // The slot must not tempt anyone into rendering the card early to fill it.
+    // While the reads are in flight the user sees a skeleton and the four item
+    // labels are nowhere on screen.
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending', { checklist: undefined });
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
