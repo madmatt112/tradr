@@ -37,12 +37,25 @@ export function hasResolvedRoute(router: AnyRouter): boolean {
   return !!matches[matches.length - 1]?.routeId;
 }
 
-// Referrer properties are still DROPPED. Resolved in-app URLs are sent (see
-// scrubEvent), but a referrer can carry an EXTERNAL origin and its query string
-// — a different exposure from our own paths, and nothing in web analytics'
-// installation health needs it. Dropping keeps third-party navigation history
-// out of the payload.
-const DROP_REFERRER_KEYS = ['$referrer', '$initial_referrer'] as const;
+// Referrer properties are DROPPED, at ANY depth. A referrer can carry an
+// EXTERNAL origin and its query string — a different exposure from our own
+// paths, and nothing in web analytics' installation health needs it. Dropping
+// keeps third-party navigation history out of the payload.
+//
+// `$session_entry_referrer` / `$session_entry_ph_keyword` are the session-entry
+// mirrors: posthog-js' SessionPropsManager spreads getPersonInfo() — the raw
+// entry href and `document.referrer` — onto EVERY event, and they persist for
+// the whole session, so a top-level `$referrer` drop never reached them.
+// `ph_keyword` is the search term the SDK parses out of the referrer's query.
+// `$session_entry_referring_domain` is deliberately KEPT: a bare hostname, no
+// path and no query, and it is what channel reporting reads.
+const DROP_REFERRER_KEYS: ReadonlySet<string> = new Set([
+  '$referrer',
+  '$initial_referrer',
+  '$session_entry_referrer',
+  'ph_keyword',
+  '$session_entry_ph_keyword',
+]);
 
 // URL properties posthog-js builds from `window.location.href`, which INCLUDES
 // the `#fragment`. The fragment must be stripped before send: the password-reset
@@ -51,13 +64,98 @@ const DROP_REFERRER_KEYS = ['$referrer', '$initial_referrer'] as const;
 // browser, and sending the raw href would hand that token to the vendor. Query
 // strings are kept — no route puts a secret in one (REQ-3.9) and they carry real
 // analytics signal. Fragments carry none.
-const FRAGMENT_BEARING_KEYS = ['$current_url', '$initial_current_url'] as const;
+//
+// Matched at ANY depth: `$session_entry_url` rides every event of the session,
+// and `$web_vitals_<NAME>_event.$current_url` nests one metric-object deep.
+const FRAGMENT_BEARING_KEYS: ReadonlySet<string> = new Set([
+  '$current_url',
+  '$initial_current_url',
+  '$session_entry_url',
+]);
+
+// Depth cap for the URL walk. Event property trees are shallow — the deepest the
+// SDK builds is `$exception_list` -> stacktrace -> frames — so this only bites on
+// a pathological or cyclic structure, where it stops the walk rather than hang
+// the tab.
+const MAX_URL_WALK_DEPTH = 8;
+
+/**
+ * Subtrees the app deliberately sends verbatim: free text the user typed. A bug
+ * report that opens with a pasted app URL and then continues into prose
+ * containing a '#' would otherwise be truncated at that '#'. Surveys are off
+ * today (`disable_surveys`), so this is inert until the feedback surface ships.
+ */
+function isFreeTextKey(key: string): boolean {
+  return key.startsWith('$survey_response') || key === '$survey_questions';
+}
 
 /** The URL with any `#fragment` removed. Returns non-strings untouched. */
 function stripFragment(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   const hash = value.indexOf('#');
   return hash === -1 ? value : value.slice(0, hash);
+}
+
+/**
+ * The app's own origin, or undefined when there is no usable one (non-browser,
+ * or an opaque `null` origin). Decides which arbitrary strings are our URLs and
+ * may therefore lose a fragment.
+ */
+function ownOrigin(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const origin = window.location?.origin;
+  return origin && origin !== 'null' ? origin : undefined;
+}
+
+/**
+ * Recurse plain objects/arrays, applying the URL guards at EVERY depth:
+ *
+ * - a DROP_REFERRER_KEYS key is removed;
+ * - a FRAGMENT_BEARING_KEYS key loses its value's `#fragment` unconditionally —
+ *   those keys are always URLs, never free text, whatever the origin;
+ * - any other string VALUE, and any object KEY, beginning with our own origin
+ *   loses its `#fragment`. Keys must be rewritten too because `$heatmap_data` is
+ *   keyed BY the page URL, which a value-only walk cannot reach. Two keys that
+ *   differ only by fragment collapse — last wins, which is fine for heatmaps;
+ * - free-text subtrees (isFreeTextKey) pass through verbatim.
+ *
+ * Own-origin matching is what makes the value rule safe to apply to strings the
+ * SDK did not build: it closes the class (any URL property the SDK invents next)
+ * without truncating unrelated text that happens to contain a '#'.
+ *
+ * Returns a new structure; the caller swaps it in.
+ */
+function scrubUrlsDeep(value: unknown, origin: string | undefined, depth = 0): unknown {
+  if (depth >= MAX_URL_WALK_DEPTH) return value;
+  if (typeof value === 'string') {
+    return origin && value.startsWith(origin) ? stripFragment(value) : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => scrubUrlsDeep(item, origin, depth + 1));
+  if (!isPlainObject(value)) return value;
+  return scrubUrlEntries(value, origin, depth);
+}
+
+/**
+ * scrubUrlsDeep's object case, split out so scrubEvent can apply it to the root
+ * property bag UNCONDITIONALLY. Going through scrubUrlsDeep for the root would
+ * make the whole guard hinge on isPlainObject: a bag with an unexpected
+ * prototype would be returned untouched and the scrub would silently become a
+ * no-op — the one failure mode a credential guard must not have.
+ */
+function scrubUrlEntries(
+  obj: Record<string, unknown>,
+  origin: string | undefined,
+  depth: number,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (DROP_REFERRER_KEYS.has(key)) continue;
+    const outKey = origin && key.startsWith(origin) ? (stripFragment(key) as string) : key;
+    if (isFreeTextKey(key)) out[outKey] = val;
+    else if (FRAGMENT_BEARING_KEYS.has(key)) out[outKey] = stripFragment(val);
+    else out[outKey] = scrubUrlsDeep(val, origin, depth + 1);
+  }
+  return out;
 }
 
 // Exception-autocapture ($exception) properties that carry the error message and
@@ -92,6 +190,13 @@ interface PostHogCaptureLike {
  * id in /positions/:id) DO reach PostHog — a deliberate reversal of the original
  * masking, taken to make web analytics usable. See .env.example's privacy note.
  *
+ * Both guards run at EVERY depth (scrubUrlsDeep), not just over the top-level
+ * property bag. That is deliberate: posthog-js mirrors the raw entry href and
+ * `document.referrer` into `$session_entry_url` / `$session_entry_referrer` on
+ * EVERY event of the session, and nests the raw href again inside each
+ * `$web_vitals_<NAME>_event`. A top-level pass reached none of it, so the
+ * emailed reset token rode every event of a reset-password session.
+ *
  * Referrers are still dropped (DROP_REFERRER_KEYS): an external referrer is a
  * different exposure from our own paths. Sets `$geoip_disable` to suppress
  * server-side geo enrichment and removes any `$geoip_*` already present. Also
@@ -103,17 +208,14 @@ interface PostHogCaptureLike {
  */
 export function scrubEvent<T extends PostHogCaptureLike>(event: T | null): T | null {
   if (!event || !event.properties) return event;
-  const props = event.properties as Record<string, unknown>;
 
-  for (const key of DROP_REFERRER_KEYS) {
-    delete props[key];
-  }
-
-  // Strip the `#fragment` from URL properties — this is what keeps the emailed
-  // reset/verification token out of the payload (see FRAGMENT_BEARING_KEYS).
-  for (const key of FRAGMENT_BEARING_KEYS) {
-    if (key in props) props[key] = stripFragment(props[key]);
-  }
+  // Drop referrers and strip own-origin `#fragment`s at EVERY depth, then swap
+  // the rewritten bag in (the event object's identity is preserved). Walking the
+  // whole tree is what catches the carriers a top-level pass missed:
+  // `$session_entry_url` / `$session_entry_referrer` ride EVERY event of the
+  // session, and `$web_vitals_<NAME>_event.$current_url` nests one object deep.
+  const props = scrubUrlEntries(event.properties as Record<string, unknown>, ownOrigin(), 0);
+  event.properties = props;
 
   // Suppress server-side geo enrichment. `$geoip_disable` is the property the
   // ingestion pipeline actually honours; setting `$ip = null` does NOT stop it
@@ -173,6 +275,14 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
     // oversight. Set to false to turn it off.
     capture_performance: { web_vitals: true, network_timing: false },
     advanced_disable_toolbar_metrics: true,
+    // No /flags request. The app reads no feature flags (zero isFeatureEnabled /
+    // getFeatureFlag / onFeatureFlags call sites), and the flags POST is the one
+    // vendor request before_send never sees: its body carries
+    // `$initial_current_url` RAW — fragment and all — plus `$initial_referrer`,
+    // on first load and again every 5 minutes. Remote config is unaffected.
+    // Side effect: `$active_feature_flags` stops riding events, which is moot
+    // while there are no flags to report.
+    advanced_disable_feature_flags: true,
     before_send: scrubEvent,
   });
   posthog = ph;
@@ -180,8 +290,9 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
   // Stamp the deployment label ('production', 'staging') onto EVERY event as a
   // super property — including the ones we never call capture() for ourselves:
   // autocaptured $exception and $web_vitals. register() runs before before_send,
-  // so scrubEvent sees the property and passes it through untouched (it only
-  // touches the referrer/geoip/exception keys). Skipped when the
+  // so scrubEvent sees the property and passes it through untouched (the label is
+  // not a referrer, a geoip key, an exception payload, or an own-origin URL).
+  // Skipped when the
   // deploy did not set posthogPublicEnvironment — the self-host default, where
   // there is one deployment and nothing to tell apart. Super properties live in
   // the memory-only persistence store (REQ-3.7), so this stays cookieless.
