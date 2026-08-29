@@ -488,6 +488,153 @@ describe('DashboardGrid — gesture completion is the only write path', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The aside: a transient item the grid shows top-right and never persists
+// (the activation checklist).
+// ---------------------------------------------------------------------------
+
+describe('DashboardGrid — the aside', () => {
+  const stored: WidgetPlacement[] = [
+    W({ id: 'a', type: 'stats-summary', x: 0, y: 0, w: 12, h: STATS_MIN_H }),
+    W({ id: 'b', type: 'performance-chart', x: 0, y: STATS_MIN_H, w: 8, h: PERF_MIN_H }),
+  ];
+  const aside = { id: 'note', w: 4, h: STATS_MIN_H, node: <p data-testid="aside-node">aside</p> };
+
+  function mountWith(asideProp: typeof aside | undefined, scheduleLayoutWrite = vi.fn()) {
+    installMatchMediaSpy({});
+    const { container, root } = mountIntoBody();
+    const render = (next: typeof aside | undefined): void => {
+      act(() => {
+        root.render(
+          <DashboardGrid
+            widgets={stored}
+            aside={next}
+            onRemove={() => undefined}
+            scheduleLayoutWrite={scheduleLayoutWrite}
+          />,
+        );
+      });
+    };
+    render(asideProp);
+    const unmount = (): void => {
+      act(() => {
+        root.unmount();
+      });
+      container.remove();
+    };
+    return { container, render, unmount, scheduleLayoutWrite };
+  }
+
+  it('renders the node in a locked top-right item and narrows what it displaces, without writing', () => {
+    const { container, unmount, scheduleLayoutWrite } = mountWith(aside);
+    const grid = gridOf(container);
+
+    const item = container.querySelector('[data-grid-aside="note"]') as GridItemHTMLElement | null;
+    expect(item).not.toBeNull();
+    expect(item!.contains(container.querySelector('[data-testid="aside-node"]'))).toBe(true);
+    expect(item!.gridstackNode).toMatchObject({
+      x: GRID_COLUMNS - 4,
+      y: 0,
+      w: 4,
+      h: STATS_MIN_H,
+      locked: true,
+      noMove: true,
+      noResize: true,
+    });
+    // It is not a widget: no card chrome, no `data-widget-id`.
+    expect(item!.hasAttribute('data-widget-id')).toBe(false);
+    expect(item!.querySelector('section[data-widget-id]')).toBeNull();
+
+    // Stats Summary is shown at eight columns beside it; nothing else moved.
+    expect(itemOf(grid, 'a').gridstackNode).toMatchObject({ x: 0, y: 0, w: 8, h: STATS_MIN_H });
+    expect(itemOf(grid, 'b').gridstackNode).toMatchObject({ x: 0, y: STATS_MIN_H, w: 8 });
+    // Making room is a view, not an edit.
+    expect(scheduleLayoutWrite).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('gives the room back when the aside goes, still without writing', () => {
+    const { container, render, unmount, scheduleLayoutWrite } = mountWith(aside);
+    const grid = gridOf(container);
+    expect(itemOf(grid, 'a').gridstackNode?.w).toBe(8);
+
+    render(undefined);
+    expect(container.querySelector('[data-grid-aside]')).toBeNull();
+    expect(itemOf(grid, 'a').gridstackNode).toMatchObject({ x: 0, y: 0, w: 12, h: STATS_MIN_H });
+    expect(container.querySelectorAll('.grid-stack-item')).toHaveLength(2);
+    expect(scheduleLayoutWrite).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('a gesture persists neither the aside nor the narrowing of a widget it left alone', () => {
+    const { container, unmount, scheduleLayoutWrite } = mountWith(aside);
+    const grid = gridOf(container);
+
+    // Drag the chart into empty canvas below everything; Stats Summary is untouched.
+    const emptyRow = STATS_MIN_H + PERF_MIN_H;
+    const itemB = itemOf(grid, 'b');
+    grid.update(itemB, { x: 0, y: emptyRow, w: 8, h: PERF_MIN_H });
+    fireGesture(grid, 'dragstop', itemB);
+
+    expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
+    const written = scheduleLayoutWrite.mock.calls[0][0] as WidgetPlacement[];
+    expect(written.map((widget) => widget.id).sort()).toEqual(['a', 'b']);
+    // The stored full width, not the eight columns on screen.
+    expect(written.find((widget) => widget.id === 'a')).toMatchObject({
+      x: 0,
+      y: 0,
+      w: 12,
+      h: STATS_MIN_H,
+    });
+    expect(written.find((widget) => widget.id === 'b')).toMatchObject({
+      x: 0,
+      y: emptyRow,
+      w: 8,
+      h: PERF_MIN_H,
+    });
+    unmount();
+  });
+
+  it('a gesture on the narrowed widget itself persists where the user put it', () => {
+    const { container, unmount, scheduleLayoutWrite } = mountWith(aside);
+    const grid = gridOf(container);
+
+    const emptyRow = STATS_MIN_H + PERF_MIN_H;
+    const itemA = itemOf(grid, 'a');
+    grid.update(itemA, { x: 0, y: emptyRow, w: 8, h: STATS_MIN_H });
+    fireGesture(grid, 'dragstop', itemA);
+
+    const written = scheduleLayoutWrite.mock.calls[0][0] as WidgetPlacement[];
+    expect(written.find((widget) => widget.id === 'a')).toMatchObject({ x: 0, y: emptyRow, w: 8 });
+    unmount();
+  });
+
+  it('leads the mobile stack', () => {
+    installMatchMediaSpy({ '(max-width: 767px)': true });
+    const { container, root } = mountIntoBody();
+    act(() => {
+      root.render(
+        <DashboardGrid
+          widgets={stored}
+          aside={aside}
+          onRemove={() => undefined}
+          scheduleLayoutWrite={vi.fn()}
+        />,
+      );
+    });
+    const stack = container.querySelector('[data-grid-mode="mobile"]')!;
+    expect(stack.firstElementChild?.tagName).toBe('SPAN'); // the sr-only instructions
+    expect(stack.children[1]?.getAttribute('data-grid-aside')).toBe('note');
+    expect(stack.children[1]?.contains(container.querySelector('[data-testid="aside-node"]'))).toBe(
+      true,
+    );
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Mobile fallback (Req 4.9)
 // ---------------------------------------------------------------------------
 

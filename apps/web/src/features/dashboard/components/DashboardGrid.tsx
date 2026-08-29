@@ -6,13 +6,13 @@ import {
   type GridStackOptions,
   type GridStackWidget,
 } from 'gridstack';
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { PerWidgetMinSize, type WidgetPlacement } from '@tradr/shared/schemas/dashboard';
 
 import { GRID_COLUMNS, GRID_GAP_PX, GRID_MAX_ROWS, GRID_ROW_HEIGHT_PX } from '../grid.constants';
-import { sortByYThenX } from '../layout';
+import { keepStoredGeometry, reserveTopRightSlot, sortByYThenX } from '../layout';
 
 import { WidgetCard, WIDGET_DRAG_CANCEL_CLASS, WIDGET_DRAG_HANDLE_CLASS } from './WidgetCard';
 
@@ -132,8 +132,22 @@ export function createGridOptions(): GridStackOptions {
   };
 }
 
+/**
+ * A transient item the grid shows in its top-right corner without ever
+ * persisting it — the activation checklist. It is locked in place (no drag, no
+ * resize) and the widgets around it give way for as long as it is mounted; see
+ * `reserveTopRightSlot`. Its id must never be a widget id.
+ */
+export interface GridAside {
+  id: string;
+  w: number;
+  h: number;
+  node: ReactNode;
+}
+
 export interface DashboardGridProps {
   widgets: WidgetPlacement[];
+  aside?: GridAside;
   onRemove: (id: string) => void;
   /**
    * Called with the next `widgets[]` after a drag-end or resize-end. The route
@@ -229,11 +243,23 @@ const NO_HOSTS: ReadonlyMap<string, HTMLElement> = new Map();
  */
 function DashboardGridCanvas({
   widgets,
+  aside,
   onRemove,
   scheduleLayoutWrite,
   onUpdateConfig,
 }: DashboardGridProps): ReactElement {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // What gridstack is handed: the stored layout, or that layout with room made
+  // for the aside. `widgets` itself stays the stored truth for the write path.
+  const asideW = aside?.w;
+  const asideH = aside?.h;
+  const shown = useMemo(
+    () =>
+      asideW !== undefined && asideH !== undefined
+        ? reserveTopRightSlot(widgets, { w: asideW, h: asideH })
+        : widgets,
+    [widgets, asideW, asideH],
+  );
   const [grid, setGrid] = useState<GridStack | null>(null);
   /**
    * Portal targets, by widget id. State rather than a ref because the elements
@@ -247,6 +273,10 @@ function DashboardGridCanvas({
   // registered once, at init, and would otherwise close over a stale render.
   const widgetsRef = useRef(widgets);
   widgetsRef.current = widgets;
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const asideRef = useRef(aside);
+  asideRef.current = aside;
   const scheduleLayoutWriteRef = useRef(scheduleLayoutWrite);
   scheduleLayoutWriteRef.current = scheduleLayoutWrite;
 
@@ -273,7 +303,13 @@ function DashboardGridCanvas({
         saved.w = node.w;
         saved.h = node.h;
       }) as GridStackWidget[];
-      scheduleLayoutWriteRef.current(fromGridWidgets(nodes, widgetsRef.current));
+      // The aside has no matching widget, so `fromGridWidgets` drops it here:
+      // it is never persisted. What IS persisted, while the aside is up, is
+      // the stored geometry for every widget the gesture left alone.
+      const moved = fromGridWidgets(nodes, shownRef.current);
+      scheduleLayoutWriteRef.current(
+        asideRef.current ? keepStoredGeometry(moved, shownRef.current, widgetsRef.current) : moved,
+      );
     };
     instance.on('dragstop', commit);
     instance.on('resizestop', commit);
@@ -295,9 +331,24 @@ function DashboardGridCanvas({
   // differs. After a gesture the route echoes our own placements back as
   // `widgets`, so the common case is a no-op; a failed PUT rolls the query
   // cache back and this is what returns the widget to where it was.
+  const asideId = aside?.id;
   useEffect(() => {
     if (!grid) return;
-    const desired = toGridWidgets(widgets);
+    const desired: IdentifiedGridWidget[] = toGridWidgets(shown);
+    if (asideId !== undefined && asideW !== undefined && asideH !== undefined) {
+      // Locked: nothing the user drags can push it, and gridstack routes a
+      // widget dropped onto it underneath instead. No handle, no resize.
+      desired.unshift({
+        id: asideId,
+        x: GRID_COLUMNS - asideW,
+        y: 0,
+        w: asideW,
+        h: asideH,
+        locked: true,
+        noMove: true,
+        noResize: true,
+      });
+    }
     const desiredIds = new Set(desired.map((widget) => widget.id));
 
     const existing = new Map<string, GridItemHTMLElement>();
@@ -322,7 +373,10 @@ function DashboardGridCanvas({
           // React's anyway. It only has to create the empty item + content divs.
           const created = grid.addWidget(widget);
           if (created) {
-            created.setAttribute('data-widget-id', widget.id);
+            created.setAttribute(
+              widget.id === asideId ? 'data-grid-aside' : 'data-widget-id',
+              widget.id,
+            );
             existing.set(widget.id, created);
             membershipChanged = true;
           }
@@ -348,13 +402,16 @@ function DashboardGridCanvas({
       if (content) hosts.set(id, content);
     }
     setContentHosts(hosts);
-  }, [grid, widgets]);
+  }, [grid, shown, asideId, asideW, asideH]);
 
   return (
     <div data-grid-mode="grid" className="w-full">
       <div ref={rootRef} className="grid-stack" />
+      {grid && aside && contentHosts.has(aside.id)
+        ? createPortal(aside.node, contentHosts.get(aside.id)!, aside.id)
+        : null}
       {grid
-        ? widgets.map((widget) => {
+        ? shown.map((widget) => {
             const host = contentHosts.get(widget.id);
             if (!host) return null;
             return (
@@ -375,6 +432,7 @@ function DashboardGridCanvas({
 
 export function DashboardGrid({
   widgets,
+  aside,
   onRemove,
   scheduleLayoutWrite,
   onUpdateConfig,
@@ -419,6 +477,11 @@ export function DashboardGrid({
         <span id="dashboard-grid-mobile-instructions" className="sr-only">
           Reorder requires a pointer-fine device
         </span>
+        {aside ? (
+          <div data-grid-aside={aside.id} className="w-full">
+            {aside.node}
+          </div>
+        ) : null}
         {sortedForMobile.map((widget) => (
           <div
             key={widget.id}
@@ -443,6 +506,7 @@ export function DashboardGrid({
   return (
     <DashboardGridCanvas
       widgets={widgets}
+      aside={aside}
       onRemove={onRemove}
       scheduleLayoutWrite={scheduleLayoutWrite}
       onUpdateConfig={onUpdateConfig}

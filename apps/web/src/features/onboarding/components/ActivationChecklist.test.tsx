@@ -18,7 +18,7 @@ import { deriveChecklist, type ChecklistItemId } from '../lib/derive-checklist';
 
 vi.mock('../hooks/useOnboarding', () => ({ useOnboarding: vi.fn() }));
 
-import { ActivationChecklist } from './ActivationChecklist';
+import { ActivationChecklist, resolveChecklistView } from './ActivationChecklist';
 
 const mockUseOnboarding = vi.mocked(useOnboarding);
 
@@ -416,6 +416,87 @@ describe('ActivationChecklist — keyboard and design-system gates', () => {
 
     for (const el of document.querySelectorAll('[data-slot="skeleton"]')) {
       expect(el.className).toContain('motion-reduce:animate-none');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `resolveChecklistView` — the one statement of which of the four things the
+// checklist shows. The route reads it too (to tell the grid whether to make
+// room), so it is pinned here against the same cases the component is.
+// ---------------------------------------------------------------------------
+
+describe('resolveChecklistView', () => {
+  it('answers `card` for an outstanding checklist and `none` for a finished one', () => {
+    expect(
+      resolveChecklistView({
+        checklist: checklistOf(),
+        preference: preference('pending'),
+        isError: false,
+      }),
+    ).toBe('card');
+    expect(
+      resolveChecklistView({
+        checklist: checklistOf(ALL_DONE),
+        preference: preference('active'),
+        isError: false,
+      }),
+    ).toBe('none');
+  });
+
+  it('answers `loading` only once the status is known and the reads are still out', () => {
+    expect(
+      resolveChecklistView({
+        checklist: undefined,
+        preference: preference('pending'),
+        isError: false,
+      }),
+    ).toBe('loading');
+    expect(
+      resolveChecklistView({ checklist: undefined, preference: undefined, isError: false }),
+    ).toBe('none');
+    expect(
+      resolveChecklistView({
+        checklist: undefined,
+        preference: preference('pending'),
+        isError: true,
+      }),
+    ).toBe('none');
+  });
+
+  it('answers `reopen` for a dismissal and `none` for a retirement', () => {
+    expect(
+      resolveChecklistView({ checklist: null, preference: preference('skipped'), isError: false }),
+    ).toBe('reopen');
+    expect(
+      resolveChecklistView({ checklist: null, preference: preference('done'), isError: false }),
+    ).toBe('none');
+  });
+
+  it('agrees with the component on every case', () => {
+    const cases = [
+      { checklist: checklistOf(), preference: preference('pending') },
+      { checklist: checklistOf(ALL_DONE), preference: preference('active') },
+      { checklist: undefined, preference: preference('pending') },
+      { checklist: undefined, preference: undefined },
+      { checklist: null, preference: preference('skipped') },
+      { checklist: null, preference: preference('done') },
+    ] as const;
+    const testIdFor = {
+      card: 'activation-checklist',
+      loading: 'activation-checklist-loading',
+      reopen: 'activation-checklist-reopen',
+    } as const;
+    for (const c of cases) {
+      useHook({ ...c });
+      const { unmount } = render(<ActivationChecklist />);
+      const view = resolveChecklistView({ ...c, isError: false });
+      for (const [name, testId] of Object.entries(testIdFor)) {
+        expect(screen.queryByTestId(testId) !== null, `${name} for ${JSON.stringify(c)}`).toBe(
+          view === name,
+        );
+      }
+      unmount();
     }
   });
 });

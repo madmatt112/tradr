@@ -18,7 +18,10 @@ import { DashboardHeader } from '@/features/dashboard/components/DashboardHeader
 import { GRID_COLUMNS } from '@/features/dashboard/grid.constants';
 import { useDashboardLayout } from '@/features/dashboard/hooks/useDashboardLayout';
 import { findFirstSlot } from '@/features/dashboard/layout';
-import { ActivationChecklist } from '@/features/onboarding/components/ActivationChecklist';
+import {
+  ActivationChecklist,
+  resolveChecklistView,
+} from '@/features/onboarding/components/ActivationChecklist';
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { ZeroState } from '@/features/onboarding/components/ZeroState';
 import { useOnboarding, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
@@ -84,37 +87,18 @@ function ReadOnlyDefaultLayout(): ReactElement {
 }
 
 /**
- * The checklist's mount slot on the populated and empty-layout branches.
- *
- * WHY A SLOT AND NOT A BARE MOUNT. `ActivationChecklist` paints a four-row card
- * skeleton while its derived reads are in flight, and the skeleton is SHORTER
- * than the card that replaces it — so on the primary screen the widget grid
- * dropped by the difference, once per load, for every user still mid-onboarding.
- * The design system forbids exactly that — no layout jump between loading,
- * empty and loaded. The checklist itself is correct and is left alone; the
- * geometry is the mount site's problem, and this is the mount site.
- *
- * THE RESERVATION IS DRIVEN BY WHAT ACTUALLY RENDERED, via `:has()` on the
- * skeleton's own test id, rather than by re-deciding here which users get a
- * checklist. That matters twice over: nothing in this file restates the
- * component's rules (a second copy of them is a second thing to get wrong), and
- * the space is reserved ONLY while the skeleton is on screen — not for a retired
- * user who renders nothing, and not for the beat between the last item being
- * ticked and `status: 'done'` landing, where a status-driven reservation would
- * leave an empty box behind.
- *
- * 238px is the settled card's outer height, and it is arithmetic, not a guess:
- * 1px border + 16px (`py-4`) + 44px header (16px `text-base leading-none` title
- * + 8px `gap-2` + 20px `text-sm` description) + 16px (`gap-4`) + 144px content
- * (4 items × `min-h-9`) + 16px + 1px. The skeleton comes to 210px by the same
- * sum, hence the 28px it was short by. If the card's rows, padding or header
- * change, this number changes with them — `_auth.dashboard.test.tsx` pins it so
- * the pair cannot drift silently.
- *
- * `empty:hidden` is not cosmetic. The checklist renders nothing at all for a
- * `done` user — the majority — and a wrapper that stayed in the flow would count
- * as a child of the surrounding `space-y-*`, adding a permanent gap of dead
- * space between the header and the grid that was not there before.
+ * The checklist's grid footprint: the width of the right-rail widgets under it
+ * in the default layout and the Stats Summary's height, so the top row of the
+ * default dashboard becomes Stats Summary at eight columns beside it. The id is
+ * the grid's handle for the item and must never be a widget id.
+ */
+const CHECKLIST_ASIDE = { id: 'activation-checklist', w: 4, h: 6 } as const;
+
+/**
+ * The checklist, wired to the walkthrough, for the populated and empty-layout
+ * branches. It decides nothing about WHETHER to render — `ActivationChecklist`
+ * answers for every state itself, and the route reads the same answer through
+ * `resolveChecklistView` to know whether the grid has to make room.
  */
 function ChecklistSlot(): ReactElement {
   // THE WALKTHROUGH'S OTHER DOOR, and without it items 2-4 had none. `ZeroState`
@@ -141,24 +125,19 @@ function ChecklistSlot(): ReactElement {
     [setStatus, start],
   );
 
+  // Withdrawn when the tour runtime will not load, exactly as the zero-state
+  // withdraws it: a "Start" with nothing behind it is a dead control, and the
+  // checklist is useful without one.
+  //
+  // `canStart` withholds the same thing one set at a time. On THIS screen the
+  // user has an account, so the account set's first step — the zero-state's
+  // "Create my first account" — is a control this branch by definition does
+  // not render.
   return (
-    <div
-      data-slot="activation-checklist-slot"
-      className="empty:hidden has-data-[testid=activation-checklist-loading]:min-h-[238px]"
-    >
-      {/* Withdrawn when the tour runtime will not load, exactly as the
-          zero-state withdraws it: a "Start" with nothing behind it is a dead
-          control, and the checklist is useful without one.
-
-          `canStart` withholds the same thing one set at a time. On THIS screen
-          the user has an account, so the account set's first step — the
-          zero-state's "Create my first account" — is a control this branch by
-          definition does not render. */}
-      <ActivationChecklist
-        onStartStep={isUnavailable ? undefined : beginGuided}
-        canStartStep={canStart}
-      />
-    </div>
+    <ActivationChecklist
+      onStartStep={isUnavailable ? undefined : beginGuided}
+      canStartStep={canStart}
+    />
   );
 }
 
@@ -174,10 +153,11 @@ function DashboardPage(): ReactElement {
   // A user with no accounts gets a screen that tells them what to do instead of
   // six widgets that are each individually empty for a different reason.
   //
-  // TWO READS, NOT THREE. `useOnboardingQuery` is the CHEAP preference read; the
-  // full `useOnboarding` hook additionally pulls the whole unfiltered positions
-  // list down to count it, and this route has no use for a checklist — only for
-  // the stored status. The accounts list is the one the dashboard already needs:
+  // THE CHEAP READ FOR THE GATE. `useOnboardingQuery` is the preference read on
+  // its own; the gate below needs only the stored status, and needs it before
+  // anything else. (The full `useOnboarding` hook is read further down for the
+  // checklist's own view — see there.) The accounts list is the one the
+  // dashboard already needs:
   // `account-balances` is one of the six default widgets and calls `useAccounts`
   // itself, so hoisting the same `['accounts', 'list']` query up here shares one
   // request with it rather than adding a second (Performance NFR).
@@ -200,6 +180,15 @@ function DashboardPage(): ReactElement {
   const onboardingRetired = preference?.status === 'done';
   const accountsQuery = useAccounts({ enabled: !onboardingRetired });
   const accounts = accountsQuery.data;
+
+  // WHETHER THE CHECKLIST IS ON SCREEN, decided once here rather than left to
+  // the component, because on the populated branch it is a grid item and the
+  // grid has to be told to make room before anything renders. The rules stay in
+  // `resolveChecklistView`; this only reads the answer. The full hook is the
+  // one the checklist itself reads — its two gated reads are shared with that
+  // mount and switched off for a retired user, so this adds no request.
+  const checklistView = resolveChecklistView(useOnboarding());
+  const checklistInGrid = checklistView === 'card' || checklistView === 'loading';
 
   // beforeunload: flush any pending debounced PUT (Req 1.9).
   useEffect(() => {
@@ -399,27 +388,26 @@ function DashboardPage(): ReactElement {
   // reads off for good — would never get a chance to fire. So both remaining
   // branches mount it.
   //
-  // UNCONDITIONALLY, and that is safe because the component answers for every
-  // state itself: nothing for a retired (`done`) user, nothing while the stored
-  // status is still unknown, the quiet reopen row for a `skipped` user, and the
-  // card otherwise. Nothing here may restate those rules — a second copy of them
-  // is a second thing to get wrong.
+  // ON THE POPULATED BRANCH IT IS A GRID ITEM. A card above the grid stretched
+  // four short rows across the whole content width, with each row's play button
+  // a screen away from its label. In the grid it is one widget among the
+  // others: locked in the top-right slot, sized like the right-rail widgets
+  // below it, with the Stats Summary narrowing to sit beside it. The grid makes
+  // the room and takes it back — the stored layout is never written with the
+  // checklist in it, and a drag while it is up persists only what the drag
+  // moved (`reserveTopRightSlot` / `keepStoredGeometry`). The skeleton and the
+  // card occupy the same item, row for row, so the loading swap moves nothing.
   //
-  // NO LAYOUT JUMP, and it takes all three of these. `ActivationChecklist`
-  // occupies no space while `preference` is `undefined`, so it cannot appear and
-  // then vanish on an established user; this route never even reaches these
-  // branches with an unknown status unless a read failed, because the gate above
-  // holds the skeleton until the preference lands; and `ChecklistSlot` reserves
-  // the settled card's height for the one transition the first two do not cover,
-  // the skeleton → card swap a mid-onboarding user still sees. Mount through the
-  // slot, never `ActivationChecklist` directly.
+  // The reopen row for a `skipped` user is not a grid item — one ghost button
+  // is not a widget — and sits above the grid as before. The empty branch has
+  // no grid, so the checklist renders as a plain block there, whichever state
+  // it is in. On both, the component answers for every state itself and is
+  // mounted unconditionally; the route reads `resolveChecklistView` only to
+  // choose WHERE, never whether.
   //
   // NO SECOND PRIMARY ACTION. The checklist carries no amber of its own by
   // design, so the one primary each of these views is allowed stays where it is
   // — "Use the default layout" below, and nothing on the populated dashboard.
-  // The per-item "Start" buttons `ChecklistSlot` now wires are ghost-variant and
-  // change none of that; they were left unwired only while the walkthrough
-  // itself was still to be built.
   // ===========================================================================
 
   // Empty
@@ -477,7 +465,9 @@ function DashboardPage(): ReactElement {
           It is handed to the header rather than placed beside it so that it
           anchors to the HEADING, as every other surface's mark does — see the
           prop's own note. Anchored at the right-hand end of this row it opened
-          on top of the checklist's play buttons. */}
+          on top of the checklist's play buttons — which is also why the
+          checklist's grid slot is the top-RIGHT one: anchored here, the mark
+          opens over the Stats Summary's tiles, and those are not controls. */}
       <DashboardHeader
         placedTypes={placedTypes}
         onAdd={handleAdd}
@@ -487,11 +477,16 @@ function DashboardPage(): ReactElement {
         resetBusy={defaultBusy}
         coachMark={<CoachMark surface="dashboard-widgets" />}
       />
-      {/* Above the grid, below the page heading and its actions — see the note
-          on the empty branch. */}
-      <ChecklistSlot />
+      {/* Mounted exactly once on this branch, wherever it goes: in the grid
+          when there is a card (or its skeleton) to show, above it otherwise —
+          where it renders the reopen row, or nothing. "Nothing" still has to
+          mount: the retirement write on the fourth completed item is the
+          component's own effect, and a route that skipped the mount for a
+          finished checklist would never let it fire. */}
+      {checklistInGrid ? null : <ChecklistSlot />}
       <DashboardGrid
         widgets={widgets}
+        aside={checklistInGrid ? { ...CHECKLIST_ASIDE, node: <ChecklistSlot /> } : undefined}
         onRemove={handleRemove}
         scheduleLayoutWrite={handleGridChange}
         onUpdateConfig={handleUpdateConfig}

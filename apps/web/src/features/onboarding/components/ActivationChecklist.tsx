@@ -1,5 +1,19 @@
 // ActivationChecklist — the four-item "what set up means" list.
 //
+// IT WEARS THE WIDGET CHROME, NOT A CARD'S. On the populated dashboard it is a
+// grid item — locked in the top-right slot, never persisted — and a card with
+// its own border weight and radius sat in that grid like a visitor. So the
+// shell here is `WidgetCard`'s (hairline border, `rounded-md`, the mono
+// uppercase title strip, with the progress line in it), and the same shell
+// serves every other mount: the zero-state, the empty layout, the mobile stack.
+// Nothing here knows which one it is in — the caller sizes the box, this fills
+// it.
+//
+// `resolveChecklistView` IS THE ONE STATEMENT OF WHICH OF THE FOUR THINGS TO
+// SHOW. The route needs the same answer BEFORE rendering, to tell the grid
+// whether to make room, and a second copy of the rules there is a second thing
+// to get wrong. So the rules live in the function and the component reads it.
+//
 // It renders derived state and writes nothing except the onboarding STATUS.
 // Every completion decision comes from `useOnboarding().checklist`, which is
 // `deriveChecklist`'s output: this file must never restate a rule like
@@ -79,22 +93,31 @@
 // never rests on colour alone.
 
 import { Circle, CircleCheck, Play, RotateCcw, X } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ComponentProps, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
-import { useOnboarding } from '../hooks/useOnboarding';
+import { useOnboarding, type UseOnboardingResult } from '../hooks/useOnboarding';
 import type { ChecklistItemId } from '../lib/derive-checklist';
+
+/** What the checklist renders as, for the three checklist values (above). */
+export type ChecklistView = 'none' | 'loading' | 'reopen' | 'card';
+
+export function resolveChecklistView({
+  checklist,
+  preference,
+  isError,
+}: Pick<UseOnboardingResult, 'checklist' | 'preference' | 'isError'>): ChecklistView {
+  // "There is no checklist for this user." Only a dismissal leaves a trace.
+  if (checklist === null) return preference?.status === 'skipped' ? 'reopen' : 'none';
+  // "Not known yet." A terminal failure is not a loading state, and neither is
+  // an unknown status — see the note on `undefined` above.
+  if (checklist === undefined) return isError || preference === undefined ? 'none' : 'loading';
+  // Retired. The component persists it; this stops showing it now.
+  return checklist.allComplete ? 'none' : 'card';
+}
 
 interface ActivationChecklistProps {
   /**
@@ -126,6 +149,38 @@ interface ActivationChecklistProps {
   canStartStep?: (id: ChecklistItemId) => boolean;
 }
 
+/**
+ * The widget shell — the same classes as `WidgetCard`'s section and header, so
+ * the checklist reads as one of the grid's own. `h-full` fills a grid item; in
+ * a flow container it is inert.
+ *
+ * THE BOX IS 224px TALL IN THE GRID — six rows of 40px less the 16px gutter —
+ * and the four rows, the header and the body padding come to 209px. Nothing
+ * else fits: a footer here put the card 14px over and gave it a scrollbar. So
+ * the progress line lives in the header, beside the dismiss control, and the
+ * loading state mirrors that row for row.
+ */
+function Shell({
+  trailing,
+  children,
+  ...rest
+}: { trailing?: ReactNode; children: ReactNode } & ComponentProps<'section'>) {
+  return (
+    <section
+      {...rest}
+      className="flex h-full flex-col overflow-hidden rounded-md border border-hairline bg-card text-card-foreground"
+    >
+      <header className="flex min-h-10 items-center justify-between gap-2 border-b border-hairline px-3 py-1.5">
+        <h3 className="font-mono text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">
+          Get set up
+        </h3>
+        <div className="flex items-center gap-2">{trailing}</div>
+      </header>
+      <div className="flex-1 overflow-auto p-3">{children}</div>
+    </section>
+  );
+}
+
 export function ActivationChecklist({ onStartStep, canStartStep }: ActivationChecklistProps) {
   const { checklist, preference, isError, isSaving, setStatus, dismiss } = useOnboarding();
 
@@ -143,9 +198,11 @@ export function ActivationChecklist({ onStartStep, canStartStep }: ActivationChe
     setStatus('done');
   }, [allComplete, status, setStatus]);
 
-  // "There is no checklist for this user." Only a dismissal leaves a trace.
-  if (checklist === null) {
-    if (status !== 'skipped') return null;
+  const view = resolveChecklistView({ checklist, preference, isError });
+
+  if (view === 'none') return null;
+
+  if (view === 'reopen') {
     return (
       <div data-testid="activation-checklist-reopen">
         <Button
@@ -162,113 +219,108 @@ export function ActivationChecklist({ onStartStep, canStartStep }: ActivationChe
     );
   }
 
-  // "Not known yet." A terminal failure is not a loading state — an unticked
-  // box we cannot substantiate is worse than no box, so render nothing at all.
-  if (checklist === undefined) {
-    if (isError) return null;
-    // Status unknown: the cheap preference read has not landed, so we cannot
-    // tell a user who is about to see a checklist from one who never will.
-    // Occupy no space rather than reserve room for a card most users lose.
-    if (preference === undefined) return null;
+  if (view === 'loading') {
+    // Row for row the geometry of the settled card, so the swap moves nothing
+    // around it — whichever box the caller put this in.
     return (
-      <Card
+      <Shell
         data-testid="activation-checklist-loading"
         role="status"
         aria-label="Loading your setup checklist"
-        className="gap-4 py-4"
+        trailing={<Skeleton className="h-4 w-24 motion-reduce:animate-none" />}
       >
-        <CardHeader className="px-4">
-          <Skeleton className="h-5 w-32 motion-reduce:animate-none" />
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3 px-4">
+        <ol className="flex flex-col">
           {[0, 1, 2, 3].map((row) => (
-            <Skeleton key={row} className="h-6 w-full motion-reduce:animate-none" />
+            <li key={row} className="flex min-h-9 items-center py-1">
+              <Skeleton className="h-4 w-full motion-reduce:animate-none" />
+            </li>
           ))}
-        </CardContent>
-      </Card>
+        </ol>
+      </Shell>
     );
   }
 
-  // Retired. The effect above persists it; this stops showing it now.
-  if (allComplete) return null;
+  // `card` implies a checklist; the type system cannot follow the resolver.
+  if (!checklist) return null;
 
   const doneCount = checklist.items.filter((item) => item.done).length;
 
   return (
-    <Card data-testid="activation-checklist" className="gap-4 py-4">
-      <CardHeader className="px-4">
-        <CardTitle className="text-base">Get set up</CardTitle>
-        {/* The non-colour carrier for overall progress, and the answer to "how
-            far along am I?" that a setup checklist has to give. */}
-        <CardDescription data-testid="activation-checklist-progress">
-          {doneCount} of {checklist.items.length} complete
-        </CardDescription>
-        <CardAction>
+    <Shell
+      data-testid="activation-checklist"
+      trailing={
+        <>
+          {/* The non-colour carrier for overall progress, and the answer to
+              "how far along am I?" that a setup checklist has to give. */}
+          <span
+            data-testid="activation-checklist-progress"
+            className="font-mono text-xs text-muted-foreground"
+          >
+            {doneCount} of {checklist.items.length} complete
+          </span>
           <Button
             variant="ghost"
-            size="icon-sm"
-            className="cursor-pointer"
+            size="icon-xs"
+            className="cursor-pointer text-muted-foreground"
             aria-label="Dismiss checklist"
             disabled={isSaving}
             onClick={dismiss}
           >
             <X aria-hidden="true" />
           </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="px-4">
-        {/* Ordered because the four items have a fixed presentation order, not
-            because they gate on each other — any one can be completed first. */}
-        <ol className="flex flex-col">
-          {checklist.items.map((item) => (
-            <li
-              key={item.id}
-              // The join to the walkthrough: this attribute is the anchor the
-              // tour targets and the handle the per-item action is found by.
-              data-checklist-item={item.id}
-              className="flex min-h-9 items-center gap-3 py-1"
+        </>
+      }
+    >
+      {/* Ordered because the four items have a fixed presentation order, not
+          because they gate on each other — any one can be completed first. */}
+      <ol className="flex flex-col">
+        {checklist.items.map((item) => (
+          <li
+            key={item.id}
+            // The join to the walkthrough: this attribute is the anchor the
+            // tour targets and the handle the per-item action is found by.
+            data-checklist-item={item.id}
+            className="flex min-h-9 items-center gap-3 py-1"
+          >
+            {item.done ? (
+              <CircleCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
+            ) : (
+              <Circle className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            )}
+            <span
+              className={cn(
+                'min-w-0 flex-1 text-sm',
+                item.done && 'text-muted-foreground line-through',
+              )}
             >
-              {item.done ? (
-                <CircleCheck className="size-4 shrink-0 text-success" aria-hidden="true" />
-              ) : (
-                <Circle className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              )}
-              <span
-                className={cn(
-                  'min-w-0 flex-1 text-sm',
-                  item.done && 'text-muted-foreground line-through',
-                )}
-              >
-                {item.label}
-                <span className="sr-only">{item.done ? ' — completed' : ' — not completed'}</span>
-              </span>
-              {/* No primary (amber) action anywhere on this card. The checklist
-                  is embedded in the zero-state, which carries the one primary
-                  action that view is allowed.
+              {item.label}
+              <span className="sr-only">{item.done ? ' — completed' : ' — not completed'}</span>
+            </span>
+            {/* No primary (amber) action anywhere on this card. The checklist
+                is embedded in the zero-state, which carries the one primary
+                action that view is allowed.
 
-                  A PLAY TRIANGLE, AND A NAME THE ICON DOES NOT CARRY. The row is
-                  a line of text and a tick; a word here read as a second label
-                  competing with the item's own. The icon says "this starts
-                  something" at a glance and `aria-label` says which — an icon
-                  alone would leave a screen reader with an unnamed button four
-                  times over, one per row. Same size and variant as the dismiss
-                  control in the header, so the card has one icon-button size. */}
-              {onStartStep && (canStartStep?.(item.id) ?? true) && (
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0 cursor-pointer"
-                  data-checklist-action={item.id}
-                  aria-label={`Start: ${item.label}`}
-                  onClick={() => onStartStep(item.id)}
-                >
-                  <Play aria-hidden="true" />
-                </Button>
-              )}
-            </li>
-          ))}
-        </ol>
-      </CardContent>
-    </Card>
+                A PLAY TRIANGLE, AND A NAME THE ICON DOES NOT CARRY. The row is
+                a line of text and a tick; a word here read as a second label
+                competing with the item's own. The icon says "this starts
+                something" at a glance and `aria-label` says which — an icon
+                alone would leave a screen reader with an unnamed button four
+                times over, one per row. */}
+            {onStartStep && (canStartStep?.(item.id) ?? true) && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0 cursor-pointer"
+                data-checklist-action={item.id}
+                aria-label={`Start: ${item.label}`}
+                onClick={() => onStartStep(item.id)}
+              >
+                <Play aria-hidden="true" />
+              </Button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </Shell>
   );
 }
