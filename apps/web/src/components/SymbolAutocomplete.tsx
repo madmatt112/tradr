@@ -57,10 +57,21 @@ export function SymbolAutocomplete({
   const results = data?.results ?? [];
   const hasQuery = debouncedQuery.length >= 1;
 
-  // A fresh query invalidates the current highlight and any prior dismissal.
+  // NEW RESULTS INVALIDATE THE HIGHLIGHT, AND NOTHING ELSE.
+  //
+  // This used to clear `dismissed` here as well, and that reopened the dropdown
+  // immediately after a selection. `commit` sets the query to the chosen ticker
+  // and dismisses in the same breath; the debounce then delivers that ticker as
+  // a "fresh query" ~250ms later, this effect cleared the dismissal, and the
+  // list came back showing the one exact match the user had just picked.
+  //
+  // Clearing it here was never what reopened the list for a user who was TYPING
+  // — `handleInputChange` already clears `dismissed` on every keystroke, which
+  // is the gesture that should undo an Escape. So the reset belongs there, where
+  // the user's intent is known, and not on a query change that the component
+  // itself may have caused.
   React.useEffect(() => {
     setActiveIndex(-1);
-    setDismissed(false);
   }, [debouncedQuery]);
 
   // On endpoint error, degrade to a plain text input: no dropdown (REQ-7.3).

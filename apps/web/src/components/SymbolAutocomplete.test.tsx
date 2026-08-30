@@ -119,4 +119,71 @@ describe('SymbolAutocomplete', () => {
     fireEvent.keyDown(input, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
   });
+
+  // SELECTING CLOSES THE LIST, AND STAYS CLOSED.
+  //
+  // The dismissal used to be undone by the component itself. `commit` sets the
+  // query to the chosen ticker and dismisses; the debounce then delivered that
+  // ticker as a fresh query ~250ms later and the effect watching it cleared the
+  // dismissal, so the list came back showing the single exact match the user had
+  // just chosen. Every existing test here asserted `onChange` fired and none
+  // asserted the list went away, which is why it survived.
+  //
+  // The wait past the debounce window is the whole assertion: a check made
+  // immediately after the click passes either way.
+  it('selecting a result closes the dropdown and it does not come back', async () => {
+    vi.mocked(api.get).mockResolvedValue({ results: [AAPL, AAL] });
+    const { input } = renderAC();
+    type(input, 'aa');
+    const list = await screen.findByRole('listbox');
+
+    fireEvent.mouseDown(within(list).getByText('AAPL').closest('[role="option"]')!);
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+
+    // Past the 250ms debounce of the committed ticker — the moment it reopened.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('stays closed after Enter selects the highlighted ticker', async () => {
+    vi.mocked(api.get).mockResolvedValue({ results: [AAPL, AAL] });
+    const { input } = renderAC();
+    type(input, 'aa');
+    await screen.findByRole('listbox');
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  // The other half of the same rule: typing is what should undo a dismissal, and
+  // it still does. Escape then a keystroke brings the list back.
+  it('typing after a dismissal reopens the dropdown', async () => {
+    vi.mocked(api.get).mockResolvedValue({ results: [AAPL, AAL] });
+    const { input } = renderAC();
+    type(input, 'aa');
+    await screen.findByRole('listbox');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+
+    fireEvent.change(input, { target: { value: 'aap' } });
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeNull());
+  });
+
+  // And a correction after a selection: the user picks AAPL, then keeps typing
+  // to search for something else. That is a keystroke, so the list returns.
+  it('typing after a selection reopens the dropdown', async () => {
+    vi.mocked(api.get).mockResolvedValue({ results: [AAPL, AAL] });
+    const { input } = renderAC();
+    type(input, 'aa');
+    const list = await screen.findByRole('listbox');
+    fireEvent.mouseDown(within(list).getByText('AAPL').closest('[role="option"]')!);
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+
+    fireEvent.change(input, { target: { value: 'AAL' } });
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeNull());
+  });
 });
