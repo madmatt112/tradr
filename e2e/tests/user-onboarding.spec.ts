@@ -266,11 +266,31 @@ async function tabTo(page: Page, selector: string): Promise<void> {
  * either way, which is why nothing below this line changed with it.
  */
 async function walkAccountSetTo(page: Page, stopAt: number): Promise<void> {
-  await page.locator('[data-tour="account-new"]').click();
-  await expect(page.getByLabel('Name')).toBeVisible();
-  for (let index = 1; index <= stopAt; index += 1) {
+  await openAccountDialogFromStepOne(page);
+  for (let index = 2; index <= stopAt; index += 1) {
     await advanceTo(page, index);
   }
+}
+
+/**
+ * Step 1's action, and the advance it earns.
+ *
+ * Opening the dialog IS what step 1 asks for, so the tour moves on it — there is
+ * no "Next" in this, and pressing one here would ask for a field that does not
+ * exist yet. That press is what users reported as a dead button: it moved
+ * driver.js onto `#name` before the dialog was open, which left the step-1
+ * popover on screen for the whole of that step's wait and then ended the
+ * walkthrough.
+ */
+async function openAccountDialogFromStepOne(page: Page): Promise<void> {
+  await page.locator('[data-tour="account-new"]').click();
+  // `#name`, not `getByLabel('Name')`: the step this advance lands on is titled
+  // "Name", and driver.js gives its popover `role="dialog"` labelled by that
+  // title, so the accessible-name lookup matches the popover as well as the
+  // field. The id is the step's own target and names only the field.
+  await expect(page.locator('#name')).toBeVisible();
+  await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[1]);
+  await expectStepClear(page, `account step 2, "${ACCOUNT_STEP_TITLES[1]}"`);
 }
 
 /** Fill the account form and submit it — the real action the gated step waits for. */
@@ -438,36 +458,70 @@ test.describe('user onboarding', () => {
     await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
   });
 
-  // A TARGET THE USER HAS NOT MADE YET IS WAITED FOR, NOT GIVEN UP ON.
+  // "THE NEXT BUTTON DOES NOTHING" — the reported defect, from the press that
+  // caused it, on the set it was reported against and on the one reported after.
   //
-  // The first step asks the user to open the account dialog, and that gesture
-  // publishes nothing the walkthrough can hear, so "Next" is what drives it.
-  // Pressing Next before opening the dialog is therefore the ordinary thing to
-  // do — the step names a button, not a Next — and it asks for `#name`, a field
-  // that does not exist yet. The wait behind that step used to be sized for a
-  // dialog already opening, so it expired while the user was still reading and
-  // ended the walkthrough on a field that was about to appear.
+  // The first step of each asks the user to open a dialog, and the step after it
+  // anchors to a field inside that dialog. The gesture publishes nothing on the
+  // event bus, so the step used to be handed to the engine with "Next" live —
+  // and pressing it moved driver.js onto a target that did not exist, which
+  // parks it in that step's `waitForElement` window with the PREVIOUS popover
+  // still on screen. Fifteen seconds of a live button doing nothing, then the
+  // walkthrough ended on a step the user never saw.
   //
-  // The five-second pause is the assertion: it is longer than any render this
-  // screen does, so a tour still up after it is one that is genuinely waiting.
-  test('a step waits for a target the user has not created yet', async ({ page, request }) => {
-    const email = await registerUser(request, 'waitfor');
-    await loginViaUi(page, email);
-    await startWalkthrough(page);
+  // THE FIVE-SECOND PAUSE IS THE ASSERTION, and it is what a shorter one cannot
+  // do: it is longer than any render either screen does, so a tour still sitting
+  // on step 1 after it is a tour that never entered the doomed wait. The press
+  // has to leave the walkthrough exactly where it stands AND leave it able to go
+  // on, which is what the second half checks.
+  for (const set of [
+    {
+      name: 'the account set',
+      start: async (page: Page, request: APIRequestContext): Promise<void> => {
+        const email = await registerUser(request, 'nextdead-account');
+        await loginViaUi(page, email);
+        await startWalkthrough(page);
+      },
+      first: ACCOUNT_STEP_TITLES[0],
+      second: ACCOUNT_STEP_TITLES[1],
+      opener: '[data-tour="account-new"]',
+    },
+    {
+      name: 'the position set',
+      start: async (page: Page, request: APIRequestContext): Promise<void> => {
+        const email = await registerUser(request, 'nextdead-position');
+        await createAccount(request, 'Next account');
+        await loginViaUi(page, email);
+        await expect(page.getByTestId('activation-checklist')).toBeVisible();
+        await page.locator('[data-checklist-action="position"]').click();
+        await expect(page).toHaveURL(/\/positions$/);
+      },
+      first: POSITION_STEP_TITLES[0],
+      second: POSITION_STEP_TITLES[1],
+      opener: '[data-tour="position-new"]',
+    },
+  ]) {
+    test(`${set.name} survives a Next pressed before the dialog is open`, async ({
+      page,
+      request,
+    }) => {
+      await set.start(page, request);
+      await expect(popoverTitle(page)).toHaveText(set.first);
 
-    await popoverNext(page).click();
-    await expect(popover(page)).toHaveCount(1);
-    await page.waitForTimeout(5_000);
-    await expect(popover(page)).toHaveCount(1);
-    // Still on the step that asked, because the tour has not moved — it is
-    // holding the window open for the control the next step needs.
-    await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[0]);
+      // The press that was reported. It must move nothing — and, more to the
+      // point, must not commit the tour to a target that is not there.
+      await popoverNext(page).click();
+      await page.waitForTimeout(5_000);
+      await expect(popover(page)).toHaveCount(1);
+      await expect(popoverTitle(page)).toHaveText(set.first);
 
-    // And the moment the user does the thing, the tour is there.
-    await page.locator('[data-tour="account-new"]').click();
-    await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[1]);
-    await escapeTour(page);
-  });
+      // And the walkthrough is still going somewhere: doing the thing the step
+      // actually asks for carries it on, which is what the dead press cost.
+      await page.locator(set.opener).click();
+      await expect(popoverTitle(page)).toHaveText(set.second);
+      await escapeTour(page);
+    });
+  }
 
   // THE POSITION SET, END TO END — the set this suite never drove, which is how
   // it shipped unfinishable. Creating the position leaves the user on
@@ -495,11 +549,12 @@ test.describe('user onboarding', () => {
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[0]);
     await expectStepClear(page, `position step 1, "${POSITION_STEP_TITLES[0]}"`);
 
-    // The gesture step 1 asks for, from the control it highlights.
+    // The gesture step 1 asks for, from the control it highlights — and the
+    // whole of the move. No "Next": the field this set's second step names
+    // arrives with the dialog, and that arrival is what advances the step.
     await page.locator('[data-tour="position-new"]').click();
     const dialog = page.getByRole('dialog', { name: 'New Position' });
     await expect(dialog.locator('#symbol')).toBeVisible();
-    await popoverNext(page).click();
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[1]);
     await expectStepClear(page, `position step 2, "${POSITION_STEP_TITLES[1]}", dialog open`);
 

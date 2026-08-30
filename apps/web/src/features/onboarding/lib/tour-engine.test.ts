@@ -207,6 +207,110 @@ describe('action steps', () => {
 });
 
 /**
+ * A STEP HELD ON A CONTROL THAT IS STILL TO COME.
+ *
+ * The reported defect: the first step of the account set and of the position set
+ * each ask the user to open a dialog, and the step after each anchors to a field
+ * inside it. Neither gesture publishes anything, so both steps reached the
+ * engine with "Next" live — and a "Next" that moves the tour onto a target that
+ * does not exist parks driver.js in that step's `waitForElement` window with the
+ * PREVIOUS popover still on screen. A live button that did nothing for fifteen
+ * seconds, and then the walkthrough ended.
+ *
+ * `advanceOnAppearanceOf` names the control whose arriving IS the action, which
+ * makes the step gated like any other action step while it is still to come and
+ * an ordinary step once it is there.
+ */
+describe('a step waiting for the control its gesture creates', () => {
+  const steps: TourStep[] = [
+    {
+      target: '#one',
+      title: 'Open it',
+      description: 'Choose the button.',
+      advanceOnAppearanceOf: '#late',
+    },
+    { target: '#late', title: 'The field', description: 'Fill this in.' },
+  ];
+
+  /** What the gesture does: the dialog mounts, carrying the next step's field. */
+  function mountLateTarget(): void {
+    document.body.insertAdjacentHTML('beforeend', '<input id="late" />');
+  }
+
+  it('ignores "Next" while the control is still to come', () => {
+    startTour(steps);
+
+    clickPopoverButton('.driver-popover-next-btn');
+
+    expect(popoverTitle()).toBe('Open it');
+  });
+
+  it('ignores the right-arrow key on the same terms', () => {
+    startTour(steps);
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
+
+    expect(popoverTitle()).toBe('Open it');
+  });
+
+  it('advances by itself the moment the control appears', async () => {
+    const onBeforeAdvance = vi.fn();
+    startTour(steps, { onBeforeAdvance });
+    expect(popoverTitle()).toBe('Open it');
+
+    mountLateTarget();
+
+    await vi.waitFor(() => expect(popoverTitle()).toBe('The field'));
+    // Through the same path a "Next" press takes, so the caller gets its chance
+    // to prepare the screen either way.
+    expect(onBeforeAdvance).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  // The step is not gated on principle, only on the control being absent. A set
+  // whose next step names something the screen already renders — both of the
+  // calculator's gesture steps do — keeps "Next" exactly as it was.
+  it('leaves "Next" alone when the control is already on screen', () => {
+    mountLateTarget();
+    startTour(steps);
+
+    clickPopoverButton('.driver-popover-next-btn');
+
+    expect(popoverTitle()).toBe('The field');
+  });
+
+  // The classification the user is owed on the way out: the control the step
+  // named was there and usable, so leaving is declining something they could
+  // have done — not the tour pointing at nothing.
+  it('reports a step left this way as an action the user declined', () => {
+    const onExit = vi.fn();
+    startTour(steps, { onExit });
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+
+    expect(onExit).toHaveBeenCalledWith('dismissed', { cause: 'action-required', step: steps[0] });
+  });
+
+  // THE WATCH BELONGS TO ONE STEP. The position set navigates onto a screen
+  // carrying the very control the step before it was waiting on, so a watch that
+  // outlived its step would advance the tour again the moment that screen
+  // rendered — one step skipped, and the one that teaches the draft state.
+  it('stops watching once the tour has moved on', async () => {
+    startTour(steps);
+
+    mountLateTarget();
+    await vi.waitFor(() => expect(popoverTitle()).toBe('The field'));
+
+    // A second mutation of the same kind must move nothing: the tour is on its
+    // last step and a live watch would finish it.
+    document.body.insertAdjacentHTML('beforeend', '<input id="late-again" />');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(isActive()).toBe(true);
+    expect(popoverTitle()).toBe('The field');
+  });
+});
+
+/**
  * The caller's chance to put the next step's screen up before the tour moves
  * onto it. Only for a move the USER made: a caller driving the tour with
  * `advance()` has already prepared, and firing here as well would do it twice.

@@ -295,21 +295,71 @@ function bindAdvance(engine: TourEngineModule, navigate: NavigateFn): void {
  * Percent risk basis, picking an account in the calculator) which changes no
  * server data and publishes nothing.
  *
- * For those, the flag is turned off and "Next" advances normally. The highlighted
- * control stays interactive either way (`disableActiveInteraction: false`), so
- * the user still performs the gesture; they just also press Next afterwards, and
- * the following step's `waitForMs` covers a dialog that is still opening. That
- * is a narrower reading of advance-on-the-real-action than those four steps
- * were authored for, and it is the honest one until a gesture has an event to
- * advance on — being asked to press Next is a worse tour, but a tour that
- * cannot be advanced at all is a broken one.
+ * For those the flag is turned off, and `appearanceSignal()` below then says
+ * what the step advances on instead. The highlighted control stays interactive
+ * throughout (`disableActiveInteraction: false`), so the gesture is always the
+ * user's to make.
+ *
+ * "NEXT ADVANCES THEM" WAS THE PREVIOUS ANSWER, AND ON TWO OF THE FOUR IT WAS
+ * NOT TRUE. Turning the flag off hands "Next" back, but "Next" can only move a
+ * tour onto a step whose target exists — and the first step of the account set
+ * and of the position set both name a field inside a dialog the user has not
+ * opened. Pressing it moved driver.js onto that step, which then sat in its
+ * `waitForElement` window with the PREVIOUS popover still on screen for the full
+ * 15 seconds before ending the walkthrough. Reported as "the next button does
+ * nothing", against both sets, and correctly: it did nothing a user could see,
+ * for fifteen seconds, and then took the walkthrough away.
+ *
+ * So the gesture's own result is the signal. The dialog opening IS the step's
+ * action, observed in the DOM instead of on the bus, and the engine holds "Next"
+ * until it lands exactly as it does for an action step with an event behind it.
+ * The other two of the four keep advancing on "Next" as they always did, because
+ * the control their next step names is already on the screen they run on.
  */
 function withObservableActionsOnly(steps: WalkthroughStep[]): WalkthroughStep[] {
-  return steps.map((step) => {
+  return steps.map((step, index) => {
     if (!step.advanceOnAction) return step;
     if (step.target !== undefined && step.target in ACTION_SIGNALS) return step;
-    return { ...step, advanceOnAction: false };
+    return {
+      ...step,
+      advanceOnAction: false,
+      advanceOnAppearanceOf: appearanceSignal(step, steps[index + 1]),
+    };
   });
+}
+
+/**
+ * The control whose ARRIVAL is this step's action, when there is one.
+ *
+ * The four steps above ask for a gesture with no event behind it, but two of
+ * them — "Choose New Account" and "Choose New Position" — do leave a mark we can
+ * see: the dialog they open, which is where the NEXT step's target lives. Naming
+ * it here is what turns those two from steps driven by a "Next" that cannot work
+ * into steps driven by the gesture their own copy asks for, and it is why the
+ * flag being off above no longer means "Next is the only way on".
+ *
+ * TWO KINDS OF NEXT STEP ARE REFUSED, AND THE FIRST IS THE ONE THAT MATTERS:
+ *
+ * - A NEXT STEP ON ANOTHER ROUTE is reached by NAVIGATING, and nothing navigates
+ *   until the tour moves. Waiting for its target would be waiting for something
+ *   the wait itself prevents — a step with no way out but Escape, which is the
+ *   trap the downgrade above exists to avoid. No step is in that position today:
+ *   all four run their gesture and their next step on one screen. It is a guard
+ *   for the fifth, because the failure it prevents is silent and the check is one
+ *   comparison.
+ * - A NEXT STEP WITH NO TARGET is centred, so there is nothing to wait for.
+ *
+ * The calculator's two gesture steps are named here and cost nothing: both point
+ * at a control `/calculator` already renders, so the engine finds the selector
+ * present, leaves the gate open and lets "Next" move them exactly as before.
+ */
+function appearanceSignal(
+  step: WalkthroughStep,
+  next: WalkthroughStep | undefined,
+): string | undefined {
+  if (next?.target === undefined) return undefined;
+  if (next.route !== step.route) return undefined;
+  return next.target;
 }
 
 /**
