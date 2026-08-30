@@ -68,13 +68,46 @@ export interface TourStep {
    * "Next", such a step would strand the user, so `useWalkthrough` downgrades it
    * at runtime: any step whose target is absent from `ACTION_SIGNALS` there is
    * handed to the engine with the flag off and advances on "Next" like any
-   * other. Four are, today — `[data-testid="zero-state-create-account"]`,
+   * other. Four are, today — `[data-tour="account-new"]`,
    * `[data-tour="calculator-risk"]`, `[data-tour="calculator-account"]` and
    * `[data-tour="position-new"]` — because each asks for a pure UI gesture that
    * changes no server data. `hooks/useWalkthrough.ts` owns both the mapping and
    * the downgrade, and a test there fails if a fifth step joins them unnoticed.
+   *
+   * A DOWNGRADED STEP IS NOT THEREBY DRIVEN BY "NEXT" — two of the four are
+   * driven by `advanceOnAppearanceOf` below, because "Next" is the one thing
+   * that cannot move them.
    */
   advanceOnAction?: boolean;
+  /**
+   * ADVANCE WHEN THIS SELECTOR APPEARS. The step's action IS something we can
+   * observe after all — not on the event bus, but in the DOM: the control the
+   * NEXT step is about arriving is the gesture having happened.
+   *
+   * IT EXISTS BECAUSE "NEXT" COULD NOT WORK ON THESE STEPS AND LOOKED LIKE IT
+   * DID. A step downgraded to "Next" (see `advanceOnAction`) whose next step's
+   * target lives inside a dialog the user has not opened moves the tour onto a
+   * target that is not there, and driver.js then holds the PREVIOUS popover on
+   * screen for the whole of that step's `waitForElement` window — 15 seconds on
+   * both sets that do this. To the user "Next" is a live button that does
+   * nothing, and then the walkthrough ends with a notice about a step they never
+   * saw. That is the reported defect, against "Log a position" and "Create a
+   * brokerage account": the only two sets whose first step opens a dialog.
+   *
+   * So the wait becomes the signal. While the selector is absent the step is
+   * gated exactly as an action step is — "Next" is suppressed rather than
+   * misleading — and the moment it resolves the tour advances by itself, which
+   * is the gesture the step's own copy asked for ("Choose New Position"). Once
+   * the control IS there the gate lifts, because from then on "Next" lands on a
+   * step that exists.
+   *
+   * SET BY `useWalkthrough`, NOT AUTHORED. Only it knows which steps have no
+   * event to advance on, and only it knows whether the next step is on this
+   * step's own screen — a target that arrives by NAVIGATION must never be waited
+   * for here, because nothing navigates until the tour moves and the wait would
+   * never end.
+   */
+  advanceOnAppearanceOf?: string;
 }
 
 export type TourExitReason =
@@ -183,6 +216,8 @@ let exitReason: TourExitReason = 'dismissed';
 /** Why the tour could not carry on, if it could not — see `TourHandlers.onExit`. */
 let blocked: TourBlock | undefined;
 let pendingStopTimer: number | undefined;
+/** Watches for the step's `advanceOnAppearanceOf` control, while one is awaited. */
+let appearanceObserver: MutationObserver | null = null;
 
 function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
@@ -202,11 +237,57 @@ function toDriveStep(step: TourStep): DriveStep {
   };
 }
 
+/**
+ * Stop waiting for a step's `advanceOnAppearanceOf` control.
+ *
+ * Called from `advance()` and from the teardown, which is EVERY way a step stops
+ * being the current one. A watch that outlived its step would advance the tour
+ * off whichever step came next the moment its selector happened to resolve — and
+ * the position set navigates onto a screen carrying the very control the step
+ * before it was waiting on, so that is a step skipped rather than a theoretical
+ * one.
+ */
+function disarmAppearanceAdvance(): void {
+  appearanceObserver?.disconnect();
+  appearanceObserver = null;
+}
+
+/**
+ * Wait for the control this step's gesture creates, and advance when it lands.
+ *
+ * Armed only when the selector is ABSENT: a step whose next control is already
+ * on screen is not waiting for anything, "Next" can move it, and arming here
+ * would advance it the instant the tour opened. That is what keeps the
+ * calculator set — whose two gesture steps both name a control the page already
+ * renders — behaving exactly as it did.
+ *
+ * `document.body` with `subtree`, because what we are waiting for is a dialog
+ * being portalled in somewhere we do not own. The callback is cheap: one
+ * `querySelector` per mutation batch, for as long as one step is on screen.
+ */
+function armAppearanceAdvance(index: number): void {
+  disarmAppearanceAdvance();
+  const selector = activeSteps[index]?.advanceOnAppearanceOf;
+  if (selector === undefined) return;
+  if (document.querySelector(selector) !== null) return;
+
+  appearanceObserver = new MutationObserver(() => {
+    if (document.querySelector(selector) === null) return;
+    // Through `advanceFromUser`, not `advance`, because this IS the user
+    // advancing — they did the thing the step asked for. It is also what gives
+    // the caller its `onBeforeAdvance`, so the move is prepared the same way a
+    // "Next" press would have been.
+    advanceFromUser();
+  });
+  appearanceObserver.observe(document.body, { childList: true, subtree: true });
+}
+
 function clearState(): void {
   if (pendingStopTimer !== undefined) {
     window.clearTimeout(pendingStopTimer);
     pendingStopTimer = undefined;
   }
+  disarmAppearanceAdvance();
   window.removeEventListener('keyup', handleKeyup);
   instance = null;
   activeSteps = [];
@@ -251,12 +332,27 @@ function clearState(): void {
  *   point of an action step, and a user who leaves anyway declined something
  *   they could have done.
  *
- * A step with no `advanceOnAction` is never blocking: "Next" moves it, so
- * whatever the user did, they had a way on.
+ * TWO THINGS PUT A STEP IN THAT POSITION, AND `holdsNext` IS WHERE THEY MEET —
+ * the authored `advanceOnAction`, and an `advanceOnAppearanceOf` control that
+ * has not arrived yet. They are one question here because they have one answer:
+ * either way the user is being asked to do something, and either way "Next" must
+ * not pretend otherwise. A step held by neither is never blocking: "Next" moves
+ * it, so whatever the user did, they had a way on.
  */
+function holdsNext(step: TourStep): boolean {
+  if (step.advanceOnAction === true) return true;
+  // Held only while the control is still to come. Once it is on screen the step
+  // is an ordinary one again: "Next" would land on a step that exists, so there
+  // is nothing left to hold the user for.
+  return (
+    step.advanceOnAppearanceOf !== undefined &&
+    document.querySelector(step.advanceOnAppearanceOf) === null
+  );
+}
+
 function blockOn(index: number): TourBlock | undefined {
   const step = activeSteps[index];
-  if (step?.advanceOnAction !== true) return undefined;
+  if (step === undefined || !holdsNext(step)) return undefined;
   if (step.target === undefined) return { cause: 'action-required', step };
 
   const element = document.querySelector(step.target);
@@ -342,6 +438,9 @@ function handleKeyup(event: KeyboardEvent): void {
   // Never off the front of the set: driver.js's own left-arrow handler stops at
   // the first step, while `movePrevious()` there tears the tour down.
   if (event.key === 'ArrowLeft' && running.hasPreviousStep()) {
+    // Going back leaves the step too, so its watch goes with it — the highlight
+    // that re-arms is the one for the step being moved to.
+    disarmAppearanceAdvance();
     running.movePrevious();
   }
 }
@@ -421,6 +520,9 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
     return;
   }
 
+  // Before the caller hears about the step, so a handler that reads the tour's
+  // state finds the watch already in place.
+  armAppearanceAdvance(index);
   activeHandlers.onStepChange?.(index, step);
 };
 
@@ -527,6 +629,10 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
  */
 export function advance(): void {
   if (!instance?.isActive()) return;
+  // The step being left stops being waited for HERE rather than on the next
+  // highlight: a step whose target has to be waited for is highlighted long
+  // after the move, and the old watch would be live for all of it.
+  disarmAppearanceAdvance();
   if (instance.isLastStep()) {
     exitReason = 'completed';
     stop();

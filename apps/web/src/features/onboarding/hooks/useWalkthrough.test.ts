@@ -1074,6 +1074,41 @@ describe('useWalkthrough — action signals', () => {
     );
   });
 
+  // THE OTHER HALF OF THE DOWNGRADE, AND THE REASON IT IS NOT JUST "PRESS NEXT".
+  //
+  // Two of those four open a dialog, and the step after each names a field
+  // inside it. "Next" cannot move a tour onto a target that is not on screen —
+  // it strands driver.js in that step's wait with the previous popover still up,
+  // which is the "the next button does nothing" both sets were reported for. So
+  // the dialog arriving is named as the signal instead, and the engine holds the
+  // step until it does.
+  it('names the control that advances each downgraded step, or nothing', async () => {
+    const signals = async (item: ChecklistItemId): Promise<[string, string | undefined][]> => {
+      resetSession();
+      await start(item);
+      return (started?.steps ?? [])
+        .filter((step) => step.advanceOnAppearanceOf !== undefined)
+        .map((step) => [step.target ?? '(centred)', step.advanceOnAppearanceOf]);
+    };
+
+    expect(await signals('account')).toEqual([['[data-tour="account-new"]', '#name']]);
+    expect(await signals('position')).toEqual([['[data-tour="position-new"]', '#symbol']]);
+
+    // The calculator's two are named as well — both point at a control
+    // `/calculator` already renders, so the engine finds it present, leaves the
+    // gate open and "Next" moves them exactly as it always did.
+    expect(await signals('calculator')).toEqual([
+      ['[data-tour="calculator-risk"]', '[data-tour="calculator-account"]'],
+      ['[data-tour="calculator-account"]', '#riskPercent, #dollarRisk'],
+    ]);
+
+    // Nothing in the close set: neither of its action steps is downgraded, and
+    // its one step that changes screen is reached by NAVIGATING, which nothing
+    // does until the tour moves. Waiting for that target would be waiting for
+    // something the wait itself prevents.
+    expect(await signals('close')).toEqual([]);
+  });
+
   it('does not otherwise alter the authored steps', async () => {
     await start('close');
     expect(currentTargets()).toEqual(WALKTHROUGH_STEPS.close.map((s) => s.target));
