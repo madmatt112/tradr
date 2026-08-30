@@ -1,5 +1,7 @@
 import {
   AdminUsageQuerySchema,
+  type AdminResetPreview,
+  type AdminResetResult,
   type AdminStats,
   type AdminUsage,
   type AdminUserDetail,
@@ -15,6 +17,10 @@ import { withTransaction } from '@/lib/transaction';
 import {
   countActiveUsersNow,
   countAdmins,
+  countResettableData,
+  deleteTradingData,
+  deleteUserSettings,
+  resetUserPreferences,
   countAllPositionsByStatus,
   countAllUsers,
   decodeAdminUserCursor,
@@ -281,4 +287,94 @@ export async function getUsage(from?: string, to?: string): Promise<AdminUsage> 
       net: revenue.net.toString(),
     },
   };
+}
+
+/**
+ * What a factory reset would destroy for this user (REQ-13.1).
+ *
+ * Read-only and unlocked: it feeds the confirmation dialog, and the numbers are
+ * a description of the account rather than a promise about a future transaction.
+ * The reset itself re-counts from its own DELETEs, so a row added between the
+ * preview and the press is still removed and still reported — the preview being
+ * a few rows stale cannot cause the wrong thing to be deleted.
+ */
+export async function getResetPreview(userId: string): Promise<AdminResetPreview> {
+  const row = await selectAdminUserById(db, userId);
+  if (!row) throw new NotFoundError('User', userId);
+  const counts = await countResettableData(db, userId);
+  return { userId, email: row.email, ...counts };
+}
+
+/**
+ * Return a user's journal to its post-registration state (REQ-13.2).
+ *
+ * THE TYPED EMAIL IS CHECKED HERE, not only in the dialog that collected it. A
+ * confirmation implemented in the client is a courtesy to whoever uses the
+ * client; this endpoint is reachable by anything holding an admin session, and
+ * the whole value of "type the address" is that a request aimed at the wrong id
+ * cannot destroy the wrong account. Compared case-insensitively because
+ * registration lowercases what it stores and an operator reading an address off
+ * the screen should not be punished for capitalising it.
+ *
+ * ONE TRANSACTION COVERS THE DELETES *AND* THE AUDIT ROW, which is the only way
+ * the two can be trusted to agree: the audit entry's `detail` is the sole record
+ * of what was destroyed — nothing can reconstruct those counts once the rows are
+ * gone — so a commit that dropped the rows but not the entry would leave the
+ * destruction unexplained, and one that wrote the entry but not the rows would
+ * describe a reset that never happened.
+ *
+ * Order inside the transaction is forced by ON DELETE RESTRICT — see
+ * `deleteTradingData` in admin.query.ts.
+ */
+export async function factoryResetUser(
+  actorId: string,
+  targetId: string,
+  confirmEmail: string,
+  removeSettings: boolean,
+): Promise<AdminResetResult> {
+  return withTransaction(db, async (tx) => {
+    // Actor email for the audit snapshot, resolved inside the tx — the
+    // `toggleAdmin` precedent: authMiddleware exposes userId/isAdmin, not email.
+    const actorEmail = await selectUserEmailById(tx, actorId);
+    if (actorEmail === null) {
+      throw new InvariantViolationError(`Reset actor ${actorId} has no user row`);
+    }
+
+    const targetEmail = await selectUserEmailById(tx, targetId);
+    if (targetEmail === null) throw new NotFoundError('User', targetId);
+
+    if (confirmEmail.trim().toLowerCase() !== targetEmail.toLowerCase()) {
+      throw new ValidationError(
+        'The typed email does not match the account being reset. Nothing was changed.',
+      );
+    }
+
+    const deleted = await deleteTradingData(tx, targetId);
+    if (removeSettings) {
+      Object.assign(deleted, await deleteUserSettings(tx, targetId));
+    }
+    // Always last, and always run: `onboarding` is cleared whether or not
+    // settings were included, because a user whose walkthrough still thinks it
+    // has been completed cannot walk it again — which is what a reset is for.
+    await resetUserPreferences(tx, targetId, removeSettings);
+
+    await insertAdminAuditEntry(tx, {
+      action: 'factory_reset',
+      actorUserId: actorId,
+      actorEmail,
+      targetUserId: targetId,
+      targetEmail,
+      detail: { removeSettings, deleted },
+    });
+
+    logger.warn('admin factory reset', {
+      feature: 'admin',
+      actorUserId: actorId,
+      targetUserId: targetId,
+      removeSettings,
+      deleted,
+    });
+
+    return { userId: targetId, email: targetEmail, removeSettings, deleted };
+  });
 }

@@ -50,7 +50,12 @@ import { db } from '@/db';
 import {
   accounts,
   adminAuditLog,
+  advisorProviderKeys,
   advisorTurnCounters,
+  brokerages,
+  dashboardLayouts,
+  expenses,
+  fills,
   ledgerEntries,
   positions,
   sessions,
@@ -228,6 +233,17 @@ function patchAdminFlag(targetId: string, isAdmin: unknown, token?: string) {
       ...(token ? { Cookie: `session=${token}` } : {}),
     },
     body: JSON.stringify({ isAdmin }),
+  });
+}
+
+function postReset(targetId: string, body: Record<string, unknown>, token?: string) {
+  return app.request(`/api/admin/users/${targetId}/reset`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Cookie: `session=${token}` } : {}),
+    },
+    body: JSON.stringify(body),
   });
 }
 
@@ -1070,5 +1086,390 @@ describe('bootstrapFirstAdmin', () => {
     config.SEED_ADMIN_EMAIL = undefined;
     await expect(bootstrapFirstAdmin()).resolves.toBeUndefined();
     expect(await isAdminFlag(user.id)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Factory reset — the admin surface's one destructive endpoint.
+//
+// The assertions worth reading are the NEGATIVE ones. That a reset deletes
+// positions is the easy half and would survive almost any implementation; that
+// it leaves the wallet, the Stripe mirror and the non-evasion quota counters
+// alone is the half that makes it safe to expose, and none of it is visible from
+// the endpoint's own response. So the survivors are asserted by name, from the
+// database, after the reset has run.
+// ---------------------------------------------------------------------------
+
+/** A user with one of everything the reset can reach. */
+async function seedFullUser(): Promise<{
+  id: string;
+  email: string;
+  accountId: string;
+  positionId: string;
+}> {
+  const user = await seedUser();
+  const accountId = await seedAccount(user.id);
+
+  // Direct insert per the seedPosition precedent above: CHECK-safe (an `open`
+  // row carries openedAt and no closedAt), and the reset is about rows existing,
+  // not about how they were created.
+  // eslint-disable-next-line no-restricted-syntax
+  const [position] = await db
+    .insert(positions)
+    .values({
+      userId: user.id,
+      accountId,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      status: 'open',
+      openedAt: new Date(),
+    })
+    .returning({ id: positions.id });
+
+  await db.insert(fills).values({
+    positionId: position!.id,
+    type: 'entry',
+    price: '100.00',
+    quantity: '10',
+    fees: '0',
+    filledAt: new Date(),
+  });
+
+  await db.insert(ledgerEntries).values({
+    userId: user.id,
+    accountId,
+    positionId: position!.id,
+    entryType: 'position_pnl',
+    direction: 'credit',
+    amount: '25.0000',
+    currency: 'USD',
+    occurredAt: new Date(),
+    groupId: randomUUID(),
+  });
+
+  await db.insert(expenses).values({
+    userId: user.id,
+    category: 'data_subscription',
+    description: 'data feed',
+    amount: '9.9900',
+    currency: 'USD',
+    occurredAt: '2026-01-15',
+  });
+
+  await db.insert(brokerages).values({ userId: user.id, name: `custom-${++seedCounter}` });
+  await db.insert(dashboardLayouts).values({ userId: user.id, widgets: [] });
+  await db.insert(advisorProviderKeys).values({
+    userId: user.id,
+    providerId: 'openai',
+    encryptedKey: 'enc',
+    keyVersion: 1,
+    defaultModel: 'gpt-4o',
+    keyHintTail: 'abcd',
+  });
+
+  return { id: user.id, email: user.email, accountId, positionId: position!.id };
+}
+
+describe('POST /api/admin/users/:id/reset', () => {
+  it('deletes the trading data and reports what it deleted', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    const res = await postReset(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as { deleted: Record<string, number>; removeSettings: boolean };
+    expect(body.removeSettings).toBe(false);
+    expect(body.deleted).toMatchObject({
+      accounts: 1,
+      positions: 1,
+      fills: 1,
+      ledger_entries: 1,
+      expenses: 1,
+      brokerages: 1,
+    });
+
+    expect(await db.select().from(accounts).where(eq(accounts.userId, target.id))).toHaveLength(0);
+    expect(await db.select().from(positions).where(eq(positions.userId, target.id))).toHaveLength(
+      0,
+    );
+    expect(await db.select().from(expenses).where(eq(expenses.userId, target.id))).toHaveLength(0);
+    // Cascaded from the position rather than deleted directly.
+    expect(
+      await db.select().from(fills).where(eq(fills.positionId, target.positionId)),
+    ).toHaveLength(0);
+  });
+
+  // THE POINT OF THE FEATURE. A user whose onboarding state survived would be
+  // shown a completed checklist on an empty account, which is the one outcome
+  // that makes the whole reset pointless.
+  it('always clears onboarding state, even when settings are kept', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    await db
+      .update(users)
+      .set({ onboarding: { status: 'done', calculatorFirstUsedAt: '2026-01-01' } })
+      .where(eq(users.id, target.id));
+
+    await postReset(target.id, { confirmEmail: target.email, removeSettings: false }, admin.token);
+
+    const [row] = await db.select().from(users).where(eq(users.id, target.id));
+    expect(row!.onboarding).toEqual({});
+  });
+
+  it('keeps settings by default — BYOK keys, dashboard layout and preferences survive', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    await db.update(users).set({ theme: 'dark' }).where(eq(users.id, target.id));
+
+    const res = await postReset(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(200);
+
+    expect(
+      await db.select().from(advisorProviderKeys).where(eq(advisorProviderKeys.userId, target.id)),
+    ).toHaveLength(1);
+    expect(
+      await db.select().from(dashboardLayouts).where(eq(dashboardLayouts.userId, target.id)),
+    ).toHaveLength(1);
+    const [row] = await db.select().from(users).where(eq(users.id, target.id));
+    expect(row!.theme).toBe('dark');
+  });
+
+  it('removes settings when asked, and returns preferences to their defaults', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    await db
+      .update(users)
+      .set({ theme: 'dark', buyingPowerBasis: 'balance', timezone: 'Europe/London' })
+      .where(eq(users.id, target.id));
+
+    const res = await postReset(
+      target.id,
+      { confirmEmail: target.email, removeSettings: true },
+      admin.token,
+    );
+    expect(res.status).toBe(200);
+
+    expect(
+      await db.select().from(advisorProviderKeys).where(eq(advisorProviderKeys.userId, target.id)),
+    ).toHaveLength(0);
+    expect(
+      await db.select().from(dashboardLayouts).where(eq(dashboardLayouts.userId, target.id)),
+    ).toHaveLength(0);
+    const [row] = await db.select().from(users).where(eq(users.id, target.id));
+    expect(row!.theme).toBe('system');
+    expect(row!.buyingPowerBasis).toBe('cash');
+    expect(row!.timezone).toBeNull();
+  });
+
+  // THE SURVIVORS. None of this is observable from the endpoint's response, and
+  // all of it is the reason the button can exist at all.
+  it('never touches the wallet, the Stripe mirror, or the non-evasion quota counters', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    await db.insert(wallets).values({ userId: target.id, balance: 5_000_000n });
+    await seedWalletTx(target.id, 'credit', 5_000_000n);
+    await seedUsageRecord(target.id, {
+      inputTokens: 10n,
+      outputTokens: 20n,
+      creditCost: 30n,
+      rawCost: 15n,
+      createdAt: new Date(),
+    });
+    await db
+      .insert(advisorTurnCounters)
+      .values({ userId: target.id, periodKey: currentPeriodKeyUtc(), turnCount: 7 });
+
+    await postReset(target.id, { confirmEmail: target.email, removeSettings: true }, admin.token);
+
+    const [wallet] = await db.select().from(wallets).where(eq(wallets.userId, target.id));
+    expect(wallet!.balance).toBe(5_000_000n);
+    expect(
+      await db.select().from(walletTransactions).where(eq(walletTransactions.userId, target.id)),
+    ).toHaveLength(1);
+    expect(
+      await db.select().from(usageRecords).where(eq(usageRecords.userId, target.id)),
+    ).toHaveLength(1);
+    const [counter] = await db
+      .select()
+      .from(advisorTurnCounters)
+      .where(eq(advisorTurnCounters.userId, target.id));
+    expect(counter!.turnCount).toBe(7);
+  });
+
+  it('keeps identity: the account, its password, admin flag and verified flag all survive', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    await postReset(target.id, { confirmEmail: target.email, removeSettings: true }, admin.token);
+
+    const [row] = await db.select().from(users).where(eq(users.id, target.id));
+    expect(row).toBeDefined();
+    expect(row!.email).toBe(target.email);
+    expect(row!.passwordHash).toBe(SEEDED_PASSWORD_HASH);
+    expect(row!.emailVerified).toBe(true);
+  });
+
+  // The system brokerages every user shares are `user_id IS NULL`. Deleting
+  // those would empty the picker for the whole instance, not just this user.
+  it("deletes the user's own brokerages and leaves the system ones alone", async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    await db.insert(brokerages).values({ userId: null, name: `system-${++seedCounter}` });
+    // Counted rather than pinned to a number: the instance ships seeded system
+    // brokerages, and the assertion is that the reset changed none of them.
+    const systemBefore = (await db.select().from(brokerages)).filter(
+      (b) => b.userId === null,
+    ).length;
+
+    await postReset(target.id, { confirmEmail: target.email }, admin.token);
+
+    expect(await db.select().from(brokerages).where(eq(brokerages.userId, target.id))).toHaveLength(
+      0,
+    );
+    const systemAfter = (await db.select().from(brokerages)).filter(
+      (b) => b.userId === null,
+    ).length;
+    expect(systemAfter).toBe(systemBefore);
+  });
+
+  // The confirmation is a server-side guard, not a dialog convenience: a request
+  // that skips the UI must still be refused.
+  it('refuses a mismatched confirmEmail and deletes nothing', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    const res = await postReset(
+      target.id,
+      { confirmEmail: 'someone-else@example.com' },
+      admin.token,
+    );
+    expect(res.status).toBe(400);
+    await errorBody(res);
+
+    expect(await db.select().from(accounts).where(eq(accounts.userId, target.id))).toHaveLength(1);
+    expect(await db.select().from(positions).where(eq(positions.userId, target.id))).toHaveLength(
+      1,
+    );
+    expect(await auditRows()).toHaveLength(0);
+  });
+
+  it('accepts the confirmation regardless of case', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    const res = await postReset(
+      target.id,
+      { confirmEmail: target.email.toUpperCase() },
+      admin.token,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  // The audit entry's `detail` is the ONLY surviving record of what was
+  // destroyed — the rows it counted are gone — so it commits with the deletes.
+  it('writes one audit row carrying what it deleted', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    await postReset(target.id, { confirmEmail: target.email, removeSettings: true }, admin.token);
+
+    const audit = await auditRows();
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      action: 'factory_reset',
+      actorUserId: admin.id,
+      actorEmail: admin.email,
+      targetUserId: target.id,
+      targetEmail: target.email,
+      // Nullable now, and null for this action — it is not a transition.
+      oldValue: null,
+      newValue: null,
+    });
+    expect(audit[0]!.detail).toMatchObject({
+      removeSettings: true,
+      deleted: { accounts: 1, positions: 1, fills: 1 },
+    });
+  });
+
+  it('404s an unknown user and 400s a non-uuid id', async () => {
+    const admin = await seedAdmin();
+
+    const missing = await postReset(
+      randomUUID(),
+      { confirmEmail: 'nobody@example.com' },
+      admin.token,
+    );
+    expect(missing.status).toBe(404);
+
+    const malformed = await postReset(
+      'not-a-uuid',
+      { confirmEmail: 'nobody@example.com' },
+      admin.token,
+    );
+    expect(malformed.status).toBe(400);
+  });
+
+  it('is 401 unauthenticated and 403 for a non-admin, deleting nothing either way', async () => {
+    const target = await seedFullUser();
+    const plain = await seedUser();
+    const plainToken = await seedSession(plain.id);
+
+    expect((await postReset(target.id, { confirmEmail: target.email })).status).toBe(401);
+
+    const forbidden = await postReset(target.id, { confirmEmail: target.email }, plainToken);
+    expect(forbidden.status).toBe(403);
+    expect((await errorBody(forbidden)).code).toBe('ADMIN_REQUIRED');
+
+    expect(await db.select().from(accounts).where(eq(accounts.userId, target.id))).toHaveLength(1);
+  });
+
+  it('is idempotent — a second reset succeeds and deletes nothing', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    await postReset(target.id, { confirmEmail: target.email }, admin.token);
+    const second = await postReset(target.id, { confirmEmail: target.email }, admin.token);
+
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as { deleted: Record<string, number> };
+    expect(body.deleted).toMatchObject({ accounts: 0, positions: 0, fills: 0 });
+  });
+});
+
+describe('GET /api/admin/users/:id/reset-preview', () => {
+  it('counts both halves without deleting anything', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+
+    const res = await get(`/api/admin/users/${target.id}/reset-preview`, admin.token);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      email: string;
+      tradingData: Record<string, number>;
+      settings: Record<string, number>;
+    };
+
+    expect(body.email).toBe(target.email);
+    expect(body.tradingData).toMatchObject({
+      accounts: 1,
+      positions: 1,
+      fills: 1,
+      ledgerEntries: 1,
+      expenses: 1,
+      brokerages: 1,
+    });
+    // Always counted, whatever the caller intends to do with the flag.
+    expect(body.settings).toMatchObject({ providerKeys: 1, dashboardLayouts: 1 });
+
+    // Read-only.
+    expect(await db.select().from(accounts).where(eq(accounts.userId, target.id))).toHaveLength(1);
+  });
+
+  it('404s an unknown user', async () => {
+    const admin = await seedAdmin();
+    const res = await get(`/api/admin/users/${randomUUID()}/reset-preview`, admin.token);
+    expect(res.status).toBe(404);
   });
 });

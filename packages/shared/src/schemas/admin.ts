@@ -92,6 +92,78 @@ export const ToggleAdminRequestSchema = z.object({
 });
 export type ToggleAdminRequest = z.infer<typeof ToggleAdminRequestSchema>;
 
+// --- GET /api/admin/users/:id/reset-preview ----------------------------------
+
+/**
+ * What a factory reset would destroy, counted before anything is destroyed.
+ *
+ * THE COUNTS ARE THE WARNING. "This cannot be undone" is a sentence anyone can
+ * click past; "47 positions, 112 fills" is the same statement in a form the
+ * operator can check against the account they think they are resetting. It is
+ * also the only chance to notice the wrong row was clicked, because afterwards
+ * there is nothing left to compare against.
+ *
+ * `settings` is counted separately and always returned, so the dialog can say
+ * what ticking "Remove user settings?" would add WITHOUT a second round trip
+ * that could disagree with the first.
+ */
+export const AdminResetPreviewSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string().email(),
+  /** Always destroyed. Keyed by the table each count came from. */
+  tradingData: z.object({
+    accounts: z.number().int().nonnegative(),
+    positions: z.number().int().nonnegative(),
+    fills: z.number().int().nonnegative(),
+    ledgerEntries: z.number().int().nonnegative(),
+    expenses: z.number().int().nonnegative(),
+    brokerages: z.number().int().nonnegative(),
+    csvImportStaging: z.number().int().nonnegative(),
+  }),
+  /** Destroyed only when `removeSettings` is true. */
+  settings: z.object({
+    providerKeys: z.number().int().nonnegative(),
+    externalApiKeys: z.number().int().nonnegative(),
+    advisorPersonas: z.number().int().nonnegative(),
+    advisorConversations: z.number().int().nonnegative(),
+    dashboardLayouts: z.number().int().nonnegative(),
+  }),
+});
+export type AdminResetPreview = z.infer<typeof AdminResetPreviewSchema>;
+
+// --- POST /api/admin/users/:id/reset -----------------------------------------
+
+/**
+ * `confirmEmail` IS THE SAFETY MECHANISM, AND IT IS CHECKED ON THE SERVER.
+ *
+ * The dialog asks the operator to type the target's address, but a dialog is a
+ * convenience, not a guard — anything that can reach the endpoint can skip it.
+ * The service compares this against the email of the user it is about to reset
+ * and refuses on a mismatch, so the confirmation holds for a curl as well as for
+ * the button, and a request built against the wrong id cannot destroy the wrong
+ * account.
+ *
+ * `removeSettings` DEFAULTS TO FALSE, matching the unticked box: the common case
+ * is an operator resetting their own journal to walk onboarding again, and
+ * re-pasting a BYOK key every time is friction with no safety value. A caller
+ * that omits it gets the conservative half.
+ */
+export const AdminResetRequestSchema = z.object({
+  confirmEmail: z.string().email(),
+  removeSettings: z.boolean().default(false),
+});
+export type AdminResetRequest = z.infer<typeof AdminResetRequestSchema>;
+
+/** What the reset actually removed — the preview, re-counted from the deletes. */
+export const AdminResetResultSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string().email(),
+  removeSettings: z.boolean(),
+  /** Rows deleted per table. Absent keys deleted nothing. */
+  deleted: z.record(z.string(), z.number().int().nonnegative()),
+});
+export type AdminResetResult = z.infer<typeof AdminResetResultSchema>;
+
 // --- GET /api/admin/usage ----------------------------------------------------
 
 const MAX_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
