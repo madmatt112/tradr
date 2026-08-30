@@ -1,8 +1,20 @@
-import { and, eq, gt, gte, lt, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
+import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 
 import type { Database, Transaction } from '@/db';
 import {
+  accounts,
   adminAuditLog,
+  advisorConversations,
+  advisorPersonas,
+  advisorProviderKeys,
+  brokerages,
+  csvImportStaging,
+  dashboardLayouts,
+  expenses,
+  externalApiKeys,
+  fills,
+  ledgerEntries,
   positions,
   sessions,
   usageRecords,
@@ -10,6 +22,7 @@ import {
   walletTransactions,
   wallets,
 } from '@/db/schema';
+import type { AdminAuditDetail } from '@/db/schema/admin.schema';
 
 import { currentPeriodKeyUtc, getTurnCount } from './gating.query';
 
@@ -378,15 +391,30 @@ export async function updateUserIsAdmin(
   return row;
 }
 
-export interface AdminAuditEntryInsert {
-  action: 'admin_toggle';
-  actorUserId: string;
-  actorEmail: string;
-  targetUserId: string;
-  targetEmail: string;
-  oldValue: boolean;
-  newValue: boolean;
-}
+/**
+ * A discriminated union, not one shape with optional fields, so the DB's own
+ * `admin_audit_log_toggle_values_chk` cannot be violated from TypeScript: a
+ * toggle entry without both boolean ends does not typecheck, and a reset entry
+ * cannot claim ones it does not have.
+ */
+export type AdminAuditEntryInsert =
+  | {
+      action: 'admin_toggle';
+      actorUserId: string;
+      actorEmail: string;
+      targetUserId: string;
+      targetEmail: string;
+      oldValue: boolean;
+      newValue: boolean;
+    }
+  | {
+      action: 'factory_reset';
+      actorUserId: string;
+      actorEmail: string;
+      targetUserId: string;
+      targetEmail: string;
+      detail: AdminAuditDetail;
+    };
 
 /**
  * Append the audit row in the SAME transaction as the flag flip (REQ-3.5).
@@ -623,4 +651,298 @@ export async function sumPeriodRevenue(
   const credited = BigInt((creditedRow?.sum as string | undefined) ?? 0);
   const reversed = BigInt((reversedRow?.sum as string | undefined) ?? 0);
   return { credited, reversed, net: credited + reversed };
+}
+
+// --- Component 13: factory reset --------------------------------------------
+//
+// WHAT A RESET DOES NOT TOUCH IS THE PART WORTH READING, because the deletes
+// below are unremarkable and the omissions are load-bearing:
+//
+// - BILLING AND WALLET (`wallets`, `wallet_transactions`, `usage_records`,
+//   `subscriptions`, `billing_customers`, `webhook_events`). `subscriptions` and
+//   `billing_customers` are local MIRRORS of Stripe, so deleting them cancels
+//   nothing — it orphans a live Stripe Customer and leaves the next webhook
+//   writing rows for a subscription the app no longer believes in. The wallet
+//   holds credit the user paid real money for. A journal reset is not a refund
+//   and must not look like one.
+// - QUOTA COUNTERS (`csv_import_counters`, `advisor_turn_counters`,
+//   `advisor_image_counters`). Their own schema comments say they are "never
+//   decremented and never deleted by application flows (non-evasion)", with the
+//   user-deletion CASCADE as the only removal path. Resetting them would turn
+//   this button into a way to refill a free-tier allowance on demand — exactly
+//   the evasion those comments exist to prevent.
+// - IDENTITY (`email`, `password_hash`, `is_admin`, `email_verified`,
+//   `created_at`) and `sessions`. The user is returned to the state they were in
+//   just after registering and verifying: the account still exists, still
+//   belongs to them, and stays logged in.
+//
+// ORDER IS NOT COSMETIC. Three FKs into this graph are ON DELETE RESTRICT —
+// `positions.account_id`, `ledger_entries.account_id` and
+// `accounts.brokerage_id` — so PostgreSQL refuses to delete an account while a
+// position or ledger entry still points at it, and refuses to delete a
+// user-owned brokerage while an account still points at that. The sequence below
+// is the topological one those constraints force; reordering it does not lose
+// data, it aborts the transaction.
+
+/** Rows removed, keyed by table name. */
+export type ResetDeleteCounts = Record<string, number>;
+
+/** `COUNT(*)` over one table for one user — the shape all twelve counts share. */
+async function countBy(
+  db: Database | Transaction,
+  table: PgTable,
+  column: PgColumn,
+  userId: string,
+): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(table)
+    .where(eq(column, userId));
+  return row?.count ?? 0;
+}
+
+/** `fills` has no `user_id`; it is reached through the user's positions. */
+async function countFillsForUser(db: Database | Transaction, userId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(fills)
+    .where(
+      inArray(
+        fills.positionId,
+        db.select({ id: positions.id }).from(positions).where(eq(positions.userId, userId)),
+      ),
+    );
+  return row?.count ?? 0;
+}
+
+/**
+ * The always-deleted half: everything the user has journalled.
+ *
+ * `fills` and `fee_schedules` are not deleted directly — they CASCADE from
+ * `positions` and `brokerages` — so the fill count is taken before the parent
+ * goes, which is the only moment it can be.
+ */
+export async function deleteTradingData(
+  tx: Transaction,
+  userId: string,
+): Promise<ResetDeleteCounts> {
+  const counts: ResetDeleteCounts = {};
+
+  // Counted before the cascade takes them.
+  counts.fills = await countFillsForUser(tx, userId);
+
+  // 1. Ledger entries — RESTRICT on accounts, so they go first.
+  counts.ledger_entries = (
+    await tx
+      .delete(ledgerEntries)
+      .where(eq(ledgerEntries.userId, userId))
+      .returning({ id: ledgerEntries.id })
+  ).length;
+
+  // 2. Positions — RESTRICT on accounts; cascades fills.
+  counts.positions = (
+    await tx.delete(positions).where(eq(positions.userId, userId)).returning({ id: positions.id })
+  ).length;
+
+  // 3. Staged CSV rows — cascade from accounts anyway, deleted explicitly so the
+  //    count is reported rather than silently absorbed.
+  counts.csv_import_staging = (
+    await tx
+      .delete(csvImportStaging)
+      .where(eq(csvImportStaging.userId, userId))
+      .returning({ id: csvImportStaging.id })
+  ).length;
+
+  counts.expenses = (
+    await tx.delete(expenses).where(eq(expenses.userId, userId)).returning({ id: expenses.id })
+  ).length;
+
+  // 4. Accounts — now unblocked. `users.writable_account_id` is ON DELETE SET
+  //    NULL, so the free-tier writable-account designation clears itself.
+  counts.accounts = (
+    await tx.delete(accounts).where(eq(accounts.userId, userId)).returning({ id: accounts.id })
+  ).length;
+
+  // 5. The user's OWN brokerages only. `brokerages.user_id` is nullable: NULL
+  //    marks the system brokerages every user shares, and deleting those would
+  //    empty the picker for the whole instance. `isNotNull` is redundant against
+  //    `eq` — NULL never equals — and kept as the statement of intent, because
+  //    the cost of that line being wrong is instance-wide.
+  counts.brokerages = (
+    await tx
+      .delete(brokerages)
+      .where(and(eq(brokerages.userId, userId), isNotNull(brokerages.userId)))
+      .returning({ id: brokerages.id })
+  ).length;
+
+  return counts;
+}
+
+/**
+ * The opt-in half: configuration the operator chose to remove as well.
+ *
+ * Deliberately NOT including `users.onboarding` — that is reset on every run by
+ * `resetUserPreferences` below, whatever the flag says, because a reset user
+ * whose walkthrough still believes it has been completed cannot do the one thing
+ * this feature exists for.
+ */
+export async function deleteUserSettings(
+  tx: Transaction,
+  userId: string,
+): Promise<ResetDeleteCounts> {
+  const counts: ResetDeleteCounts = {};
+
+  counts.advisor_provider_keys = (
+    await tx
+      .delete(advisorProviderKeys)
+      .where(eq(advisorProviderKeys.userId, userId))
+      .returning({ id: advisorProviderKeys.id })
+  ).length;
+
+  counts.external_api_keys = (
+    await tx
+      .delete(externalApiKeys)
+      .where(eq(externalApiKeys.userId, userId))
+      .returning({ id: externalApiKeys.id })
+  ).length;
+
+  // Cascades advisor_messages and advisor_summaries.
+  counts.advisor_conversations = (
+    await tx
+      .delete(advisorConversations)
+      .where(eq(advisorConversations.userId, userId))
+      .returning({ id: advisorConversations.id })
+  ).length;
+
+  // `users.advisor_default_persona_id` is ON DELETE SET NULL, so the default
+  // clears itself rather than pointing at a persona that no longer exists.
+  counts.advisor_personas = (
+    await tx
+      .delete(advisorPersonas)
+      .where(eq(advisorPersonas.userId, userId))
+      .returning({ id: advisorPersonas.id })
+  ).length;
+
+  counts.dashboard_layouts = (
+    await tx
+      .delete(dashboardLayouts)
+      .where(eq(dashboardLayouts.userId, userId))
+      .returning({ userId: dashboardLayouts.userId })
+  ).length;
+
+  return counts;
+}
+
+/**
+ * Return the `users` row to its post-registration state.
+ *
+ * `onboarding` is reset UNCONDITIONALLY — see `deleteUserSettings`. The
+ * preference columns go back to their schema defaults only when the operator
+ * asked for settings to be removed, and the values written are the ones a
+ * brand-new row carries, so "reset" and "newly registered" mean the same thing.
+ *
+ * Never touched: `email`, `password_hash`, `is_admin`, `email_verified`,
+ * `created_at`. The account is being emptied, not re-created.
+ */
+export async function resetUserPreferences(
+  tx: Transaction,
+  userId: string,
+  removeSettings: boolean,
+): Promise<void> {
+  await tx
+    .update(users)
+    .set({
+      // Always: the walkthrough status, the first-calculator-use stamp and the
+      // set of coach marks seen. '{}' is what a brand-new row carries.
+      onboarding: {},
+      ...(removeSettings
+        ? {
+            displayCurrency: null,
+            timezone: null,
+            taxJurisdiction: null,
+            theme: 'system',
+            buyingPowerBasis: 'cash',
+            advisorTradeDataConsent: false,
+            changelogViewedAt: null,
+          }
+        : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
+}
+
+/**
+ * Count what a reset WOULD remove, without removing it.
+ *
+ * Both halves are always counted, whatever the operator has ticked, so the
+ * dialog can show what including settings would add without a second request
+ * that could come back with different numbers.
+ */
+export async function countResettableData(
+  db: Database | Transaction,
+  userId: string,
+): Promise<{
+  tradingData: {
+    accounts: number;
+    positions: number;
+    fills: number;
+    ledgerEntries: number;
+    expenses: number;
+    brokerages: number;
+    csvImportStaging: number;
+  };
+  settings: {
+    providerKeys: number;
+    externalApiKeys: number;
+    advisorPersonas: number;
+    advisorConversations: number;
+    dashboardLayouts: number;
+  };
+}> {
+  const [
+    accountCount,
+    positionCount,
+    fillCount,
+    ledgerCount,
+    expenseCount,
+    brokerageCount,
+    stagingCount,
+    providerKeyCount,
+    externalKeyCount,
+    personaCount,
+    conversationCount,
+    layoutCount,
+  ] = await Promise.all([
+    countBy(db, accounts, accounts.userId, userId),
+    countBy(db, positions, positions.userId, userId),
+    countFillsForUser(db, userId),
+    countBy(db, ledgerEntries, ledgerEntries.userId, userId),
+    countBy(db, expenses, expenses.userId, userId),
+    countBy(db, brokerages, brokerages.userId, userId),
+    countBy(db, csvImportStaging, csvImportStaging.userId, userId),
+    countBy(db, advisorProviderKeys, advisorProviderKeys.userId, userId),
+    countBy(db, externalApiKeys, externalApiKeys.userId, userId),
+    countBy(db, advisorPersonas, advisorPersonas.userId, userId),
+    countBy(db, advisorConversations, advisorConversations.userId, userId),
+    countBy(db, dashboardLayouts, dashboardLayouts.userId, userId),
+  ]);
+
+  return {
+    tradingData: {
+      accounts: accountCount,
+      positions: positionCount,
+      fills: fillCount,
+      ledgerEntries: ledgerCount,
+      expenses: expenseCount,
+      brokerages: brokerageCount,
+      csvImportStaging: stagingCount,
+    },
+    settings: {
+      providerKeys: providerKeyCount,
+      externalApiKeys: externalKeyCount,
+      advisorPersonas: personaCount,
+      advisorConversations: conversationCount,
+      dashboardLayouts: layoutCount,
+    },
+  };
 }

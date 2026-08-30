@@ -15,6 +15,10 @@
 //   house envelope the api client throws).
 // - Row "Details" opens a dialog over useAdminUser (positions, advisor turns,
 //   usage sums, wallet balance).
+// - Row "Reset" opens <FactoryResetDialog>, which owns the whole destructive
+//   flow (preview counts, the settings switch, the typed-email confirmation).
+//   This component only decides WHICH user it is about — the confirmation that
+//   matters is enforced server-side either way.
 
 import { Check, Info } from 'lucide-react';
 import { useState } from 'react';
@@ -50,6 +54,8 @@ import { useAdminUsers } from '../hooks/useAdminUsers';
 import { useToggleAdmin } from '../hooks/useToggleAdmin';
 import { formatMicroUsd } from '../lib/format';
 
+import { FactoryResetDialog } from './FactoryResetDialog';
+
 const LAST_SEEN_CAVEAT = 'Last recorded session activity — may be arbitrarily old';
 
 function formatDate(iso: string): string {
@@ -66,11 +72,12 @@ function getErrorCode(err: unknown): string | undefined {
 interface RowActions {
   onToggle: (user: AdminUserListItem) => void;
   onDetails: (user: AdminUserListItem) => void;
+  onReset: (user: AdminUserListItem) => void;
 }
 
 // One mounted component per loaded page so every page refetches on
 // invalidation (the cache is shared with the parent's nextCursor query).
-function UserTableRows({ cursor, onToggle, onDetails }: RowActions & { cursor?: string }) {
+function UserTableRows({ cursor, onToggle, onDetails, onReset }: RowActions & { cursor?: string }) {
   const { data, isLoading, isError } = useAdminUsers(cursor);
 
   if (isLoading) {
@@ -136,14 +143,27 @@ function UserTableRows({ cursor, onToggle, onDetails }: RowActions & { cursor?: 
             </div>
           </TableCell>
           <TableCell>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="cursor-pointer"
-              onClick={() => onDetails(u)}
-            >
-              Details
-            </Button>
+            <div className="flex items-center justify-end gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="cursor-pointer"
+                onClick={() => onDetails(u)}
+              >
+                Details
+              </Button>
+              {/* Destructive, so it is styled as such and sits last — the
+                  rightmost control in a row is the one a mis-aimed click is
+                  least likely to land on. */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:text-destructive cursor-pointer"
+                onClick={() => onReset(u)}
+              >
+                Reset
+              </Button>
+            </div>
           </TableCell>
         </TableRow>
       ))}
@@ -208,6 +228,7 @@ export function UserTable() {
   const [pendingToggle, setPendingToggle] = useState<AdminUserListItem | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [detailUser, setDetailUser] = useState<AdminUserListItem | null>(null);
+  const [resetUser, setResetUser] = useState<AdminUserListItem | null>(null);
 
   // Same query key as the last mounted page — shared cache, no extra fetch.
   const lastPage = useAdminUsers(cursors[cursors.length - 1]);
@@ -271,6 +292,7 @@ export function UserTable() {
               cursor={cursor}
               onToggle={openConfirm}
               onDetails={setDetailUser}
+              onReset={setResetUser}
             />
           ))}
         </TableBody>
@@ -287,6 +309,8 @@ export function UserTable() {
           </Button>
         </div>
       )}
+
+      <FactoryResetDialog user={resetUser} onClose={() => setResetUser(null)} />
 
       <Dialog
         open={pendingToggle !== null}

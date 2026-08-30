@@ -568,6 +568,111 @@
         ]
       }
     },
+    "/api/admin/users/{id}/reset": {
+      "post": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). DESTRUCTIVE AND IRREVERSIBLE — there is no undo and no backup taken. POST (never GET) per the SameSite=Lax CSRF posture.\n`confirmEmail` must equal the target user's email (case-insensitive) or the request is a 400 `VALIDATION_ERROR` and nothing is changed; the check is enforced here, not only in the UI that collects it.\nALWAYS DELETED: accounts, positions, fills, ledger entries, expenses, the user's own brokerages and their fee schedules, and staged CSV rows. ALWAYS RESET: the user's onboarding state, so the walkthrough can be walked again. DELETED ONLY WHEN `removeSettings` IS TRUE (default false): BYOK provider and external API keys, advisor personas/conversations/messages/summaries, the dashboard layout, and the user's preference columns.\nNEVER TOUCHED: billing and wallet state (`wallets`, `wallet_transactions`, `usage_records`, `subscriptions`, `billing_customers`) — these mirror Stripe and hold purchased credit; the non-evasion quota counters (`csv_import_counters`, `advisor_turn_counters`, `advisor_image_counters`); and the user's identity (email, password, admin flag, verified flag, created-at) and sessions — the user stays logged in.\nDeletes and the `admin_audit_log` entry recording them commit in one transaction. That entry's `detail` is the only surviving record of what was removed.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "confirmEmail": {
+                    "description": "Must match the target user's email, case-insensitively.",
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "removeSettings": {
+                    "default": false,
+                    "description": "Also delete BYOK keys, advisor data, dashboard layout and preferences.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "confirmEmail"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "AdminResetResult — { userId, email, removeSettings, deleted }."
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — id is not a UUID, body malformed, or confirmEmail does not match."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "404": {
+            "description": "NOT_FOUND — no such user."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "Factory-reset a user's data to their post-registration state (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/admin/users/{id}/reset-preview": {
+      "get": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Read-only. Returns the row counts a factory reset would remove, split into `tradingData` (always removed) and `settings` (removed only when the reset is requested with `removeSettings: true`). Both halves are always counted, so a client can show what including settings would add without a second request. Counts are a snapshot and are not a promise about a later reset — `POST .../reset` re-counts from its own deletes.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AdminResetPreview — { userId, email, tradingData, settings }."
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — id is not a UUID."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "404": {
+            "description": "NOT_FOUND — no such user."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          }
+        },
+        "summary": "What a factory reset would delete for this user (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
     "/api/auth/login": {
       "post": {
         "description": "Public. On success sets the `session` cookie; every authenticated endpoint reads it. Rate limited to 10 requests per 15 minutes per client, tightening to 5 while the shared rate-limit store is unavailable. A wrong email and a wrong password are answered identically, so the response does not reveal whether an address is registered. A user may hold 5 concurrent sessions; signing in a sixth time ends the oldest one.\n",

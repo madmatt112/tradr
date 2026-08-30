@@ -238,6 +238,9 @@ export {
   AdminUserListResponseSchema,
   AdminUserDetailSchema,
   ToggleAdminRequestSchema,
+  AdminResetPreviewSchema,
+  AdminResetRequestSchema,
+  AdminResetResultSchema,
   AdminUsageQuerySchema,
   AdminUsageSchema,
 } from './schemas/admin';
@@ -247,6 +250,9 @@ export type {
   AdminUserListResponse,
   AdminUserDetail,
   ToggleAdminRequest,
+  AdminResetPreview,
+  AdminResetRequest,
+  AdminResetResult,
   AdminUsageQuery,
   AdminUsage,
 } from './schemas/admin';
