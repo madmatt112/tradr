@@ -94,7 +94,7 @@ type StepsModule = typeof import('../lib/steps');
  */
 export const ACTION_SIGNALS: Readonly<Record<string, { event: EventName; reason: string }>> = {
   '[data-tour="account-submit"]': { event: 'accounts:cache-invalidate', reason: 'created' },
-  '#symbol': { event: 'positions:cache-invalidate', reason: 'created' },
+  '[data-tour="position-submit"]': { event: 'positions:cache-invalidate', reason: 'created' },
   '[data-tour="position-add-fill"]': { event: 'positions:cache-invalidate', reason: 'fill-added' },
   '[data-tour="position-open"]': { event: 'positions:cache-invalidate', reason: 'opened' },
   '[data-tour="position-close"]': { event: 'positions:cache-invalidate', reason: 'closed' },

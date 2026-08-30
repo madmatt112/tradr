@@ -828,9 +828,11 @@ describe('useWalkthrough — action-driven advance', () => {
     expect(engine.advance).toHaveBeenCalledOnce();
   });
 
-  it('advances the symbol step when the position is created, and not before', async () => {
+  it('advances the create step when the position is created, and not before', async () => {
     await start('position');
-    const index = WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol');
+    const index = WALKTHROUGH_STEPS.position.findIndex(
+      (s) => s.target === '[data-tour="position-submit"]',
+    );
     highlight(index);
 
     act(() => {
@@ -911,7 +913,9 @@ describe('useWalkthrough — action-driven advance', () => {
     await start('position');
     navigate.mockClear();
 
-    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-submit"]'),
+    );
     act(() => {
       eventBus.publish('positions:cache-invalidate', { reason: 'created', positionId: 'pos-new' });
     });
@@ -937,7 +941,9 @@ describe('useWalkthrough — action-driven advance', () => {
     await start('position');
     navigate.mockClear();
 
-    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-submit"]'),
+    );
     act(() => {
       eventBus.publish('positions:cache-invalidate', { reason: 'created' });
     });
@@ -951,7 +957,9 @@ describe('useWalkthrough — action-driven advance', () => {
   // would remount the screen under the fill dialog the step before opened.
   it('does not re-navigate once it is already on the position', async () => {
     await start('position');
-    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-submit"]'),
+    );
     act(() => {
       eventBus.publish('positions:cache-invalidate', { reason: 'created', positionId: 'pos-new' });
     });
@@ -982,7 +990,9 @@ describe('useWalkthrough — action-driven advance', () => {
 
   it('stops listening once the tour has ended', async () => {
     await start('position');
-    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-submit"]'),
+    );
 
     act(() => {
       started?.handlers.onExit?.('dismissed');
@@ -1000,7 +1010,9 @@ describe('useWalkthrough — action-driven advance', () => {
       result.current.start('position');
     });
     await waitFor(() => expect(engine.startTour).toHaveBeenCalledOnce());
-    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-submit"]'),
+    );
 
     // The tour navigates off /positions and the zero-state goes with it.
     unmount();
@@ -1038,7 +1050,7 @@ describe('useWalkthrough — action signals', () => {
     resetSession();
     await start('position');
     expect(gatedTargets()).toEqual([
-      '#symbol',
+      '[data-tour="position-submit"]',
       '[data-tour="position-add-fill"]',
       '[data-tour="position-open"]',
     ]);
@@ -1138,7 +1150,9 @@ describe('useWalkthrough — logging out ends the session', () => {
 
   it('stops listening for the events that were advancing it', async () => {
     await start('position');
-    highlight(WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '#symbol'));
+    highlight(
+      WALKTHROUGH_STEPS.position.findIndex((s) => s.target === '[data-tour="position-submit"]'),
+    );
 
     await act(async () => {
       eventBus.publish('auth:logout', {});

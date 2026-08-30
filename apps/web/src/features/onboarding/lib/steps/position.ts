@@ -14,7 +14,19 @@
  *   ledger" — and `positions.service.ts` refuses an exit fill while draft.
  * - `CreatePositionDialog` asks for Symbol, Side, Asset Type, Account and
  *   Notes, and nothing else; `#symbol` is the stock-mode id and Stock is the
- *   default asset type.
+ *   default asset type. Symbol is the same `SymbolAutocomplete` the calculator
+ *   uses, so "searches as you type" is true of both screens.
+ * - `[data-tour="position-submit"]` is the dialog's Create button.
+ *
+ * WHY CREATING THE POSITION HAS A STEP OF ITS OWN, and did not always. The
+ * field step used to carry `advanceOnAction` itself: it described four controls
+ * and then waited for the position to be created, which is an instruction it
+ * never actually gave. A gated step ignores "Next" by design, so a user who
+ * filled the form in and pressed the only obvious control got nothing, with
+ * nothing on screen to say what was wanted — the reported stall. The account set
+ * never had this problem because it already separates its field steps from a
+ * final "Choose Create" step, and this set now matches it: the fields advance on
+ * "Next", and the action step points at the button that performs the action.
  * - `FillDialog` offers Type Entry / Exit — Entry only while the position is a
  *   draft — with Price, Quantity, Fees, Date & Time and Notes.
  * - "Open Position" is disabled until an entry fill exists, with the tooltip
@@ -71,11 +83,30 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     // control is left interactive in the first place.
     side: 'right',
     align: 'start',
-    advanceOnAction: true,
     title: 'Symbol, side and account',
     body:
-      'The ticker, whether you are long or short, and the account it is booked against. Notes ' +
-      'are worth filling in now — why you took the trade is the part you will want back later.',
+      'The ticker, whether you are long or short, and the account it is booked against. Symbol ' +
+      'searches as you type, the same as the calculator does. Notes are worth filling in now — ' +
+      'why you took the trade is the part you will want back later.',
+  },
+  {
+    target: '[data-tour="position-submit"]',
+    route: '/positions',
+    docs: 'positions',
+    // BESIDE THE DIALOG, NOT ABOVE THE FOOTER — and that is a measurement, not a
+    // preference. The account set's submit step goes `top`/`end`, but that
+    // dialog is a tall form whose footer has clear space above it. This one is
+    // short: placed above the Create button the popover came down on the Notes
+    // textarea, the Account select and Cancel — three controls the user can
+    // still press, which `expectPromptClearOfEveryControl` fails on. `right` is
+    // the placement the field step above already proves clears this dialog.
+    side: 'right',
+    align: 'end',
+    advanceOnAction: true,
+    title: 'Create the position',
+    body:
+      'Choose Create. Nothing is committed to your account yet — what you get is a draft, which ' +
+      'is the subject of the next step.',
   },
   {
     target: '[data-tour="position-add-fill"]',
