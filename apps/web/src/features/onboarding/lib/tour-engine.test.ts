@@ -559,6 +559,96 @@ describe('keyboard control', () => {
   });
 });
 
+/**
+ * FOCUS FOLLOWS THE TOUR ONTO A FIELD THE USER IS ASKED TO TYPE IN.
+ *
+ * The account set highlights `#name`, then `#startingBalance`, and the caret
+ * used to stay wherever the user last clicked — the popover moved, the typing
+ * did not. A text-entry target now takes focus when its step is highlighted
+ * (after driver.js has focused the popover's own button, so this write wins),
+ * and the arrows pressed IN that field belong to the caret, not the tour.
+ */
+describe('focus follows a text-entry step', () => {
+  const fieldSteps: TourStep[] = [
+    { target: '#field', title: 'The field', description: 'Type here.' },
+    { target: '#two', title: 'Second', description: 'The second control.' },
+  ];
+
+  function mountField(markup: string): void {
+    document.body.innerHTML = `${markup}<button id="two">two</button>`;
+  }
+
+  it('moves focus into a highlighted text input', async () => {
+    mountField('<input id="field" />');
+    startTour(fieldSteps);
+
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('field'));
+  });
+
+  it('selects a prefilled value so typing replaces it', async () => {
+    mountField('<input id="field" value="0" />');
+    startTour(fieldSteps);
+
+    const field = document.querySelector<HTMLInputElement>('#field')!;
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe(1);
+  });
+
+  it('does not move focus onto a button target', async () => {
+    // The default harness: both targets are buttons.
+    startTour(TWO_STEPS);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(document.activeElement?.id).not.toBe('one');
+  });
+
+  it('leaves a disabled field alone', async () => {
+    mountField('<input id="field" disabled />');
+    startTour(fieldSteps);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(document.activeElement?.id).not.toBe('field');
+  });
+
+  it('keeps an arrow pressed in the field as caret movement, not navigation', async () => {
+    mountField('<input id="field" />');
+    startTour(fieldSteps);
+    const field = document.querySelector<HTMLInputElement>('#field')!;
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+
+    field.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
+    field.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowLeft', bubbles: true }));
+
+    expect(popoverTitle()).toBe('The field');
+  });
+
+  it('still advances on an arrow pressed outside the field', async () => {
+    mountField('<input id="field" />');
+    startTour(fieldSteps);
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('field'));
+
+    // Focus back on the page body, as after a click somewhere neutral: the
+    // press does not originate from a text-entry control, so it navigates.
+    (document.activeElement as HTMLElement).blur();
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }));
+
+    expect(popoverTitle()).toBe('Second');
+  });
+
+  it('still exits on Escape pressed in the field', async () => {
+    mountField('<input id="field" />');
+    const onExit = vi.fn();
+    startTour(fieldSteps, { onExit });
+    const field = document.querySelector<HTMLInputElement>('#field')!;
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+
+    field.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }));
+
+    expect(onExit).toHaveBeenCalledExactlyOnceWith('dismissed', undefined);
+  });
+});
+
 describe('exiting', () => {
   it('reports a dismissal from the close button', () => {
     const onExit = vi.fn();
