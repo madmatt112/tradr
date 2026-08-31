@@ -129,7 +129,9 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     body:
       'Pick the account you are trading. Under Percent it supplies the balance to size against, ' +
       'and in either basis it supplies the currency and caps the position at the buying power ' +
-      'the account actually has.',
+      'the account actually has. An account with a brokerage attached also brings that ' +
+      'brokerage&rsquo;s fee schedule into the estimate for you — under Fees you can still ' +
+      'change or clear it.',
   },
   {
     // Whichever field the basis chosen two steps ago renders; exactly one of the

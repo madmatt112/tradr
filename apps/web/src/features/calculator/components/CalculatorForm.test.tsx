@@ -647,6 +647,152 @@ describe('CalculatorForm — default-account preselection', () => {
   });
 });
 
+describe('CalculatorForm — account fee adoption', () => {
+  // The account's own fee arrangement: a brokerage carrying a schedule, and an
+  // account attached to it. Selecting that account must do what clicking the
+  // brokerage under Fees does — no re-picking what the account already states.
+  const FEE_SCHEDULE = {
+    stockPerShareCommission: '0.01',
+    stockMinPerFill: '1.00',
+    stockMaxPerFill: '5.00',
+    optionsPerContractCommission: '0.65',
+    optionsPerContractExchangeFee: '0.10',
+    optionsMinPerFill: '1.00',
+    optionsMaxPerFill: '10.00',
+  };
+  const BROKERAGE = { id: 'brk-1', name: 'Fee Broker', feeSchedule: FEE_SCHEDULE };
+  const BROKERED_ACCOUNT = {
+    id: 'acc-brk',
+    name: 'Brokered',
+    currency: 'USD',
+    balance: '50000',
+    brokerageId: 'brk-1',
+  };
+
+  function setBrokerages(data: unknown[]): void {
+    state.brokerages.current = { data, isLoading: false, isError: false };
+  }
+
+  function feeTab(name: 'None' | 'Brokerage' | 'Manual'): HTMLElement {
+    return screen.getByRole('tab', { name });
+  }
+
+  it('selecting an account with a brokerage adopts its fee structure', async () => {
+    setAccounts({ data: [BROKERED_ACCOUNT] });
+    setBrokerages([BROKERAGE]);
+    await mount();
+
+    fireEvent.change(selectByOptionValue(BROKERED_ACCOUNT.id), {
+      target: { value: BROKERED_ACCOUNT.id },
+    });
+
+    expect(feeTab('Brokerage').getAttribute('aria-selected')).toBe('true');
+    expect(selectByOptionValue(BROKERAGE.id).value).toBe(BROKERAGE.id);
+    // The schedule landed on the form: the "Select a brokerage" hint renders
+    // exactly when feeMode is 'brokerage' with no schedule set.
+    expect(screen.queryByText(/Select a brokerage to see fee estimates/)).toBeNull();
+  });
+
+  it('the default-account preselect adopts too', async () => {
+    setAccounts({ data: [{ ...BROKERED_ACCOUNT, isDefault: true }] });
+    setBrokerages([BROKERAGE]);
+    await mount();
+
+    expect(selectByOptionValue(BROKERED_ACCOUNT.id).value).toBe(BROKERED_ACCOUNT.id);
+    expect(feeTab('Brokerage').getAttribute('aria-selected')).toBe('true');
+    expect(selectByOptionValue(BROKERAGE.id).value).toBe(BROKERAGE.id);
+  });
+
+  it('an account with no brokerage leaves the fee mode untouched', async () => {
+    setAccounts({ data: [CAD_ACCOUNT] });
+    setBrokerages([BROKERAGE]);
+    await mount();
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), {
+      target: { value: CAD_ACCOUNT.id },
+    });
+
+    expect(feeTab('None').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('withdraws ADOPTED fees when switching to a brokerage-less account', async () => {
+    setAccounts({ data: [BROKERED_ACCOUNT, CAD_ACCOUNT] });
+    setBrokerages([BROKERAGE]);
+    await mount();
+
+    fireEvent.change(selectByOptionValue(BROKERED_ACCOUNT.id), {
+      target: { value: BROKERED_ACCOUNT.id },
+    });
+    expect(feeTab('Brokerage').getAttribute('aria-selected')).toBe('true');
+
+    // The switch: this account states no fee structure, and pricing its
+    // estimate on the previous account's schedule would be silently wrong.
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), {
+      target: { value: CAD_ACCOUNT.id },
+    });
+    expect(feeTab('None').getAttribute('aria-selected')).toBe('true');
+    // The brokerage picker (and the old selection with it) is gone.
+    expect(screen.queryByText('Fee Broker')).toBeNull();
+  });
+
+  it('user-chosen fees survive a switch to a brokerage-less account', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [BROKERED_ACCOUNT, CAD_ACCOUNT] });
+    setBrokerages([BROKERAGE]);
+    await mount();
+
+    fireEvent.change(selectByOptionValue(BROKERED_ACCOUNT.id), {
+      target: { value: BROKERED_ACCOUNT.id },
+    });
+    // The user takes over: Manual is their call, not the adoption's.
+    await user.click(feeTab('Manual'));
+    expect(feeTab('Manual').getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), {
+      target: { value: CAD_ACCOUNT.id },
+    });
+    expect(feeTab('Manual').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('a fee choice made after selecting the account is not overridden', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [BROKERED_ACCOUNT] });
+    setBrokerages([BROKERAGE]);
+    await mount();
+
+    fireEvent.change(selectByOptionValue(BROKERED_ACCOUNT.id), {
+      target: { value: BROKERED_ACCOUNT.id },
+    });
+    expect(feeTab('Brokerage').getAttribute('aria-selected')).toBe('true');
+
+    // The user walks the adoption back to None; re-renders (any state change
+    // re-runs the adoption effect) must not re-adopt for the same account.
+    await user.click(feeTab('None'));
+    expect(feeTab('None').getAttribute('aria-selected')).toBe('true');
+    await switchBasis(user, 'Percent');
+    expect(feeTab('None').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('adopts when the brokerages land after the account was selected', async () => {
+    setAccounts({ data: [BROKERED_ACCOUNT] });
+    state.brokerages.current = { data: undefined, isLoading: true, isError: false };
+    await mount();
+
+    fireEvent.change(selectByOptionValue(BROKERED_ACCOUNT.id), {
+      target: { value: BROKERED_ACCOUNT.id },
+    });
+    // Nothing to adopt from yet.
+    expect(feeTab('None').getAttribute('aria-selected')).toBe('true');
+
+    // The brokerages query resolves; any re-render picks it up.
+    setBrokerages([BROKERAGE]);
+    fireEvent.change(input('Entry price'), { target: { value: '50' } });
+
+    expect(feeTab('Brokerage').getAttribute('aria-selected')).toBe('true');
+    expect(selectByOptionValue(BROKERAGE.id).value).toBe(BROKERAGE.id);
+  });
+});
+
 // -----------------------------------------------------------------------------
 // Task 13 — symbol-search / quote integration
 // -----------------------------------------------------------------------------
