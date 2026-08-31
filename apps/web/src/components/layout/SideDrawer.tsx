@@ -48,10 +48,18 @@ function DrawerHeader({ activeTab, setActiveTab, onClose }: DrawerHeaderProps) {
         {/* `!h-auto` overrides TabsList's default single-row `h-9` so the muted
             track grows to wrap both rows of the 2x2 grid. */}
         <TabsList className="grid !h-auto w-full grid-cols-2 gap-1">
-          <TabsTrigger value="open-positions">Open Positions</TabsTrigger>
-          <TabsTrigger value="quick-stats">Quick Stats</TabsTrigger>
-          <TabsTrigger value="options-pricing">Options Pricing</TabsTrigger>
-          <TabsTrigger value="recently-created">Recently Created</TabsTrigger>
+          <TabsTrigger value="open-positions" data-testid="drawer-tab-open-positions">
+            Open Positions
+          </TabsTrigger>
+          <TabsTrigger value="quick-stats" data-testid="drawer-tab-quick-stats">
+            Quick Stats
+          </TabsTrigger>
+          <TabsTrigger value="options-pricing" data-testid="drawer-tab-options-pricing">
+            Options Pricing
+          </TabsTrigger>
+          <TabsTrigger value="recently-created" data-testid="drawer-tab-recently-created">
+            Recently Created
+          </TabsTrigger>
         </TabsList>
       </Tabs>
       {/* shrink-0 pins the close control so the tabs can never push it
@@ -62,6 +70,7 @@ function DrawerHeader({ activeTab, setActiveTab, onClose }: DrawerHeaderProps) {
         className="shrink-0 cursor-pointer"
         onClick={onClose}
         aria-label="Close side drawer"
+        data-testid="drawer-close"
       >
         <PanelRightClose className="h-4 w-4" />
       </Button>
@@ -201,6 +210,7 @@ export function SideDrawer() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (e.defaultPrevented) return;
       const state = useDrawerStore.getState();
       if (state.inspectedPosition !== null) {
         state.close();
