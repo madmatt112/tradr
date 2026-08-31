@@ -111,6 +111,8 @@ const popover = (page: Page): Locator => page.locator('.driver-popover');
 const popoverTitle = (page: Page): Locator => page.locator('.driver-popover-title');
 const popoverNext = (page: Page): Locator => page.locator('.driver-popover-next-btn');
 const popoverProgress = (page: Page): Locator => page.locator('.driver-popover-progress-text');
+/** The instruction a held step shows in place of a working "Next". */
+const popoverHint = (page: Page): Locator => page.locator('.tradr-tour-action-hint');
 
 /**
  * The account set's nine step titles, in order, from
@@ -434,12 +436,17 @@ test.describe('user onboarding', () => {
     await walkAccountSetTo(page, CREATE_STEP);
     await expect(popoverProgress(page)).toHaveText(gatedStep);
 
-    // THE GATE. This step's action — the account actually being created — is one
-    // the app publishes an event for, so the step is genuinely held: pressing
-    // "Next" must leave the tour exactly where it is. Pressed twice, because a
-    // single press racing an advance would pass either way.
-    await popoverNext(page).click();
-    await popoverNext(page).click();
+    // THE GATE, AND WHAT IT NOW LOOKS LIKE. This step's action — the account
+    // actually being created — is one the app publishes an event for, so the
+    // step is genuinely held. It used to be asserted by pressing "Next" twice
+    // and checking nothing moved, which was true and was also the defect: the
+    // button stayed pressable, so honest behaviour read as a broken control.
+    //
+    // The assertion is now the affordance itself. A disabled button cannot be
+    // clicked by Playwright either, so "the press does not move the tour" is
+    // enforced by the DOM rather than checked after the fact.
+    await expect(popoverNext(page)).toBeDisabled();
+    await expect(popoverHint(page)).toHaveText('To continue: Choose Create');
     await expect(popoverTitle(page)).toHaveText('Create the account');
     await expect(popoverProgress(page)).toHaveText(gatedStep);
 
@@ -492,6 +499,7 @@ test.describe('user onboarding', () => {
       first: ACCOUNT_STEP_TITLES[0],
       second: ACCOUNT_STEP_TITLES[1],
       opener: '[data-tour="account-new"]',
+      hint: 'To continue: Choose New Account',
     },
     {
       name: 'the position set',
@@ -506,6 +514,7 @@ test.describe('user onboarding', () => {
       first: POSITION_STEP_TITLES[0],
       second: POSITION_STEP_TITLES[1],
       opener: '[data-tour="position-new"]',
+      hint: 'To continue: Choose New Position',
     },
   ]) {
     test(`${set.name} survives a Next pressed before the dialog is open`, async ({
@@ -515,9 +524,15 @@ test.describe('user onboarding', () => {
       await set.start(page, request);
       await expect(popoverTitle(page)).toHaveText(set.first);
 
-      // The press that was reported. It must move nothing — and, more to the
-      // point, must not commit the tour to a target that is not there.
-      await popoverNext(page).click();
+      // THE PRESS THAT WAS REPORTED IS NO LONGER AVAILABLE. The step is held on
+      // opening the dialog, so "Next" is disabled and the popover says which
+      // control to use instead — the button can no longer be pressed to no
+      // effect, which is what the report was about.
+      await expect(popoverNext(page)).toBeDisabled();
+      await expect(popoverHint(page)).toHaveText(set.hint);
+
+      // And the tour is still there and still on the step, five seconds later:
+      // a held step must not be a step that quietly expires.
       await page.waitForTimeout(5_000);
       await expect(popover(page)).toHaveCount(1);
       await expect(popoverTitle(page)).toHaveText(set.first);

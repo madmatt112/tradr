@@ -213,8 +213,53 @@ body.driver-active:has([data-slot='dialog-content'][data-state='open'])
   margin-top: 0.25rem;
 }
 
+/* --- The action a held step is waiting for ---------------------------------
+   Shown only while the step genuinely cannot be advanced by "Next", which the
+   engine decides live (tour-engine.ts, `syncGateAffordance`). It reads as an
+   instruction rather than an error: this is the ordinary way an action step
+   moves, not something the user got wrong.
+
+   FOREGROUND, NOT MUTED, and that is the whole point of the rule. The
+   description above it is muted because it is exposition; this line is the one
+   thing on the popover the user has to act on, so it takes the higher-contrast
+   role. The left border carries the same signal without colour doing it alone,
+   which is what keeps it legible to a reader who cannot separate the two. */
+/* See `narrow` in tour-engine.ts: the one step whose anchor has no room for a
+   300px popover on any side. 240px is what lets it sit to the left of "Add Fill"
+   while still clearing the fill dialog centred beside it. */
+.driver-popover.tradr-tour-narrow {
+  max-width: 240px;
+}
+
+/* Rendered with every step that has one, shown only while the step is actually
+   held — the engine toggles `tradr-tour-held` on the popover. It is rendered
+   rather than injected so driver.js measures it before placing the popover; see
+   `toDriveStep` in tour-engine.ts. */
+.driver-popover:not(.tradr-tour-held) .tradr-tour-action-hint {
+  display: none;
+}
+
+.tradr-tour-action-hint {
+  /* TIGHT ON PURPOSE, AND THE NUMBER IS MEASURED. driver.js pins a top-placed
+     popover's TOP and lets it grow downward, so every pixel this block adds is a
+     pixel closer to the control below it. The close set's first step is the
+     binding case: its popover starts at y=386 above an "Add Fill" button at
+     y=554, which leaves 168px, and the step's own text uses 148 of them. */
+  margin-top: 0.25rem;
+  padding-left: 0.625rem;
+  border-left: 2px solid var(--color-primary);
+  color: var(--color-foreground);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  font-weight: 500;
+}
+
+/* 0.5rem rather than the 1rem this used to carry. Popovers gained a line when
+   held steps started naming their action, and the footer's generous gap was the
+   cheapest 8px to give back — it costs nothing legible and it buys that height
+   back on EVERY step rather than only the ones that happen to be measured. */
 .driver-popover-footer {
-  margin-top: 1rem;
+  margin-top: 0.5rem;
   gap: 0.5rem;
 }
 
@@ -262,6 +307,13 @@ body.driver-active:has([data-slot='dialog-content'][data-state='open'])
   font-weight: 500;
   cursor: pointer;
 }
+
+/* A HELD STEP'S "NEXT" IS DISABLED, and it borrows driver.js's own
+   `.driver-popover-btn-disabled` (`opacity: .5; pointer-events: none`) rather
+   than getting a treatment of its own — that is the class the library already
+   puts on "Previous" at the first step, so the two disabled controls in this
+   popover look alike. Nothing is needed here; the note is so the absence reads
+   as a decision. See `syncGateAffordance` in tour-engine.ts. */
 
 /* Hover rides the BORDER, not the fill, for the same reason: it is the only
    channel with room to move here (`border` → `muted-foreground` is 3.36 → 7.44

@@ -207,6 +207,139 @@ describe('action steps', () => {
 });
 
 /**
+ * THE POPOVER TELLS THE TRUTH ABOUT WHETHER "NEXT" WORKS.
+ *
+ * A gated step ignoring "Next" is correct and always was; the button going on
+ * LOOKING pressable is what made correct behaviour read as a bug, twice. The
+ * disabled state and the instruction come from the same `isGatedStep` reading as
+ * the press itself, so they cannot disagree with what a press would do.
+ */
+describe('a held step disables Next and says what it wants', () => {
+  const steps: TourStep[] = [
+    {
+      target: '#one',
+      title: 'Do it',
+      description: 'Create the thing.',
+      advanceOnAction: true,
+      actionHint: 'Choose New Thing',
+    },
+    { target: '#two', title: 'Done', description: 'Here it is.' },
+  ];
+
+  const nextBtn = () =>
+    document.querySelector<HTMLButtonElement>('.driver-popover-next-btn') ?? undefined;
+  // WHAT THE USER CAN SEE, not what is in the DOM. The hint is rendered with
+  // every step that has one — that is what lets driver.js measure it before
+  // placing the popover — and shown only while the step is held, via the
+  // `tradr-tour-held` class. jsdom applies no stylesheet, so asking for the node
+  // would report a hint the user is not being shown.
+  const isHeld = () =>
+    document.querySelector('.driver-popover')?.classList.contains('tradr-tour-held') ?? false;
+  const hint = () =>
+    isHeld()
+      ? (document.querySelector('.tradr-tour-action-hint')?.textContent ?? undefined)
+      : undefined;
+
+  it('disables "Next" and shows the gesture', async () => {
+    startTour(steps);
+
+    // The popover is written by driver.js AFTER `onHighlightStarted`, so the
+    // affordance lands on the watch that sees it appear. That is a microtask —
+    // before any paint, and after this call returns.
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(true));
+    expect(nextBtn()?.getAttribute('aria-disabled')).toBe('true');
+    expect(nextBtn()?.classList.contains('driver-popover-btn-disabled')).toBe(true);
+    expect(hint()).toBe('To continue: Choose New Thing');
+  });
+
+  it('leaves an ordinary step alone', async () => {
+    startTour(TWO_STEPS);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(nextBtn()?.disabled).toBe(false);
+    expect(hint()).toBeUndefined();
+  });
+
+  // THE CASE THAT MATTERS MOST. The gate releases on a control the user cannot
+  // press, because the rest of the page is inert and a held step pointing at a
+  // disabled button would leave Escape as the only way on. The instruction has
+  // to go with it: telling somebody to choose a greyed-out control is worse than
+  // saying nothing.
+  it('re-enables "Next" and drops the hint when the control goes disabled', async () => {
+    startTour(steps);
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(true));
+
+    document.querySelector<HTMLButtonElement>('#one')!.disabled = true;
+
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(false));
+    expect(hint()).toBeUndefined();
+  });
+
+  it('takes "Next" back when the control becomes pressable again', async () => {
+    const target = document.querySelector<HTMLButtonElement>('#one')!;
+    target.disabled = true;
+    startTour(steps);
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(false));
+
+    target.disabled = false;
+
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(true));
+    expect(hint()).toBe('To continue: Choose New Thing');
+  });
+
+  // A step held only because the control it is waiting for has not arrived —
+  // the account and position sets' opening steps — is held the same way and
+  // says so the same way.
+  it('holds an appearance step the same way', async () => {
+    const appearanceSteps: TourStep[] = [
+      {
+        target: '#one',
+        title: 'Open it',
+        description: 'Choose the button.',
+        advanceOnAppearanceOf: '#late',
+        actionHint: 'Choose New Thing',
+      },
+      { target: '#late', title: 'The field', description: 'Fill this in.' },
+    ];
+    startTour(appearanceSteps);
+
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(true));
+    expect(hint()).toBe('To continue: Choose New Thing');
+
+    document.body.insertAdjacentHTML('beforeend', '<input id="late" />');
+
+    await vi.waitFor(() => expect(popoverTitle()).toBe('The field'));
+    expect(nextBtn()?.disabled).toBe(false);
+    expect(hint()).toBeUndefined();
+  });
+
+  // A step gated with no hint authored still disables the button — the button
+  // must never lie — it simply has nothing to add.
+  it('disables "Next" even when no hint was authored', async () => {
+    startTour([
+      { target: '#one', title: 'Do it', description: 'Create the thing.', advanceOnAction: true },
+      { target: '#two', title: 'Done', description: 'Here it is.' },
+    ]);
+
+    await vi.waitFor(() => expect(nextBtn()?.disabled).toBe(true));
+    expect(hint()).toBeUndefined();
+  });
+
+  // The sync writes to the same attributes its own watch is filtered on, so an
+  // unconditional write would re-trigger it forever. This is the guard for that:
+  // a tour that settles has stopped calling itself.
+  it('settles instead of driving its own observer', async () => {
+    startTour(steps);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(isActive()).toBe(true);
+    expect(nextBtn()?.disabled).toBe(true);
+    expect(document.querySelectorAll('.tradr-tour-action-hint')).toHaveLength(1);
+    expect(isHeld()).toBe(true);
+  });
+});
+
+/**
  * A STEP HELD ON A CONTROL THAT IS STILL TO COME.
  *
  * The reported defect: the first step of the account set and of the position set

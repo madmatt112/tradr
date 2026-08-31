@@ -56,13 +56,29 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     // exit fill this step waits for is recorded in the fill dialog, and the
     // default placement to the LEFT of Add Fill reaches x=850 at 1280x720 while
     // the dialog runs to x=896, covering 21px of that dialog's Add button.
-    side: 'top',
+    // ABOVE, AND THE STEP IS WRITTEN TO A HEIGHT BUDGET BECAUSE OF IT. This
+    // anchor is the most cramped in any set, and both of its states are measured:
+    // to the LEFT the popover clears the button but lands on the fill dialog it
+    // just told the user to open, and BELOW or RIGHT it leaves the viewport. That
+    // leaves above, where driver.js pins the popover's top at y=386 over a button
+    // at y=554 — 168px, for the title, the body, the "read more" line and the
+    // line naming the action. The body is one line for that reason, not for
+    // style: a second one puts the popover on the button. The quantity nuance it
+    // used to carry is the whole subject of the next step.
+    // LEFT AND NARROW, AND BOTH HALVES ARE MEASURED. This anchor is the most
+    // cramped in any set: "Add Fill" sits at the bottom right of the page and
+    // opens a dialog centred beside it, so the step is asserted clear in two
+    // states. At the full 300px width nothing satisfies both — above lands 12px
+    // inside the button, below and right leave the viewport, and left reaches
+    // x=862 across a dialog running to x=896. At 240px the left side fits: the
+    // popover starts at x=922, clear of the dialog and clear of the button.
+    side: 'left',
+    align: 'end',
+    narrow: true,
+    actionHint: 'Add the exit fill',
     advanceOnAction: true,
     title: 'Record the exit',
-    body:
-      'Add a fill with the type set to Exit, at the price and quantity you actually closed at. ' +
-      'Partial exits are ordinary — one fill per exit, averaged for you — and the one that ' +
-      'leaves nothing open is the one that finishes the trade.',
+    body: 'Set the type to Exit, at the price and quantity you closed at.',
   },
   {
     target: '[data-tour="position-close"]',
@@ -70,6 +86,7 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
     routeParams: ['positionId'],
     docs: 'positions',
     waitForMs: 3000,
+    actionHint: 'Choose Close Position',
     advanceOnAction: true,
     title: 'It closes itself',
     body:
