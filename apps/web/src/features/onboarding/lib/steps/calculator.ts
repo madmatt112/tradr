@@ -109,6 +109,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     route: '/calculator',
     docs: 'gettingStarted',
     side: 'right',
+    actionHint: 'Choose the Percent basis',
     advanceOnAction: true,
     title: 'Risk',
     body:
@@ -122,6 +123,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     docs: 'gettingStarted',
     waitForMs: 3000,
     side: 'right',
+    actionHint: 'Pick an account',
     advanceOnAction: true,
     title: 'Account',
     body:

@@ -85,6 +85,14 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     // the tour would exit `target-missing` before the screen it is describing
     // has finished arriving.
     waitForMs: 5000,
+    // BESIDE THE BUTTON, NOT UNDER IT. The control sits at the top right of the
+    // page and the popover is tall enough that driver.js's default placement
+    // clamps it back up over its own anchor — measured at 1280x720, the tour
+    // stood on the very control it was telling the user to press. To the left it
+    // clears the anchor with room to spare.
+    side: 'left',
+    align: 'start',
+    actionHint: 'Choose New Account',
     advanceOnAction: true,
     title: 'Start with an account',
     body:
@@ -178,8 +186,9 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
     // left; this one cannot, because Cancel is what is immediately to the left
     // of the control it highlights, and the popover reached 68px across it.
     // Above and end-aligned, the popover clears the whole footer row.
-    side: 'top',
+    side: 'right',
     align: 'end',
+    actionHint: 'Choose Create',
     advanceOnAction: true,
     title: 'Create the account',
     body:

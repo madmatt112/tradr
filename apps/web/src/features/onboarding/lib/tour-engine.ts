@@ -24,6 +24,14 @@ import '../tour.css';
 
 /** Consumed by `tour.css`; also the hook a future restyle can hang off. */
 const POPOVER_CLASS = 'tradr-tour';
+/** The hint element's class, styled in `tour.css`. */
+const HINT_CLASS = 'tradr-tour-action-hint';
+/** driver.js's own disabled-button class — `opacity: .5; pointer-events: none`. */
+const DRIVER_BTN_DISABLED_CLASS = 'driver-popover-btn-disabled';
+/** On the popover while the step cannot be advanced by "Next". */
+const HELD_CLASS = 'tradr-tour-held';
+/** Narrower popover, for the one step with no room at the full width. */
+const NARROW_CLASS = 'tradr-tour-narrow';
 
 export type TourStepSide = 'top' | 'right' | 'bottom' | 'left';
 export type TourStepAlign = 'start' | 'center' | 'end';
@@ -108,6 +116,38 @@ export interface TourStep {
    * never end.
    */
   advanceOnAppearanceOf?: string;
+  /**
+   * WHAT THE USER HAS TO DO, said in the imperative, for a step that cannot be
+   * advanced by "Next".
+   *
+   * Shown in the popover only while the step is ACTUALLY held — not whenever it
+   * is authored — because the gate releases on a control the user cannot press
+   * (see `blockOn`), and telling somebody to choose a button that is greyed out
+   * is worse than saying nothing. It is rendered next to a "Next" that has been
+   * disabled for the same reason at the same moment, so the instruction and the
+   * dead control can never disagree.
+   *
+   * Write the gesture and nothing else — "Choose New Account", not "Click the
+   * New Account button to continue". The engine supplies the frame.
+   */
+  actionHint?: string;
+  /**
+   * Render this step's popover narrow (240px rather than 300px).
+   *
+   * FOR A STEP WITH NO ROOM ANY OTHER WAY, and there is exactly one. The close
+   * set opens on "Add Fill", which sits at the bottom right of the position page
+   * and opens a centred dialog. Measured at 1280x720, every placement fails at
+   * the full width: above lands 12px inside the button, below and right leave the
+   * viewport, and to the left a 300px popover reaches x=862 across a dialog that
+   * runs to x=896. Narrowing it is what makes the left side fit — a 240px
+   * popover starts at x=922, clear of the dialog on one side and of the button
+   * on the other.
+   *
+   * Not a general dial. A narrower popover is a taller one, so this trades a
+   * horizontal problem for a vertical one and is worth it only where the
+   * horizontal problem is the unsolvable one.
+   */
+  narrow?: boolean;
 }
 
 export type TourExitReason =
@@ -216,29 +256,135 @@ let exitReason: TourExitReason = 'dismissed';
 /** Why the tour could not carry on, if it could not — see `TourHandlers.onExit`. */
 let blocked: TourBlock | undefined;
 let pendingStopTimer: number | undefined;
-/** Watches for the step's `advanceOnAppearanceOf` control, while one is awaited. */
-let appearanceObserver: MutationObserver | null = null;
+/**
+ * The one DOM watch a running step needs, for the two things that change under
+ * it: an `advanceOnAppearanceOf` control arriving, and the gate opening or
+ * closing beneath a "Next" button that has to look like the answer.
+ */
+let stepObserver: MutationObserver | null = null;
+/** The step `stepObserver` belongs to; `-1` when nothing is watched. */
+let watchedIndex = -1;
 
 function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+/**
+ * THE HINT IS PART OF THE DESCRIPTION, AND THAT IS A PLACEMENT FIX, NOT A
+ * STYLISTIC ONE.
+ *
+ * It was originally inserted into the popover after driver.js had rendered it,
+ * which put ~32px of content into a box whose position had already been
+ * computed for the height it had WITHOUT them. The popover then grew downward
+ * past its own placement: measured at 1280x720, the position set's draft step
+ * ended up with its bottom at y=566 across an "Add Fill" button at y=554 — the
+ * tour standing on the control it was telling the user to press. Every tall step
+ * had the same problem to some degree, and moving them one at a time would have
+ * been fixing the symptom on whichever ones happened to be measured.
+ *
+ * Rendered here it is in the DOM before driver.js positions anything, so the
+ * library measures the real height and places the popover correctly with no
+ * repositioning, no post-render mutation, and nothing for a resize to get wrong.
+ *
+ * It is always rendered when the step has one, and HIDDEN by class while the
+ * step is not held (`syncGateAffordance`). Hiding can only make the popover
+ * shorter than the box driver.js placed, and a shorter popover cannot overlap
+ * something the taller one cleared.
+ */
 function toDriveStep(step: TourStep): DriveStep {
   return {
     element: step.target,
     waitForElement: step.waitForMs,
     popover: {
       title: step.title,
-      description: step.description,
+      description:
+        step.actionHint === undefined
+          ? step.description
+          : `${step.description}<p class="${HINT_CLASS}" role="status">To continue: ${escapeHtml(step.actionHint)}</p>`,
       side: step.side,
       align: step.align,
+      // driver.js REPLACES the global `popoverClass` with a step's own, so the
+      // base class has to be repeated here or the step loses every token style.
+      ...(step.narrow === true ? { popoverClass: `${POPOVER_CLASS} ${NARROW_CLASS}` } : {}),
     },
   };
 }
 
 /**
- * Stop waiting for a step's `advanceOnAppearanceOf` control.
+ * Escape the authored hint before it goes into the description's HTML.
+ *
+ * The hint is repo-authored copy today, so this is not defending against a
+ * hostile value — it is making sure the one interpolation in this file cannot
+ * become the place a future hint carrying an apostrophe or an ampersand renders
+ * as broken markup, or worse if the field ever takes a value from elsewhere.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * MAKE THE POPOVER TELL THE TRUTH ABOUT WHETHER "NEXT" WORKS.
+ *
+ * A gated step ignores "Next" — that is the whole point of an action step — but
+ * the button went on looking pressable, so the honest behaviour read as a broken
+ * one. Reported twice: a live control that does nothing is indistinguishable
+ * from a bug, and users correctly stopped trusting the walkthrough rather than
+ * looking for the action it wanted.
+ *
+ * So the same `isGatedStep` answer that decides whether the press moves the tour
+ * now also decides what the popover looks like. One reading, two consequences:
+ * "Next" is disabled, and the step's `actionHint` appears saying what to do
+ * instead. They cannot come apart, because there is nothing to keep in step —
+ * both are derived here, together, from the one call.
+ *
+ * RUN AGAIN ON EVERY DOM CHANGE, because the gate is not a property of the step:
+ * it is read live, and it releases the moment the highlighted control becomes
+ * unpressable (`blockOn`). The close set reaches exactly that state — a Close
+ * Position button that stays disabled after a partial exit — and a user who was
+ * told to press it, and handed a dead "Next", would have Escape as their only
+ * way on. When the gate lifts, this puts "Next" back and takes the instruction
+ * away in the same pass.
+ */
+function syncGateAffordance(index: number): void {
+  const popover = document.querySelector('.driver-popover');
+  if (!popover) return;
+
+  const held = isGatedStep(index);
+
+  const next = popover.querySelector<HTMLButtonElement>('.driver-popover-next-btn');
+  if (next) {
+    // WRITTEN ONLY WHEN THE VALUE ACTUALLY CHANGES, and that is not a
+    // micro-optimisation — it is what stops this function driving itself. The
+    // watch that calls it filters on `disabled` and `aria-disabled`, and
+    // `setAttribute` queues a mutation record even when the value it writes is
+    // the one already there. Writing unconditionally therefore re-triggers the
+    // observer, which calls this again, forever.
+    if (next.disabled !== held) next.disabled = held;
+    const announced = String(held);
+    if (next.getAttribute('aria-disabled') !== announced) {
+      next.setAttribute('aria-disabled', announced);
+    }
+    // DRIVER.JS'S OWN DISABLED CLASS, not a treatment of ours. It is what the
+    // library already puts on "Previous" at the first step, so a held "Next"
+    // looks like the disabled control the user has been looking at since the
+    // tour opened rather than a second, different idea of disabled.
+    next.classList.toggle(DRIVER_BTN_DISABLED_CLASS, held);
+  }
+
+  // The hint itself is rendered with the description (`toDriveStep`); this only
+  // decides whether it is shown. A class rather than a node, so the popover's
+  // measured height is the one driver.js placed it for, and so this write cannot
+  // reach the watch — `class` is not in its attribute filter.
+  popover.classList.toggle(HELD_CLASS, held);
+}
+
+/**
+ * Stop watching for the step being left.
  *
  * Called from `advance()` and from the teardown, which is EVERY way a step stops
  * being the current one. A watch that outlived its step would advance the tour
@@ -247,9 +393,10 @@ function toDriveStep(step: TourStep): DriveStep {
  * before it was waiting on, so that is a step skipped rather than a theoretical
  * one.
  */
-function disarmAppearanceAdvance(): void {
-  appearanceObserver?.disconnect();
-  appearanceObserver = null;
+function disarmStepWatch(): void {
+  stepObserver?.disconnect();
+  stepObserver = null;
+  watchedIndex = -1;
 }
 
 /**
@@ -265,21 +412,42 @@ function disarmAppearanceAdvance(): void {
  * being portalled in somewhere we do not own. The callback is cheap: one
  * `querySelector` per mutation batch, for as long as one step is on screen.
  */
-function armAppearanceAdvance(index: number): void {
-  disarmAppearanceAdvance();
-  const selector = activeSteps[index]?.advanceOnAppearanceOf;
-  if (selector === undefined) return;
-  if (document.querySelector(selector) !== null) return;
+function armStepWatch(index: number): void {
+  disarmStepWatch();
+  watchedIndex = index;
 
-  appearanceObserver = new MutationObserver(() => {
-    if (document.querySelector(selector) === null) return;
-    // Through `advanceFromUser`, not `advance`, because this IS the user
-    // advancing — they did the thing the step asked for. It is also what gives
-    // the caller its `onBeforeAdvance`, so the move is prepared the same way a
-    // "Next" press would have been.
-    advanceFromUser();
+  // The appearance selector, when this step has one AND it is still to come. A
+  // step whose next control is already on screen is not waiting for anything,
+  // and arming that half would advance it the instant the tour opened.
+  const selector = activeSteps[index]?.advanceOnAppearanceOf;
+  const awaiting =
+    selector !== undefined && document.querySelector(selector) === null ? selector : undefined;
+
+  stepObserver = new MutationObserver(() => {
+    if (watchedIndex !== index) return;
+    if (awaiting !== undefined && document.querySelector(awaiting) !== null) {
+      // Through `advanceFromUser`, not `advance`, because this IS the user
+      // advancing — they did the thing the step asked for. It is also what gives
+      // the caller its `onBeforeAdvance`, so the move is prepared the same way a
+      // "Next" press would have been.
+      advanceFromUser();
+      return;
+    }
+    syncGateAffordance(index);
   });
-  appearanceObserver.observe(document.body, { childList: true, subtree: true });
+
+  // `attributes` as well as `childList`, and filtered to the three the gate
+  // reads: `blockOn` releases on a control that is disabled, so the button going
+  // from enabled to disabled has to reach this watch or "Next" stays dead on a
+  // step the user can no longer act on.
+  stepObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['disabled', 'aria-disabled', 'data-disabled'],
+  });
+
+  syncGateAffordance(index);
 }
 
 function clearState(): void {
@@ -287,7 +455,7 @@ function clearState(): void {
     window.clearTimeout(pendingStopTimer);
     pendingStopTimer = undefined;
   }
-  disarmAppearanceAdvance();
+  disarmStepWatch();
   window.removeEventListener('keyup', handleKeyup);
   instance = null;
   activeSteps = [];
@@ -440,7 +608,7 @@ function handleKeyup(event: KeyboardEvent): void {
   if (event.key === 'ArrowLeft' && running.hasPreviousStep()) {
     // Going back leaves the step too, so its watch goes with it — the highlight
     // that re-arms is the one for the step being moved to.
-    disarmAppearanceAdvance();
+    disarmStepWatch();
     running.movePrevious();
   }
 }
@@ -522,8 +690,23 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
 
   // Before the caller hears about the step, so a handler that reads the tour's
   // state finds the watch already in place.
-  armAppearanceAdvance(index);
+  armStepWatch(index);
   activeHandlers.onStepChange?.(index, step);
+};
+
+/**
+ * The popover EXISTS as of this hook, and not before it.
+ *
+ * `onHighlightStarted` runs ahead of the render, so the affordance sync armed
+ * there has no popover to write to — the watch would pick it up a microtask
+ * later when the node lands, but that leaves a frame in which "Next" is on
+ * screen still looking pressable on a step that will not move. Syncing here
+ * closes that window: driver.js has finished putting the popover up, so the
+ * button is disabled and the instruction is present the first time either is
+ * painted.
+ */
+const handleHighlighted: DriverHook = (_element, _driveStep, opts) => {
+  syncGateAffordance(opts.index ?? -1);
 };
 
 const handleNextClick: DriverHook = (_element, _driveStep, opts) => {
@@ -610,6 +793,7 @@ export function startTour(steps: TourStep[], handlers: TourHandlers = {}): void 
     disableActiveInteraction: false,
     popoverClass: POPOVER_CLASS,
     onHighlightStarted: handleHighlightStarted,
+    onHighlighted: handleHighlighted,
     onNextClick: handleNextClick,
     onDoneClick: handleDoneClick,
     onCloseClick: handleCloseClick,
@@ -632,7 +816,7 @@ export function advance(): void {
   // The step being left stops being waited for HERE rather than on the next
   // highlight: a step whose target has to be waited for is highlighted long
   // after the move, and the old watch would be live for all of it.
-  disarmAppearanceAdvance();
+  disarmStepWatch();
   if (instance.isLastStep()) {
     exitReason = 'completed';
     stop();

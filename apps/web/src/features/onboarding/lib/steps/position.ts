@@ -54,6 +54,14 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     // the tagged enabled one once it has: without this the tour exits
     // `target-missing` on a screen that was about to be ready.
     waitForMs: 5000,
+    // BESIDE THE BUTTON, NOT UNDER IT. The control sits at the top right of the
+    // page and the popover is tall enough that driver.js's default placement
+    // clamps it back up over its own anchor — measured at 1280x720, the tour
+    // stood on the very control it was telling the user to press. To the left it
+    // clears the anchor with room to spare.
+    side: 'left',
+    align: 'start',
+    actionHint: 'Choose New Position',
     advanceOnAction: true,
     title: 'Log the position',
     body:
@@ -102,6 +110,7 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     // the placement the field step above already proves clears this dialog.
     side: 'right',
     align: 'end',
+    actionHint: 'Choose Create',
     advanceOnAction: true,
     title: 'Create the position',
     body:
@@ -122,13 +131,12 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     // popover across Add and across the Notes field above it. Placed above, the
     // popover stays clear of the dialog it just told the user to open.
     side: 'top',
+    actionHint: 'Add the entry fill',
     advanceOnAction: true,
     title: 'It starts as a draft',
     body:
-      'What you just made is a draft: a plan, not a trade. It posts nothing to your ledger and ' +
-      'leaves the account balance exactly where it was, so you can plan a trade you never take. ' +
-      'Add Fill is what turns it into one — the price and quantity you actually got, plus any ' +
-      'fees.',
+      'A draft is a plan, not a trade: it posts nothing to your ledger and leaves the balance ' +
+      'where it was. Add Fill records what you actually got.',
   },
   {
     target: '[data-tour="position-open"]',
@@ -136,6 +144,13 @@ export const positionSteps: readonly WalkthroughStepSource[] = [
     routeParams: ['positionId'],
     docs: 'positions',
     waitForMs: 3000,
+    // BESIDE THE BUTTON. Open Position sits at the top right of the detail page,
+    // and driver.js's default places the popover below it starting 12px inside
+    // the button — measured at 1280x720, popover y 48 against a button ending at
+    // y 60. The same shape, and the same fix, as the two sets' opening steps.
+    side: 'left',
+    align: 'start',
+    actionHint: 'Choose Open Position',
     advanceOnAction: true,
     title: 'Open the position',
     body:

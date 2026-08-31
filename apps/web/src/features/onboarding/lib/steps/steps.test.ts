@@ -240,6 +240,8 @@ describe('walkthrough step definitions', () => {
       'align',
       'waitForMs',
       'advanceOnAction',
+      'actionHint',
+      'narrow',
       'docs',
       'route',
       'routeParams',
@@ -248,6 +250,39 @@ describe('walkthrough step definitions', () => {
       for (const key of Object.keys(step)) {
         expect(allowed.has(key), `${name} carries unexpected key ${key}`).toBe(true);
       }
+    }
+  });
+
+  // EVERY STEP THAT CAN HOLD THE USER SAYS WHAT IT IS HOLDING THEM FOR.
+  //
+  // A step gated on an action ignores "Next" — the engine disables the button
+  // for exactly that reason — so the popover has to name the gesture instead, or
+  // the user is left with a dead control and no instruction. That was the
+  // reported defect, twice, and this is the rule that stops a new action step
+  // shipping without its half of the fix.
+  //
+  // Keyed on the AUTHORED flag rather than on what the engine ends up gating,
+  // because `useWalkthrough` may downgrade a step at runtime and may gate it
+  // again on `advanceOnAppearanceOf`. The flag is the honest question: does this
+  // step's author believe an action is required?
+  it('gives every action step the gesture it is waiting for', () => {
+    const gated = allSteps.filter(([, step]) => step.advanceOnAction === true);
+    expect(gated.length).toBeGreaterThan(0);
+    for (const [name, step] of gated) {
+      expect(typeof step.actionHint, `${name} has no actionHint`).toBe('string');
+      expect(step.actionHint!.length, `${name} has an empty actionHint`).toBeGreaterThan(0);
+    }
+  });
+
+  // The engine renders "To continue: <hint>", so the hint is a bare gesture. A
+  // hint carrying its own framing reads as "To continue: Click X to continue".
+  it('writes action hints as a bare imperative', () => {
+    for (const [name, step] of allSteps) {
+      if (step.actionHint === undefined) continue;
+      expect(step.actionHint, `${name} ends with punctuation`).not.toMatch(/[.!]$/);
+      expect(step.actionHint.toLowerCase(), `${name} re-states the frame`).not.toContain(
+        'to continue',
+      );
     }
   });
 });
