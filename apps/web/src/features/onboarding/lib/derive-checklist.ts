@@ -81,6 +81,14 @@ export interface Checklist {
   items: ChecklistItem[];
   /** When this is true the checklist retires. The UI decides how. */
   allComplete: boolean;
+  /**
+   * The three data-creating items — account, position, close — are all done.
+   * The calculator is deliberately not consulted: it creates no data, so an
+   * unused calculator must not keep the dashboard on its welcome view once the
+   * user's journal genuinely has something to show. The dashboard swaps to the
+   * real grid on this; the checklist itself runs on until `allComplete`.
+   */
+  coreComplete: boolean;
 }
 
 /**
@@ -129,5 +137,9 @@ export function deriveChecklist(input: ChecklistInput): Checklist {
   };
   const items: ChecklistItem[] = CHECKLIST_ITEMS.map((item) => ({ ...item, done: done[item.id] }));
 
-  return { items, allComplete: items.every((item) => item.done) };
+  return {
+    items,
+    allComplete: items.every((item) => item.done),
+    coreComplete: done.account && done.position && done.close,
+  };
 }

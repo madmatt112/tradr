@@ -12,7 +12,12 @@
  * step below is unchanged, and the set now runs for the user who has finished
  * onboarding as well as the one who has not started.
  *
- * No step navigates: the dialog opens over this route, as it did over the other.
+ * Every FIELD step stays on this route: the dialog opens over it, as it did
+ * over the other. The one navigation is the closing aside, which runs on
+ * `/dashboard` — creating the account is what `bindAdvance` observes, so the
+ * move onto the closing step is also the move that puts the user back on the
+ * dashboard they came from, instead of leaving them stranded on the accounts
+ * list once the tour ends.
  *
  * EVERY CLAIM, AND WHERE IT WAS CHECKED:
  * - Booked against an account, mirrors a real brokerage account, never places
@@ -196,18 +201,22 @@ export const accountSteps: readonly WalkthroughStepSource[] = [
       'you can book positions against it straight away.',
   },
   {
-    // No target: the reporting timezone is not a control on this screen, and the
-    // invitation belongs at the point the account is created rather than as a
-    // detour into settings mid-walkthrough. Centred, so it reads as the aside it
-    // is.
-    route: '/accounts',
+    // No target: nothing on the dashboard is being pointed at, and the two
+    // things this step says — you are back where you started, and there is a
+    // second timezone — are asides, so it is centred. The `/dashboard` route is
+    // what returns the user: `bindAdvance` navigates between the submit step
+    // and this one the moment the account exists, so the tour ends on the
+    // screen the checklist lives on rather than leaving the user parked on the
+    // accounts list wondering what to do next.
+    route: '/dashboard',
     docs: 'gettingStarted',
-    title: 'Your reporting timezone',
+    title: 'Back on your dashboard',
     body:
-      'One more zone, and it is a different one. Separately from the account you just made, ' +
-      'Tradr stores a single reporting timezone for you: the zone your P&amp;L is bucketed into ' +
-      'by day, week and month, so those figures stay the same wherever you open Tradr. One was ' +
-      'stored when you registered. Confirm or correct it under Settings → Profile, where it is ' +
-      'shown prefilled with the zone on record.',
+      'Your account is created, and this is your dashboard again — the setup checklist here ' +
+      'names what to do next. One more zone before you go, and it is a different one: separately ' +
+      'from the trading-day timezone you just set, Tradr stores a single reporting timezone for ' +
+      'you — the zone your P&amp;L is bucketed into by day, week and month, so those figures ' +
+      'stay the same wherever you open Tradr. One was stored when you registered. Confirm or ' +
+      'correct it under Settings → Profile, where it is shown prefilled with the zone on record.',
   },
 ];

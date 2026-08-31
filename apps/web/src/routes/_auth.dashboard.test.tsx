@@ -423,11 +423,11 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.queryByText('Your dashboard is empty')).toBeNull();
   });
 
-  it('swaps to the grid with no reload when the first account is created', async () => {
-    // `useCreateAccount` invalidates ['accounts'] and the route observes
-    // ['accounts', 'list'], so a real create produces exactly this data change.
-    // What is pinned here is the route's reaction to it: the SAME mounted tree
-    // re-renders into the grid — nothing is remounted and no reload happens.
+  it('keeps the welcome view when the first account is created, in its carry-on stage', () => {
+    // Creating the account used to swap this screen for the grid — which handed
+    // a brand-new user exactly the six-empty-widgets view the welcome exists to
+    // replace, with two setup steps still outstanding. Now the same mounted
+    // tree re-renders into the welcome's second stage instead.
     layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending');
     accountsMock = { data: [], isLoading: false, isError: false };
@@ -435,6 +435,44 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.getByTestId('onboarding-zero-state')).toBeTruthy();
 
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
+    setOnboarding('pending', {
+      checklist: deriveChecklist({
+        accountCount: 1,
+        positionsEverCreatedCount: 0,
+        closedPositionCount: 0,
+      }),
+    });
+    rerenderRoute();
+
+    expect(screen.getByTestId('onboarding-zero-state')).toBeTruthy();
+    expect(screen.getByText('Your account is ready')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-skip-setup')).toBeTruthy();
+    expect(container.querySelector('[data-widget-id]')).toBeNull();
+  });
+
+  it('swaps to the grid with no reload once the core steps are done', async () => {
+    // Account made, position logged, position closed: the checklist observer
+    // refetches on the close's invalidation and this is the data change it
+    // hands the route. The calculator being untried must not hold the grid.
+    layoutMockValue = baseLayout({ data: populated });
+    setOnboarding('active', {
+      checklist: deriveChecklist({
+        accountCount: 1,
+        positionsEverCreatedCount: 1,
+        closedPositionCount: 0,
+      }),
+    });
+    accountsMock = { data: oneAccount, isLoading: false, isError: false };
+    const { container, rerenderRoute } = renderRoute();
+    expect(screen.getByTestId('onboarding-zero-state')).toBeTruthy();
+
+    setOnboarding('active', {
+      checklist: deriveChecklist({
+        accountCount: 1,
+        positionsEverCreatedCount: 1,
+        closedPositionCount: 1,
+      }),
+    });
     rerenderRoute();
 
     await waitFor(() => {
@@ -443,13 +481,16 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.queryByTestId('onboarding-zero-state')).toBeNull();
   });
 
-  it('a user who already has an account never sees the zero-state', () => {
-    layoutMockValue = baseLayout({ data: emptyLayout });
+  it('gives a user with sample data the grid, not the welcome view', () => {
+    // The seeder's account completes nothing — the checklist derives from the
+    // user's own rows — but the populated grid is the whole point of asking for
+    // sample data, so the demo flag on the raw accounts list opens the gate.
+    layoutMockValue = baseLayout({ data: populated });
     setOnboarding('pending');
-    accountsMock = { data: oneAccount, isLoading: false, isError: false };
-    renderRoute();
+    accountsMock = { data: [{ id: 'demo-1', isDemo: true }], isLoading: false, isError: false };
+    const { container } = renderRoute();
     expect(screen.queryByTestId('onboarding-zero-state')).toBeNull();
-    expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
+    expect(container.querySelectorAll('[data-widget-id]').length).toBeGreaterThanOrEqual(1);
   });
 
   it('gives a retired user with zero accounts the empty layout, not the zero-state', () => {
@@ -464,18 +505,18 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
   });
 
-  it('still gives a SKIPPED user with zero accounts the zero-state, and with it the reopen control', () => {
-    // The trap this gate is most likely to fall into. Retiring on
-    // `done || skipped` would look harmless — but ActivationChecklist's
-    // "Reopen setup checklist" row is the only way back from a dismissal
-    // anywhere in the product, and the zero-state is the only screen that
-    // mounts the checklist. Gate on `skipped` too and dismissal stops being
-    // recoverable, with nothing in the checklist's own tests to notice.
+  it('gives a SKIPPED user the ordinary dashboard, with the reopen control still reachable', () => {
+    // `skipped` is the explicit exit the welcome view owes the user — the
+    // checklist's dismiss and the welcome card's skip both write it — so it
+    // retires the welcome even with zero accounts. What keeps the dismissal
+    // recoverable is `ChecklistSlot` on the remaining branches: the reopen row
+    // must be on the screen the skip lands the user on.
     layoutMockValue = baseLayout({ data: emptyLayout });
     setOnboarding('skipped', { checklist: null });
     accountsMock = { data: [], isLoading: false, isError: false };
     renderRoute();
-    expect(screen.getByTestId('onboarding-zero-state')).toBeTruthy();
+    expect(screen.queryByTestId('onboarding-zero-state')).toBeNull();
+    expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
     expect(screen.getByTestId('activation-checklist-reopen')).toBeTruthy();
   });
 
@@ -503,7 +544,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
 
   it('a failed onboarding read falls through to the dashboard instead of parking on the skeleton', () => {
     layoutMockValue = baseLayout({ data: emptyLayout });
-    setOnboarding(undefined);
+    setOnboarding(undefined, { isError: true });
     onboardingQueryMock = { data: undefined, isLoading: false, isError: true };
     accountsMock = { data: [], isLoading: false, isError: false };
     const { container } = renderRoute();
@@ -564,15 +605,24 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     calculatorFirstUsedAt: '2026-05-01T00:00:00.000Z',
   });
 
-  it('a user with an account and pending onboarding sees the checklist IN the grid, locked top-right', async () => {
+  // Past the welcome view now means past the CORE steps (account, position,
+  // close) — the calculator is the one item that can still be outstanding on
+  // the grid, and the one this mount exists to keep visible.
+  const coreDone = deriveChecklist({
+    accountCount: 1,
+    positionsEverCreatedCount: 1,
+    closedPositionCount: 1,
+  });
+
+  it('a user past the core steps sees the live checklist IN the grid, locked top-right', async () => {
     layoutMockValue = baseLayout({ data: populated });
-    setOnboarding('pending');
+    setOnboarding('active', { checklist: coreDone });
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     const { container } = renderRoute();
 
     const checklist = screen.getByTestId('activation-checklist');
-    // Items 2-4 are the outstanding work for this user, so they must be on
-    // screen — that is the whole point of mounting past the zero-state.
+    // The calculator is the outstanding work for this user, so the list must
+    // be on screen — that is the whole point of mounting past the welcome.
     expect(screen.getByText('Size a trade in the calculator')).toBeTruthy();
     expect(screen.getByText('Log a position')).toBeTruthy();
     expect(screen.getByText('Close it and see the stats')).toBeTruthy();
@@ -616,7 +666,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
 
   it('the empty-layout branch mounts it too, and keeps its own empty state', () => {
     layoutMockValue = baseLayout({ data: emptyLayout });
-    setOnboarding('pending');
+    setOnboarding('active', { checklist: coreDone });
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     renderRoute();
     expect(screen.getByTestId('activation-checklist')).toBeTruthy();
@@ -681,7 +731,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     // branch is only reachable via a failed read — and there the checklist must
     // occupy no space rather than paint a card an established user then loses.
     layoutMockValue = baseLayout({ data: populated });
-    setOnboarding(undefined);
+    setOnboarding(undefined, { isError: true });
     onboardingQueryMock = { data: undefined, isLoading: false, isError: true };
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     const { container } = renderRoute();
@@ -715,83 +765,19 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
   });
 });
 
-// ---- The checklist's loading state holds the card's grid item ---------------
+// ---- The checklist's loading state ------------------------------------------
 //
-// `ActivationChecklist` paints a skeleton while its derived reads are in
-// flight. Mounted bare above the widget grid it was once 28px shorter than the
-// card that replaced it, and the whole grid dropped by that much, once per
-// load, for every user still mid-onboarding — the loading-state layout jump the
-// design system forbids. In the grid the geometry is the item's, not the
-// content's, and the skeleton matches the card row for row besides. jsdom
-// computes no layout, so these cases pin what it CAN see: the skeleton mounts
-// in the aside item, and the card then refills that SAME item.
-
-describe('_auth.dashboard route — the checklist skeleton holds the same grid item as the card', () => {
-  const populated = {
-    widgets: sixDefaultWidgets,
-    theme: 'light',
-    updatedAt: '2026-05-01T00:00:00.000Z',
-  };
-  const emptyLayout = { widgets: [], theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' };
-  const oneAccount = [{ id: 'acct-1' }];
-  const someChecklist = deriveChecklist({
-    accountCount: 1,
-    positionsEverCreatedCount: 0,
-    closedPositionCount: 0,
-  });
-
-  it('mounts the skeleton in the aside slot, and the card refills that same item', async () => {
-    layoutMockValue = baseLayout({ data: populated });
-    // Preference landed, gated reads still in flight: the one window in which
-    // the skeleton is on screen.
-    setOnboarding('pending', { checklist: undefined });
-    accountsMock = { data: oneAccount, isLoading: false, isError: false };
-    const { container, rerenderRoute } = renderRoute();
-
-    await waitFor(() => {
-      expect(asideItem(container)).not.toBeNull();
-    });
-    const slot = asideItem(container)!;
-    expect(slot.contains(screen.getByTestId('activation-checklist-loading'))).toBe(true);
-    expect(slot.gridstackNode).toMatchObject({ x: 8, y: 0, w: 4, h: 6 });
-
-    // The positions read lands and the card replaces the skeleton.
-    setOnboarding('pending', { checklist: someChecklist });
-    rerenderRoute();
-
-    expect(screen.queryByTestId('activation-checklist-loading')).toBeNull();
-    // SAME item — the grid was told nothing changed, so nothing around it moved.
-    const after = asideItem(container)!;
-    expect(after).toBe(slot);
-    expect(after.contains(screen.getByTestId('activation-checklist'))).toBe(true);
-  });
-
-  it('mounts the skeleton on the empty-layout branch too, above the empty state', () => {
-    layoutMockValue = baseLayout({ data: emptyLayout });
-    setOnboarding('pending', { checklist: undefined });
-    accountsMock = { data: oneAccount, isLoading: false, isError: false };
-    renderRoute();
-
-    expect(screen.getByTestId('activation-checklist-loading')).toBeTruthy();
-    // And the branch's own content is unchanged.
-    expect(screen.getByText('Your dashboard is empty')).toBeTruthy();
-  });
-
-  it('does not reintroduce the flash of four unticked boxes', () => {
-    // The slot must not tempt anyone into rendering the card early to fill it.
-    // While the reads are in flight the user sees a skeleton and the four item
-    // labels are nowhere on screen.
-    layoutMockValue = baseLayout({ data: populated });
-    setOnboarding('pending', { checklist: undefined });
-    accountsMock = { data: oneAccount, isLoading: false, isError: false };
-    renderRoute();
-
-    expect(screen.getByTestId('activation-checklist-loading')).toBeTruthy();
-    expect(screen.queryByTestId('activation-checklist')).toBeNull();
-    expect(screen.queryByText('Create a brokerage account')).toBeNull();
-    expect(screen.queryByText('Log a position')).toBeNull();
-  });
-});
+// There USED to be a describe here pinning the checklist's loading skeleton
+// into the grid's aside item, so the card landing did not move the layout. The
+// welcome-view gate made that window unreachable: a `pending`/`active` user
+// whose checklist is still `undefined` now holds the route-level skeleton — the
+// gate cannot tell the welcome view from the grid until the checklist answers —
+// so the grid only ever mounts with the checklist already known. The aside
+// still accepts the `loading` view defensively (`checklistInGrid`), but there
+// is no state the route can be put in that renders it, in the product or here.
+// The no-flash claims those cases guarded live on in "no flash: nothing is
+// rendered when the route falls through with the status still unknown" above
+// and the gate's own skeleton cases.
 
 // ---- The widget coach mark --------------------------------------------------
 //
@@ -822,7 +808,7 @@ describe('_auth.dashboard route — the widget coach mark', () => {
 
   it('appears beside the header on the populated branch', () => {
     layoutMockValue = baseLayout({ data: populated });
-    setOnboarding('pending');
+    setOnboarding('done');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     const { container } = renderRoute();
 
@@ -862,7 +848,7 @@ describe('_auth.dashboard route — the widget coach mark', () => {
 
   it('stays off the empty-layout branch, which renders none of the controls it names', () => {
     layoutMockValue = baseLayout({ data: emptyLayout });
-    setOnboarding('pending');
+    setOnboarding('done');
     accountsMock = { data: oneAccount, isLoading: false, isError: false };
     const { container } = renderRoute();
 

@@ -671,3 +671,89 @@ describe('ZeroState — mobile widths', () => {
     expect(root.outerHTML).not.toMatch(/\bw-\[\d/);
   });
 });
+
+// The welcome view no longer retires on the first account: the dashboard keeps
+// it up until the core steps are done or the user explicitly skips, so this
+// screen now has a second face. These cases pin what that face says and does —
+// the stage rule itself (derived item 1, so demo data cannot flip it) lives in
+// the component.
+describe('ZeroState — the carry-on stage, once the account exists', () => {
+  function accountDoneChecklist() {
+    return deriveChecklist({
+      accountCount: 1,
+      positionsEverCreatedCount: 0,
+      closedPositionCount: 0,
+    });
+  }
+
+  it('swaps the create-stage furniture for the carry-on card', () => {
+    useHook({ checklist: accountDoneChecklist(), preference: preference('active') });
+    render(<ZeroState />);
+
+    expect(screen.getByText('Your account is ready')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Continue the walkthrough' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Skip to my dashboard' })).toBeTruthy();
+    // The create-stage pieces are gone: the account exists, the seeder would
+    // refuse to run beside it, and the not-connected copy has been met.
+    expect(screen.queryByRole('button', { name: 'Create my first account' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add sample data' })).toBeNull();
+    expect(screen.queryByTestId('zero-state-not-connected')).toBeNull();
+  });
+
+  it("gives the walkthrough the stage's one amber action", () => {
+    useHook({ checklist: accountDoneChecklist(), preference: preference('active') });
+    render(<ZeroState />);
+
+    expect(screen.getByTestId('zero-state-walkthrough').getAttribute('data-variant')).toBe(
+      'default',
+    );
+    expect(screen.getByTestId('zero-state-skip-setup').getAttribute('data-variant')).toBe(
+      'outline',
+    );
+  });
+
+  it('continue records the opt-in and starts the first outstanding set', async () => {
+    const tour = useTour();
+    const hook = useHook({ checklist: accountDoneChecklist(), preference: preference('active') });
+    render(<ZeroState />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Continue the walkthrough' }));
+
+    expect(hook.setStatus).toHaveBeenCalledExactlyOnceWith('active');
+    expect(tour.start).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
+  it("skip writes the checklist's own dismissal value, and starts nothing", async () => {
+    const tour = useTour();
+    const hook = useHook({ checklist: accountDoneChecklist(), preference: preference('active') });
+    render(<ZeroState />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip to my dashboard' }));
+
+    expect(hook.dismiss).toHaveBeenCalledTimes(1);
+    expect(tour.start).not.toHaveBeenCalled();
+  });
+
+  it('is still no dead end: the checklist and the docs link stay', () => {
+    useHook({ checklist: accountDoneChecklist(), preference: preference('active') });
+    render(<ZeroState />);
+
+    expect(screen.getByTestId('activation-checklist')).toBeTruthy();
+    expect(screen.getByTestId('zero-state-docs-link')).toBeTruthy();
+  });
+
+  it('a failed runtime blocks the walkthrough with its reason, and leaves the skip live', async () => {
+    useTour({ isUnavailable: true });
+    const hook = useHook({ checklist: accountDoneChecklist(), preference: preference('active') });
+    render(<ZeroState />);
+
+    const walkthrough = screen.getByTestId('zero-state-walkthrough');
+    expect(walkthrough.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByTestId('zero-state-guidance-note')).toBeTruthy();
+    await userEvent.click(walkthrough);
+    expect(hook.setStatus).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip to my dashboard' }));
+    expect(hook.dismiss).toHaveBeenCalledTimes(1);
+  });
+});

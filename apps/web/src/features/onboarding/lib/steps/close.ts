@@ -34,9 +34,14 @@
  *   past rather than a dead end, and its copy says so. Nothing here claims the
  *   position closed: the last step attributes the figures to the exits
  *   recorded, which is true of a partial exit and of a full one alike.
- * - `[data-grid-mode]` is `DashboardGrid`'s own attribute, set on both the
- *   desktop grid and the mobile stack, so the closing step anchors to the
- *   widgets at any width.
+ * - THE CLOSING STEP IS CENTRED, NOT ANCHORED TO THE GRID, and the partial exit
+ *   is why. A full exit completes the last core setup step, so the dashboard
+ *   greets the user with the populated grid; a partial exit leaves item 4
+ *   outstanding, and the dashboard (correctly) still shows the focused welcome
+ *   view — no `[data-grid-mode]` anywhere. A step anchored to the grid waited
+ *   out its `waitForMs` on that path and ended the walkthrough `target-missing`
+ *   one step from the finish. Centred, the aside opens over whichever dashboard
+ *   the user's data has earned, and its copy is written to be true of both.
  */
 
 import type { WalkthroughStepSource } from './index';
@@ -98,15 +103,16 @@ export const closeSteps: readonly WalkthroughStepSource[] = [
       'from Add Fill whenever you close it out.',
   },
   {
-    target: '[data-grid-mode]',
+    // No target — see the header: a partial exit leaves the dashboard on its
+    // welcome view, where the grid this step used to anchor to does not exist.
     route: '/dashboard',
     docs: 'gettingStarted',
-    waitForMs: 5000,
     title: 'And there it is',
     body:
-      'Back on the dashboard, with figures in it. Everything here is derived from the trades you ' +
-      'log — the stats, the equity curve and your account balance all just moved, because each ' +
-      'exit you recorded booked its share of the result as you recorded it. Log the next one and ' +
-      'they move again.',
+      'Back on the dashboard, which builds itself from the trades you log: each exit you ' +
+      'recorded booked its share of the result as you recorded it, so your account balance has ' +
+      'already moved. With the position fully closed, the stats and the equity curve here draw ' +
+      'from your own figures — and if you exited only part of it, they fill in the moment you ' +
+      'close out the rest. Log the next one and they move again.',
   },
 ];
