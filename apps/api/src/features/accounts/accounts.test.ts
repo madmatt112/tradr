@@ -870,6 +870,21 @@ describe('accounts default designation', () => {
     const second = await createTestAccount(cookie, 'Second', 'EUR');
     const third = await createTestAccount(cookie, 'Third', 'GBP');
 
+    // Three HTTP creates can land in the same clock tick, and under an exact
+    // created_at tie the promotion's id tiebreak is free to disagree with
+    // creation order — so pin the timestamps the rule actually reads.
+    const staggered: Array<[string, string]> = [
+      [first.id, '2026-01-01T00:00:00Z'],
+      [second.id, '2026-01-02T00:00:00Z'],
+      [third.id, '2026-01-03T00:00:00Z'],
+    ];
+    for (const [id, createdAt] of staggered) {
+      await db
+        .update(accountsTable)
+        .set({ createdAt: new Date(createdAt) })
+        .where(eq(accountsTable.id, id));
+    }
+
     const res = await authedRequest('DELETE', `/api/accounts/${first.id}`, cookie);
     expect(res.status).toBe(204);
 

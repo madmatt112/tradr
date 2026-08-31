@@ -373,10 +373,15 @@ function dialogSelect(dialog: Locator, label: string): Locator {
  */
 const CLOSE_STEP_TITLES = ['Record the exit', 'It closes itself', 'And there it is'] as const;
 
-/** An account, over the API — this suite's own guided path already covers the UI one. */
+/**
+ * An account, over the API — this suite's own guided path already covers the UI
+ * one. Funded: as the user's first account it is the default the calculator now
+ * auto-selects, and a zero-cash account caps a dollar-risk size at nothing, so
+ * the calculator traversal would never see its results render.
+ */
 async function createAccount(req: APIRequestContext, name: string): Promise<string> {
   const res = await req.post('/api/accounts', {
-    data: { name, currency: 'USD' },
+    data: { name, currency: 'USD', startingBalance: '10000' },
     headers: { 'X-Forwarded-For': uniqueIp() },
   });
   expect(res.status(), `POST /accounts ${name}`).toBe(201);
