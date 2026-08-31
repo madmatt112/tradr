@@ -253,6 +253,9 @@ function checkContrast(theme, map) {
     checkPair(theme, `muted-foreground/${s}`, '--color-muted-foreground', s, 4.5, map);
   }
 
+  // popover-foreground on popover (the feedback surface's popover body text).
+  checkPair(theme, 'popover-foreground/popover', '--color-popover-foreground', '--color-popover', 4.5, map);
+
   // primary-foreground on primary (on-amber ≥ 4.5).
   checkPair(theme, 'on-amber (primary)', '--color-primary-foreground', '--color-primary', 4.5, map);
 
