@@ -257,6 +257,22 @@ async function tabTo(page: Page, selector: string): Promise<void> {
 }
 
 /**
+ * Tab within driver.js's focus trap until the popover's Next button holds
+ * focus. Asserted by position, not press count: the trap cycles
+ * [close, previous, next, highlighted target], driver.js focuses close on
+ * render, and the engine then moves focus into a text-entry target — so where
+ * Tab starts varies by step and timing; only the destination is stable.
+ */
+async function tabToPopoverNext(page: Page): Promise<void> {
+  const next = popoverNext(page);
+  for (let presses = 0; presses < 6; presses += 1) {
+    if (await next.evaluate((el) => el === document.activeElement)) return;
+    await page.keyboard.press('Tab');
+  }
+  await expect(next).toBeFocused();
+}
+
+/**
  * Walk the account set from its first step to `stopAt`, opening the account
  * dialog on the way because the six field steps anchor to controls that only
  * exist once it is open.
@@ -1145,21 +1161,37 @@ test.describe('user onboarding', () => {
     await page.goto('/dashboard');
     await expect(page.getByTestId('activation-checklist')).toBeVisible();
 
-    // And a set whose steps all live on one screen traverses on the arrow keys
-    // alone — the account set cannot, because its field steps need a dialog the
-    // user opens by activating the highlighted control.
+    // And a set whose steps live on one screen still traverses by keyboard
+    // alone — with one change: the tour now moves the caret into each field it
+    // describes, so the arrows pressed THERE edit the value, and traversal
+    // happens from the popover's own Next button, inside driver.js's focus
+    // trap. Each press is still asserted on its own: this is where a dropped
+    // press shows up.
     await tabTo(page, '[data-checklist-action="calculator"]');
     await page.keyboard.press('Enter');
     await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
-    // Consecutive presses, each asserted on its own: this is where a dropped
-    // press shows up, because every press after the first follows a transition
-    // that has only just painted the title the one before it produced.
+
+    // The caret followed the tour into the field — the feature itself…
+    await expect(page.locator('#entryPrice')).toBeFocused();
+    // …and an arrow pressed there is caret movement, not tour navigation.
+    await page.keyboard.press('ArrowRight');
+    await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
+
+    await tabToPopoverNext(page);
     await pressToTitle(page, 'ArrowRight', CALCULATOR_STEP_TITLES[1]);
+    await expect(page.locator('#stopLoss')).toBeFocused();
+    await tabToPopoverNext(page);
     await pressToTitle(page, 'ArrowRight', CALCULATOR_STEP_TITLES[2]);
+    await expect(page.locator('#targetPrice')).toBeFocused();
+    await tabToPopoverNext(page);
     await pressToTitle(page, 'ArrowLeft', CALCULATOR_STEP_TITLES[1]);
+    await expect(page.locator('#stopLoss')).toBeFocused();
+    await tabToPopoverNext(page);
     await pressToTitle(page, 'ArrowLeft', CALCULATOR_STEP_TITLES[0]);
-    // The first step is the front of the set, and the key that would run off it
-    // does nothing rather than ending the tour.
+    await expect(page.locator('#entryPrice')).toBeFocused();
+    // The first step is the front of the set, and the key that would run off
+    // it does nothing rather than ending the tour.
+    await tabToPopoverNext(page);
     await page.keyboard.press('ArrowLeft');
     await expect(popoverTitle(page)).toHaveText(CALCULATOR_STEP_TITLES[0]);
     await escapeTour(page);

@@ -545,6 +545,78 @@ function isGatedStep(index: number): boolean {
 }
 
 /**
+ * The input types a caret cannot live in. Everything else an `<input>` renders
+ * is something the user types into — text, number, search, email and the rest —
+ * and the two behaviours below treat "typed into" as one question with one
+ * answer.
+ */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);
+
+/**
+ * A CONTROL THE USER TYPES IN — one predicate for two decisions that must not
+ * come apart: which highlighted target the tour moves the caret into
+ * (`focusStepTarget`), and which focused element's arrow keys belong to the
+ * caret rather than the tour (`handleKeyup`). Deciding them separately is how
+ * the tour could put focus somewhere and then fight the user for the keys.
+ *
+ * Buttons, radios, checkboxes and Radix's trigger buttons are deliberately NOT
+ * here: focusing them invites Enter and arrow presses the step never asked for.
+ */
+function isTextEntry(element: Element): boolean {
+  if (element instanceof HTMLTextAreaElement) return true;
+  if (element instanceof HTMLInputElement) return !NON_TEXT_INPUT_TYPES.has(element.type);
+  return element instanceof HTMLElement && element.matches('[contenteditable="true"]');
+}
+
+/**
+ * MOVE THE CARET WHERE THE TOUR IS POINTING — for a step highlighting a field
+ * the user is being asked to type into, and for nothing else.
+ *
+ * The reported gap: the account set walks `#name`, then the selects, then
+ * `#startingBalance`, and a user whose last click was the name field is still
+ * typing THERE when the tour says "initial balance". The popover's copy moved;
+ * the caret did not. So a text-entry target takes focus when highlighted, and a
+ * prefilled value is selected so typing replaces it — "0" in a balance field
+ * must not become "01000" for a user doing exactly what the step asked.
+ *
+ * Called from `handleHighlighted`, which is AFTER driver.js has rendered the
+ * popover and focused its own first button — the only ordering that lets this
+ * write win. driver.js's Tab trap already cycles between the popover and the
+ * highlighted element, so focus starting in the field stays inside the trap.
+ *
+ * Skipped for a control that is disabled or gone — a caret in a dead field is
+ * an instruction to type into something that will not take it.
+ */
+function focusStepTarget(index: number): void {
+  const target = activeSteps[index]?.target;
+  if (target === undefined) return;
+
+  const element = document.querySelector(target);
+  if (element === null || !isTextEntry(element)) return;
+  if (element.matches(':disabled, [aria-disabled="true"], [data-disabled]')) return;
+  if (element === document.activeElement) return;
+
+  (element as HTMLElement).focus();
+  if (
+    (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+    element.value !== ''
+  ) {
+    element.select();
+  }
+}
+
+/**
  * Classify the step the user left from, so the ending can be explained rather
  * than merely happening.
  *
@@ -584,9 +656,11 @@ function recordBlock(index: number): void {
  * do, so the two paths cannot drift: the gate is `isGatedStep`, advancing is
  * `advanceFromUser()`, and exiting is `stop()`. `keyup` rather than `keydown` matches
  * what driver.js listened for, so holding a key still moves one step rather than
- * racing through the set. Nothing filters by event target, also as before: the
- * highlighted control is interactive (`disableActiveInteraction: false`) and a
- * user typing in it was already moving the tour with the arrow keys.
+ * racing through the set. THE ARROWS are filtered by event target, and only
+ * the arrows: the engine itself moves focus into a text-entry target
+ * (`focusStepTarget`), so a caret move in the very field a step asked the user
+ * to fill must not double as tour navigation. Escape is not filtered — it ends
+ * the tour from anywhere, exactly as before.
  */
 function handleKeyup(event: KeyboardEvent): void {
   const running = instance;
@@ -598,6 +672,8 @@ function handleKeyup(event: KeyboardEvent): void {
     stop();
     return;
   }
+  // Arrows in a field are the caret's, not the tour's — see the comment above.
+  if (event.target instanceof Element && isTextEntry(event.target)) return;
   if (event.key === 'ArrowRight') {
     if (isGatedStep(running.getActiveIndex() ?? -1)) return;
     advanceFromUser();
@@ -704,9 +780,15 @@ const handleHighlightStarted: DriverHook = (element, _driveStep, opts) => {
  * closes that window: driver.js has finished putting the popover up, so the
  * button is disabled and the instruction is present the first time either is
  * painted.
+ *
+ * The render this hook follows is also where driver.js focuses the popover's
+ * own first button, which is why the caret move comes here and last: it is the
+ * final write, so the field wins.
  */
 const handleHighlighted: DriverHook = (_element, _driveStep, opts) => {
-  syncGateAffordance(opts.index ?? -1);
+  const index = opts.index ?? -1;
+  syncGateAffordance(index);
+  focusStepTarget(index);
 };
 
 const handleNextClick: DriverHook = (_element, _driveStep, opts) => {
