@@ -181,6 +181,45 @@
         ]
       }
     },
+    "/api/accounts/default": {
+      "put": {
+        "description": "Authed. Moves the default-account designation — the account the app's pickers preselect — to the named account. Exactly one account holds it at a time: setting a new default clears the old one in the same statement. The first account a user creates takes the designation automatically, and deleting the default hands it to the oldest remaining account, so this endpoint is only ever a *move*.\n\nThe account must belong to the current user (404 otherwise), and the sample account is refused with `400 DEMO_ACCOUNT_NOT_DEFAULTABLE` — a preselected sample account would put invented data behind every new position by default.\n\nEvery account read carries a boolean `isDefault`; it is server-set and cannot be sent in on create or update.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "accountId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ defaultAccountId } — the stored designation."
+          },
+          "400": {
+            "description": "Validation error, or DEMO_ACCOUNT_NOT_DEFAULTABLE (the sample account)."
+          },
+          "404": {
+            "description": "Account not found (or not owned by the user)."
+          }
+        },
+        "summary": "Set the default account.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
     "/api/accounts/demo": {
       "post": {
         "description": "Authed. Creates one flagged sample account for the current user, seeded with a fixed set of trades — closed, open and planned — driven through the normal position lifecycle so realized P&L and its ledger entries are derived exactly as they are for real trades. The fixture is identical on every run, so support, the documentation screenshots and the end-to-end tests all describe the same figures.\n\nRefused with `409` when the user already has an account. Sample figures are kept out of real ones by keeping sample and real data mutually exclusive, so there is no supported state in which both exist. Seeding is all-or-nothing: a failure leaves no account behind, and a retry is safe.\n\nAvailable identically to self-hosted and hosted deployments — it needs no optional integration configured.\n\nEvery account read — the list, the detail and this response — carries a boolean `isDemo`, which is `true` on the sample account and `false` on every real one. That is how a client identifies the sample account to label or remove it; it is server-set and cannot be sent in on create or update.\n",

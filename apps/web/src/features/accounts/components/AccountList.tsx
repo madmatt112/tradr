@@ -36,7 +36,12 @@ import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
 import { useDemoAccount } from '@/features/onboarding/hooks/useDemoAccount';
 
-import { useAccounts, useDeleteAccount, useSetWritableAccount } from '../hooks/useAccounts';
+import {
+  useAccounts,
+  useDeleteAccount,
+  useSetDefaultAccount,
+  useSetWritableAccount,
+} from '../hooks/useAccounts';
 
 import { AccountDialog } from './AccountDialog';
 
@@ -44,6 +49,7 @@ export function AccountList() {
   const { data: accounts, isLoading } = useAccounts();
   const deleteAccount = useDeleteAccount();
   const setWritable = useSetWritableAccount();
+  const setDefault = useSetDefaultAccount();
   const { data: tierState } = useTierState();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
@@ -142,6 +148,14 @@ export function AccountList() {
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-2">
                     <span>{account.name}</span>
+                    {/* The default account — what pickers preselect. Moved from
+                        the row menu's "Make default"; the sample account never
+                        carries it. */}
+                    {account.isDefault && (
+                      <Badge variant="secondary" data-testid={`default-badge-${account.id}`}>
+                        Default
+                      </Badge>
+                    )}
                     {/* Writability badge + make-writable action (D18) — only
                         while the restriction is active; the action is the
                         in-place remedy instead of a 403 at position create. */}
@@ -186,6 +200,17 @@ export function AccountList() {
                       >
                         Edit
                       </DropdownMenuItem>
+                      {/* Withheld from the current default (nothing to do) and
+                          from the sample account (the server refuses it). */}
+                      {!account.isDefault && !account.isDemo && (
+                        <DropdownMenuItem
+                          className="cursor-pointer"
+                          disabled={setDefault.isPending}
+                          onClick={() => setDefault.mutate(account.id)}
+                        >
+                          Make default
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
                         className="cursor-pointer text-destructive"
                         onClick={() => setDeleteTarget(account)}

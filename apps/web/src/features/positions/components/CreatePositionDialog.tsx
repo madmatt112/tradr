@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
@@ -164,6 +164,21 @@ export function CreatePositionDialog({ open, onOpenChange }: Props) {
   });
 
   const assetType = form.watch('assetType');
+
+  // Preselect the user's default account while the field is still untouched —
+  // an empty value is the placeholder, never a choice, so nothing the user
+  // picked is ever overwritten (a re-run with a value present is a no-op, and
+  // the reset after a successful create re-seeds the same way). Withheld when
+  // the default account is not writable on the current plan: its option is
+  // disabled below, and a preselected disabled option would invite the 403 the
+  // disabling exists to prevent.
+  const defaultAccount = accounts?.find((a) => a.isDefault);
+  useEffect(() => {
+    if (!open || !defaultAccount) return;
+    if (form.getValues('accountId') !== '') return;
+    if (!isAccountWritable(tierState, defaultAccount.id)) return;
+    form.setValue('accountId', defaultAccount.id);
+  }, [open, defaultAccount, tierState, form]);
 
   // Req 1.3: preserve side/account/notes; clear the stock symbol and all option
   // inputs; reset Type → Call. Values are NOT restored on toggle-back.

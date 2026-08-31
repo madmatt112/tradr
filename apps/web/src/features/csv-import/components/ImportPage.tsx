@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
+import { isAccountWritable } from '@/features/billing/tier-usage';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
@@ -62,6 +63,18 @@ export function ImportPage() {
   const { data: accounts } = useAccounts();
   const { data: tierState } = useTierState();
   const currencyCode = accounts?.find((a) => a.id === accountId)?.currency ?? 'USD';
+
+  // Preselect the user's default account while none is chosen — null is the
+  // placeholder, never a choice, so a target the user picked is never
+  // overwritten. Withheld when the default is not writable on the current
+  // plan: AccountPicker disables that option, and a preselected disabled
+  // target would gate the preview on a 403.
+  const defaultAccount = accounts?.find((a) => a.isDefault);
+  useEffect(() => {
+    if (accountId !== null || !defaultAccount) return;
+    if (!isAccountWritable(tierState, defaultAccount.id)) return;
+    setAccountId(defaultAccount.id);
+  }, [accountId, defaultAccount, tierState]);
 
   // Remaining lifetime CSV imports (plan-tiers REQ-10.3) — disclosed BEFORE
   // staging. `usage` is populated only when gating is on and the user is
