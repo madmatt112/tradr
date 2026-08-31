@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { AccountSchema, CreateAccountSchema, UpdateAccountSchema } from './account';
+import {
+  AccountSchema,
+  CreateAccountSchema,
+  SetDefaultAccountSchema,
+  UpdateAccountSchema,
+} from './account';
 
 const baseCreate = { name: 'Main', currency: 'USD' };
 
@@ -124,5 +129,42 @@ describe('AccountSchema.defaultRiskPercent', () => {
     const result = AccountSchema.safeParse({ ...baseAccount, defaultRiskPercent: '3.00' });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.defaultRiskPercent).toBe('3.00');
+  });
+
+  describe('isDefault', () => {
+    it('parses when the field is absent (existing fixtures keep working)', () => {
+      const result = AccountSchema.safeParse(baseAccount);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.isDefault).toBeUndefined();
+    });
+
+    it('parses a stored value', () => {
+      const result = AccountSchema.safeParse({ ...baseAccount, isDefault: true });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.isDefault).toBe(true);
+    });
+
+    // Server-set only, like isDemo: no request body may claim it.
+    it('is absent from CreateAccountSchema and UpdateAccountSchema', () => {
+      const created = CreateAccountSchema.safeParse({ ...baseCreate, isDefault: true });
+      expect(created.success).toBe(true);
+      if (created.success) expect(created.data).not.toHaveProperty('isDefault');
+      const updated = UpdateAccountSchema.safeParse({ isDefault: true });
+      expect(updated.success).toBe(true);
+      if (updated.success) expect(updated.data).not.toHaveProperty('isDefault');
+    });
+  });
+});
+
+describe('SetDefaultAccountSchema', () => {
+  it('accepts a uuid accountId', () => {
+    expect(
+      SetDefaultAccountSchema.safeParse({ accountId: '11111111-1111-4111-8111-111111111111' })
+        .success,
+    ).toBe(true);
+  });
+
+  it.each([[{}], [{ accountId: 'not-a-uuid' }], [{ accountId: 42 }]])('rejects %j', (body) => {
+    expect(SetDefaultAccountSchema.safeParse(body).success).toBe(false);
   });
 });

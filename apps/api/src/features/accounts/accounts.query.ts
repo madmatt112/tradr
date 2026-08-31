@@ -120,6 +120,9 @@ export function findAccountsByUser(db: Database | Transaction, userId: string) {
       // the wrong account the day it moved. This flag is read-only on the way
       // out: nothing a client sends can set it.
       isDemo: accounts.isDemo,
+      // Which account pickers preselect. Read-only on the way out, like isDemo:
+      // it moves via PUT /api/accounts/default, never via create/update bodies.
+      isDefault: accounts.isDefault,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -148,6 +151,9 @@ export function findAccountById(db: Database | Transaction, id: string, userId: 
       // The sample-data flag — see findAccountsByUser. Also carried here so the
       // account this endpoint returns after seeding identifies itself.
       isDemo: accounts.isDemo,
+      // See findAccountsByUser. Carried here so the account the create endpoint
+      // returns says whether it just became the default.
+      isDefault: accounts.isDefault,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -177,6 +183,9 @@ export function insertAccount(
     // everything booked against it, so a client that could set it could talk
     // its way past the guard protecting a real account.
     isDemo?: boolean;
+    // Only createAccount passes this, for the user's first account. Never
+    // derived from request input, same as isDemo.
+    isDefault?: boolean;
   },
 ) {
   return tx.insert(accounts).values(data).returning();
@@ -217,9 +226,9 @@ export function deleteAccount(tx: Transaction, id: string, userId: string) {
 }
 
 /**
- * One owned account's stored sample-data flag, without the balance LATERALs the
- * full projection carries — the delete path needs to know what kind of account
- * it is holding, not what it is worth.
+ * One owned account's stored sample-data and default flags, without the balance
+ * LATERALs the full projection carries — the delete path needs to know what
+ * kind of account it is holding, not what it is worth.
  *
  * `undefined` is the same answer for an account belonging to somebody else as
  * for one that never existed, which is what keeps a deletion attempt from
@@ -229,13 +238,73 @@ export async function selectOwnedAccountDemoFlag(
   db: Database | Transaction,
   id: string,
   userId: string,
-): Promise<{ id: string; isDemo: boolean } | undefined> {
+): Promise<{ id: string; isDemo: boolean; isDefault: boolean } | undefined> {
   const rows = await db
-    .select({ id: accounts.id, isDemo: accounts.isDemo })
+    .select({ id: accounts.id, isDemo: accounts.isDemo, isDefault: accounts.isDefault })
     .from(accounts)
     .where(and(eq(accounts.id, id), eq(accounts.userId, userId)))
     .limit(1);
   return rows[0];
+}
+
+/**
+ * Does this user already have a default account? Existence only — the create
+ * path needs to know whether the account it is inserting takes the
+ * designation, not which account holds it. Backed by
+ * `accounts_one_default_per_user`, and stopped at the first row.
+ */
+export async function userHasDefaultAccount(
+  db: Database | Transaction,
+  userId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql<number>`1` })
+    .from(accounts)
+    .where(and(eq(accounts.userId, userId), eq(accounts.isDefault, true)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Flip the default designation to exactly this account, in one statement, so
+ * there is no window in which the user has two defaults for the partial unique
+ * index to reject — the `setDefaultPersona` idiom. The demo account is left
+ * out of the flip entirely: it can never gain the flag here, and it never
+ * carries it to lose.
+ */
+export async function setDefaultAccountId(
+  tx: Transaction,
+  userId: string,
+  accountId: string,
+): Promise<void> {
+  await tx.execute(sql`
+    UPDATE accounts
+    SET is_default = (id = ${accountId}), updated_at = now()
+    WHERE user_id = ${userId} AND is_demo = false
+  `);
+}
+
+/**
+ * Give the designation to the user's oldest remaining non-demo account, if any
+ * — the delete path's promotion, run after the default account is gone. The
+ * (created_at, id) order matches the backfill migration, so "the first account
+ * the user created" means the same row everywhere; same-transaction creation
+ * produces exact created_at ties, hence the id tiebreak.
+ */
+export async function promoteOldestAccountToDefault(
+  tx: Transaction,
+  userId: string,
+): Promise<void> {
+  await tx.execute(sql`
+    UPDATE accounts
+    SET is_default = true, updated_at = now()
+    WHERE id = (
+      SELECT id FROM accounts
+      WHERE user_id = ${userId} AND is_demo = false
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    )
+  `);
 }
 
 /**

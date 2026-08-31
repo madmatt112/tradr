@@ -1,0 +1,2 @@
+ALTER TABLE "accounts" ADD COLUMN "is_default" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "accounts_one_default_per_user" ON "accounts" USING btree ("user_id") WHERE is_default = true;

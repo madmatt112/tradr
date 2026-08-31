@@ -396,6 +396,74 @@ describe('CreatePositionDialog — symbol entry', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Default-account preselection
+// ---------------------------------------------------------------------------
+
+describe('CreatePositionDialog — default-account preselection', () => {
+  it('preselects the default account while the field is untouched', async () => {
+    accountsData.current = [
+      { id: ACCOUNT_ID, name: 'Main', currency: 'USD' },
+      { id: ACCOUNT_B_ID, name: 'Swing', currency: 'EUR', isDefault: true },
+    ];
+    renderDialog();
+
+    await waitFor(() => {
+      expect(selectByOptionValue(ACCOUNT_ID).value).toBe(ACCOUNT_B_ID);
+    });
+  });
+
+  it('never overwrites an account the user picked', async () => {
+    accountsData.current = [
+      { id: ACCOUNT_ID, name: 'Main', currency: 'USD' },
+      { id: ACCOUNT_B_ID, name: 'Swing', currency: 'EUR', isDefault: true },
+    ];
+    const { rerender } = renderDialog();
+    await waitFor(() => {
+      expect(selectByOptionValue(ACCOUNT_ID).value).toBe(ACCOUNT_B_ID);
+    });
+
+    chooseAccount();
+    rerender(<CreatePositionDialog open onOpenChange={vi.fn()} />);
+    expect(selectByOptionValue(ACCOUNT_ID).value).toBe(ACCOUNT_ID);
+  });
+
+  // The native-select stub cannot show an empty value (it snaps to its first
+  // option), so "still empty" is proven the way the form itself proves it: a
+  // submit fails the accountId validation and the mutation never fires.
+  async function expectAccountStillEmpty(): Promise<void> {
+    fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'AAPL' } });
+    fireEvent.click(createButton());
+    await screen.findByText('Select an account');
+    expect(mutateAsync).not.toHaveBeenCalled();
+  }
+
+  it('leaves the field empty when no account is the default', async () => {
+    accountsData.current = [
+      { id: ACCOUNT_ID, name: 'Main', currency: 'USD' },
+      { id: ACCOUNT_B_ID, name: 'Swing', currency: 'EUR' },
+    ];
+    renderDialog();
+    await expectAccountStillEmpty();
+  });
+
+  it('withholds the preselect when the default account is not writable (D18)', async () => {
+    accountsData.current = [
+      { id: ACCOUNT_ID, name: 'Main', currency: 'USD' },
+      { id: ACCOUNT_B_ID, name: 'Swing', currency: 'EUR', isDefault: true },
+    ];
+    // Over-cap on enforced free with Main designated — the default (Swing) is
+    // read-only, and preselecting a disabled option would invite the 403.
+    tierData.current = tierFixture({
+      accountsUsed: 2,
+      writableAccountId: ACCOUNT_ID,
+      positionsUsed: 0,
+    });
+    renderDialog();
+    await expectAccountStillEmpty();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Plan tiers (design Component 12; REQ-6.4, REQ-11.5/11.6)
 // ---------------------------------------------------------------------------
 

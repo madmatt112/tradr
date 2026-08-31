@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type {
   Account,
   CreateAccountInput,
+  SetDefaultAccountInput,
   SetWritableAccountInput,
   UpdateAccountInput,
 } from '@tradr/shared';
@@ -120,6 +121,28 @@ export function useDeleteAccount() {
     },
     onError: (err: unknown) => {
       toast.error(getErrorMessage(err, 'Failed to delete account'));
+    },
+  });
+}
+
+/**
+ * PUT /api/accounts/default — move the default-account designation. Unlike the
+ * writable designation below, this lives on the account rows themselves
+ * (`isDefault`), so it is the accounts list that must refetch.
+ */
+export function useSetDefaultAccount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (accountId: string) => {
+      const body: SetDefaultAccountInput = { accountId };
+      return api.put<{ defaultAccountId: string }>('/accounts/default', body);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      toast.success('Default account updated');
+    },
+    onError: (err: unknown) => {
+      toast.error(getErrorMessage(err, 'Failed to update the default account'));
     },
   });
 }

@@ -361,6 +361,19 @@ export function CalculatorForm() {
     setSelectedAccount(account);
   };
 
+  // Preselect the user's default account, through the same path a click takes
+  // so the balance/risk seeding behaves identically. Only while nothing is
+  // selected — a null `selectedAccount` is the placeholder, never a choice, so
+  // the user's own pick is never overwritten (and there is no way to unselect,
+  // so this cannot re-fire over one).
+  const defaultAccount = accounts.find((a) => a.isDefault);
+  useEffect(() => {
+    if (selectedAccount !== null || !defaultAccount) return;
+    // handleAccountSelect is recreated per render and deliberately not a dep;
+    // the guards above make the effect idempotent.
+    handleAccountSelect(defaultAccount.id);
+  }, [selectedAccount, defaultAccount]);
+
   // Rendered in BOTH risk bases. In the percent basis it also supplies the
   // balance to size against; in the dollar basis it supplies only the cap figure
   // and the display currency, because a dollar risk is typed directly and a

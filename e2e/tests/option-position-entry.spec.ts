@@ -170,7 +170,9 @@ test.describe.serial('Option position entry — full flow', () => {
     await dialog.getByLabel('Strike').fill('120');
     // Type defaults to Call — leave it (asserted on prefill below).
 
-    await chooseFromUnnamedSelect(page, dialog, 'Select account', ACCOUNT_LABEL);
+    // The account picker preselects the user's default account (their first
+    // and only one) — no manual choice needed, and the trigger says which.
+    await expect(dialog.getByRole('combobox').filter({ hasText: ACCOUNT_LABEL })).toBeVisible();
 
     await dialog.getByRole('button', { name: 'Create' }).click();
 
@@ -214,7 +216,8 @@ test.describe.serial('Option position entry — full flow', () => {
 
     // Asset Type stays Stock (default) — a bare ticker, no OCC encoding.
     await dialog.getByLabel('Symbol').fill('AAPL');
-    await chooseFromUnnamedSelect(page, dialog, 'Select account', ACCOUNT_LABEL);
+    // Preselected with the default account — see the option-flow test above.
+    await expect(dialog.getByRole('combobox').filter({ hasText: ACCOUNT_LABEL })).toBeVisible();
 
     await dialog.getByRole('button', { name: 'Create' }).click();
 

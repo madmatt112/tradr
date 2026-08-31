@@ -790,3 +790,145 @@ describe('accounts tier enforcement + writable designation (plan-tiers L1/D18)',
     expect(await resolveWritableAccountId(db, userIdA)).toBe(own.id);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Default-account designation: first-created takes it, PUT /default moves it,
+// delete promotes the oldest remaining, the sample account never holds it.
+// ---------------------------------------------------------------------------
+
+describe('accounts default designation', () => {
+  async function listAccounts(cookie: string): Promise<Array<Record<string, unknown>>> {
+    const res = await authedRequest('GET', '/api/accounts', cookie);
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  it('the first account created is the default; the second is not', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const first = await createTestAccount(cookie, 'First');
+    expect(first.isDefault).toBe(true);
+
+    const second = await createTestAccount(cookie, 'Second', 'EUR');
+    expect(second.isDefault).toBe(false);
+
+    const rows = await listAccounts(cookie);
+    expect(rows.filter((a) => a.isDefault).map((a) => a.id)).toEqual([first.id]);
+  });
+
+  // Mount-order pin: a shadowed static route would be captured by PUT /:id,
+  // fail its uuid param schema, and 400 from the wrong handler.
+  it('PUT /api/accounts/default moves the designation atomically (static route not shadowed)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const first = await createTestAccount(cookie, 'First');
+    const second = await createTestAccount(cookie, 'Second', 'EUR');
+
+    const res = await authedRequest('PUT', '/api/accounts/default', cookie, {
+      accountId: second.id,
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).defaultAccountId).toBe(second.id);
+
+    // Exactly one default, and it moved — the old one is cleared in the same
+    // statement.
+    const rows = await listAccounts(cookie);
+    expect(rows.filter((a) => a.isDefault).map((a) => a.id)).toEqual([second.id]);
+    expect(rows.find((a) => a.id === first.id)?.isDefault).toBe(false);
+  });
+
+  it('PUT /api/accounts/default refuses a non-owned account with 404, changing nothing', async () => {
+    const { cookie: cookieA } = await registerAndGetCookie();
+    const { cookie: cookieB } = await registerAndGetCookie();
+    const own = await createTestAccount(cookieA, 'Own');
+    const foreign = await createTestAccount(cookieB, 'Foreign');
+
+    const res = await authedRequest('PUT', '/api/accounts/default', cookieA, {
+      accountId: foreign.id,
+    });
+    expect(res.status).toBe(404);
+
+    const rows = await listAccounts(cookieA);
+    expect(rows.filter((a) => a.isDefault).map((a) => a.id)).toEqual([own.id]);
+  });
+
+  it('the sample account never takes the designation and cannot be made the default', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const seedRes = await authedRequest('POST', '/api/accounts/demo', cookie);
+    expect(seedRes.status).toBe(201);
+    const demo = await seedRes.json();
+    expect(demo.isDefault).toBe(false);
+
+    const res = await authedRequest('PUT', '/api/accounts/default', cookie, {
+      accountId: demo.id,
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('DEMO_ACCOUNT_NOT_DEFAULTABLE');
+  });
+
+  it('deleting the default promotes the oldest remaining account', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const first = await createTestAccount(cookie, 'First');
+    const second = await createTestAccount(cookie, 'Second', 'EUR');
+    const third = await createTestAccount(cookie, 'Third', 'GBP');
+
+    // Three HTTP creates can land in the same clock tick, and under an exact
+    // created_at tie the promotion's id tiebreak is free to disagree with
+    // creation order — so pin the timestamps the rule actually reads.
+    const staggered: Array<[string, string]> = [
+      [first.id, '2026-01-01T00:00:00Z'],
+      [second.id, '2026-01-02T00:00:00Z'],
+      [third.id, '2026-01-03T00:00:00Z'],
+    ];
+    for (const [id, createdAt] of staggered) {
+      await db
+        .update(accountsTable)
+        .set({ createdAt: new Date(createdAt) })
+        .where(eq(accountsTable.id, id));
+    }
+
+    const res = await authedRequest('DELETE', `/api/accounts/${first.id}`, cookie);
+    expect(res.status).toBe(204);
+
+    // "The first account the user created" — creation order, not id order.
+    const rows = await listAccounts(cookie);
+    expect(rows.filter((a) => a.isDefault).map((a) => a.id)).toEqual([second.id]);
+    expect(rows.find((a) => a.id === third.id)?.isDefault).toBe(false);
+  });
+
+  it('deleting a non-default account leaves the designation alone', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const first = await createTestAccount(cookie, 'First');
+    const second = await createTestAccount(cookie, 'Second', 'EUR');
+
+    const res = await authedRequest('DELETE', `/api/accounts/${second.id}`, cookie);
+    expect(res.status).toBe(204);
+
+    const rows = await listAccounts(cookie);
+    expect(rows.filter((a) => a.isDefault).map((a) => a.id)).toEqual([first.id]);
+  });
+
+  it('deleting the last account leaves no default; the next create takes it again', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const only = await createTestAccount(cookie, 'Only');
+    const res = await authedRequest('DELETE', `/api/accounts/${only.id}`, cookie);
+    expect(res.status).toBe(204);
+    expect(await listAccounts(cookie)).toHaveLength(0);
+
+    const next = await createTestAccount(cookie, 'Next');
+    expect(next.isDefault).toBe(true);
+  });
+
+  // Server-set only: the update schema strips the key, so a request claiming
+  // the designation changes nothing.
+  it('PUT /api/accounts/:id cannot set isDefault', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await createTestAccount(cookie, 'First');
+    const second = await createTestAccount(cookie, 'Second', 'EUR');
+
+    const res = await authedRequest('PUT', `/api/accounts/${second.id}`, cookie, {
+      name: 'Second Renamed',
+      isDefault: true,
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).isDefault).toBe(false);
+  });
+});

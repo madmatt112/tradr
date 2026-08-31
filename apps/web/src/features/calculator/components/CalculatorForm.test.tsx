@@ -624,6 +624,29 @@ describe('CalculatorForm — account picker async states mirror the brokerage se
   });
 });
 
+describe('CalculatorForm — default-account preselection', () => {
+  it('auto-selects the default account and seeds exactly as a click would', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT, { ...RULED_ACCOUNT, isDefault: true }] });
+    await mount();
+
+    // Selected in dollar mode (the mount default): only the selection itself.
+    expect(selectByOptionValue(RULED_ACCOUNT.id).value).toBe(RULED_ACCOUNT.id);
+
+    // The percent basis then seeds balance + risk from the selected account,
+    // exactly as it does for a hand-picked one.
+    await switchBasis(user, 'Percent');
+    expect(input('Balance').value).toBe('50000');
+    expect(input('Risk percent').value).toBe('1.50');
+  });
+
+  it('selects nothing when no account carries the flag', async () => {
+    setAccounts({ data: [CAD_ACCOUNT, RULED_ACCOUNT] });
+    await mount();
+    expect(selectByOptionValue(RULED_ACCOUNT.id).value).toBe('');
+  });
+});
+
 // -----------------------------------------------------------------------------
 // Task 13 — symbol-search / quote integration
 // -----------------------------------------------------------------------------

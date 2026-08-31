@@ -28,8 +28,11 @@ import {
   accountHasLedgerEntries,
   countAccountsByUser,
   lockUserForAccountChange,
+  promoteOldestAccountToDefault,
   selectOwnedAccountDemoFlag,
+  setDefaultAccountId,
   setWritableAccountId,
+  userHasDefaultAccount,
   userHasDemoAccount,
 } from './accounts.query';
 
@@ -120,7 +123,13 @@ export async function createAccount(
     }
 
     try {
-      const rows = await insertAccount(tx, { userId, ...data });
+      // The first account a user creates is their default. Decided under the
+      // lock above, so two concurrent first creations serialize and exactly one
+      // takes the designation; the partial unique index backstops it. The demo
+      // account never holds the flag, so a user whose only account is the
+      // sample one still takes it with their first real account.
+      const isDefault = !(await userHasDefaultAccount(tx, userId));
+      const rows = await insertAccount(tx, { userId, ...data, isDefault });
 
       // Materialize the user's display_currency on their first account creation.
       // Race-safe first-writer-wins: the `display_currency IS NULL` predicate
@@ -216,6 +225,31 @@ export async function setWritableAccount(db: Database, userId: string, accountId
 }
 
 /**
+ * Move the default-account designation. Ownership-validated (404, like every
+ * other accounts endpoint), and refused for the sample account — the default
+ * is what pickers preselect, and preselecting invented data would put the
+ * demo account behind every new position by default. Runs under the per-user
+ * account lock so the flip cannot interleave with a create or delete deciding
+ * who holds the designation.
+ */
+export async function setDefaultAccount(db: Database, userId: string, accountId: string) {
+  return withTransaction(db, async (tx) => {
+    await lockUserForAccountChange(tx, userId);
+    const existing = await selectOwnedAccountDemoFlag(tx, accountId, userId);
+    if (!existing) throw new NotFoundError('Account', accountId);
+    if (existing.isDemo) {
+      throw new AppError(
+        400,
+        'DEMO_ACCOUNT_NOT_DEFAULTABLE',
+        'The sample account cannot be the default account.',
+      );
+    }
+    await setDefaultAccountId(tx, userId, accountId);
+    return { defaultAccountId: accountId };
+  });
+}
+
+/**
  * Delete an account.
  *
  * There are two paths through here, and which one runs is decided by the stored
@@ -242,6 +276,11 @@ export async function removeAccount(
   options: { cascade?: boolean } = {},
 ): Promise<boolean> {
   return withTransaction(db, async (tx) => {
+    // Deleting can move the default designation (the promotion below), so this
+    // serializes with the other account-set changes exactly as creation and
+    // seeding do — same lock, same ordering, taken before any read.
+    await lockUserForAccountChange(tx, userId);
+
     const existing = await selectOwnedAccountDemoFlag(tx, id, userId);
 
     if (!existing) {
@@ -265,6 +304,13 @@ export async function removeAccount(
     }
 
     await deleteAccount(tx, id, userId);
+    // Deleting the default hands the designation to the oldest remaining
+    // non-demo account — "the first account the user created", the same rule
+    // that assigned it — so a user with accounts always has a default for the
+    // pickers to preselect. No-op when nothing remains.
+    if (existing.isDefault) {
+      await promoteOldestAccountToDefault(tx, userId);
+    }
     return true;
   });
 }

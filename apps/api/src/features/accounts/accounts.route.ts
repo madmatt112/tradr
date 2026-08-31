@@ -1,7 +1,11 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 
-import { CreateAccountSchema, UpdateAccountSchema } from '@tradr/shared/schemas/account';
+import {
+  CreateAccountSchema,
+  SetDefaultAccountSchema,
+  UpdateAccountSchema,
+} from '@tradr/shared/schemas/account';
 import { SetWritableAccountSchema } from '@tradr/shared/schemas/tier';
 
 import { db } from '@/db';
@@ -17,6 +21,7 @@ import {
   createAccount,
   editAccount,
   removeAccount,
+  setDefaultAccount,
   setWritableAccount,
 } from './accounts.service';
 
@@ -197,6 +202,51 @@ accounts.put('/writable', validate('json', SetWritableAccountSchema), async (c) 
   const userId = c.get('userId');
   const { accountId } = c.req.valid('json');
   const result = await setWritableAccount(db, userId, accountId);
+  return c.json(result, 200);
+});
+
+/**
+ * @swagger
+ * /api/accounts/default:
+ *   put:
+ *     summary: Set the default account.
+ *     description: >
+ *       Authed. Moves the default-account designation — the account the app's
+ *       pickers preselect — to the named account. Exactly one account holds it
+ *       at a time: setting a new default clears the old one in the same
+ *       statement. The first account a user creates takes the designation
+ *       automatically, and deleting the default hands it to the oldest
+ *       remaining account, so this endpoint is only ever a *move*.
+ *
+ *
+ *       The account must belong to the current user (404 otherwise), and the
+ *       sample account is refused with `400 DEMO_ACCOUNT_NOT_DEFAULTABLE` — a
+ *       preselected sample account would put invented data behind every new
+ *       position by default.
+ *
+ *
+ *       Every account read carries a boolean `isDefault`; it is server-set and
+ *       cannot be sent in on create or update.
+ *     tags: [Accounts]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [accountId]
+ *             properties:
+ *               accountId: { type: string, format: uuid }
+ *     responses:
+ *       200: { description: '{ defaultAccountId } — the stored designation.' }
+ *       400: { description: 'Validation error, or DEMO_ACCOUNT_NOT_DEFAULTABLE (the sample account).' }
+ *       404: { description: Account not found (or not owned by the user). }
+ */
+// Same mount-order pin as `/writable` above: registered BEFORE `PUT /:id`.
+accounts.put('/default', validate('json', SetDefaultAccountSchema), async (c) => {
+  const userId = c.get('userId');
+  const { accountId } = c.req.valid('json');
+  const result = await setDefaultAccount(db, userId, accountId);
   return c.json(result, 200);
 });
 
