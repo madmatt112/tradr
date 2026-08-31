@@ -92,6 +92,20 @@ export function CalculatorForm() {
   const [riskBasis, setRiskBasis] = useState<RiskBasis>('dollar');
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
 
+  // Which account's fee arrangement the form last settled, and WHOSE call it
+  // was — the adoption effect below ('adopted'), or the user making a fee
+  // choice of their own while that account was selected ('user', written by the
+  // two handlers). One value serves both so they cannot fight: adoption runs
+  // once per selected account, never over a choice the user has made since —
+  // and the source is what lets a later account switch tell fees the form
+  // borrowed from an old account (withdraw them) apart from fees the user
+  // asked for (keep them). `accountId` is null for a choice made before any
+  // account was selected.
+  const feeAdoptionFor = useRef<{
+    accountId: string | null;
+    source: 'adopted' | 'user';
+  } | null>(null);
+
   // Stock-mode symbol is UI-only local state (OD#4) — NOT a form field, so
   // CalculatorInputSchema and the calculator endpoint stay untouched (REQ-1.5).
   const [symbol, setSymbol] = useState<string>('');
@@ -230,6 +244,8 @@ export function CalculatorForm() {
     setValue('manualFees', undefined, { shouldValidate: true });
     setSelectedBrokerageId('');
     setFeeMode(nextMode);
+    // A mode the user chose outranks the adoption below — see feeAdoptionFor.
+    feeAdoptionFor.current = { accountId: selectedAccount?.id ?? null, source: 'user' };
   };
 
   // Mode-switch clear (REQ-5.5). ORDER IS LOAD-BEARING: clear the three
@@ -300,6 +316,9 @@ export function CalculatorForm() {
     const parsed = FeeScheduleSchema.parse(brokerage.feeSchedule);
     setSelectedBrokerageId(brokerageId);
     setValue('feeSchedule', parsed, { shouldValidate: true });
+    // Same claim as a mode change: a brokerage the user picked by hand is
+    // theirs, whatever the selected account is attached to.
+    feeAdoptionFor.current = { accountId: selectedAccount?.id ?? null, source: 'user' };
   };
 
   // Seed the risk percent from the account's own rule, at the two points that
@@ -373,6 +392,65 @@ export function CalculatorForm() {
     // the guards above make the effect idempotent.
     handleAccountSelect(defaultAccount.id);
   }, [selectedAccount, defaultAccount]);
+
+  // ADOPT THE SELECTED ACCOUNT'S FEE STRUCTURE. The account names a brokerage
+  // and the brokerage carries the fee schedule, yet the Fees tab used to sit on
+  // "none" until the user re-picked by hand what their account already states.
+  // Selecting an account — by click or the default preselect above, both of
+  // which land in `selectedAccount` — now does exactly what choosing that
+  // brokerage under Fees does: mode 'brokerage', the account's brokerage
+  // selected, its schedule on the form.
+  //
+  // An account with NO brokerage adopts nothing of its own — "None is
+  // perfectly valid" is the account form's promise, and those users keep
+  // entering fees per calculation. But it does not inherit either: fees the
+  // form ADOPTED from a previously selected account are withdrawn on the
+  // switch, because silently pricing this account's estimate on another
+  // account's fee schedule is exactly the confusion adoption exists to remove.
+  // A fee arrangement the USER chose stands, on this switch as on any other.
+  //
+  // Once per selected account, via `feeAdoptionFor`: a fee mode or brokerage
+  // the user chooses afterwards stands until they switch accounts, which
+  // re-settles. In the effect rather than `handleAccountSelect` because the
+  // brokerages arrive on their own query — an account selected before they
+  // land adopts the moment they do, the ref keeps the late arrival from
+  // overriding anything the user did in between, and an unresolved brokerage
+  // id is only treated as "no fee structure" once that query has actually
+  // answered (a dangling id after a landed list means a deleted brokerage).
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const claim = feeAdoptionFor.current;
+    if (claim?.accountId === selectedAccount.id) return;
+
+    const brokerage = selectedAccount.brokerageId
+      ? brokerages.find((b) => b.id === selectedAccount.brokerageId)
+      : undefined;
+
+    if (brokerage) {
+      feeAdoptionFor.current = { accountId: selectedAccount.id, source: 'adopted' };
+      setFeeMode('brokerage');
+      setSelectedBrokerageId(brokerage.id);
+      setValue('feeSchedule', FeeScheduleSchema.parse(brokerage.feeSchedule), {
+        shouldValidate: true,
+      });
+      setValue('manualFees', undefined, { shouldValidate: true });
+      return;
+    }
+
+    // Still waiting on the brokerages for an id that may yet resolve — settle
+    // nothing, so the adoption above runs the moment they land.
+    if (selectedAccount.brokerageId && !brokeragesQuery.isSuccess) return;
+
+    // This account states no fee structure. Withdraw one the form only had by
+    // adoption; leave one the user asked for.
+    if (claim?.source === 'adopted') {
+      feeAdoptionFor.current = { accountId: selectedAccount.id, source: 'adopted' };
+      setFeeMode('none');
+      setSelectedBrokerageId('');
+      setValue('feeSchedule', undefined, { shouldValidate: true });
+      setValue('manualFees', undefined, { shouldValidate: true });
+    }
+  }, [selectedAccount, brokerages, brokeragesQuery.isSuccess, setValue]);
 
   // Rendered in BOTH risk bases. In the percent basis it also supplies the
   // balance to size against; in the dollar basis it supplies only the cap figure
