@@ -574,3 +574,229 @@ describe('scrubEvent — depth-agnostic URL guards', () => {
     expect((props.$survey_questions as Array<{ response: string }>)[0].response).toBe(body);
   });
 });
+
+// The three feedback captures call posthog.capture DIRECTLY (never
+// captureClientEvent / scrubProperties, whose FILENAME_PATTERN would double-scrub
+// a filename — REQ-5.1). These pin the on-demand emits, the exact five-key
+// `survey sent` payload, and the no-text `survey dismissed` shape against the
+// mocked SDK. Payload key-set is PROVISIONAL with the contract (REQ-9.5).
+describe('feedback captures (mocked SDK)', () => {
+  const IDS = { surveyId: 'sv_1', ratingQuestionId: 'q_rate', textQuestionId: 'q_text' };
+
+  async function initAndImport() {
+    window.__TRADR_CONFIG__ = { posthogPublicKey: 'phc_test' };
+    const mod = await import('./posthog');
+    await mod.initPostHogClient(makeStubRouter([{ routeId: PATTERN }]));
+    // init emits an entry $pageview; clear it so each test asserts only its capture.
+    captureSpy.mockClear();
+    return mod;
+  }
+
+  it('no capture from any wrapper when the SDK never initialised', async () => {
+    const { captureFeedbackShown, captureFeedbackSent, captureFeedbackDismissed } =
+      await import('./posthog');
+
+    captureFeedbackShown(IDS);
+    captureFeedbackSent(IDS, 'sub_1', 4, 'anything');
+    captureFeedbackDismissed(IDS, 'sub_1');
+
+    expect(captureSpy).not.toHaveBeenCalled();
+  });
+
+  it('captureFeedbackShown emits `survey shown` with just $survey_id', async () => {
+    const { captureFeedbackShown } = await initAndImport();
+
+    captureFeedbackShown(IDS);
+
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    const [name, props] = captureSpy.mock.calls[0];
+    expect(name).toBe('survey shown');
+    // No $survey_submission_id on shown (the SDK's own `survey shown` omits it).
+    expect(props).toEqual({ $survey_id: 'sv_1' });
+  });
+
+  it('captureFeedbackSent emits the exact five-key payload, scrubbed via scrubFeedbackText', async () => {
+    const { captureFeedbackSent } = await initAndImport();
+
+    // The free text carries BOTH a filename and a secret. If the wrapper routed
+    // through scrubProperties (FILENAME_PATTERN), the `.csv` would be masked; it
+    // survives here, proving the scrub is scrubFeedbackText — which masks the
+    // secret but keeps filenames (REQ-6).
+    captureFeedbackSent(
+      IDS,
+      'sub_1',
+      4,
+      'import broke on schwab-2024.csv, key sk-ant-abc123def leaked',
+    );
+
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    const [name, props] = captureSpy.mock.calls[0];
+    expect(name).toBe('survey sent');
+
+    // Key-set equality — exactly five keys, with the computed $survey_response_*
+    // names. NOT a subset assertion: nothing else may ride the payload.
+    expect(Object.keys(props).sort()).toEqual(
+      [
+        '$survey_id',
+        '$survey_submission_id',
+        '$survey_completed',
+        '$survey_response_q_rate',
+        '$survey_response_q_text',
+      ].sort(),
+    );
+    expect(props.$survey_id).toBe('sv_1');
+    expect(props.$survey_submission_id).toBe('sub_1');
+    expect(props.$survey_completed).toBe(true);
+    // Rating as a NUMBER under the rating-question key.
+    expect(props.$survey_response_q_rate).toBe(4);
+
+    const text = props.$survey_response_q_text as string;
+    expect(text).toContain('schwab-2024.csv'); // filename survives (not scrubProperties)
+    expect(text).toContain('[redacted]'); // secret masked by scrubFeedbackText
+    expect(text).not.toContain('sk-ant-abc123def');
+  });
+
+  it('captureFeedbackSent sends blank text as ""', async () => {
+    const { captureFeedbackSent } = await initAndImport();
+
+    captureFeedbackSent(IDS, 'sub_1', 5, '');
+
+    const [, props] = captureSpy.mock.calls[0];
+    expect(props.$survey_response_q_text).toBe('');
+  });
+
+  it('captureFeedbackDismissed carries only $survey_id + $survey_submission_id, no text', async () => {
+    const { captureFeedbackDismissed } = await initAndImport();
+
+    captureFeedbackDismissed(IDS, 'sub_1');
+
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    const [name, props] = captureSpy.mock.calls[0];
+    expect(name).toBe('survey dismissed');
+    // Exactly the two keys — no text under $survey_response_* or any other key.
+    expect(Object.keys(props).sort()).toEqual(['$survey_id', '$survey_submission_id'].sort());
+    expect(Object.keys(props).some((k) => k.startsWith('$survey_response'))).toBe(false);
+    expect(props.$survey_id).toBe('sv_1');
+    expect(props.$survey_submission_id).toBe('sub_1');
+  });
+});
+
+// The split $set/$set_once guard runs on EVERY event — before the
+// !event.properties early return — so a property-less event carrying $set is
+// still stripped. Today only the three survey names carry an injected $set
+// (posthog-core.js:1071-1080), but the strip is the boundary invariant, not a
+// survey-name special case (REQ-5.7).
+describe('scrubEvent — $set / $set_once strip', () => {
+  it('deletes top-level $set/$set_once from a survey event, keeping its properties', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({
+      event: 'survey sent',
+      properties: { $survey_id: 'sv_1' } as Record<string, unknown>,
+      $set: { plan: 'pro' },
+      $set_once: { first_seen: 'today' },
+    });
+
+    expect(out!.$set).toBeUndefined();
+    expect(out!.$set_once).toBeUndefined();
+    expect((out!.properties as Record<string, unknown>).$survey_id).toBe('sv_1');
+  });
+
+  it('deletes top-level $set/$set_once from a non-survey event', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    const out = scrubEvent({
+      event: 'position_create_dialog_opened',
+      properties: { keep: 'me' } as Record<string, unknown>,
+      $set: { plan: 'pro' },
+      $set_once: { first_seen: 'today' },
+    });
+
+    expect(out!.$set).toBeUndefined();
+    expect(out!.$set_once).toBeUndefined();
+    expect((out!.properties as Record<string, unknown>).keep).toBe('me');
+  });
+
+  it('strips $set/$set_once from a property-less event (the split-guard case)', async () => {
+    const { scrubEvent } = await import('./posthog');
+
+    // No `properties` key at all — the strip must land BEFORE the
+    // !event.properties early return, or this event ships its $set.
+    const out = scrubEvent({
+      event: 'survey dismissed',
+      $set: { plan: 'pro' },
+      $set_once: { first_seen: 'today' },
+    });
+
+    expect(out!.$set).toBeUndefined();
+    expect(out!.$set_once).toBeUndefined();
+  });
+});
+
+// scrubFeedbackText applies SECRET_PATTERNS + EMAIL_PATTERN (NOT FILENAME_PATTERN)
+// then truncates to FEEDBACK_TEXT_MAX_LENGTH — scrub FIRST so truncation can never
+// cut a token below its match (REQ-6.4/6.6).
+describe('scrubFeedbackText', () => {
+  it('keeps a .csv filename a user pasted into a bug report', async () => {
+    const { scrubFeedbackText } = await import('./posthog');
+
+    const text = 'the import broke on schwab-2024.csv';
+    expect(scrubFeedbackText(text)).toBe(text);
+    expect(scrubFeedbackText(text)).toContain('schwab-2024.csv');
+  });
+
+  it('masks an sk-… secret', async () => {
+    const { scrubFeedbackText } = await import('./posthog');
+    expect(scrubFeedbackText('my key sk-ant-abc123def leaked')).toBe('my key [redacted] leaked');
+  });
+
+  it('masks a JWT', async () => {
+    const { scrubFeedbackText } = await import('./posthog');
+    const out = scrubFeedbackText('token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.sig here');
+    expect(out).toBe('token [redacted] here');
+  });
+
+  it('masks an email address', async () => {
+    const { scrubFeedbackText } = await import('./posthog');
+    expect(scrubFeedbackText('reach me at john@example.com please')).toBe(
+      'reach me at [redacted] please',
+    );
+  });
+
+  it('scrubs BEFORE truncating: a JWT straddling the 2000-char bound is masked, not cut', async () => {
+    const { scrubFeedbackText, FEEDBACK_TEXT_MAX_LENGTH } = await import('./posthog');
+
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmNkZWZnaGlqayJ9.signaturesignaturesignature';
+    // Pad so the JWT starts at 1990 and runs past the 2000 boundary. Scrub-first
+    // masks the whole JWT to a 10-char [redacted] landing at 1990 (survives the
+    // truncate). Truncate-first would cut the JWT's third segment at 2000, leaving
+    // the `eyJ…` prefix unmatched in the output.
+    const text = 'x'.repeat(FEEDBACK_TEXT_MAX_LENGTH - 10) + jwt;
+
+    const out = scrubFeedbackText(text);
+
+    expect(out).not.toContain('eyJ');
+    expect(out).toContain('[redacted]');
+    expect(out.length).toBeLessThanOrEqual(FEEDBACK_TEXT_MAX_LENGTH);
+  });
+
+  it('leaves non-secret prose containing a # untouched', async () => {
+    const { scrubFeedbackText } = await import('./posthog');
+    const text = 'the chart on tab #2 never loads — see step #3';
+    expect(scrubFeedbackText(text)).toBe(text);
+  });
+
+  it('never exceeds FEEDBACK_TEXT_MAX_LENGTH', async () => {
+    const { scrubFeedbackText, FEEDBACK_TEXT_MAX_LENGTH } = await import('./posthog');
+    const out = scrubFeedbackText('y'.repeat(FEEDBACK_TEXT_MAX_LENGTH + 500));
+    expect(out.length).toBe(FEEDBACK_TEXT_MAX_LENGTH);
+    expect(out.length).toBeLessThanOrEqual(FEEDBACK_TEXT_MAX_LENGTH);
+  });
+
+  it('returns a string for any string input', async () => {
+    const { scrubFeedbackText } = await import('./posthog');
+    expect(typeof scrubFeedbackText('')).toBe('string');
+    expect(scrubFeedbackText('')).toBe('');
+    expect(typeof scrubFeedbackText('plain prose, nothing to scrub')).toBe('string');
+  });
+});
