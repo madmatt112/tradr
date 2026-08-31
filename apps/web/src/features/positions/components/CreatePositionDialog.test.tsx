@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -134,8 +136,16 @@ function createButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement;
 }
 
+function withQueryClient() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: qc }, children);
+}
+
 function renderDialog() {
-  return render(<CreatePositionDialog open onOpenChange={vi.fn()} />);
+  return render(<CreatePositionDialog open onOpenChange={vi.fn()} />, {
+    wrapper: withQueryClient(),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +343,59 @@ describe('CreatePositionDialog', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The symbol field is a SymbolAutocomplete, not a plain input
+// ---------------------------------------------------------------------------
+
+describe('CreatePositionDialog — symbol entry', () => {
+  // THE TRAP THIS FIELD SETS, AND WHY THE DIALOG WIRES TWO HANDLERS.
+  //
+  // `SymbolAutocomplete` reports a ticker through `onChange` only when it is
+  // COMMITTED — a result is clicked, or Enter is pressed. Blur does not commit.
+  // A dialog with a submit button therefore cannot rely on `onChange` alone:
+  // the ordinary way to fill this form is to type four characters and reach for
+  // Create, and that gesture commits nothing. Before `onQueryChange` was wired,
+  // it submitted an empty symbol.
+  //
+  // This is the assertion that the typed text reaches the form without a
+  // selection, which is what the field did when it was a plain input.
+  it('submits a typed ticker that was never selected from the dropdown', async () => {
+    renderDialog();
+    chooseAccount();
+
+    fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'AAPL' } });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0]![0]).toMatchObject({ symbol: 'AAPL' });
+  });
+
+  // The field uppercased on the server before; it does so on the way in now, so
+  // what the user sees is what is submitted.
+  it('uppercases a lowercase ticker', async () => {
+    renderDialog();
+    chooseAccount();
+
+    fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'aapl' } });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0]![0]).toMatchObject({ symbol: 'AAPL' });
+  });
+
+  // The walkthrough anchors its "Symbol, side and account" step to `#symbol`.
+  // The autocomplete forwards `id` to its inner input, so the anchor survived
+  // the swap — but nothing else guarantees that, and a tour that points at
+  // nothing ends without a word.
+  it('keeps the #symbol id the walkthrough anchors to', () => {
+    renderDialog();
+
+    const field = document.querySelector('#symbol');
+    expect(field).not.toBeNull();
+    expect(field!.tagName).toBe('INPUT');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Plan tiers (design Component 12; REQ-6.4, REQ-11.5/11.6)
 // ---------------------------------------------------------------------------
 
@@ -392,7 +455,9 @@ describe('CreatePositionDialog — plan tiers', () => {
       error: { code: 'TIER_LIMIT_POSITIONS', message: 'server text is not branched on' },
     });
     const onOpenChange = vi.fn();
-    render(<CreatePositionDialog open onOpenChange={onOpenChange} />);
+    render(<CreatePositionDialog open onOpenChange={onOpenChange} />, {
+      wrapper: withQueryClient(),
+    });
 
     submitStock();
 

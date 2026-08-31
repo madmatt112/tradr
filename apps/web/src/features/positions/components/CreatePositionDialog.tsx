@@ -5,9 +5,9 @@ import { z } from 'zod';
 
 import type { CreatePositionInput } from '@tradr/shared';
 
+import { SymbolAutocomplete } from '@/components/SymbolAutocomplete';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -263,7 +263,30 @@ export function CreatePositionDialog({ open, onOpenChange }: Props) {
           {assetType === 'stock' ? (
             <div className="space-y-2">
               <Label htmlFor="symbol">Symbol</Label>
-              <Input id="symbol" {...form.register('symbol')} placeholder="e.g., AAPL" />
+              {/* The same control the calculator uses, for the reason above the
+                  import.
+
+                  BOTH HANDLERS ARE WIRED, AND THE SECOND ONE IS NOT OPTIONAL
+                  HERE. `onChange` fires only when the ticker is COMMITTED — a
+                  result is clicked, or Enter is pressed — and blur does not
+                  commit. This dialog has a submit button, so a user who types
+                  AAPL and goes straight for Create never commits anything, and
+                  without `onQueryChange` the form would submit an empty symbol.
+                  Keeping the field value in step with the raw text preserves the
+                  plain-text-entry behaviour this input had before the dropdown
+                  was added; selecting a result still overwrites it with the
+                  canonical ticker. */}
+              <SymbolAutocomplete
+                id="symbol"
+                value={form.watch('symbol') ?? ''}
+                onQueryChange={(raw) =>
+                  form.setValue('symbol', raw.toUpperCase(), { shouldDirty: true })
+                }
+                onChange={(ticker) =>
+                  form.setValue('symbol', ticker, { shouldValidate: true, shouldDirty: true })
+                }
+                placeholder="e.g., AAPL"
+              />
               {form.formState.errors.symbol && (
                 <p className="text-sm text-destructive">{form.formState.errors.symbol.message}</p>
               )}
@@ -361,7 +384,16 @@ export function CreatePositionDialog({ open, onOpenChange }: Props) {
             >
               Cancel
             </Button>
-            <Button type="submit" className="cursor-pointer" disabled={createPosition.isPending}>
+            <Button
+              type="submit"
+              // The walkthrough's anchor for its "Choose Create" step — the
+              // account dialog's `account-submit` precedent. Without it the
+              // position set had no step for the action it was waiting on, so
+              // the tour described four fields and then appeared to stall.
+              data-tour="position-submit"
+              className="cursor-pointer"
+              disabled={createPosition.isPending}
+            >
               {createPosition.isPending ? 'Creating...' : 'Create'}
             </Button>
           </div>
