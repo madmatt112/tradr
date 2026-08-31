@@ -129,7 +129,7 @@ const ACCOUNT_STEP_TITLES = [
   'Default risk %',
   'Brokerage',
   'Create the account',
-  'Your reporting timezone',
+  'Back on your dashboard',
 ] as const;
 
 /** Index of the one step in the account set that is genuinely action-gated. */
@@ -466,24 +466,25 @@ test.describe('user onboarding', () => {
     await expect(popoverTitle(page)).toHaveText('Create the account');
     await expect(popoverProgress(page)).toHaveText(gatedStep);
 
-    // Doing the thing is what advances it.
+    // Doing the thing is what advances it — and the advance is also the set's
+    // one navigation: the tour returns the user to the dashboard it recruited
+    // them from, so the closing aside opens over the screen the checklist
+    // lives on.
     await createAccountFromDialog(page, 'Guided account');
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[CREATE_STEP + 1]);
+    await expect(page).toHaveURL(/\/dashboard/);
     // The last step of the set, which no `advanceTo` reaches: the tour gets
     // here on the account being created, not on a press.
     await expectStepClear(page, `account step ${ACCOUNT_STEP_TITLES.length}, the closing aside`);
 
-    // Finish, on the Accounts page the set runs on, with the account the user
-    // just made listed behind it.
+    // Finish. The welcome view carries on — its carry-on stage, not the grid
+    // of empty widgets creating an account used to swap in — with item 1
+    // ticked off the user's real data, no flag written.
     await popoverNext(page).click();
     await expect(popover(page)).toHaveCount(0);
-    await expect(page.getByRole('cell', { name: 'Guided account' })).toBeVisible();
-
-    // And the dashboard has swapped to the grid, off the account that now
-    // exists. Item 1 ticked itself off the user's real data, no flag written.
-    await page.goto('/dashboard');
-    await expect(page.getByTestId('onboarding-zero-state')).toHaveCount(0);
-    await expect(page.locator('[data-widget-type]').first()).toBeVisible();
+    await expect(page.getByTestId('onboarding-zero-state')).toBeVisible();
+    await expect(page.getByText('Your account is ready')).toBeVisible();
+    await expect(page.locator('[data-widget-type]')).toHaveCount(0);
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
     await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
   });
@@ -854,8 +855,9 @@ test.describe('user onboarding', () => {
     // nothing the tour does may take it away.
     await walkAccountSetTo(page, CREATE_STEP);
     await createAccountFromDialog(page, 'Exit account');
+    // The create carried the tour — and the user — back onto the dashboard.
     await expect(popoverTitle(page)).toHaveText(ACCOUNT_STEP_TITLES[CREATE_STEP + 1]);
-    await expect(page.getByRole('cell', { name: 'Exit account' })).toBeVisible();
+    await expect(page).toHaveURL(/\/dashboard/);
 
     // Escape — one action, and the tour is abandoned rather than completed.
     await escapeTour(page);
@@ -865,12 +867,14 @@ test.describe('user onboarding', () => {
     expect(accounts.map((account) => account.name)).toEqual(['Exit account']);
 
     // The checklist counted it, on the screen the checklist lives on, and still
-    // does after a reload: an abandoned walkthrough rolls nothing back.
-    await page.goto('/dashboard');
+    // does after a reload: an abandoned walkthrough rolls nothing back. The
+    // welcome view is what the reload comes back to — the account alone no
+    // longer swaps in the grid.
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
     await page.reload();
-    await expect(page.locator('[data-widget-type]').first()).toBeVisible();
+    await expect(page.getByTestId('onboarding-zero-state')).toBeVisible();
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
+    await expect(checklistItemLabel(page, 'account')).toHaveText(/— completed$/);
   });
 
   // RESUMING ONTO A LATER SET, DRIVEN THE WAY A USER WOULD DRIVE IT. This
@@ -892,9 +896,10 @@ test.describe('user onboarding', () => {
     await createAccount(request, 'Resume account');
     await loginViaUi(page, email);
 
-    // Past the zero-state, on the populated dashboard, with the checklist as the
-    // only way into a walkthrough — the state this whole test is about.
-    await expect(page.getByTestId('onboarding-zero-state')).toHaveCount(0);
+    // On the welcome view's carry-on stage — an account, nothing else — with
+    // the checklist's per-item buttons as the way into a walkthrough: the
+    // state this whole test is about.
+    await expect(page.getByTestId('onboarding-zero-state')).toBeVisible();
     await expect(checklistProgress(page)).toHaveText('1 of 4 complete');
 
     // Start a set OTHER than the first, off the checklist, so "where the user
@@ -1117,13 +1122,27 @@ test.describe('user onboarding', () => {
   test('no coach mark stands on a control the user can press', async ({ page, request }) => {
     const email = await registerUser(request, 'markclear');
     const accountId = await createAccount(request, 'Mark account');
-    // An open position, so the dashboard has widgets to arrange (the mark's own
-    // gate) and the position detail has an Add Fill for its mark to describe.
+    // An open position, so the position detail has an Add Fill for its mark to
+    // describe.
     const positionId = await createOpenPosition(request, accountId);
+    // And a CLOSED one, so the core setup steps read complete and the dashboard
+    // shows the grid the mark describes — the welcome view otherwise holds the
+    // screen, and mounts none of the widgets the mark is about.
+    const closedId = await createOpenPosition(request, accountId);
+    const exitRes = await request.post(`/api/positions/${closedId}/fills`, {
+      data: {
+        type: 'exit',
+        price: '160.00',
+        quantity: '10',
+        fees: '0',
+        filledAt: '2026-05-02T14:30:00.000Z',
+      },
+    });
+    expect(exitRes.status(), 'POST exit fill (auto-closes the position)').toBe(201);
     await loginViaUi(page, email);
 
     // The dashboard, with the checklist up — the mark and the checklist share
-    // this screen for every user who has not finished setting up.
+    // this screen for every user whose calculator item is still outstanding.
     await expect(page.getByTestId('activation-checklist')).toBeVisible();
     await expect(page.getByTestId('coach-mark-dashboard-widgets')).toBeVisible();
     await expectMarkClear(page, 'the dashboard-widgets coach mark, checklist on screen');

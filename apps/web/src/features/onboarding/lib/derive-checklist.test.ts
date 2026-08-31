@@ -118,6 +118,16 @@ describe('deriveChecklist — truth table', () => {
 
     expect(result.items.map((item) => item.done)).toEqual(signals);
     expect(result.allComplete).toBe(allComplete);
+    // The dashboard's welcome-view flag: the three data-creating items, with
+    // the calculator deliberately left out of the conjunction.
+    expect(result.coreComplete).toBe(signals[0] && signals[2] && signals[3]);
+  });
+
+  it('is coreComplete without the calculator — the one aside must not hold the dashboard', () => {
+    const result = deriveChecklist(inputFor([true, false, true, true]));
+
+    expect(result.coreComplete).toBe(true);
+    expect(result.allComplete).toBe(false);
   });
 
   it('covers every combination of the four signals', () => {

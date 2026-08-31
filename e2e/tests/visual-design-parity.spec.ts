@@ -321,6 +321,13 @@ test.describe('visual-design parity smoke', () => {
     });
     expect(accountRes.status(), 'POST /accounts').toBe(201);
     accountId = ((await accountRes.json()) as { id: string }).id;
+    // An established user, not an onboarding one: the dashboard keeps its
+    // focused welcome view until onboarding is done or skipped, and both cases
+    // below are about the populated grid.
+    const onboardingRes = await request.patch('/api/users/me/onboarding', {
+      data: { status: 'done' },
+    });
+    expect(onboardingRes.status(), 'PATCH onboarding').toBe(200);
   });
 
   test.beforeEach(async ({ page }) => {

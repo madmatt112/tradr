@@ -166,6 +166,13 @@ test.describe('Dashboard — cross-tab close-position event bus', () => {
     // position belong to this user (the isolated context is authenticated by
     // register), and loginViaUi below logs the browser in as the SAME user.
     const user = await registerUser(request, 'crosstab');
+    // An established user, not an onboarding one: the dashboard keeps its
+    // focused welcome view until onboarding is done or skipped, and this test
+    // is about the grid's cross-tab refetch behaviour.
+    const onboardingRes = await request.patch('/api/users/me/onboarding', {
+      data: { status: 'done' },
+    });
+    expect(onboardingRes.status(), 'PATCH onboarding').toBe(200);
     const account = await createAccount(request, 'USD Account', 'USD');
     const { positionId } = await createOpenPosition(request, account.id);
 

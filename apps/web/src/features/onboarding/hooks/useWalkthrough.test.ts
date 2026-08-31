@@ -132,7 +132,11 @@ vi.mock('../lib/tour-engine', async (importOriginal) => {
 function aChecklist(...done: ChecklistItemId[]): Checklist {
   const ids: ChecklistItemId[] = ['account', 'calculator', 'position', 'close'];
   const items = ids.map((id) => ({ id, label: id, done: done.includes(id) }));
-  return { items, allComplete: items.every((i) => i.done) };
+  return {
+    items,
+    allComplete: items.every((i) => i.done),
+    coreComplete: (['account', 'position', 'close'] as const).every((id) => done.includes(id)),
+  };
 }
 
 /** Start a walkthrough and wait for the lazy runtime import to settle. */
@@ -886,6 +890,28 @@ describe('useWalkthrough — action-driven advance', () => {
   });
 
   it('navigates nowhere when the next step is on the same screen', async () => {
+    // The close set's add-fill step: its next step (the close button) lives on
+    // the same position page, so the advance must not re-navigate to it — that
+    // would remount the screen under the dialog the user is working in.
+    await start('close', { positionId: 'pos-1' });
+    navigate.mockClear();
+
+    highlight(
+      WALKTHROUGH_STEPS.close.findIndex((s) => s.target === '[data-tour="position-add-fill"]'),
+    );
+    act(() => {
+      eventBus.publish('positions:cache-invalidate', { reason: 'fill-added', positionId: 'pos-1' });
+    });
+
+    expect(engine.advance).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // Creating the account is the account set's one change of screen: the tour
+  // returns the user to the dashboard it recruited them from, so its closing
+  // aside — and the end of the tour — land on the screen the checklist lives
+  // on rather than leaving them parked on the accounts list.
+  it('returns to the dashboard the moment the account is created', async () => {
     await start('account');
     navigate.mockClear();
 
@@ -897,7 +923,12 @@ describe('useWalkthrough — action-driven advance', () => {
     });
 
     expect(engine.advance).toHaveBeenCalledOnce();
-    expect(navigate).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith({ to: '/dashboard' });
+    // Before the tour moves, so the closing step opens over the screen it
+    // describes rather than over the accounts list it just left.
+    expect(navigate.mock.invocationCallOrder[0]).toBeLessThan(
+      engine.advance.mock.invocationCallOrder[0],
+    );
   });
 
   // `/positions` → `/positions/$positionId`, the position set's one change of
