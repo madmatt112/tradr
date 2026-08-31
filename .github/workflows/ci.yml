@@ -536,11 +536,18 @@ jobs:
           # config.js) before launching nginx, so the file exists immediately.
           set_cfg=$(docker run --rm --entrypoint sh \
             -e API_BASE_URL="https://api.example.test" \
+            -e POSTHOG_PUBLIC_FEEDBACK_SURVEY='sid:rid:tid' \
             "$web_image" -c \
             '/docker-entrypoint.d/10-runtime-config.sh && cat /usr/share/nginx/html/config.js')
           echo "set config.js: $set_cfg"
           echo "$set_cfg" | grep -q '"apiBaseUrl":"https://api.example.test"' || {
             echo "expected config.js to reflect API_BASE_URL=https://api.example.test"
+            exit 1
+          }
+          # POSTHOG_PUBLIC_FEEDBACK_SURVEY -> feedbackSurvey, emitted verbatim
+          # through the same `emit` helper (absent when unset — step 1 above).
+          echo "$set_cfg" | grep -q '"feedbackSurvey":"sid:rid:tid"' || {
+            echo "expected config.js to reflect POSTHOG_PUBLIC_FEEDBACK_SURVEY=sid:rid:tid"
             exit 1
           }
 
