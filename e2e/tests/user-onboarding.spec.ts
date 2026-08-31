@@ -767,11 +767,13 @@ test.describe('user onboarding', () => {
 
     // THE ASSERTION. "Next" is live, because the gate behind it cannot be
     // opened — and it carries the user to the last step, on the dashboard,
-    // exactly as the full exit does.
+    // exactly as the full exit does. With item 4 honestly still outstanding,
+    // that dashboard is the welcome view, not the grid — which is why the
+    // closing aside is centred rather than anchored to `[data-grid-mode]`.
     await popoverNext(page).click();
     await expect(popoverTitle(page)).toHaveText(CLOSE_STEP_TITLES[2]);
     await expect(page).toHaveURL(/\/dashboard/);
-    await expect(page.locator('[data-grid-mode]')).toBeVisible();
+    await expect(page.getByTestId('onboarding-zero-state')).toBeVisible();
 
     await popoverNext(page).click();
     await expect(popover(page)).toHaveCount(0);
