@@ -317,13 +317,20 @@ const checklistItemLabel = (page: Page, id: string): Locator =>
   page.locator(`[data-checklist-item="${id}"] > span`).first();
 
 /**
- * The position set's five step titles, in order, from
+ * The position set's six step titles, in order, from
  * `features/onboarding/lib/steps/position.ts`. It is the only set that changes
  * screen onto a row the user creates while the tour is running.
+ *
+ * "Create the position" is a step of its own, and did not used to be. The field
+ * step carried the create gate itself, so it described four controls and then
+ * waited for an action it never asked for — "Next" was correctly inert and there
+ * was nothing on screen saying to press Create. The set now matches the account
+ * set: fields advance on "Next", and the action step points at the button.
  */
 const POSITION_STEP_TITLES = [
   'Log the position',
   'Symbol, side and account',
+  'Create the position',
   'It starts as a draft',
   'Open the position',
   'That is a position logged',
@@ -567,13 +574,28 @@ test.describe('user onboarding', () => {
     await page.getByRole('option', { name: 'Position account (USD)' }).click();
     await dialog.locator('#symbol').click();
     await dialog.locator('#symbol').fill('AAPL');
+
+    // THE STEP THAT ASKS FOR THE ACTION. The field step advances on "Next" now,
+    // onto a step that highlights Create and says to press it — which is the
+    // instruction the set used to be missing entirely.
+    await popoverNext(page).click();
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[2]);
+    await expectStepClear(page, `position step 3, "${POSITION_STEP_TITLES[2]}", dialog open`);
+    // The control the step names has to be pressable, not merely visible: the
+    // popover sits above the footer precisely so it clears Cancel and Create.
+    await expectClearOfPopover(
+      page,
+      dialog.getByRole('button', { name: 'Create', exact: true }),
+      "the position dialog's Create button, on 'Create the position'",
+    );
+
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
 
     // THE ASSERTION THIS TEST EXISTS FOR. The tour follows the position onto its
     // own page, which nothing but the walkthrough was going to do.
     await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[2]);
     await expect(page).toHaveURL(/\/positions\/[0-9a-f-]{36}/);
-    await expectStepClear(page, `position step 3, "${POSITION_STEP_TITLES[2]}"`);
+    await expectStepClear(page, `position step 4, "${POSITION_STEP_TITLES[3]}"`);
 
     // Draft → open, through the two controls the remaining steps highlight.
     await page.locator('[data-tour="position-add-fill"]').click();
@@ -582,7 +604,7 @@ test.describe('user onboarding', () => {
     // this step is finished by. In that order, because the general measurement
     // is the one that reports the whole picture and the named one is a
     // narrower, louder restatement of part of it.
-    await expectStepClear(page, `position step 3, "${POSITION_STEP_TITLES[2]}", fill dialog open`);
+    await expectStepClear(page, `position step 4, "${POSITION_STEP_TITLES[3]}", fill dialog open`);
     await expectClearOfPopover(
       page,
       page.getByRole('button', { name: 'Add', exact: true }),
@@ -591,13 +613,13 @@ test.describe('user onboarding', () => {
     await page.locator('#price').fill('150.00');
     await page.locator('#quantity').fill('10');
     await page.getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[3]);
-    await expectStepClear(page, `position step 4, "${POSITION_STEP_TITLES[3]}"`);
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[4]);
+    await expectStepClear(page, `position step 5, "${POSITION_STEP_TITLES[4]}"`);
 
     await page.locator('[data-tour="position-open"]').click();
-    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[4]);
-    await expect(popoverProgress(page)).toHaveText(`5 of ${POSITION_STEP_TITLES.length}`);
-    await expectStepClear(page, `position step 5, "${POSITION_STEP_TITLES[4]}"`);
+    await expect(popoverTitle(page)).toHaveText(POSITION_STEP_TITLES[5]);
+    await expect(popoverProgress(page)).toHaveText(`6 of ${POSITION_STEP_TITLES.length}`);
+    await expectStepClear(page, `position step 6, "${POSITION_STEP_TITLES[5]}"`);
 
     // "Done" finishes it, and item 3 ticks off the user's real data. The set
     // ends on the position rather than the dashboard, so the checklist is read
