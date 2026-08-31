@@ -335,7 +335,11 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
 
 const REDACTED = '[redacted]';
 
-const VALUE_PATTERNS: RegExp[] = [
+// Secret/token patterns: API keys and auth tokens. Bearer sits BEFORE JWT so a
+// `Bearer eyJ…` masks as one token (the whole `Bearer <jwt>` run collapses to a
+// single [redacted]); reordering them changes byte output. Reused by the
+// feedback text scrubber, which applies these (minus filenames) to prose.
+const SECRET_PATTERNS: RegExp[] = [
   // OpenAI / Anthropic API keys (hyphen form: sk-, sk-ant-, sk-proj-)
   /\bsk-[A-Za-z0-9_-]+/g,
   // Stripe keys (underscore form: sk_, rk_, whsec_)
@@ -346,11 +350,20 @@ const VALUE_PATTERNS: RegExp[] = [
   /Bearer\s+\S+/g,
   // JSON Web Tokens
   /eyJ[\w-]+\.[\w-]+\.[\w-]+/g,
-  // Anchored email address
-  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-  // Uploaded image / document filenames
-  /[\w-]+\.(?:png|jpe?g|webp|gif|pdf|csv|xlsx?)/g,
 ];
+
+// Anchored email address.
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+// Uploaded image / document filenames.
+const FILENAME_PATTERN = /[\w-]+\.(?:png|jpe?g|webp|gif|pdf|csv|xlsx?)/g;
+
+// The full value-scrub set, in load-bearing order: secrets, then EMAIL_PATTERN
+// BEFORE FILENAME_PATTERN so `report@2024.csv`-shaped strings mask whole as an
+// email rather than leaving `report@` when the filename pattern runs first. This
+// recomposition preserves the original array order exactly — a golden-output
+// test (posthog.test.ts) pins the byte result across the refactor.
+const VALUE_PATTERNS: RegExp[] = [...SECRET_PATTERNS, EMAIL_PATTERN, FILENAME_PATTERN];
 
 const DENY_KEYS: ReadonlySet<string> = new Set([
   'password',

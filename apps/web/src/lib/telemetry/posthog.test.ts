@@ -377,6 +377,38 @@ describe('scrubProperties', () => {
     expect(out!.ok).toBe(true);
     expect(scrubProperties(undefined)).toBeUndefined();
   });
+
+  // Golden-output pin (REQ-10.2). Authored against the CURRENT VALUE_PATTERNS,
+  // BEFORE the pattern-constant refactor, so it catches any recomposition that
+  // silently changes byte output. The two order-sensitive overlaps the array
+  // order exists for:
+  //   - Bearer before JWT: `Bearer eyJ…` masks as ONE token — the whole
+  //     `Bearer <jwt>` run collapses to a single [redacted], the JWT never
+  //     matched on its own.
+  //   - email before filename: `report@2024.csv` is masked whole by the email
+  //     pattern ([redacted]); if the filename pattern ran first it would mask
+  //     only `2024.csv`, leaving `report@[redacted]`. The expected value here
+  //     pins the email-first outcome.
+  // Byte-for-byte identical values must still pass after the refactor.
+  it('golden output: pins the byte-exact scrub of Bearer/JWT and email/filename overlaps', async () => {
+    const { scrubProperties } = await import('./posthog');
+
+    const out = scrubProperties({
+      bearerJwt: 'header Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.sig end',
+      emailFile: 'report@2024.csv',
+      filename: 'attached chart-final.png please',
+      jwt: 'raw eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.sig here',
+      contact: 'ping ops@tradr.io now',
+    });
+
+    expect(out).toEqual({
+      bearerJwt: 'header [redacted] end',
+      emailFile: '[redacted]',
+      filename: 'attached [redacted] please',
+      jwt: 'raw [redacted] here',
+      contact: 'ping [redacted] now',
+    });
+  });
 });
 
 describe('pageview capture', () => {
