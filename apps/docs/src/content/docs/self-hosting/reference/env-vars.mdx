@@ -173,7 +173,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `POSTHOG_PUBLIC_KEY` | Optional | --- Frontend (web container; read by the nginx entrypoint into /config.js) --- PostHog browser project key. Absent ⇒ frontend PostHog OFF. Optional. |
 | `POSTHOG_PUBLIC_HOST` | Optional | PostHog browser ingestion host. Optional (default https://us.i.posthog.com). |
 | `POSTHOG_PUBLIC_ENVIRONMENT` | Optional | Deployment label for frontend events — the browser-side mirror of POSTHOG_ENVIRONMENT. Optional; absent ⇒ events are unstamped. |
-| `POSTHOG_PUBLIC_FEEDBACK_SURVEY` | Optional | Feedback-tab survey ids, "<surveyId>:<ratingQuestionId>:<textQuestionId>" (the three ids from a PostHog survey created with the API presentation). Optional and needs POSTHOG_PUBLIC_KEY set; absent, empty, or malformed ⇒ no feedback tab renders and the SDK's surveys UI is never loaded. See the privacy posture above for what the form sends. |
+| `POSTHOG_PUBLIC_FEEDBACK_SURVEY` | Optional | Feedback-tab survey ids, "&lt;surveyId>:&lt;ratingQuestionId>:&lt;textQuestionId>" (the three ids from a PostHog survey created with the API presentation). Optional and needs POSTHOG_PUBLIC_KEY set; absent, empty, or malformed ⇒ no feedback tab renders and the SDK's surveys UI is never loaded. See the privacy posture above for what the form sends. |
 
 ## Hosted platform (api container)
 
