@@ -166,6 +166,23 @@ vi.mock('@/features/options/components/OptionsChainViewer', () => ({
   ),
 }));
 
+// The "Save as draft trade" button's create flow. Mocked at the hook boundary
+// so no network is hit and the payload passed to the mutation is assertable;
+// `getPositionErrorCode` keeps its real shape so the tier-refusal branch is
+// exercised end to end.
+const positions = vi.hoisted(() => ({
+  mutate: vi.fn(),
+  isPending: { current: false },
+}));
+vi.mock('@/features/positions/hooks/usePositions', () => ({
+  useCreatePosition: () => ({ mutate: positions.mutate, isPending: positions.isPending.current }),
+  getPositionErrorCode: (err: unknown) =>
+    (err as { error?: { code?: string } } | null | undefined)?.error?.code,
+}));
+
+const sonnerToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock('sonner', () => ({ toast: sonnerToast }));
+
 import { CalculatorForm } from './CalculatorForm';
 
 // ---- Fixtures ---------------------------------------------------------------
@@ -299,6 +316,9 @@ beforeEach(() => {
   onboarding.query.current = { data: { status: 'pending', coachMarksSeen: [] } };
   onboarding.patch.mockClear();
   onboarding.options.current = undefined;
+  positions.mutate.mockReset();
+  positions.isPending.current = false;
+  sonnerToast.error.mockClear();
 });
 
 afterEach(() => {
@@ -1402,5 +1422,123 @@ describe('CalculatorForm — first calculator use (the one stored checklist fact
     ).toBeTruthy();
 
     expect(onboarding.patch).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Save as draft trade — creates a draft position (no fills) from the planned
+// instrument. Sends only what CreatePositionSchema accepts; entry price and the
+// derived size are calculator-only and are not part of a draft.
+// -----------------------------------------------------------------------------
+
+describe('CalculatorForm — save as draft trade', () => {
+  beforeEach(resetQuoteFixtures);
+
+  function saveButton(): HTMLButtonElement {
+    return screen.getByRole('button', { name: 'Save as draft trade' }) as HTMLButtonElement;
+  }
+
+  it('is disabled with a guiding hint until an account and a symbol are set', async () => {
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByText('Select an account to save a draft.')).toBeTruthy();
+
+    // Account selected — now the symbol is what's missing.
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByText('Enter a symbol to save a draft.')).toBeTruthy();
+
+    // Symbol entered — enabled, and the hint is gone.
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    expect(saveButton().disabled).toBe(false);
+    expect(screen.queryByText(/to save a draft/)).toBeNull();
+  });
+
+  it('creates a stock draft carrying the account, symbol, side, and stop/target plan', async () => {
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    fireEvent.change(input('Symbol'), { target: { value: 'aapl' } });
+    fill('Stop loss', '48');
+    fill('Target price (optional)', '55');
+
+    fireEvent.click(saveButton());
+
+    expect(positions.mutate).toHaveBeenCalledTimes(1);
+    expect(positions.mutate.mock.calls[0][0]).toEqual({
+      accountId: CAD_ACCOUNT.id,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      stopLoss: '48',
+      targetPrice: '55',
+    });
+  });
+
+  it('carries the short side and omits target/stop when left blank', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT] });
+    await mount();
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    fireEvent.change(input('Symbol'), { target: { value: 'TSLA' } });
+    await user.click(screen.getByRole('tab', { name: 'Short' }));
+
+    fireEvent.click(saveButton());
+
+    expect(positions.mutate.mock.calls[0][0]).toEqual({
+      accountId: CAD_ACCOUNT.id,
+      symbol: 'TSLA',
+      side: 'short',
+      assetType: 'stock',
+    });
+  });
+
+  it('creates an option draft from the handed-off OCC contract', async () => {
+    const user = userEvent.setup();
+    setAccounts({ data: [CAD_ACCOUNT] });
+    quote.contracts.current = [{ option_symbol: 'AAPL  250620C00150000', premium: 3.25 }];
+    await mount();
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    await user.click(screen.getByRole('tab', { name: 'Options' }));
+
+    // No contract picked yet — the hint names what's missing in options mode.
+    expect(saveButton().disabled).toBe(true);
+    expect(screen.getByText('Select a contract to save a draft.')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Select from options chain' }));
+    await user.click(screen.getByRole('button', { name: /Use AAPL/ }));
+    fill('Stop loss', '2.50');
+
+    fireEvent.click(saveButton());
+
+    expect(positions.mutate.mock.calls[0][0]).toEqual({
+      accountId: CAD_ACCOUNT.id,
+      symbol: 'AAPL  250620C00150000',
+      side: 'long',
+      assetType: 'option',
+      stopLoss: '2.50',
+    });
+  });
+
+  it('surfaces a tier refusal as a toast — the shared hook stays silent on it', async () => {
+    setAccounts({ data: [CAD_ACCOUNT] });
+    positions.mutate.mockImplementation(
+      (_payload: unknown, opts?: { onError?: (e: unknown) => void }) =>
+        opts?.onError?.({
+          error: { code: 'TIER_LIMIT_POSITIONS', message: "You've reached your plan's limit." },
+        }),
+    );
+    await mount();
+
+    fireEvent.change(selectByOptionValue(CAD_ACCOUNT.id), { target: { value: CAD_ACCOUNT.id } });
+    fireEvent.change(input('Symbol'), { target: { value: 'AAPL' } });
+    fireEvent.click(saveButton());
+
+    expect(sonnerToast.error).toHaveBeenCalledWith("You've reached your plan's limit.");
   });
 });

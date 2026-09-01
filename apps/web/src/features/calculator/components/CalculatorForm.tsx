@@ -2,6 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
 
 import {
   type Account,
@@ -9,6 +10,7 @@ import {
   type CalculatorInput,
   CalculatorInputSchema,
   type CalculatorOutput,
+  type CreatePositionInput,
   FeeScheduleSchema,
   parseOccSymbol,
 } from '@tradr/shared';
@@ -38,6 +40,7 @@ import { useBuyingPowerBasisQuery } from '@/features/calculator/hooks/useBuyingP
 import { useOnboardingPatch, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
 import { OptionsChainViewer } from '@/features/options/components/OptionsChainViewer';
 import type { OptionContract } from '@/features/options/hooks/useOptionsChain';
+import { getPositionErrorCode, useCreatePosition } from '@/features/positions/hooks/usePositions';
 import { useStockQuote } from '@/hooks/useStockQuote';
 import { useStockQuoteConfig } from '@/hooks/useStockQuoteConfig';
 import { formatMoney } from '@/lib/format';
@@ -124,6 +127,8 @@ export function CalculatorForm() {
 
   const accountsQuery = useAccounts();
   const accounts = accountsQuery.data ?? [];
+
+  const createPosition = useCreatePosition();
 
   // Which account figure the buying-power cap sizes against. Defaults to 'cash'
   // while the preference is in flight so a slow settings fetch cannot silently
@@ -524,6 +529,51 @@ export function CalculatorForm() {
     </div>
   );
 
+  // "Save as draft trade" — persist the planned instrument as a draft position
+  // (a position with no fills). Sends what CreatePositionSchema accepts: the
+  // account, symbol, side (direction), asset type (mode), and the stop/target
+  // plan annotations. Entry price and the derived size are calculator-only and
+  // are recorded later on the entry fill, so they are not part of a draft.
+  // Reuses the positions create flow so caches and the success toast stay
+  // consistent with the rest of the app.
+  const draftSymbol = mode === 'options' ? (handedOffOcc ?? '') : symbol.trim().toUpperCase();
+  const canSaveDraft = selectedAccount !== null && draftSymbol !== '';
+  const saveDraftHint =
+    selectedAccount === null
+      ? 'Select an account to save a draft.'
+      : draftSymbol === ''
+        ? mode === 'options'
+          ? 'Select a contract to save a draft.'
+          : 'Enter a symbol to save a draft.'
+        : null;
+
+  const handleSaveDraft = () => {
+    if (!selectedAccount || draftSymbol === '') return;
+    const payload: CreatePositionInput = {
+      accountId: selectedAccount.id,
+      symbol: draftSymbol,
+      side: direction,
+      assetType: mode === 'options' ? 'option' : 'stock',
+    };
+    const stop = values.stopLoss.trim();
+    if (stop) payload.stopLoss = stop;
+    const target = values.targetPrice?.trim();
+    if (target) payload.targetPrice = target;
+
+    createPosition.mutate(payload, {
+      // The shared hook stays silent on tier refusals so the create DIALOG can
+      // render them inline; the calculator has no such slot, so surface them
+      // as a toast rather than let the click fail silently.
+      onError: (err) => {
+        const code = getPositionErrorCode(err);
+        if (code === 'TIER_LIMIT_POSITIONS' || code === 'TIER_ACCOUNT_NOT_WRITABLE') {
+          const message = (err as { error?: { message?: string } }).error?.message;
+          toast.error(message ?? "You've reached your plan's position limit.");
+        }
+      },
+    });
+  };
+
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
       <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
@@ -820,6 +870,18 @@ export function CalculatorForm() {
               )}
             </div>
           )}
+        </div>
+
+        <div className="space-y-2">
+          <Button
+            type="button"
+            className="w-full cursor-pointer"
+            disabled={!canSaveDraft || createPosition.isPending}
+            onClick={handleSaveDraft}
+          >
+            {createPosition.isPending ? 'Saving…' : 'Save as draft trade'}
+          </Button>
+          {saveDraftHint && <p className="text-sm text-muted-foreground">{saveDraftHint}</p>}
         </div>
       </form>
 
