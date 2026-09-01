@@ -3,6 +3,10 @@ import { createFileRoute, Navigate, Outlet } from '@tanstack/react-router';
 import { DrawerToggleRefProvider } from '@/components/layout/DrawerToggleRefContext';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { SideDrawer } from '@/components/layout/SideDrawer';
+import {
+  FeedbackSurface,
+  feedbackMainGutterClasses,
+} from '@/features/feedback/components/FeedbackSurface';
 import { DemoBanner } from '@/features/onboarding/components/DemoBanner';
 import { useAuth } from '@/hooks/useAuth';
 import { useReportingTimezoneBackfill } from '@/hooks/useUserTimezone';
@@ -44,6 +48,7 @@ function AuthLayout() {
           className={cn(
             'flex-1 p-6 transition-[padding] duration-200 ease-out motion-reduce:duration-0',
             drawerOpen && 'lg:pr-[384px]',
+            feedbackMainGutterClasses(drawerOpen),
           )}
         >
           {/* Sample data reaches every derived surface in the app, so the notice
@@ -56,6 +61,7 @@ function AuthLayout() {
           <Outlet />
         </main>
         <SideDrawer />
+        <FeedbackSurface />
       </div>
     </DrawerToggleRefProvider>
   );

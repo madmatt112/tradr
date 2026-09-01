@@ -11,6 +11,8 @@
 #   POSTHOG_PUBLIC_HOST  -> posthogPublicHost
 #   POSTHOG_PUBLIC_ENVIRONMENT -> posthogPublicEnvironment  (deployment label
 #     stamped on every frontend event; absent => events are unstamped)
+#   POSTHOG_PUBLIC_FEEDBACK_SURVEY -> feedbackSurvey  ("<surveyId>:<ratingQid>:
+#     <textQid>" ids for the feedback tab; absent => no feedback tab renders)
 #   APP_VERSION          -> appVersion   (corner version badge; absent => the SPA shows "localdev")
 #   NEWSLETTER_URL       -> newsletterUrl  (the link on /register's signups-closed
 #     notice; absent => the notice renders with no link, which is the right
@@ -74,6 +76,7 @@ emit apiBaseUrl         "${API_BASE_URL:-}"
 emit posthogPublicKey   "${POSTHOG_PUBLIC_KEY:-}"
 emit posthogPublicHost  "${POSTHOG_PUBLIC_HOST:-}"
 emit posthogPublicEnvironment "${POSTHOG_PUBLIC_ENVIRONMENT:-}"
+emit feedbackSurvey     "${POSTHOG_PUBLIC_FEEDBACK_SURVEY:-}"
 emit appVersion         "${APP_VERSION:-}"
 emit newsletterUrl      "${NEWSLETTER_URL:-}"
 

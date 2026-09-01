@@ -183,6 +183,7 @@ services:
       POSTHOG_PUBLIC_KEY: ${POSTHOG_PUBLIC_KEY:-}
       POSTHOG_PUBLIC_HOST: ${POSTHOG_PUBLIC_HOST:-}
       POSTHOG_PUBLIC_ENVIRONMENT: ${POSTHOG_PUBLIC_ENVIRONMENT:-}
+      POSTHOG_PUBLIC_FEEDBACK_SURVEY: ${POSTHOG_PUBLIC_FEEDBACK_SURVEY:-}
       # Prometheus metrics (web container). Gates the static build-info
       # exposition the entrypoint writes for GET /metrics. Value default, same
       # rule as api above. APP_VERSION is deliberately NOT listed here: web has

@@ -8,6 +8,7 @@ declare global {
       posthogPublicKey?: string; // publishable phc_… project key
       posthogPublicHost?: string; // PostHog ingestion host
       posthogPublicEnvironment?: string; // deployment label stamped on every event ('production', 'staging'); absent ⇒ unstamped
+      feedbackSurvey?: string; // "<surveyId>:<ratingQid>:<textQid>" gating the feedback surface (user-feedback REQ-1.1); absent/empty ⇒ surface absent
       appVersion?: string; // deploy-stamped version badge (prod "v1.2.3", staging "v1.2.3-abc1234"); absent ⇒ local dev
       newsletterUrl?: string; // where /register sends people when registration is closed (newsletter REQ-9.6); absent ⇒ the notice renders with no link
     };

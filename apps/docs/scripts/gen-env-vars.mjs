@@ -129,6 +129,16 @@ function cell(value) {
     .trim();
 }
 
+/**
+ * Escape the MDX-hostile characters in prose so a description that mentions a
+ * placeholder like `<surveyId>` or a `{brace}` renders literally instead of being
+ * parsed as a JSX tag or expression. Only prose is escaped — code spans (shell
+ * recipes, default values) are emitted inside backticks, where these are literal.
+ */
+function mdxText(s) {
+  return s.replace(/</g, '&lt;').replace(/\{/g, '&#123;');
+}
+
 /** Collapse a key's comment block into one cell, keeping shell recipes as code. */
 function describe(doc) {
   const parts = [];
@@ -146,7 +156,7 @@ function describe(doc) {
       continue;
     }
     flush();
-    if (line.trim() !== '') parts.push(line.trim());
+    if (line.trim() !== '') parts.push(mdxText(line.trim()));
   }
   flush();
   return cell(parts.join(' '));

@@ -10,6 +10,7 @@
 
 import type { AnyRouter } from '@tanstack/react-router';
 
+import type { FeedbackSurveyIds } from './config';
 import { getTelemetryConfig } from './config';
 
 // Default PostHog Cloud ingestion host; a self-hoster overrides it with
@@ -174,6 +175,10 @@ const EXCEPTION_VALUE_KEYS = [
 /** Minimal structural view of a posthog-js capture event for before_send. */
 interface PostHogCaptureLike {
   properties?: Record<string, unknown>;
+  // Top-level person-profile mutations that scrubEvent strips off EVERY event
+  // (an injected `$set` rides the survey events; posthog-core.js:1071-1080).
+  $set?: unknown;
+  $set_once?: unknown;
 }
 
 /**
@@ -207,7 +212,19 @@ interface PostHogCaptureLike {
  * which is never the intent here.
  */
 export function scrubEvent<T extends PostHogCaptureLike>(event: T | null): T | null {
-  if (!event || !event.properties) return event;
+  if (!event) return event;
+
+  // Strip any caller-injected person profile from the top level of EVERY event.
+  // `$set` / `$set_once` mutate the anonymous person and are never wanted here;
+  // today only the three survey names carry an injected `$set`
+  // (posthog-core.js:1071-1080), but the strip is the boundary invariant, not a
+  // survey-name special case. Placed AFTER the `!event` check (so it never
+  // dereferences null) and BEFORE the `!event.properties` early return (so a
+  // property-less event carrying `$set` is still stripped).
+  delete event.$set;
+  delete event.$set_once;
+
+  if (!event.properties) return event;
 
   // Drop referrers and strip own-origin `#fragment`s at EVERY depth, then swap
   // the rewritten bag in (the event object's identity is preserved). Walking the
@@ -335,7 +352,11 @@ export async function initPostHogClient(router: AnyRouter): Promise<void> {
 
 const REDACTED = '[redacted]';
 
-const VALUE_PATTERNS: RegExp[] = [
+// Secret/token patterns: API keys and auth tokens. Bearer sits BEFORE JWT so a
+// `Bearer eyJ…` masks as one token (the whole `Bearer <jwt>` run collapses to a
+// single [redacted]); reordering them changes byte output. Reused by the
+// feedback text scrubber, which applies these (minus filenames) to prose.
+const SECRET_PATTERNS: RegExp[] = [
   // OpenAI / Anthropic API keys (hyphen form: sk-, sk-ant-, sk-proj-)
   /\bsk-[A-Za-z0-9_-]+/g,
   // Stripe keys (underscore form: sk_, rk_, whsec_)
@@ -346,11 +367,20 @@ const VALUE_PATTERNS: RegExp[] = [
   /Bearer\s+\S+/g,
   // JSON Web Tokens
   /eyJ[\w-]+\.[\w-]+\.[\w-]+/g,
-  // Anchored email address
-  /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
-  // Uploaded image / document filenames
-  /[\w-]+\.(?:png|jpe?g|webp|gif|pdf|csv|xlsx?)/g,
 ];
+
+// Anchored email address.
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+// Uploaded image / document filenames.
+const FILENAME_PATTERN = /[\w-]+\.(?:png|jpe?g|webp|gif|pdf|csv|xlsx?)/g;
+
+// The full value-scrub set, in load-bearing order: secrets, then EMAIL_PATTERN
+// BEFORE FILENAME_PATTERN so `report@2024.csv`-shaped strings mask whole as an
+// email rather than leaving `report@` when the filename pattern runs first. This
+// recomposition preserves the original array order exactly — a golden-output
+// test (posthog.test.ts) pins the byte result across the refactor.
+const VALUE_PATTERNS: RegExp[] = [...SECRET_PATTERNS, EMAIL_PATTERN, FILENAME_PATTERN];
 
 const DENY_KEYS: ReadonlySet<string> = new Set([
   'password',
@@ -438,4 +468,98 @@ export function captureClientException(
 ): void {
   if (!posthog) return;
   posthog.captureException(error, scrubProperties(properties));
+}
+
+// ---------------------------------------------------------------------------
+// Feedback surface — the three survey captures, the free-text scrubber, and the
+// seenSurvey_ undo. The only telemetry code the feedback slice touches (it never
+// sees a PostHog type or an event name); design Component 6, REQ-5 / REQ-6.
+// ---------------------------------------------------------------------------
+
+/** Feedback free-text ceiling — the boundary truncation length (REQ-6.4). */
+export const FEEDBACK_TEXT_MAX_LENGTH = 2000;
+
+/**
+ * Scrub a feedback free-text answer, THEN truncate to FEEDBACK_TEXT_MAX_LENGTH.
+ * Applies SECRET_PATTERNS + EMAIL_PATTERN only — deliberately NOT
+ * FILENAME_PATTERN, so a filename like `schwab-2024.csv` a user pastes into a bug
+ * report survives intact (REQ-6). Scrub FIRST, truncate SECOND: truncating first
+ * could cut a JWT's third segment so it no longer matches its pattern; a
+ * `[redacted]` cut in half is harmless. Returns a string for any string input
+ * and never throws.
+ */
+export function scrubFeedbackText(text: string): string {
+  let out = text;
+  for (const pattern of SECRET_PATTERNS) {
+    out = out.replace(pattern, REDACTED);
+  }
+  out = out.replace(EMAIL_PATTERN, REDACTED);
+  return out.slice(0, FEEDBACK_TEXT_MAX_LENGTH);
+}
+
+/**
+ * Capture the anonymous `survey shown` event. No-op when PostHog is
+ * absent/uninitialized. Calls posthog.capture DIRECTLY — never through
+ * captureClientEvent / scrubProperties, whose FILENAME_PATTERN would double-scrub
+ * (REQ-5.1). No `$survey_submission_id` on shown: the SDK's own `survey shown`
+ * omits it and the Results tab counts shown by event name + `$survey_id`.
+ */
+export function captureFeedbackShown(ids: FeedbackSurveyIds): void {
+  if (!posthog) return;
+  posthog.capture('survey shown', { $survey_id: ids.surveyId });
+}
+
+/**
+ * Capture the anonymous `survey sent` event — exactly five keys (design
+ * Component 6): `$survey_id`, `$survey_submission_id`, `$survey_completed: true`,
+ * the rating as a NUMBER under `$survey_response_<ratingQuestionId>`, and the
+ * scrubbed-then-truncated free text (`""` when blank) under
+ * `$survey_response_<textQuestionId>`. Calls posthog.capture DIRECTLY (REQ-5.1).
+ * The seenSurvey_ key the SDK's capture() writes for this event is removed in a
+ * `finally`, so a throw landing after the SDK's synchronous write can never
+ * strand it (REQ-5.6).
+ */
+export function captureFeedbackSent(
+  ids: FeedbackSurveyIds,
+  submissionId: string,
+  rating: number,
+  text: string,
+): void {
+  if (!posthog) return;
+  try {
+    posthog.capture('survey sent', {
+      $survey_id: ids.surveyId,
+      $survey_submission_id: submissionId,
+      $survey_completed: true,
+      [`$survey_response_${ids.ratingQuestionId}`]: rating,
+      [`$survey_response_${ids.textQuestionId}`]: scrubFeedbackText(text),
+    });
+  } finally {
+    try {
+      localStorage.removeItem('seenSurvey_' + ids.surveyId);
+    } catch {
+      /* private mode / storage disabled — nothing to clean up */
+    }
+  }
+}
+
+/**
+ * Capture the anonymous `survey dismissed` event — closed without sending. No
+ * text under any key. Calls posthog.capture DIRECTLY (REQ-5.1); the seenSurvey_
+ * removal runs in a `finally` exactly as `survey sent` (REQ-5.6).
+ */
+export function captureFeedbackDismissed(ids: FeedbackSurveyIds, submissionId: string): void {
+  if (!posthog) return;
+  try {
+    posthog.capture('survey dismissed', {
+      $survey_id: ids.surveyId,
+      $survey_submission_id: submissionId,
+    });
+  } finally {
+    try {
+      localStorage.removeItem('seenSurvey_' + ids.surveyId);
+    } catch {
+      /* private mode / storage disabled — nothing to clean up */
+    }
+  }
 }

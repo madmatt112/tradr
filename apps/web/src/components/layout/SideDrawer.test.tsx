@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import React, { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { PositionListItem } from '@tradr/shared';
+
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
 
@@ -25,6 +27,11 @@ vi.mock('@/features/drawer/components/OptionsPricingTab', () => ({
 }));
 vi.mock('@/features/drawer/components/RecentlyCreatedTab', () => ({
   RecentlyCreatedTab: () => <div data-testid="recently-created-tab" />,
+}));
+// The inspect surface pulls usePosition (query deps); stub it — the Escape
+// handler reads the store, not the rendered panel.
+vi.mock('@/features/drawer/components/PositionInspectPanel', () => ({
+  PositionInspectPanel: () => <div data-testid="position-inspect" />,
 }));
 
 // Controllable useMediaQuery: default both queries → false (desktop).
@@ -63,6 +70,7 @@ beforeEach(() => {
     isOpen: false,
     activeTab: 'open-positions',
     legacyDetected: false,
+    inspectedPosition: null,
   });
   localStorage.clear();
 });
@@ -128,6 +136,44 @@ describe('SideDrawer', () => {
     renderDrawer();
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(useDrawerStore.getState().isOpen).toBe(true);
+  });
+
+  // A dismissing Escape reaches this bubble-phase window listener already
+  // defaultPrevented (Radix calls preventDefault in its document capture-phase
+  // handler), so the top layer closes and the drawer beneath it stays.
+  it('does not close the inspect surface on a defaultPrevented Escape', () => {
+    configureMediaQuery({ mobile: false, tablet: false });
+    useDrawerStore.setState({
+      isOpen: true,
+      inspectedPosition: { id: 'inspect-1' } as unknown as PositionListItem,
+    });
+    renderDrawer();
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      cancelable: true,
+      bubbles: true,
+    });
+    event.preventDefault();
+    expect(event.defaultPrevented).toBe(true);
+    fireEvent(window, event);
+
+    expect(useDrawerStore.getState().isOpen).toBe(true);
+    expect(useDrawerStore.getState().inspectedPosition).not.toBeNull();
+  });
+
+  it('closes the inspect surface on an unprevented Escape (any viewport)', () => {
+    configureMediaQuery({ mobile: false, tablet: false });
+    useDrawerStore.setState({
+      isOpen: true,
+      inspectedPosition: { id: 'inspect-1' } as unknown as PositionListItem,
+    });
+    renderDrawer();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    expect(useDrawerStore.getState().isOpen).toBe(false);
+    expect(useDrawerStore.getState().inspectedPosition).toBeNull();
   });
 
   it('moves focus to the active tab trigger on open', async () => {

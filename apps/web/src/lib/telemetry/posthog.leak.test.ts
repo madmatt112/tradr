@@ -24,9 +24,30 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 const TOKEN = 'deadbeefcafe1234';
+const OWN_ORIGIN = 'https://app.tradr.io';
 const ENTRY_URL_NO_FRAGMENT = 'https://app.tradr.io/reset-password?src=email';
 const REFERRER_PATH = 'mail.example.com/inbox/42';
 const API_HOST = 'https://ph.example.test';
+
+// The three ids for the deliberate `survey sent` capture. Held here so the wire
+// assertions and the seenSurvey_ removal both reference the same surveyId.
+const IDS = {
+  surveyId: 'sid-0001',
+  ratingQuestionId: 'rate-q1',
+  textQuestionId: 'text-q1',
+} as const;
+const SUBMISSION_ID = '11111111-2222-4333-8444-555555555555';
+const RATING = 4;
+// Free text carrying a secret + an email + a filename: scrubFeedbackText masks the
+// first two and KEEPS the .csv (REQ-6). The scrubbed value is what reaches the wire.
+const FEEDBACK_TEXT = 'ticket sk-abc123XYZ from a@b.com re schwab-2024.csv';
+const FEEDBACK_TEXT_SCRUBBED = 'ticket [redacted] from [redacted] re schwab-2024.csv';
+
+// A $heatmap_data key: an own-origin URL WITH a fragment. $heatmap_data is keyed
+// BY the page URL, so a value-only walk cannot reach it — scrubEvent must rewrite
+// the KEY, dropping the fragment (posthog.ts scrubUrlEntries).
+const HEATMAP_URL = `${OWN_ORIGIN}/positions/42`;
+const HEATMAP_KEY_WITH_FRAGMENT = `${HEATMAP_URL}#token=${TOKEN}`;
 
 interface SentRequest {
   url: string;
@@ -130,19 +151,35 @@ describe('no vendor request carries the reset token or the full referrer', () =>
       posthogPublicHost: API_HOST,
     };
 
-    const { initPostHogClient } = await import('./posthog');
+    const { initPostHogClient, captureFeedbackSent } = await import('./posthog');
     await initPostHogClient(makeStubRouter());
+
+    // Deliberate product events that must ride the SAME decoded batch the leak
+    // proof ranges over. captureFeedbackSent sends the real `survey sent` (five
+    // keys, scrubbed text) through the installed SDK; a hand-rolled capture carries
+    // a $heatmap_data-shaped property keyed by an own-origin URL WITH a fragment
+    // (heatmaps are off, so it never fires on its own). Both go through
+    // before_send: scrubEvent on the wire, exactly like every other event.
+    captureFeedbackSent(IDS, SUBMISSION_ID, RATING, FEEDBACK_TEXT);
+    const { default: ph } = await import('posthog-js');
+    ph.capture('feedback_heatmap_probe', {
+      $heatmap_data: { [HEATMAP_KEY_WITH_FRAGMENT]: [{ x: 1, y: 2, target_fixed: false }] },
+    });
 
     // REAL timers only. Fake timers cannot drive this flush: with
     // CompressionStream present the SDK gzips through an async native stream, so
-    // advanceTimersByTime returns before the body is ever handed to fetch.
-    await vi.waitFor(() => expect(sent.some((r) => r.url.includes('/e'))).toBe(true), {
-      timeout: 15_000,
-      interval: 50,
-    });
+    // advanceTimersByTime returns before the body is ever handed to fetch. Wait
+    // until BOTH deliberate events have reached the wire, then snapshot the batch.
+    await vi.waitFor(
+      async () => {
+        decoded = await Promise.all(sent.map((r) => decodeBody(r.body)));
+        events = decoded.flatMap(eventsFrom);
+        expect(events.some((e) => e.event === 'survey sent')).toBe(true);
+        expect(events.some((e) => e.event === 'feedback_heatmap_probe')).toBe(true);
+      },
+      { timeout: 15_000, interval: 50 },
+    );
 
-    decoded = await Promise.all(sent.map((r) => decodeBody(r.body)));
-    events = decoded.flatMap(eventsFrom);
     expect(events.length).toBeGreaterThan(0);
   }, 30_000);
 
@@ -174,6 +211,59 @@ describe('no vendor request carries the reset token or the full referrer', () =>
     expect(props.$initial_referrer).toBeUndefined();
   });
 
+  it('lands `survey sent` on the wire with the five keys, the scrubbed text, and no $set', () => {
+    const survey = events.find((e) => e.event === 'survey sent');
+    expect(survey).toBeDefined();
+    const props = survey!.properties as Record<string, unknown>;
+    // The five keys the wrapper sends (design Component 6), present with the right
+    // values. The SDK's own auto-properties ride alongside, so this is a superset
+    // check — key-set equality is posthog.test.ts's mocked job.
+    expect(props.$survey_id).toBe(IDS.surveyId);
+    expect(props.$survey_submission_id).toBe(SUBMISSION_ID);
+    expect(props.$survey_completed).toBe(true);
+    expect(props[`$survey_response_${IDS.ratingQuestionId}`]).toBe(RATING);
+    expect(props[`$survey_response_${IDS.textQuestionId}`]).toBe(FEEDBACK_TEXT_SCRUBBED);
+    // scrubEvent strips the injected person-profile mutation off every event; core
+    // capture() sets a top-level $set on a `survey sent` (posthog-core.js:1071-1080).
+    expect(survey!.$set).toBeUndefined();
+    expect(survey!.$set_once).toBeUndefined();
+  });
+
+  it('removes the seenSurvey_ key the SDK writes for a `survey sent`', async () => {
+    const { captureFeedbackSent } = await import('./posthog');
+    const key = `seenSurvey_${IDS.surveyId}`;
+    // Clean slate so the SDK's own "already seen?" guard does not skip its write.
+    localStorage.removeItem(key);
+
+    // Two other writers hit setItem at init regardless of persistence mode
+    // (_checkLocalStorageForDebug's __mplssupport__, the toolbar loader's test), so
+    // match specifically on this key. spyOn calls through, so the real write lands.
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    try {
+      captureFeedbackSent(IDS, crypto.randomUUID(), 3, '');
+      // The SDK's core capture() writes the seen key for every `survey sent`.
+      expect(setItem.mock.calls.some(([k]) => k === key)).toBe(true);
+    } finally {
+      setItem.mockRestore();
+    }
+    // ...and the wrapper's `finally` removed it: no key persists past the capture
+    // (REQ-5.6). An absence without the observed write above would prove nothing.
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it('rewrites a $heatmap_data key from an own-origin URL, dropping the fragment, on the wire', () => {
+    const evt = events.find((e) => e.event === 'feedback_heatmap_probe');
+    expect(evt).toBeDefined();
+    const heatmap = (evt!.properties as Record<string, unknown>).$heatmap_data as Record<
+      string,
+      unknown
+    >;
+    const keys = Object.keys(heatmap);
+    // The fragment-bearing key is rewritten to the fragmentless own-origin URL.
+    expect(keys).toContain(HEATMAP_URL);
+    expect(keys.every((k) => !k.includes('#'))).toBe(true);
+  });
+
   it('leaks the token nowhere in any decoded request body', () => {
     for (const text of decoded) {
       expect(text).not.toContain(TOKEN);
@@ -186,4 +276,55 @@ describe('no vendor request carries the reset token or the full referrer', () =>
       expect(text).not.toContain(REFERRER_PATH);
     }
   });
+
+  // The derived $web_vitals carrier: posthog-js nests the raw href one metric-object
+  // deep in `$web_vitals_<NAME>_event.$current_url`, which a top-level pass never
+  // reached. Instantiate the installed SDK's own WebVitalsAutocapture against the
+  // real instance, buffer a fake metric and flush — deriving the shape from the SDK
+  // (an SDK rename is caught) rather than hand-building it. The flush lands in a
+  // SECOND /e/ batch after the beforeAll snapshot, so this waits on its own later
+  // request and re-decodes; it does NOT reuse the beforeAll `decoded`/`events`.
+  it('strips the fragment from $current_url nested in a derived $web_vitals event', async () => {
+    const { default: ph } = await import('posthog-js');
+    const { WebVitalsAutocapture } = await import('posthog-js/lib/src/extensions/web-vitals');
+
+    // _addToBuffer / _flushToCapture are private in the .d.ts, and the constructor's
+    // PostHog type comes from a different declaration than the default export's — a
+    // structural cast reaches both (test-only) without re-implementing the metric
+    // shape or weakening the SDK's own types.
+    const WV = WebVitalsAutocapture as unknown as new (instance: unknown) => {
+      _addToBuffer: (metric: { name: string; value: number }) => void;
+      _flushToCapture: () => void;
+    };
+    const wv = new WV(ph);
+    wv._addToBuffer({ name: 'LCP', value: 123 });
+    wv._flushToCapture();
+
+    // REAL timers, above the 3 s flush. Find the later batch carrying the metric.
+    let wvText = '';
+    await vi.waitFor(
+      async () => {
+        for (const r of sent) {
+          const text = await decodeBody(r.body);
+          if (text.includes('$web_vitals_LCP_event')) {
+            wvText = text;
+            return;
+          }
+        }
+        throw new Error('web vitals batch not on the wire yet');
+      },
+      { timeout: 15_000, interval: 50 },
+    );
+
+    const wvEvent = eventsFrom(wvText).find((e) => e.event === '$web_vitals');
+    expect(wvEvent).toBeDefined();
+    const metric = (wvEvent!.properties as Record<string, unknown>).$web_vitals_LCP_event as Record<
+      string,
+      unknown
+    >;
+    // Query kept, fragment (the emailed token) gone — proven on the wire, not just
+    // through scrubEvent (posthog.test.ts pins the fast mocked twin).
+    expect(metric.$current_url).toBe(ENTRY_URL_NO_FRAGMENT);
+    expect(wvText).not.toContain(TOKEN);
+  }, 30_000);
 });
