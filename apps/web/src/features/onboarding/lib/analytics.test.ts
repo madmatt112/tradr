@@ -63,7 +63,11 @@ function aChecklist(...done: ChecklistItemId[]): ChecklistObservation {
   const ids: ChecklistItemId[] = ['account', 'calculator', 'position', 'close'];
   const items = ids.map((id) => ({ id, label: id, done: done.includes(id) }));
   return {
-    checklist: { items, allComplete: items.every((item) => item.done) },
+    checklist: {
+      items,
+      allComplete: items.every((item) => item.done),
+      coreComplete: (['account', 'position', 'close'] as const).every((id) => done.includes(id)),
+    },
     counts: {
       account: done.includes('account') ? 1 : 0,
       position: done.includes('position') ? 1 : 0,

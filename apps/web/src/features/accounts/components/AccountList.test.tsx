@@ -3,24 +3,28 @@
 // banner (REQ-6.4/11.6). Badges and the make-writable action appear ONLY while
 // the writability restriction is active (over-cap ∧ free ∧ gated); nothing
 // tier-related renders when gating is off (self-host parity).
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Account, TierState } from '@tradr/shared';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { accountsData, tierData, setWritableMutate, demoState, demoTeardown } = vi.hoisted(() => ({
-  accountsData: { current: [] as unknown[] },
-  tierData: { current: undefined as unknown },
-  setWritableMutate: vi.fn(),
-  demoState: { isDemoPresent: false, isPending: false },
-  demoTeardown: vi.fn(),
-}));
+const { accountsData, tierData, setWritableMutate, setDefaultMutate, demoState, demoTeardown } =
+  vi.hoisted(() => ({
+    accountsData: { current: [] as unknown[] },
+    tierData: { current: undefined as unknown },
+    setWritableMutate: vi.fn(),
+    setDefaultMutate: vi.fn(),
+    demoState: { isDemoPresent: false, isPending: false },
+    demoTeardown: vi.fn(),
+  }));
 
 vi.mock('../hooks/useAccounts', () => ({
   useAccounts: () => ({ data: accountsData.current, isLoading: false }),
   useDeleteAccount: () => ({ mutate: vi.fn() }),
+  useSetDefaultAccount: () => ({ mutate: setDefaultMutate, isPending: false }),
   useSetWritableAccount: () => ({ mutate: setWritableMutate, isPending: false }),
 }));
 
@@ -125,6 +129,7 @@ beforeEach(() => {
   accountsData.current = ACCOUNTS;
   tierData.current = undefined;
   setWritableMutate.mockReset();
+  setDefaultMutate.mockReset();
   demoState.isDemoPresent = false;
   demoState.isPending = false;
   demoTeardown.mockReset();
@@ -334,6 +339,61 @@ describe('AccountList — creating a real account while sample data is present',
 
     expect(demoTeardown).not.toHaveBeenCalled();
     expect(screen.queryByTestId('account-dialog')).toBeNull();
+  });
+});
+
+describe('AccountList — default-account designation', () => {
+  const withDefault: Account[] = [
+    { id: ACCOUNT_A, name: 'Main', currency: 'USD', isDefault: true } as Account,
+    { id: ACCOUNT_B, name: 'Swing', currency: 'EUR', isDefault: false } as Account,
+  ];
+
+  /** The ⋯ menu on the row that carries this account name. */
+  async function openRowMenu(name: string): Promise<HTMLElement> {
+    const row = screen.getByText(name).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: '⋯' }));
+    return row;
+  }
+
+  it('badges the default account and only it', () => {
+    accountsData.current = withDefault;
+    render(<AccountList />);
+
+    expect(screen.getByTestId(`default-badge-${ACCOUNT_A}`)).toBeTruthy();
+    expect(screen.queryByTestId(`default-badge-${ACCOUNT_B}`)).toBeNull();
+  });
+
+  it('offers Make default on a non-default row and fires the mutation with its id', async () => {
+    accountsData.current = withDefault;
+    render(<AccountList />);
+
+    await openRowMenu('Swing');
+    const item = screen.getByRole('menuitem', { name: 'Make default' });
+    expect(item.className).toContain('cursor-pointer');
+    await userEvent.click(item);
+
+    expect(setDefaultMutate).toHaveBeenCalledTimes(1);
+    expect(setDefaultMutate).toHaveBeenCalledWith(ACCOUNT_B);
+  });
+
+  it('withholds Make default from the current default', async () => {
+    accountsData.current = withDefault;
+    render(<AccountList />);
+
+    await openRowMenu('Main');
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Make default' })).toBeNull();
+  });
+
+  it('withholds Make default from the sample account (the server refuses it)', async () => {
+    accountsData.current = [
+      { id: ACCOUNT_A, name: 'Sample Data', currency: 'USD', isDemo: true } as Account,
+    ];
+    render(<AccountList />);
+
+    await openRowMenu('Sample Data');
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Make default' })).toBeNull();
   });
 });
 

@@ -24,7 +24,7 @@ import {
 } from '@/features/onboarding/components/ActivationChecklist';
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { ZeroState } from '@/features/onboarding/components/ZeroState';
-import { useOnboarding, useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
+import { useOnboarding } from '@/features/onboarding/hooks/useOnboarding';
 import { useWalkthrough } from '@/features/onboarding/hooks/useWalkthrough';
 import type { ChecklistItemId } from '@/features/onboarding/lib/derive-checklist';
 import { useAuth } from '@/hooks/useAuth';
@@ -148,46 +148,52 @@ function DashboardPage(): ReactElement {
   const { data, isLoading, isError, refetch, flushPending, scheduleLayoutWrite } = layout;
 
   // ===========================================================================
-  // THE ZERO-STATE GATE.
+  // THE WELCOME-VIEW GATE.
   //
-  // A user with no accounts gets a screen that tells them what to do instead of
-  // six widgets that are each individually empty for a different reason.
+  // A user still setting up gets a screen that tells them what to do instead of
+  // six widgets that are each individually empty for a different reason — and
+  // they KEEP it until the three data-creating steps are done (account logged,
+  // position logged, position closed: `checklist.coreComplete`), or until they
+  // explicitly skip. Creating the account alone no longer swaps this screen for
+  // the grid: that handed a brand-new user exactly the six-empty-widgets view
+  // the welcome exists to replace, with two setup steps still outstanding.
   //
-  // THE CHEAP READ FOR THE GATE. `useOnboardingQuery` is the preference read on
-  // its own; the gate below needs only the stored status, and needs it before
-  // anything else. (The full `useOnboarding` hook is read further down for the
-  // checklist's own view — see there.) The accounts list is the one the
-  // dashboard already needs:
+  // THE GATE READS THE FULL `useOnboarding` HOOK, which the route already
+  // mounts for the checklist's view below, so this costs no extra request: the
+  // positions read it derives `coreComplete` from is the same gated read the
+  // checklist needs, live for exactly the `pending`/`active` users this gate
+  // can apply to. The accounts list is also one the dashboard already needs:
   // `account-balances` is one of the six default widgets and calls `useAccounts`
   // itself, so hoisting the same `['accounts', 'list']` query up here shares one
-  // request with it rather than adding a second (Performance NFR).
+  // request with it rather than adding a second (Performance NFR). It is read
+  // raw — demo rows included — because sample data is the one thing that swaps
+  // this screen for the populated grid without completing anything.
+  //
+  // `skipped` RETIRES THE WELCOME VIEW NOW. It is the explicit way out this
+  // gate owes the user: the checklist's dismiss and the welcome card's skip
+  // both write it, and a skipped user gets the ordinary dashboard — empty tiles
+  // and all — with the "Reopen setup checklist" row `ChecklistSlot` renders on
+  // both remaining branches, so the dismissal stays recoverable from here.
   //
   // `enabled: !onboardingRetired` is TRUE on the first render, because the
   // status is unknown until the preference read lands. That is deliberate: the
   // accounts fetch goes out in parallel with the preference and the layout
   // reads rather than waiting a round trip behind one of them. Once the status
-  // comes back `done` the observer switches off — and by then the response has
+  // comes back retired the observer switches off — and by then the response has
   // usually already landed in the cache, where the balances widget picks it up
   // for free. Nothing here is a new blocking request on first paint.
   // ===========================================================================
-  const onboardingQuery = useOnboardingQuery();
-  const preference = onboardingQuery.data;
-  // `done` ONLY. `skipped` is a dismissal of the CHECKLIST, not of
-  // onboarding: a skipped user with no accounts still has nothing to look at,
-  // and the zero-state is where `ActivationChecklist` — hence the product's only
-  // "Reopen setup checklist" control — is mounted. Retiring on `skipped` would
-  // delete that control from the product and make dismissal unrecoverable.
-  const onboardingRetired = preference?.status === 'done';
+  const onboarding = useOnboarding();
+  const preference = onboarding.preference;
+  const onboardingRetired = preference?.status === 'done' || preference?.status === 'skipped';
   const accountsQuery = useAccounts({ enabled: !onboardingRetired });
   const accounts = accountsQuery.data;
 
   // WHETHER THE CHECKLIST IS ON SCREEN, decided once here rather than left to
   // the component, because on the populated branch it is a grid item and the
   // grid has to be told to make room before anything renders. The rules stay in
-  // `resolveChecklistView`; this only reads the answer. The full hook is the
-  // one the checklist itself reads — its two gated reads are shared with that
-  // mount and switched off for a retired user, so this adds no request.
-  const checklistView = resolveChecklistView(useOnboarding());
+  // `resolveChecklistView`; this only reads the answer.
+  const checklistView = resolveChecklistView(onboarding);
   const checklistInGrid = checklistView === 'card' || checklistView === 'loading';
 
   // beforeunload: flush any pending debounced PUT (Req 1.9).
@@ -338,34 +344,37 @@ function DashboardPage(): ReactElement {
     );
   }
 
-  // Zero state — takes precedence over the empty layout below, and sits behind
-  // isLoading/isError so neither of those branches changes.
+  // Welcome view — takes precedence over the empty layout below, and sits
+  // behind isLoading/isError so neither of those branches changes.
   //
-  // NO FLASH IN EITHER DIRECTION, which is the whole reason this is three
-  // conditions and not one. Deciding early would be wrong both ways: `accounts`
-  // is `undefined` before it lands, so `accounts?.length === 0` would show the
-  // zero-state to every established user for a beat; and falling through while
-  // the status is unknown would show the widget grid to a brand-new user for a
-  // beat. So the route stays on the skeleton it is ALREADY showing until both
-  // reads have answered, and only then picks a side. Same component as the
-  // isLoading branch, so the wait is invisible — the screen does not change
-  // twice.
+  // NO FLASH IN EITHER DIRECTION, which is the whole reason this waits on every
+  // read it consults. Deciding early would be wrong both ways: `checklist` is
+  // `undefined` before its reads land, so falling through would show the widget
+  // grid to a brand-new user for a beat, and treating "unknown" as "incomplete"
+  // would show the welcome to an established user for one. So the route stays
+  // on the skeleton it is ALREADY showing until the answer is known, and only
+  // then picks a side. Same component as the isLoading branch, so the wait is
+  // invisible — the screen does not change twice.
   //
   // A FAILED READ FALLS THROUGH rather than parking on the skeleton forever.
   // Onboarding is presentation over data the dashboard owns anyway; if we cannot
   // tell whether this user is new, the right answer is the dashboard they asked
   // for, not a spinner.
-  if (!onboardingQuery.isError && !accountsQuery.isError && !onboardingRetired) {
-    if (preference === undefined || accounts === undefined) {
+  if (!onboarding.isError && !accountsQuery.isError && !onboardingRetired) {
+    if (preference === undefined || accounts === undefined || onboarding.checklist === undefined) {
       return <DashboardSkeleton />;
     }
-    // Leaving this screen on the first account needs nothing extra:
-    // `useCreateAccount` invalidates ['accounts'], this observer refetches, and
-    // the next render falls through to the grid — no reload, no manual swap.
-    if (accounts.length === 0) {
+    // Leaving this screen needs nothing extra: closing the first position
+    // invalidates ['positions'], the checklist observer refetches, and the next
+    // render falls through to the grid — no reload, no manual swap. Sample data
+    // is the other door: the seeder's account arrives on ['accounts'] with
+    // `isDemo`, and the populated grid (with the demo banner) is the whole
+    // point of asking for it, so it must not be trapped behind the welcome.
+    const hasDemoAccount = accounts.some((account) => account.isDemo);
+    if (onboarding.checklist !== null && !onboarding.checklist.coreComplete && !hasDemoAccount) {
       return (
         <>
-          {/* The header grammar covers the zero state too — without it a
+          {/* The header grammar covers the welcome view too — without it a
               fresh user would be the one person with no drawer opener. */}
           <PageHeader page="Dashboard" />
           <ZeroState />
@@ -377,16 +386,15 @@ function DashboardPage(): ReactElement {
   // ===========================================================================
   // THE CHECKLIST'S HOME ON EVERY OTHER PATH.
   //
-  // `ZeroState` composes `ActivationChecklist` itself, so the zero-state branch
-  // above needs nothing — and must not double-mount it. But the zero-state is
-  // the ONLY screen the checklist had, and a user leaves it the instant they
-  // create their first account. That is precisely when items 2-4 (size a trade,
-  // log a position, close it) become the outstanding work, when the "Reopen
-  // setup checklist" row that keeps a dismissal recoverable would otherwise be
-  // unreachable, and when the retirement that fires on the fourth completed
-  // item — which is what finally switches `useOnboarding`'s two expensive gated
-  // reads off for good — would never get a chance to fire. So both remaining
-  // branches mount it.
+  // `ZeroState` composes `ActivationChecklist` itself, so the welcome branch
+  // above needs nothing — and must not double-mount it. But a user reaches
+  // these branches with the checklist possibly still live: skipping, adding
+  // sample data, and finishing the three core steps with the calculator still
+  // untried all land here before the checklist is done. This is where the
+  // "Reopen setup checklist" row that keeps a dismissal recoverable lives, and
+  // where the retirement that fires on the fourth completed item — which is
+  // what finally switches `useOnboarding`'s two expensive gated reads off for
+  // good — gets its chance to fire. So both remaining branches mount it.
   //
   // ON THE POPULATED BRANCH IT IS A GRID ITEM. A card above the grid stretched
   // four short rows across the whole content width, with each row's play button

@@ -130,8 +130,21 @@ export const AccountSchema = z.object({
   // UpdateAccountSchema, so no request can claim it. `.optional()` for the same
   // reason as `balance` above — existing fixtures build accounts without it.
   isDemo: z.boolean().optional(),
+  // True on the user's default account — the one pickers preselect — and on
+  // exactly one account per user. Server-set and read-only like `isDemo`: the
+  // first account created takes it, and `PUT /api/accounts/default` moves it.
+  // `.optional()` for the same reason as `balance` above.
+  isDefault: z.boolean().optional(),
+});
+
+// Body of PUT /api/accounts/default — mirrors SetWritableAccountSchema
+// (schemas/tier.ts), but the default designation is an accounts concern, so it
+// lives here.
+export const SetDefaultAccountSchema = z.object({
+  accountId: z.string().uuid(),
 });
 
 export type CreateAccountInput = z.infer<typeof CreateAccountSchema>;
 export type UpdateAccountInput = z.infer<typeof UpdateAccountSchema>;
 export type Account = z.infer<typeof AccountSchema>;
+export type SetDefaultAccountInput = z.infer<typeof SetDefaultAccountSchema>;

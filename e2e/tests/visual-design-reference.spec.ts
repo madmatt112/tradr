@@ -164,6 +164,13 @@ test.describe('visual-design pre-migration reference', () => {
     });
     expect(accountRes.status(), 'POST /accounts').toBe(201);
     const account = (await accountRes.json()) as { id: string };
+    // An established user, not an onboarding one: the dashboard keeps its
+    // focused welcome view until onboarding is done or skipped, and the
+    // dashboard captures here are of the populated grid.
+    const onboardingRes = await page.request.patch('/api/users/me/onboarding', {
+      data: { status: 'done' },
+    });
+    expect(onboardingRes.status(), 'PATCH onboarding').toBe(200);
 
     const posRes = await page.request.post('/api/positions', {
       data: { accountId: account.id, symbol: 'AAPL', side: 'long', assetType: 'stock' },

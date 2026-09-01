@@ -8,7 +8,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { billingKeys } from '@/features/billing/useWalletBalance';
 import { api } from '@/lib/api';
 
-import { useCreateAccount, useDeleteAccount, useSetWritableAccount } from './useAccounts';
+import {
+  useCreateAccount,
+  useDeleteAccount,
+  useSetDefaultAccount,
+  useSetWritableAccount,
+} from './useAccounts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,6 +80,39 @@ describe('useAccounts — tier-key invalidation (plan-tiers)', () => {
     expect(put).toHaveBeenCalledWith('/accounts/writable', { accountId: ACCOUNT_ID });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: billingKeys.tier() });
     expect(toast.success).toHaveBeenCalledWith('Writable account updated');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Default-account designation: the flag lives on the account rows themselves,
+// so it is the accounts list that must refetch — not the tier key.
+// ---------------------------------------------------------------------------
+
+describe('useSetDefaultAccount', () => {
+  it('PUTs the designation and invalidates the accounts list', async () => {
+    const put = vi.spyOn(api, 'put').mockResolvedValue({ defaultAccountId: ACCOUNT_ID });
+    const qc = makeClient();
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    const { result } = renderHook(() => useSetDefaultAccount(), { wrapper: makeWrapper(qc) });
+    await result.current.mutateAsync(ACCOUNT_ID);
+
+    expect(put).toHaveBeenCalledWith('/accounts/default', { accountId: ACCOUNT_ID });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['accounts'] });
+    expect(toast.success).toHaveBeenCalledWith('Default account updated');
+  });
+
+  it('toasts the api message on failure', async () => {
+    vi.spyOn(api, 'put').mockRejectedValue({
+      status: 400,
+      error: { code: 'DEMO_ACCOUNT_NOT_DEFAULTABLE', message: 'The sample account cannot…' },
+    });
+    const qc = makeClient();
+
+    const { result } = renderHook(() => useSetDefaultAccount(), { wrapper: makeWrapper(qc) });
+    await expect(result.current.mutateAsync(ACCOUNT_ID)).rejects.toBeTruthy();
+
+    expect(toast.error).toHaveBeenCalledWith('The sample account cannot…');
   });
 });
 

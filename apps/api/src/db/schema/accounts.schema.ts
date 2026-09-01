@@ -56,6 +56,13 @@ export const accounts = pgTable(
     // this flag from the stored row before deleting anything, and never trust a
     // query parameter, header or body field claiming an account is a demo.
     isDemo: boolean('is_demo').notNull().default(false),
+    // The user's default account — what account pickers preselect. Exactly one
+    // per user (partial unique index below): the first account a user creates
+    // takes it, `PUT /api/accounts/default` moves it, and deleting the default
+    // promotes the oldest remaining non-demo account. Server-set only, like
+    // is_demo — no request body can claim it — and never true on the sample
+    // account, which is not an account the user chose.
+    isDefault: boolean('is_default').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -63,5 +70,11 @@ export const accounts = pgTable(
     index('accounts_user_id_idx').on(table.userId),
     uniqueIndex('accounts_user_id_name_unique').on(table.userId, sql`lower(${table.name})`),
     index('accounts_brokerage_id_idx').on(table.brokerageId),
+    // One default per user, enforced where it cannot race. The
+    // advisor_personas_one_default_per_user precedent, minus the NULL guard —
+    // user_id here is NOT NULL.
+    uniqueIndex('accounts_one_default_per_user')
+      .on(table.userId)
+      .where(sql`is_default = true`),
   ],
 );

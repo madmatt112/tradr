@@ -301,6 +301,43 @@ describe('AccountPicker — writability (D18)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Default-account preselection
+// ---------------------------------------------------------------------------
+
+describe('ImportPage — default-account preselection', () => {
+  function targetAccountSelect(): HTMLSelectElement {
+    const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[];
+    return selects.find((s) => Array.from(s.options).some((o) => o.value === ACCOUNT_A))!;
+  }
+
+  it('preselects the default account as the import target', () => {
+    accountsData.current = [
+      { id: ACCOUNT_A, name: 'Main', currency: 'USD' },
+      { id: ACCOUNT_B, name: 'Swing', currency: 'EUR', isDefault: true },
+    ];
+    render(<ImportPage />);
+
+    expect(targetAccountSelect().value).toBe(ACCOUNT_B);
+  });
+
+  it('withholds the preselect when the default account is not writable (D18)', () => {
+    accountsData.current = [
+      { id: ACCOUNT_A, name: 'Main', currency: 'USD' },
+      { id: ACCOUNT_B, name: 'Swing', currency: 'EUR', isDefault: true },
+    ];
+    tierData.current = tierFixture({
+      accountsUsed: 2,
+      writableAccountId: ACCOUNT_A,
+      csvUsed: 0,
+    });
+    render(<ImportPage />);
+
+    // Its option is disabled, so a preselect would gate the preview on a 403.
+    expect(targetAccountSelect().value).not.toBe(ACCOUNT_B);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Commit refusal mapping — TIER_LIMIT_CSV_IMPORTS (CODE only)
 // ---------------------------------------------------------------------------
 

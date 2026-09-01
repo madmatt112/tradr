@@ -1,13 +1,20 @@
-// ZeroState — the screen a newly-registered user lands on instead of six empty
+// ZeroState — the screen a user still setting up sees instead of six empty
 // widgets.
 //
 // WHAT IT REPLACES. `/dashboard` renders six widgets, and for a user with no
-// accounts every one of them is empty and phrases its emptiness differently:
+// data every one of them is empty and phrases its emptiness differently:
 // "Close a position to see stats." / "No open positions. Create one to get
 // started." / "No accounts yet." Each is individually correct and the screen as
 // a whole reads as broken, because nothing on it says which of the six holes to
 // fill first. This component answers that question once, at the top, in the
-// user's words: you need a brokerage account, and here is how to get one.
+// user's words — and it answers it in TWO STAGES, because creating the account
+// does not fill any of the six holes. Until the account exists, the card is
+// about getting one. Once it exists and the core steps (log a position, close
+// it) are still outstanding, the card carries the user forward instead of
+// vanishing into the very grid of empties it exists to replace — with an
+// explicit skip for the user who would rather have the grid anyway. The
+// dashboard route decides WHEN this screen retires (`checklist.coreComplete`,
+// a skip, or sample data); this component only decides what to say meanwhile.
 //
 // WHY NOT `EmptyState`. The shared `EmptyState` is a centred `max-w-md` card
 // with one string description and one action slot, and the zero-state needs two
@@ -27,15 +34,16 @@
 // one — Tradr never places or executes trades. Say it here, once, before the
 // user types a balance into a form and wonders whose money it is.
 //
-// EXACTLY ONE PRIMARY (AMBER) ACTION, AND IT IS "CREATE MY FIRST ACCOUNT".
-// The design system reserves amber for the single action a view is about, and
-// on this view that is the brokerage account: it is the prerequisite that copy
-// names, the only control here that changes the user's data, and the one that
-// makes this whole screen go away. The walkthrough is a way of doing that same
-// thing with help, not a different outcome, so it takes `outline`; sample data
-// is an aside. `ActivationChecklist` deliberately carries no primary action of
-// its own for exactly this reason — the one amber this composed view is allowed
-// lives here.
+// EXACTLY ONE PRIMARY (AMBER) ACTION PER STAGE. The design system reserves
+// amber for the single action a view is about. Before the account exists that
+// is "Create my first account": the prerequisite the copy names, the only
+// control here that changes the user's data. The walkthrough is a way of doing
+// that same thing with help, not a different outcome, so it takes `outline`;
+// sample data is an aside. Once the account exists the view is about carrying
+// on, and the walkthrough — now the only control here that leads anywhere new —
+// takes the amber; the skip is the aside. `ActivationChecklist` deliberately
+// carries no primary action of its own for exactly this reason — the one amber
+// this composed view is allowed lives here.
 //
 // The docs link is a MUTED underlined link, not the app's usual `text-primary`
 // one (ImportPage, Sidebar). Those surfaces have no amber button competing with
@@ -64,6 +72,13 @@
 // than useless — that value is the checklist's OWN dismissal, and spending it
 // on "I would rather click around myself" would take the checklist away from a
 // user who never asked to lose it.
+//
+// THE CARRY-ON STAGE'S SKIP IS THE ONE PLACE THAT DOES WRITE `skipped`, because
+// there it means exactly what the user pressed: stop showing me the setup view.
+// `skipped` is what retires the welcome at the dashboard's gate AND dismisses
+// the checklist, and using the checklist's own value keeps the two exits one
+// state — the "Reopen setup checklist" row on the ordinary dashboard recovers
+// both at once.
 //
 // "WALK ME THROUGH IT" IS BLOCKED RATHER THAN QUEUED WHEN THERE IS NO STEP TO
 // RUN. `start()` returns silently when the checklist names no outstanding item —
@@ -125,13 +140,24 @@ function guidanceGap(
 }
 
 export function ZeroState() {
-  const { setStatus, isSaving, checklist } = useOnboarding();
+  const { setStatus, dismiss, isSaving, checklist } = useOnboarding();
   const { start, canStart, isUnavailable } = useWalkthrough();
   const { seed, isPending: isSeeding } = useDemoAccount();
   const [accountDialogOpen, setAccountDialogOpen] = useState(false);
 
   const guidanceNote = guidanceGap(isUnavailable, checklist);
   const guidedBlocked = guidanceNote !== null;
+
+  // The stage. Before the user's own account exists this is the classic
+  // zero-state; after, it is the carry-on card. Read from the DERIVED checklist
+  // rather than the raw accounts list so the two stages mean what the checklist
+  // means — `selectOwnRows` strips the sample account before item 1 is derived,
+  // so seeded data cannot flip this to "ready". While the checklist is still
+  // loading this reads as the first stage, which is the same face the route's
+  // skeleton gate makes unreachable in practice — the dashboard only mounts
+  // this component once the checklist is known.
+  const hasOwnAccount =
+    checklist?.items.some((item) => item.id === 'account' && item.done) ?? false;
 
   /**
    * Both ways into the walkthrough, and they are the same three lines.
@@ -186,31 +212,42 @@ export function ZeroState() {
     >
       <Card>
         <CardHeader className="px-4 sm:px-6">
-          <h2 className="text-xl leading-none font-semibold">Welcome to Tradr</h2>
+          <h2 className="text-xl leading-none font-semibold">
+            {hasOwnAccount ? 'Your account is ready' : 'Welcome to Tradr'}
+          </h2>
           <CardDescription>
-            Start with a brokerage account. Every position, fill and ledger entry is booked against
-            one, so there is nothing to show on this dashboard until you create it.
+            {hasOwnAccount
+              ? 'Positions come next: log a trade against your account, then close it, and this ' +
+                'dashboard fills in with real numbers. Follow the guided walkthrough, or skip ' +
+                'ahead to the ordinary dashboard whenever you like.'
+              : 'Start with a brokerage account. Every position, fill and ledger entry is booked ' +
+                'against one, so there is nothing to show on this dashboard until you create it.'}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 px-4 sm:px-6">
           {/* The not-connected statement. Both halves, plainly, before the user
-              meets a form asking for a starting balance. */}
-          <p data-testid="zero-state-not-connected" className="text-sm text-muted-foreground">
-            A Tradr account mirrors a real brokerage account: the same currency, the same starting
-            balance, the same trades. It is not connected to your broker. Tradr never places or
-            executes trades — you record trades you have already made.
-          </p>
+              meets a form asking for a starting balance. First stage only: by
+              the second the user has met that form and typed the balance. */}
+          {!hasOwnAccount && (
+            <p data-testid="zero-state-not-connected" className="text-sm text-muted-foreground">
+              A Tradr account mirrors a real brokerage account: the same currency, the same starting
+              balance, the same trades. It is not connected to your broker. Tradr never places or
+              executes trades — you record trades you have already made.
+            </p>
+          )}
 
           {/* Stacked and full-width on a phone, side by side from `sm` up. The
               row wraps rather than shrinking, so no label is ever truncated. */}
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-            <Button
-              data-testid="zero-state-create-account"
-              className="w-full cursor-pointer motion-reduce:transition-none sm:w-auto"
-              onClick={() => setAccountDialogOpen(true)}
-            >
-              Create my first account
-            </Button>
+            {!hasOwnAccount && (
+              <Button
+                data-testid="zero-state-create-account"
+                className="w-full cursor-pointer motion-reduce:transition-none sm:w-auto"
+                onClick={() => setAccountDialogOpen(true)}
+              >
+                Create my first account
+              </Button>
+            )}
             {/* `aria-disabled`, NEVER the `disabled` attribute, whenever the
                 reason is one the user can do something about. `disabled` takes
                 the control out of the tab order, so a keyboard user never meets
@@ -219,9 +256,13 @@ export function ZeroState() {
                 link uses. `disabled` IS still right for `isSaving`, which is a
                 sub-second window with nothing to explain and no choice to lose.
                 Either way the reason is real markup the control points at, the
-                way the sample-data option does. */}
+                way the sample-data option does.
+
+                One control, two stages: outline beside the create button while
+                the account is the view's own action, amber once carrying on IS
+                the view's action — see the one-primary-per-stage note above. */}
             <Button
-              variant="outline"
+              variant={hasOwnAccount ? 'default' : 'outline'}
               data-testid="zero-state-walkthrough"
               className="w-full cursor-pointer motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
               disabled={isSaving}
@@ -231,33 +272,53 @@ export function ZeroState() {
               // optional item id and a click handler is called with an event.
               onClick={() => beginGuided()}
             >
-              Walk me through it
+              {hasOwnAccount ? 'Continue the walkthrough' : 'Walk me through it'}
             </Button>
-            {/* Sample data is offered ALONGSIDE creating a real account, never
-                instead of it, which is why it sits next to the primary action,
-                takes `outline` rather than the amber, and does not replace
-                anything.
-                NO `disabled` ATTRIBUTE ON THIS CONTROL, in flight or otherwise.
-                It spent a phase disabled while the seeder was unbuilt, and a
-                keyboard user never met it: `disabled` removes a control from the
-                tab order, so the option might as well not have existed for them.
-                The in-flight state uses the same focusable `aria-disabled` +
-                stated-reason pattern as the guided fork above. */}
-            <Button
-              variant="outline"
-              data-testid="zero-state-sample-data"
-              className="w-full cursor-pointer motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
-              aria-disabled={isSeeding || undefined}
-              aria-describedby={isSeeding ? SAMPLE_DATA_NOTE_ID : undefined}
-              // The guard, not just the styling — an `aria-disabled` control is
-              // still clickable, which is the price of leaving it reachable.
-              onClick={() => {
-                if (isSeeding) return;
-                seed();
-              }}
-            >
-              Add sample data
-            </Button>
+            {hasOwnAccount ? (
+              /* The explicit way out this view owes the user: the ordinary
+                 dashboard, empty tiles and all. It writes the checklist's own
+                 dismissal value — see the header — so the "Reopen setup
+                 checklist" row on the dashboard recovers it. Plain `disabled`
+                 while the write is in flight, same as the walkthrough button:
+                 a sub-second window with nothing to explain. */
+              <Button
+                variant="outline"
+                data-testid="zero-state-skip-setup"
+                className="w-full cursor-pointer motion-reduce:transition-none sm:w-auto"
+                disabled={isSaving}
+                onClick={() => dismiss()}
+              >
+                Skip to my dashboard
+              </Button>
+            ) : (
+              /* Sample data is offered ALONGSIDE creating a real account, never
+                 instead of it, which is why it sits next to the primary action,
+                 takes `outline` rather than the amber, and does not replace
+                 anything. First stage only: the seeder refuses to run beside an
+                 account of the user's own, so offering it here in the second
+                 stage would be a button that can only explain itself away.
+                 NO `disabled` ATTRIBUTE ON THIS CONTROL, in flight or otherwise.
+                 It spent a phase disabled while the seeder was unbuilt, and a
+                 keyboard user never met it: `disabled` removes a control from the
+                 tab order, so the option might as well not have existed for them.
+                 The in-flight state uses the same focusable `aria-disabled` +
+                 stated-reason pattern as the guided fork above. */
+              <Button
+                variant="outline"
+                data-testid="zero-state-sample-data"
+                className="w-full cursor-pointer motion-reduce:transition-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 sm:w-auto"
+                aria-disabled={isSeeding || undefined}
+                aria-describedby={isSeeding ? SAMPLE_DATA_NOTE_ID : undefined}
+                // The guard, not just the styling — an `aria-disabled` control is
+                // still clickable, which is the price of leaving it reachable.
+                onClick={() => {
+                  if (isSeeding) return;
+                  seed();
+                }}
+              >
+                Add sample data
+              </Button>
+            )}
           </div>
 
           {/* A runtime that will not load is an ordinary outcome, not an
