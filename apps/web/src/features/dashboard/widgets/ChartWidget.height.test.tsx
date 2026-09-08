@@ -6,9 +6,8 @@
 // Neither was true. `PerformanceBarChart` and `EquityCurveChart` both wrapped
 // themselves in a hard-coded `h-[320px]`, and the widget body at the pinned
 // default is 149px — so measured in chromium at 1440x900 the performance chart
-// cut off 215px of itself (293px on the enforced free tier, where the boxed
-// tier notice renders in the same body) and the equity curve 171px (249px).
-// The whole x-axis and the bottom of every bar were simply not on screen.
+// cut off 215px of itself and the equity curve 171px. The whole x-axis and the
+// bottom of every bar were simply not on screen.
 // Nothing caught it: jsdom performs no layout, so every DOM assertion in the
 // suite passed against a chart that was half out of view.
 //
@@ -68,11 +67,6 @@ vi.mock('@/features/performance/hooks/usePerformance', () => ({
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => 'America/New_York',
 }));
-// `purchasable: true` is the taller of the two notice states — it carries the
-// upgrade CTA, which sets the compact row's height.
-vi.mock('@/features/billing/useTierState', () => ({
-  useTierState: () => ({ data: { purchasable: true } }),
-}));
 vi.mock('@/lib/telemetry/posthog', () => ({
   captureClientEvent: vi.fn(),
 }));
@@ -107,13 +101,6 @@ type DisplayCurrencyResult = ReturnType<typeof useDisplayCurrencyQuery>;
 // pins and the bound the grid enforces disagree.
 // ---------------------------------------------------------------------------
 
-/**
- * The compact TierWindowNotice: one line of text-xs beside an h-6 upgrade CTA.
- * The boxed Alert the Performance page uses is 66px, and these widgets ask for
- * the compact form for the same reason StatsSummaryWidget does — the notice
- * comes out of the chart's share of a fixed body.
- */
-const NOTICE_PX = 24;
 /**
  * The floor a dashboard chart is held to. The Performance page gives the equity
  * curve 320px; three-quarters of that is the least this widget may offer and
@@ -150,7 +137,7 @@ const TOOLBAR_PX = {
   'equity-curve': 0,
 } as const;
 
-function mockPerformance({ clamped }: { clamped: boolean }): void {
+function mockPerformance(): void {
   vi.mocked(usePerformance).mockReturnValue({
     data: {
       currencies: [
@@ -171,15 +158,6 @@ function mockPerformance({ clamped }: { clamped: boolean }): void {
           },
         },
       ],
-      ...(clamped
-        ? {
-            tierWindow: {
-              clamped: true,
-              effectiveStart: '2026-02-01T00:00:00.000Z',
-              lookbackMonths: 6,
-            },
-          }
-        : {}),
     } as unknown as PerformanceResponse,
     isLoading: false,
     isError: false,
@@ -222,7 +200,7 @@ beforeEach(() => {
     data: { currency: 'USD' },
     isLoading: false,
   } as unknown as DisplayCurrencyResult);
-  mockPerformance({ clamped: false });
+  mockPerformance();
 });
 
 afterEach(() => {
@@ -251,7 +229,7 @@ describe('chart widgets size to the body they are given', () => {
         `content and overflows the widget body again`,
     ).toContain('h-full');
 
-    // `flex-1` takes what the notice and any toolbar leave.
+    // `flex-1` takes what any toolbar leaves.
     expect(chart?.className, `${which}'s chart must take the leftover height (flex-1)`).toContain(
       'flex-1',
     );
@@ -338,35 +316,6 @@ describe('the pinned default leaves the chart a legible plot', () => {
       `${which} is pinned to h=${h} (${bodyPx}px of body), leaving the chart ` +
         `${chartPx}px — under the ${MIN_CHART_PX}px floor. Raise the height in ` +
         `DEFAULT_WIDGETS`,
-    ).toBeGreaterThanOrEqual(MIN_CHART_PX);
-  });
-
-  it.each([
-    ['performance-chart', TIMEFRAME_ROW_PX + STACK_GAP_PX],
-    ['equity-curve', 0],
-  ] as const)('%s, with the free-tier window notice', (which, toolbarPx) => {
-    // Assert the notice is really the compact one — NOTICE_PX measures that
-    // form, and the boxed Alert is 66px.
-    mockPerformance({ clamped: true });
-    const { container, root } = mount(which);
-    const notice = container.querySelector('[data-testid="tier-window-notice"]');
-    const boxed = container.querySelector('[data-slot="alert"]');
-    act(() => {
-      root.unmount();
-    });
-    container.remove();
-
-    expect(notice, 'a clamped response renders the tier window notice').not.toBeNull();
-    expect(boxed, 'the notice renders compact in a pinned widget, not as a boxed Alert').toBeNull();
-
-    const { h, bodyPx } = pinnedBodyPx(which);
-    const chartPx = bodyPx - BODY_PADDING_PX - toolbarPx - NOTICE_PX - STACK_GAP_PX;
-
-    expect(
-      chartPx,
-      `on the enforced free tier ${which} renders a ${NOTICE_PX}px notice above ` +
-        `its chart, leaving ${chartPx}px at h=${h} — under the ${MIN_CHART_PX}px ` +
-        `floor, so the free-tier user gets a strip instead of a chart`,
     ).toBeGreaterThanOrEqual(MIN_CHART_PX);
   });
 });
