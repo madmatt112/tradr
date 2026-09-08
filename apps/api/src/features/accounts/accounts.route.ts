@@ -165,6 +165,16 @@ accounts.post('/', validate('json', CreateAccountSchema), async (c) => {
 accounts.post('/demo', async (c) => {
   const userId = c.get('userId');
   const account = await seedDemoAccount(db, userId);
+  // Fire-and-forget business event AFTER the seed commits (REQ-4.2) — a failed
+  // seed throws above and never reaches here, so this fires exactly once per
+  // successful seed and nothing on a failure. Best-effort inside a guard so a
+  // telemetry fault can never fail the committed seed (same pattern as
+  // position_created); no-op when PostHog is unconfigured.
+  try {
+    captureServerEvent('demo_data_loaded', { distinctId: userId });
+  } catch {
+    // ignore — capture is fire-and-forget
+  }
   return c.json(account, 201);
 });
 
