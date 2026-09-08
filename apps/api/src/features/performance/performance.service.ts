@@ -27,7 +27,6 @@ import {
 } from '@/features/positions/pnl';
 import { config } from '@/lib/config';
 import { ClientAbortError, InvalidTimezoneError, TimeoutError } from '@/lib/errors';
-import { captureServerEvent } from '@/lib/posthog';
 
 import {
   fetchHistoryMetadata,
@@ -39,47 +38,12 @@ import {
 const CHUNK_SIZE = 1000;
 const TIMEOUT_MS = 10_000;
 
-/**
- * The free-tier lookback boundary (plan-tiers D13): `now (UTC) −
- * lookbackMonths` CALENDAR months via `Date.UTC` month arithmetic, clamping
- * day overflow to the last day of the target month (Aug 31 − 6mo ⇒ Feb 28,
- * or Feb 29 in a leap year). Time-of-day is preserved. Pure and exported so
- * the month-length edges are unit-testable.
- */
-export function computeLookbackFloor(now: Date, lookbackMonths: number): Date {
-  const targetMonth = now.getUTCMonth() - lookbackMonths;
-  // Day 0 of the month AFTER the target month = the target month's last day.
-  const lastDayOfTargetMonth = new Date(
-    Date.UTC(now.getUTCFullYear(), targetMonth + 1, 0),
-  ).getUTCDate();
-  return new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      targetMonth,
-      Math.min(now.getUTCDate(), lastDayOfTargetMonth),
-      now.getUTCHours(),
-      now.getUTCMinutes(),
-      now.getUTCSeconds(),
-      now.getUTCMilliseconds(),
-    ),
-  );
-}
-
-/** L3 lookback floor injected by the route when the user is enforced-free. */
-export interface TierLookbackFloor {
-  floor: Date;
-  lookbackMonths: number;
-}
-
 export async function getPerformance(
   db: Database,
   userId: string,
   input: PerformanceQueryInput,
   abortSignal: AbortSignal,
   startTime: number,
-  // Optional by design (D13): absent means today's behaviour exactly. The
-  // route resolves the tier — this service stays pure of Hono context.
-  tierFloor?: TierLookbackFloor,
 ): Promise<PerformanceResponse> {
   let resolvedTimezone: string;
   try {
@@ -91,25 +55,12 @@ export async function getPerformance(
   const requestedStart = new Date(input.start);
   const endInstant = new Date(input.end);
 
-  // L3 clamp-and-mark (plan-tiers D13, REQ-7.1/7.2): effectiveStart =
-  // max(requestedStart, floor) — NEVER a hard error on account of the tier
-  // window. Schema validation already ran on the REQUESTED window in the
-  // route (MIN_START / date order / BUCKET_COUNT_CAP unchanged on every
-  // tier). The fully-pre-boundary case (effectiveStart ≥ end) flows through
-  // naturally: generateBucketSeries returns [] ⇒ empty series, still marked.
-  let startInstant = requestedStart;
-  let tierWindow: PerformanceResponse['tierWindow'];
-  if (tierFloor && tierFloor.floor.getTime() > requestedStart.getTime()) {
-    startInstant = tierFloor.floor;
-    tierWindow = {
-      clamped: true,
-      effectiveStart: tierFloor.floor.toISOString(),
-      lookbackMonths: tierFloor.lookbackMonths,
-    };
-  }
+  const startInstant = requestedStart;
 
-  // fetchHistoryMetadata stays UNCLAMPED (D13/OD#9): it reveals only that
-  // older data exists and powers the free-tier upgrade notice.
+  // fetchHistoryMetadata spans the user's whole history, independent of the
+  // requested window: it powers empty-state detection (has any accounts /
+  // closed positions) and the preset-range derivation (earliest / most recent
+  // closed-position dates).
   const { snapshot, history } = await db.transaction(
     async (tx) => {
       const snap = await fetchTimeframeSnapshot(tx, userId, startInstant, endInstant);
@@ -170,17 +121,7 @@ export async function getPerformance(
     hasAnyClosedPositionsInSupportedCurrency: history.hasAnyClosedPositionsInSupportedCurrency,
     defaultCurrency,
     currencies,
-    ...(tierWindow ? { tierWindow } : {}),
   };
-
-  if (tierWindow) {
-    // D17: emitted on every clamped response — per-request noise accepted;
-    // funnels dedupe. Fire-and-forget, no-op when PostHog is unconfigured.
-    captureServerEvent('tier_limit_hit', {
-      distinctId: userId,
-      properties: { lever: 'lookback' },
-    });
-  }
 
   return PerformanceResponseSchema.parse(response);
 }
