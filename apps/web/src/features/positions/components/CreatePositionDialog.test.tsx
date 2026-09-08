@@ -155,7 +155,6 @@ function renderDialog() {
 const FREE_LIMITS = {
   accounts: 1,
   positions: 1000,
-  lookbackMonths: 6,
   platformTurns: 50,
   images: 20,
   csvImports: 3,
@@ -163,7 +162,6 @@ const FREE_LIMITS = {
 const PRO_LIMITS = {
   accounts: null,
   positions: null,
-  lookbackMonths: null,
   platformTurns: 500,
   images: 200,
   csvImports: null,

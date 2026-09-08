@@ -10,11 +10,10 @@ import { z } from 'zod';
 export const TierSchema = z.enum(['free', 'pro']);
 export type Tier = z.infer<typeof TierSchema>;
 
-// The six-lever cap catalog. `null` = unlimited (D4).
+// The five-lever cap catalog. `null` = unlimited (D4).
 export const TierLimitsSchema = z.object({
   accounts: z.number().int().nonnegative().nullable(),
   positions: z.number().int().nonnegative().nullable(),
-  lookbackMonths: z.number().int().nonnegative().nullable(),
   platformTurns: z.number().int().nonnegative().nullable(),
   images: z.number().int().nonnegative().nullable(),
   csvImports: z.number().int().nonnegative().nullable(),

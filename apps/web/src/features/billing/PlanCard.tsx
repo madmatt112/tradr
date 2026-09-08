@@ -39,7 +39,6 @@ const POLL_CAP_MS = 60_000;
 const LEVERS: Array<{ key: keyof TierLimits; label: string }> = [
   { key: 'accounts', label: 'Connected accounts' },
   { key: 'positions', label: 'Positions' },
-  { key: 'lookbackMonths', label: 'Analytics lookback' },
   { key: 'platformTurns', label: 'Advisor turns / month' },
   { key: 'images', label: 'Advisor image uploads / month' },
   { key: 'csvImports', label: 'CSV imports (lifetime)' },
@@ -52,7 +51,6 @@ const ADVISOR_LEVERS: ReadonlySet<keyof TierLimits> = new Set(['platformTurns', 
 
 function leverValue(key: keyof TierLimits, value: number | null): string {
   if (value === null) return 'Unlimited';
-  if (key === 'lookbackMonths') return `${value} months`;
   return String(value);
 }
 

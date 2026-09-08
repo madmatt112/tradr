@@ -222,7 +222,6 @@ beforeEach(() => {
       free: {
         accounts: 1,
         positions: 1000,
-        lookbackMonths: 6,
         platformTurns: 50,
         images: 20,
         csvImports: 3,
@@ -230,7 +229,6 @@ beforeEach(() => {
       pro: {
         accounts: null,
         positions: null,
-        lookbackMonths: null,
         platformTurns: 500,
         images: 200,
         csvImports: null,

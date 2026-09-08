@@ -43,7 +43,6 @@ const SELF_HOST_TIER: TierState = {
     free: {
       accounts: 1,
       positions: 1000,
-      lookbackMonths: 6,
       platformTurns: 5,
       images: 10,
       csvImports: 10,
@@ -51,7 +50,6 @@ const SELF_HOST_TIER: TierState = {
     pro: {
       accounts: null,
       positions: null,
-      lookbackMonths: null,
       platformTurns: 200,
       images: null,
       csvImports: null,
