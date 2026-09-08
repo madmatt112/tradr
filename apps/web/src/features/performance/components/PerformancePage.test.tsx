@@ -11,20 +11,11 @@ import type { PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
 // Mocks
 // ---------------------------------------------------------------------------
 
-// Tier state is test-configurable (sibling-surface pattern): `undefined`
-// (self-host / loading) and `purchasable: false` hide the upgrade CTA;
-// `purchasable: true` shows it (REQ-11.5 — no dead-end links).
-const { tierData } = vi.hoisted(() => ({
-  tierData: { current: undefined as unknown },
-}));
-vi.mock('@/features/billing/useTierState', () => ({
-  useTierState: () => ({ data: tierData.current }),
-}));
-
 // TanStack Router's `useNavigate` is exercised inside the selectors. We don't
 // test navigation here (TimeframeSelector / CurrencySelector tests cover that)
 // — a no-op spy keeps the selectors mountable without a router context. `Link`
-// backs the TierWindowNotice upgrade CTA (rest props keep its data-testid).
+// is stubbed to a plain anchor so any component that renders one stays mountable
+// (rest props keep its data-testid).
 const navigateMock = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock,
@@ -192,7 +183,6 @@ beforeEach(() => {
   vi.mocked(captureClientEvent).mockClear();
   sessionStorage.clear();
   __resetInvalidTimezoneState();
-  tierData.current = undefined;
 });
 
 afterEach(() => {

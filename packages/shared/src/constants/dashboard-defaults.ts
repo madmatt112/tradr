@@ -30,13 +30,9 @@ export type DefaultWidgetSpec = {
 // sees a pixel, so the body is `40h - 67`. Measured in chromium at 1440x900:
 // the populated tile grid needs 124px (two rows of tiles at 44px, one 12px gap,
 // 24px of body padding). h=2 gave the body 13px and clipped 111px of figures;
-// h=5 (133px body) fits those tiles with 9px to spare.
-//
-// 5 was still short for the enforced free tier, where TierWindowNotice renders
-// inside the same body: boxed it is 66px plus a 12px stack gap, and 133px of
-// body clipped 69px of it. So the notice is rendered in its one-line `compact`
-// form (24px) instead: 100px of tiles + 12px gap + 24px of notice + 24px of
-// padding = 160px, inside the 173px h=6 gives, 13px spare. Both states fit.
+// h=5 (133px body) is the tightest that fits those tiles, which is why it is the
+// per-type minimum. The default carries one row of headroom above that minimum
+// at h=6 (173px body) — the same split the two chart bands carry.
 // See StatsSummaryWidget.height.test.tsx, which fails if either drops back.
 //
 // The two chart bands are 12 rows, not the 6 they started with. The charts now
@@ -45,15 +41,14 @@ export type DefaultWidgetSpec = {
 // timeframe buttons are paid for, and measured in chromium at 1440x900 that is
 // a ~55px plot with the signed data labels sitting on top of the date ticks.
 // Not clipped and not readable is still broken. 12 rows gives the body 413px:
-// the performance chart's plot box comes to 345px (309px with the free-tier
-// notice) and the equity curve's to 389px (353px), around the 320px the
-// Performance page gives the same chart. See ChartWidget.height.test.tsx.
+// the performance chart's plot box comes to 345px and the equity curve's to
+// 389px, around the 320px the Performance page gives the same chart. See
+// ChartWidget.height.test.tsx.
 //
-// 12 is also one row above the performance chart's derived MINIMUM (11), and
-// that row is what the free tier's clamped-window notice is paid out of: the
+// 12 is also one row above the performance chart's derived MINIMUM (11): the
 // minimum reserves the chart's floor plus the widget's permanent chrome, and the
-// notice is neither. A default at the minimum would fit the plain state exactly
-// and clip the clamped one.
+// default carries one row of headroom above it — the same split Stats Summary
+// carries.
 //
 // Rows 0-35, every column covered, no overlap and no gap:
 //   0-5    stats-summary      x0-11
