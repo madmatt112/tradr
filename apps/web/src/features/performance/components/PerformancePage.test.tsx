@@ -11,20 +11,11 @@ import type { PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
 // Mocks
 // ---------------------------------------------------------------------------
 
-// Tier state is test-configurable (sibling-surface pattern): `undefined`
-// (self-host / loading) and `purchasable: false` hide the upgrade CTA;
-// `purchasable: true` shows it (REQ-11.5 — no dead-end links).
-const { tierData } = vi.hoisted(() => ({
-  tierData: { current: undefined as unknown },
-}));
-vi.mock('@/features/billing/useTierState', () => ({
-  useTierState: () => ({ data: tierData.current }),
-}));
-
 // TanStack Router's `useNavigate` is exercised inside the selectors. We don't
 // test navigation here (TimeframeSelector / CurrencySelector tests cover that)
 // — a no-op spy keeps the selectors mountable without a router context. `Link`
-// backs the TierWindowNotice upgrade CTA (rest props keep its data-testid).
+// is stubbed to a plain anchor so any component that renders one stays mountable
+// (rest props keep its data-testid).
 const navigateMock = vi.fn();
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock,
@@ -192,7 +183,6 @@ beforeEach(() => {
   vi.mocked(captureClientEvent).mockClear();
   sessionStorage.clear();
   __resetInvalidTimezoneState();
-  tierData.current = undefined;
 });
 
 afterEach(() => {
@@ -330,126 +320,6 @@ describe('PerformancePage — empty-state branches', () => {
     // Selectors should NOT render in the empty-state path — empty-state
     // composition replaces the populated view entirely.
     expect(container.querySelector('[data-testid="timeframe-selector"]')).toBeNull();
-    unmount(container, root);
-  });
-});
-
-describe('PerformancePage — tier lookback clamp notice (plan-tiers REQ-7.3)', () => {
-  const TIER_WINDOW = {
-    clamped: true as const,
-    effectiveStart: '2026-01-16T00:00:00.000Z',
-    lookbackMonths: 6,
-  };
-
-  it('renders the non-blocking notice alongside the data when tierWindow is present', async () => {
-    tierData.current = { purchasable: true };
-    useQueryMock.mockReturnValue({
-      data: buildResponse({ tierWindow: TIER_WINDOW }),
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const notice = container.querySelector('[data-testid="tier-window-notice"]');
-    expect(notice).not.toBeNull();
-    expect(notice?.textContent).toContain('Showing the last 6 months');
-    // Non-blocking: presets stay selectable and the clamped data still renders.
-    expect(container.querySelector('[data-testid="timeframe-selector"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="stats-panel"]')).not.toBeNull();
-
-    // The upgrade CTA fires the D17 funnel event with this surface's identity.
-    const cta = container.querySelector<HTMLAnchorElement>(
-      '[data-testid="upgrade-cta-performance"]',
-    );
-    expect(cta).not.toBeNull();
-    act(() => {
-      cta!.click();
-    });
-    expect(captureClientEvent).toHaveBeenCalledWith('upgrade_cta_clicked', {
-      surface: 'performance',
-    });
-
-    unmount(container, root);
-  });
-
-  it('keeps the clamp text but omits the upgrade CTA when Pro is not purchasable (REQ-11.5)', async () => {
-    // Gated Stripe-less instance: tierWindow is enforced but the subscription
-    // is not purchasable — no dead-end upgrade link.
-    tierData.current = { purchasable: false };
-    useQueryMock.mockReturnValue({
-      data: buildResponse({ tierWindow: TIER_WINDOW }),
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    const notice = container.querySelector('[data-testid="tier-window-notice"]');
-    expect(notice).not.toBeNull();
-    expect(notice?.textContent).toContain('Showing the last 6 months');
-    expect(container.querySelector('[data-testid="upgrade-cta-performance"]')).toBeNull();
-
-    unmount(container, root);
-  });
-
-  it('omits the upgrade CTA while tier state is absent (self-host / still loading)', async () => {
-    // beforeEach left tierData.current undefined — the sibling-surface default.
-    useQueryMock.mockReturnValue({
-      data: buildResponse({ tierWindow: TIER_WINDOW }),
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(container.querySelector('[data-testid="tier-window-notice"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="upgrade-cta-performance"]')).toBeNull();
-
-    unmount(container, root);
-  });
-
-  it('renders the deliberate empty state WITH the same notice for a fully-pre-boundary preset', () => {
-    // The floor clamped the whole window away: empty-but-marked series.
-    const data = buildResponse({ tierWindow: TIER_WINDOW });
-    data.currencies[0]!.series = [];
-    data.currencies[0]!.equityCurve = [];
-    useQueryMock.mockReturnValue({
-      data,
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
-
-    expect(
-      container.querySelector('[data-testid="performance-empty-state-in-timeframe-empty"]'),
-    ).not.toBeNull();
-    expect(container.querySelector('[data-testid="tier-window-notice"]')).not.toBeNull();
-    unmount(container, root);
-  });
-
-  it('renders no notice when tierWindow is absent (unclamped / gating off)', async () => {
-    useQueryMock.mockReturnValue({
-      data: buildResponse(),
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(container.querySelector('[data-testid="tier-window-notice"]')).toBeNull();
     unmount(container, root);
   });
 });

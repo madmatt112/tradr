@@ -16,7 +16,6 @@ import { EquityCurveChartSkeleton } from './EquityCurveChartSkeleton';
 import { InvalidTimezoneBanner } from './InvalidTimezoneBanner';
 import { PerformanceEmptyState } from './PerformanceEmptyState';
 import { StatsPanel } from './StatsPanel';
-import { TierWindowNotice } from './TierWindowNotice';
 import { TimeframeSelector } from './TimeframeSelector';
 import { WeekStartChangedBanner } from './WeekStartChangedBanner';
 
@@ -265,21 +264,12 @@ export function PerformancePage({ params }: PerformancePageProps) {
     !hasAnyClosedPositionsInSupportedCurrency ||
     isInTimeframeEmpty;
 
-  // L3 lookback-clamp notice (plan-tiers REQ-7.3): non-blocking, rendered on
-  // the populated AND empty paths — a fully-pre-boundary preset shows the
-  // deliberate empty state with this same notice. Server-set only when the
-  // free-tier floor actually clamped, so gating-off renders nothing.
-  const tierWindowNotice = data.tierWindow ? (
-    <TierWindowNotice tierWindow={data.tierWindow} surface="performance" />
-  ) : null;
-
   // ---- Empty-state path --------------------------------------------------
   if (showEmptyState) {
     return (
       <div data-testid="performance-page" className="space-y-4">
         <WeekStartChangedBanner />
         {showUtcFallbackBanner ? <InvalidTimezoneBanner isSecondFailure={false} /> : null}
-        {tierWindowNotice}
         <PerformanceEmptyState
           hasAnyAccounts={hasAnyAccounts}
           hasAnyClosedPositions={hasAnyClosedPositions}
@@ -302,7 +292,6 @@ export function PerformancePage({ params }: PerformancePageProps) {
       <div data-testid="performance-page" className="space-y-4">
         <WeekStartChangedBanner />
         {showUtcFallbackBanner ? <InvalidTimezoneBanner isSecondFailure={false} /> : null}
-        {tierWindowNotice}
         <PerformanceEmptyState
           hasAnyAccounts={hasAnyAccounts}
           hasAnyClosedPositions={hasAnyClosedPositions}
@@ -322,7 +311,6 @@ export function PerformancePage({ params }: PerformancePageProps) {
       <WeekStartChangedBanner />
       {showUtcFallbackBanner ? <InvalidTimezoneBanner isSecondFailure={false} /> : null}
       {showDataQualityBanner ? <DataQualityBanner dataQuality={dataQuality} /> : null}
-      {tierWindowNotice}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <TimeframeSelector

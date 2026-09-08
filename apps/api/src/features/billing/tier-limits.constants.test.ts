@@ -27,7 +27,6 @@ describe('getTierLimits — the REQ-5.1 table', () => {
     expect(getTierLimits('free')).toEqual({
       accounts: 1,
       positions: 1000,
-      lookbackMonths: 6,
       platformTurns: 25,
       images: 20,
       csvImports: 10,
@@ -39,7 +38,6 @@ describe('getTierLimits — the REQ-5.1 table', () => {
     expect(getTierLimits('pro')).toEqual({
       accounts: null,
       positions: null,
-      lookbackMonths: null,
       platformTurns: 200,
       images: 500,
       csvImports: null,

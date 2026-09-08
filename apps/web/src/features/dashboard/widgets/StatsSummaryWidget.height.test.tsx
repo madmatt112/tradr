@@ -14,10 +14,6 @@
 // render at 1440x900, and derives the requirement from the tiles the component
 // renders NOW rather than from a hardcoded total. Add a sixth tile and the grid
 // gains a row and this fails; shrink the default height and this fails.
-//
-// The enforced free tier renders TierWindowNotice in the SAME body, so it gets
-// its own case below. It is the reason the notice is `compact` there: boxed, it
-// clipped 69px at h=5 and would still clip 29px at h=6.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,11 +37,6 @@ vi.mock('@/features/performance/hooks/usePerformance', () => ({
 }));
 vi.mock('@/hooks/useUserTimezone', () => ({
   useUserTimezone: () => 'America/New_York',
-}));
-// `purchasable: true` is the taller of the two notice states — it carries the
-// upgrade CTA, which sets the compact row's height.
-vi.mock('@/features/billing/useTierState', () => ({
-  useTierState: () => ({ data: { purchasable: true } }),
 }));
 vi.mock('@/lib/telemetry/posthog', () => ({
   captureClientEvent: vi.fn(),
@@ -79,13 +70,6 @@ const TILE_ROW_GAP_PX = 12;
 /** `p-3` on WidgetCard's scroll body, top and bottom. */
 const BODY_PADDING_PX = 24;
 /**
- * The compact TierWindowNotice: one line of text-xs beside an h-6 upgrade CTA,
- * which is what sets the height. The boxed Alert the other surfaces use is 66px.
- */
-const NOTICE_PX = 24;
-/** `gap-3` between the notice and the tile grid in the widget's column stack. */
-const NOTICE_GAP_PX = 12;
-/**
  * `sm:grid-cols-3`. The grid mode this widget is pinned in only exists at
  * >=768px viewports (below that DashboardGrid drops to an unpinned, auto-height
  * mobile stack), so the 3-column track is the only one a pinned height meets.
@@ -102,8 +86,8 @@ function mountPopulated(): { container: HTMLElement; root: Root } {
   return { container, root };
 }
 
-/** The enforced free tier clamps the all-time window and sets `tierWindow`. */
-function mockPerformance({ clamped }: { clamped: boolean }): void {
+/** A populated performance response: full stats block and history range. */
+function mockPerformance(): void {
   vi.mocked(usePerformance).mockReturnValue({
     data: {
       currencies: [
@@ -125,15 +109,6 @@ function mockPerformance({ clamped }: { clamped: boolean }): void {
           },
         },
       ],
-      ...(clamped
-        ? {
-            tierWindow: {
-              clamped: true,
-              effectiveStart: '2026-02-01T00:00:00.000Z',
-              lookbackMonths: 6,
-            },
-          }
-        : {}),
     } as unknown as PerformanceResponse,
     isLoading: false,
     isError: false,
@@ -164,7 +139,7 @@ beforeEach(() => {
     data: { currency: 'USD' },
     isLoading: false,
   } as unknown as DisplayCurrencyResult);
-  mockPerformance({ clamped: false });
+  mockPerformance();
 });
 
 afterEach(() => {
@@ -191,38 +166,6 @@ describe('StatsSummaryWidget — the pinned default height fits the populated ti
       bodyPx,
       `stats-summary is pinned to h=${h} (${bodyPx}px of body) but its ${tiles} tiles ` +
         `need ${contentPx}px — raise the height in DEFAULT_WIDGETS`,
-    ).toBeGreaterThanOrEqual(contentPx);
-  });
-
-  it('still fits once the free-tier window notice renders above the tiles', () => {
-    mockPerformance({ clamped: true });
-    const { container, root } = mountPopulated();
-    const tiles = container.querySelectorAll('dl > div').length;
-    const notice = container.querySelector('[data-testid="tier-window-notice"]');
-    // The boxed Alert the performance page uses is 66px and does not fit here at
-    // any legal row span; the widget asks for the one-line form instead. Assert
-    // the shape, because NOTICE_PX below is a measurement of THAT form.
-    const boxed = container.querySelector('[data-slot="alert"]');
-    act(() => {
-      root.unmount();
-    });
-    container.remove();
-
-    expect(notice, 'a clamped response renders the tier window notice').not.toBeNull();
-    expect(boxed, 'the notice renders compact in a pinned widget, not as a boxed Alert').toBeNull();
-    expect(tiles, 'the populated widget still renders its tiles').toBeGreaterThan(0);
-
-    const rows = Math.ceil(tiles / TILE_COLUMNS);
-    const contentPx =
-      rows * TILE_PX + (rows - 1) * TILE_ROW_GAP_PX + BODY_PADDING_PX + NOTICE_PX + NOTICE_GAP_PX;
-
-    const { h, bodyPx } = pinnedBodyPx();
-
-    expect(
-      bodyPx,
-      `on the enforced free tier stats-summary renders a ${NOTICE_PX}px notice above its ` +
-        `${tiles} tiles, needing ${contentPx}px, but h=${h} gives the body ${bodyPx}px — ` +
-        `the free-tier user sees a clipped widget`,
     ).toBeGreaterThanOrEqual(contentPx);
   });
 
@@ -253,8 +196,8 @@ describe('StatsSummaryWidget — the pinned default height fits the populated ti
     // Tight, not merely sufficient: one row lower does not fit, so the bound is
     // the content's and not a number someone rounded up to.
     expect(bodyPxAt(min - 1)).toBeLessThan(contentPx);
-    // The conditional free-tier notice is the default's headroom, not the
-    // minimum's — the same split the two chart widgets carry.
+    // The default carries headroom above the minimum — the same split the two
+    // chart widgets carry.
     expect(pinnedBodyPx().h).toBeGreaterThan(min);
   });
 });

@@ -4,7 +4,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import EquityCurveChart from '@/features/performance/components/EquityCurveChart';
-import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
 import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
@@ -39,7 +38,7 @@ function EquityCurveWidget() {
     granularity: 'month',
   });
 
-  const { data: response, isLoading, isError, error, refetch } = performanceQuery;
+  const { isLoading, isError, error, refetch } = performanceQuery;
 
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
@@ -74,23 +73,8 @@ function EquityCurveWidget() {
     );
   }
 
-  // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; the all-time preset
-  // this widget uses is clamped for enforced free users.
-  //
-  // `compact` for the same reason StatsSummaryWidget asks for it: this widget's
-  // height is pinned, and the notice comes out of the chart's share of it. The
-  // boxed Alert costs 66px plus a 12px stack gap; the one-line form costs 24px.
-  const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
-  ) : null;
-
   if (currencyData == null) {
-    return (
-      <div className="flex flex-col gap-3">
-        {tierWindowNotice}
-        <EmptyState title="Close a position in this currency to see your equity curve." />
-      </div>
-    );
+    return <EmptyState title="Close a position in this currency to see your equity curve." />;
   }
 
   // `h-full` + a `flex-1` chart: the notice takes the height it needs and the
@@ -109,7 +93,6 @@ function EquityCurveWidget() {
   // container with no height at all, as far as you like is nothing.
   return (
     <div className="flex h-full flex-col gap-3">
-      {tierWindowNotice}
       <EquityCurveChart
         series={currencyData.equityCurve}
         currency={currencyData.code}

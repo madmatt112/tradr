@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 import { asc, eq, inArray } from 'drizzle-orm';
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -19,6 +19,19 @@ import {
   unregisterReverseHook,
 } from '@/features/positions/positions.service';
 import { config } from '@/lib/config';
+import { captureServerEvent } from '@/lib/posthog';
+
+// Post-commit analytics observability: replace only `captureServerEvent` so the
+// demo_data_loaded emit is assertable without a configured PostHog client.
+vi.mock('@/lib/posthog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/posthog')>();
+  return { ...actual, captureServerEvent: vi.fn() };
+});
+
+// The event names captureServerEvent was called with since the last mockClear.
+function capturedEvents(): string[] {
+  return vi.mocked(captureServerEvent).mock.calls.map(([name]) => String(name));
+}
 
 // The whole point of the seeder is that realized P&L is DERIVED by these hooks
 // rather than written by the seeder, so the production hooks are installed for
@@ -34,6 +47,10 @@ afterAll(() => {
   unregisterCloseHook('ledger');
   unregisterReverseHook('ledger');
   unregisterFillHook('ledger');
+});
+
+beforeEach(() => {
+  vi.mocked(captureServerEvent).mockClear();
 });
 
 let testCounter = 0;
@@ -285,6 +302,43 @@ describe('POST /api/accounts/demo', () => {
     // And the user can still seed cleanly afterwards — the failure is not sticky.
     expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
     expect((await readSeededData(userId)).ledger).toHaveLength(10);
+  });
+
+  it('emits demo_data_loaded exactly once on the 201 path', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+
+    expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
+
+    // The one property carried is the opaque userId surrogate — nothing else.
+    expect(vi.mocked(captureServerEvent)).toHaveBeenCalledWith('demo_data_loaded', {
+      distinctId: userId,
+    });
+    // Exactly once per successful seed, never twice.
+    expect(capturedEvents().filter((e) => e === 'demo_data_loaded')).toHaveLength(1);
+  });
+
+  it('emits nothing when the seed fails part-way through', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    // Same forced mid-seed failure as above: the request 500s before it can
+    // reach the post-seed emit.
+    let closes = 0;
+    replaceCloseHook('ledger', async (tx, ctx) => {
+      if (++closes === 3) throw new Error('__forced_mid_seed_failure__');
+      await insertPositionCloseLedgerEntries(tx, ctx);
+    });
+
+    try {
+      const res = await authedRequest('POST', '/api/accounts/demo', cookie);
+      expect(res.status).toBe(500);
+    } finally {
+      replaceCloseHook('ledger', insertPositionCloseLedgerEntries);
+    }
+
+    // Non-vacuous: beforeEach cleared the mock, so the only request in this test
+    // is the failed seed. The emit sits AFTER seedDemoAccount resolves, so a
+    // failure never reaches it — move it before the seed and this fails.
+    expect(capturedEvents()).not.toContain('demo_data_loaded');
   });
 
   it('requires authentication', async () => {

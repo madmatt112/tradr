@@ -28,7 +28,6 @@ export function getTierLimits(tier: Tier): TierLimits {
     return {
       accounts: null,
       positions: null,
-      lookbackMonths: null,
       platformTurns: config.FEATURE_GATING_ADVISOR_TURNS_PER_MONTH,
       images: 500,
       csvImports: null,
@@ -37,7 +36,6 @@ export function getTierLimits(tier: Tier): TierLimits {
   return {
     accounts: 1,
     positions: 1000,
-    lookbackMonths: 6,
     platformTurns: 25,
     images: 20,
     csvImports: 10,

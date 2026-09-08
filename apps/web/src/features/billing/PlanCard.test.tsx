@@ -36,7 +36,6 @@ vi.mock('sonner', () => ({
 const FREE_LIMITS: TierLimits = {
   accounts: 1,
   positions: 1000,
-  lookbackMonths: 6,
   platformTurns: 5,
   images: 10,
   csvImports: 10,
@@ -45,7 +44,6 @@ const FREE_LIMITS: TierLimits = {
 const PRO_LIMITS: TierLimits = {
   accounts: null,
   positions: null,
-  lookbackMonths: null,
   platformTurns: 200,
   images: null,
   csvImports: null,
@@ -150,7 +148,6 @@ describe('PlanCard states', () => {
     const summary = screen.getByTestId('lever-summary');
     expect(summary.textContent).toContain('Connected accounts');
     expect(summary.textContent).toContain('1 → Unlimited');
-    expect(summary.textContent).toContain('6 months → Unlimited');
 
     const cta = screen.getByRole('button', { name: 'Upgrade to Pro' });
     expect(cta.className).toContain('cursor-pointer');

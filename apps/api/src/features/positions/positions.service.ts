@@ -26,6 +26,7 @@ import type { FillTotals } from './pnl';
 import {
   insertPosition,
   countPositionsByUser,
+  isAccountDemo,
   findPositionListByUser,
   findPositionById,
   findPositionWithAccount,
@@ -408,9 +409,15 @@ export async function createPosition(
     // only (assetType), never financial values (REQ-4.3/8.1). The inner guard
     // keeps a telemetry fault from ever failing the committed business op.
     try {
+      // Server-sourced demo flag (REQ-4.1/4.5): read accounts.is_demo for this
+      // user+account — never a request field. Read INSIDE this best-effort guard
+      // so the telemetry-only read can never fail the committed create, and so a
+      // read error OR a concurrently-deleted account (isAccountDemo throws) skips
+      // captureServerEvent entirely — never a partial position_created.
+      const isDemo = await isAccountDemo(db, userId, data.accountId);
       captureServerEvent('position_created', {
         distinctId: userId,
-        properties: { assetType: data.assetType },
+        properties: { assetType: data.assetType, isDemo },
       });
     } catch {
       // ignore — capture is fire-and-forget

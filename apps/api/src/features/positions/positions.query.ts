@@ -2,6 +2,7 @@ import { eq, and, sql } from 'drizzle-orm';
 
 import type { Database, Transaction } from '@/db';
 import { positions, fills, accounts, brokerages, feeSchedules } from '@/db/schema';
+import { NotFoundError } from '@/lib/errors';
 
 export function insertPosition(
   tx: Transaction,
@@ -115,6 +116,29 @@ export function findPositionWithAccount(db: Database | Transaction, id: string, 
     .leftJoin(feeSchedules, eq(feeSchedules.brokerageId, brokerages.id))
     .where(and(eq(positions.id, id), eq(positions.userId, userId)))
     .limit(1);
+}
+
+/**
+ * Whether the given account (owned by `userId`) is the disposable demo account.
+ * Reads `accounts.is_demo` server-side — the authoritative source per that
+ * column's doc; never trust a request field (hosted-funnel-fixes REQ-4.1/4.5).
+ *
+ * Throws NotFoundError when no such account exists for this user, so a caller
+ * inside a best-effort telemetry guard emits NO event at all rather than a
+ * partial one when the account was concurrently deleted.
+ */
+export async function isAccountDemo(
+  db: Database | Transaction,
+  userId: string,
+  accountId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ isDemo: accounts.isDemo })
+    .from(accounts)
+    .where(and(eq(accounts.id, accountId), eq(accounts.userId, userId)))
+    .limit(1);
+  if (!row) throw new NotFoundError('Account', accountId);
+  return row.isDemo;
 }
 
 export function findFillsByPosition(db: Database | Transaction, positionId: string) {

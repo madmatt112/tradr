@@ -2766,7 +2766,7 @@
     },
     "/api/performance": {
       "get": {
-        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. When feature gating is enabled and the user is a non-admin Free user, the window is clamped to the last 6 calendar months — never an error: the response is computed over the clamped window and marked with the additive `tierWindow` field. History metadata (per-currency earliest/most-recent closed timestamps and totals) is never clamped.\n",
+        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier.\n",
         "parameters": [
           {
             "in": "query",
@@ -2820,7 +2820,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The performance response. When the free-tier lookback floor clamped the requested window it carries the additive optional `tierWindow: { clamped: true, effectiveStart: ISO date-time, lookbackMonths: integer }` field; a window entirely before the floor yields empty series, still marked.\n"
+            "description": "The performance response."
           },
           "400": {
             "description": "Validation error (invalid timezone, invalid dates, start before 2000-01-01, start not before end, end beyond today + 1 day, bucket count over cap, unsupported currency) — identical on every tier."

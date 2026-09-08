@@ -110,13 +110,10 @@ export const TIMEFRAME_ROW_PX = 32 + 8 + 32;
  * chart hid 203px at h=4 and 43px at h=8: visually identical to the original
  * hard-coded-height defect, and just as invisible to a DOM assertion.
  *
- * The one state deliberately NOT budgeted for is the free tier's clamped-window
- * notice (24px plus a 12px gap), which renders in the same body when the
- * response says the window was clamped. Reserving room for a conditional row
- * would push the performance chart's minimum to its pinned default and take
- * vertical resizing away from every user to protect one transient state; the
- * pinned default carries that headroom instead (see `DEFAULT_WIDGETS`, and
- * `ChartWidget.height.test.tsx`, which pins both).
+ * This is the tight floor: the chart's minimum plus the widget's permanent
+ * chrome, and nothing more. The pinned default carries a row of headroom above
+ * it instead (see `DEFAULT_WIDGETS`, and `ChartWidget.height.test.tsx`, which
+ * pins both).
  */
 export function chartWidgetMinRows(toolbarPx: number): number {
   const contentPx = CHART_MIN_HEIGHT_PX + toolbarPx;

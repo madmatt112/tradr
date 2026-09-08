@@ -8,7 +8,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { CHART_MIN_HEIGHT_PX } from '@/features/performance/chart.constants';
 import PerformanceBarChart from '@/features/performance/components/PerformanceBarChart';
-import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
 import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { useTimeframeSelection } from '@/features/performance/hooks/useTimeframeSelection';
 import { type PerformancePreset } from '@/features/performance/utils/derivePresetRange';
@@ -78,7 +77,7 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
     currency: displayCurrency,
   });
 
-  const { data: response, isLoading, isError, error, refetch } = performanceQuery;
+  const { isLoading, isError, error, refetch } = performanceQuery;
 
   const { options, handleChange } = useTimeframeSelection(config.timeframe, (next) => {
     onUpdateConfig({ timeframe: next });
@@ -117,23 +116,8 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
     );
   }
 
-  // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; rendered on the
-  // empty branch too (a fully-pre-boundary window is a deliberate empty state).
-  //
-  // `compact` for the same reason StatsSummaryWidget asks for it: this widget's
-  // height is pinned, and the notice comes out of the chart's share of it. The
-  // boxed Alert costs 66px plus a 12px stack gap; the one-line form costs 24px.
-  const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
-  ) : null;
-
   if (currencyData == null) {
-    return (
-      <div className="flex flex-col gap-3">
-        {tierWindowNotice}
-        <EmptyState title="Close a position in this currency to see your chart." />
-      </div>
-    );
+    return <EmptyState title="Close a position in this currency to see your chart." />;
   }
 
   // `h-full` + a `flex-1` chart: the notice and the timeframe buttons take the
@@ -152,7 +136,6 @@ function PerformanceChartWidget({ placement, onUpdateConfig }: PerformanceChartW
   // container with no height at all, as far as you like is nothing.
   return (
     <div className="flex h-full flex-col gap-3">
-      {tierWindowNotice}
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
           <Button

@@ -120,7 +120,6 @@ function makeTierState(usage: { allowanceUsed?: number } = {}): TierState {
       free: {
         accounts: 2,
         positions: 500,
-        lookbackMonths: 6,
         platformTurns: 25,
         images: 20,
         csvImports: 10,
@@ -128,7 +127,6 @@ function makeTierState(usage: { allowanceUsed?: number } = {}): TierState {
       pro: {
         accounts: null,
         positions: null,
-        lookbackMonths: null,
         platformTurns: 200,
         images: 500,
         csvImports: null,

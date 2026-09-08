@@ -219,16 +219,6 @@ export const PerformanceResponseSchema = z.object({
   hasAnyClosedPositionsInSupportedCurrency: z.boolean(),
   defaultCurrency: z.string().nullable(),
   currencies: z.array(PerformanceCurrencySchema),
-  // Present only when the free-tier lookback floor clamped the requested
-  // window (plan-tiers D13, REQ-7.1). Additive per the Shared Schema
-  // Extension Policy.
-  tierWindow: z
-    .object({
-      clamped: z.literal(true),
-      effectiveStart: z.string().datetime(),
-      lookbackMonths: z.number().int(),
-    })
-    .optional(),
 });
 
 const BUCKET_COUNT_CAP = 1095;

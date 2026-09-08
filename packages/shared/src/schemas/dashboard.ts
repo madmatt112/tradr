@@ -49,10 +49,9 @@ export const PerWidgetMinSize: Record<WidgetType, { w: number; h: number }> = {
   // of figures. h=2, which this said until the tile grid was measured, gave it
   // 13px and clipped 111px — a legal height at which the widget rendered blank.
   //
-  // The free tier's clamped-window notice (24px plus a 12px gap) is NOT
-  // budgeted for here, exactly as it is not for the charts: the pinned default
-  // carries that headroom at h=6, and reserving a conditional row in the bound
-  // would put the minimum on the default and take vertical resizing away.
+  // This is the tight floor, exactly as it is for the charts: the pinned default
+  // carries a row of headroom above it at h=6, so the minimum stays below the
+  // default and vertical resizing is preserved.
   // `StatsSummaryWidget.height.test.tsx` pins both ends.
   'stats-summary': { w: 4, h: 5 },
   'open-positions': { w: 4, h: 4 },

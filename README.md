@@ -42,7 +42,7 @@ feature is fenced off; plan gating is a single deployment setting that ships **o
 server. It is the same software from the same releases, with backups and upgrades handled
 for you. The free plan is capped ([what the caps
 are](https://docs.tradr.cloud/user-guide/reference/plan-limits/)); Pro lifts them for $10
-a month. Nothing in the self-hosted build depends on it, and your data exports either way.
+a month. Nothing in the self-hosted build depends on it.
 
 ## Quickstart
 
@@ -87,7 +87,7 @@ in-product.
   position with a correct average and realized P&L, net of per-fill fees.
 - **Trade calculator** — position size, R:R, dollar risk, and estimated fees from your
   entry, target, and stop, before anything is at risk.
-- **Accounts & ledger** — multiple brokerages and currencies on a double-entry ledger,
+- **Accounts & ledger** — multiple brokerages and currencies on a running ledger,
   with reconciliation.
 - **Performance** — equity curve built from net P&L, broken down daily through all-time.
 - **Options tools** — chain lookup, OCC symbol parsing, Black-Scholes pricing with full Greeks.
