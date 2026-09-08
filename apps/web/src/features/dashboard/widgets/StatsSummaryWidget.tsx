@@ -5,7 +5,6 @@ import { Numeric } from '@/components/Numeric';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
-import { TierWindowNotice } from '@/features/performance/components/TierWindowNotice';
 import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { formatProfitFactor } from '@/features/performance/utils/formatPerformance';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
@@ -48,7 +47,7 @@ function StatsSummaryWidget() {
     granularity: 'year',
   });
 
-  const { data: response, isLoading, isError, error, refetch } = performanceQuery;
+  const { isLoading, isError, error, refetch } = performanceQuery;
 
   // A disabled query reports `isLoading: false`, so the wait for the stored
   // zone has to be spelled out here — otherwise the widget would drop through
@@ -90,23 +89,8 @@ function StatsSummaryWidget() {
 
   const stats = currencyData?.stats ?? null;
 
-  // L3 clamp notice (plan-tiers REQ-7.3) — non-blocking; the all-time preset
-  // this widget uses is clamped for enforced free users.
-  //
-  // `compact` because this widget's height is pinned: the notice and the tiles
-  // share one fixed body, and the boxed Alert (66px + 12px gap) does not fit
-  // beside them at any row span the default layout can afford.
-  const tierWindowNotice = response?.tierWindow ? (
-    <TierWindowNotice tierWindow={response.tierWindow} surface="dashboard-widget" compact />
-  ) : null;
-
   if (currencyData == null || stats == null || (!stats.hasWins && !stats.hasLosses)) {
-    return (
-      <div className="flex flex-col gap-3">
-        {tierWindowNotice}
-        <EmptyState title="Close a position to see stats." />
-      </div>
-    );
+    return <EmptyState title="Close a position to see stats." />;
   }
 
   const code = currencyData.code;
@@ -144,7 +128,6 @@ function StatsSummaryWidget() {
 
   return (
     <div className="flex flex-col gap-3">
-      {tierWindowNotice}
       {/* The desk stat-tile grammar: mono uppercase labels over larger
           semibold figures. Five tiles — everything the stats payload carries;
           the mock's extra tiles (expectancy, max DD, open risk) need data the
