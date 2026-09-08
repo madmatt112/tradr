@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,7 +6,7 @@ import { PerformanceQuerySchema } from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
-import { positions, subscriptions, users } from '@/db/schema';
+import { positions, subscriptions } from '@/db/schema';
 import { seedPositions } from '@/db/seed';
 import { config } from '@/lib/config';
 import { validate } from '@/lib/validation';
@@ -15,7 +15,7 @@ import { errorHandler } from '@/middleware/error.middleware';
 import { loggingMiddleware } from '@/middleware/logging.middleware';
 
 import performanceRouter from './performance.route';
-import { computeLookbackFloor, getPerformance } from './performance.service';
+import { getPerformance } from './performance.service';
 import { performanceTimeoutMiddleware } from './performance.timeout';
 
 let testCounter = 0;
@@ -458,11 +458,12 @@ describe('GET /api/performance', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Plan-tiers L3 (D13, REQ-7.1/7.2/7.4/7.5): route-injected lookback floor.
-// Real PG; gating toggled via the mutable config (restored per test).
+// REQ-1.1: the endpoint returns the full requested window on every tier — no
+// lookback clamp. Real PG; gating toggled via the mutable config (restored
+// per test).
 // ---------------------------------------------------------------------------
 
-describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () => {
+describe('GET /api/performance — full unclamped window (REQ-1.1)', () => {
   const prevGating = config.FEATURE_GATING;
   afterEach(() => {
     config.FEATURE_GATING = prevGating;
@@ -472,10 +473,13 @@ describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () 
 
   /** `now − months` calendar months as an ISO string (test-relative dates). */
   function isoMonthsAgo(months: number): string {
-    return computeLookbackFloor(new Date(), months).toISOString();
+    const now = new Date();
+    return new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months, now.getUTCDate()),
+    ).toISOString();
   }
 
-  /** One closed position ~10 months ago (pre-floor) + one ~2 months ago. */
+  /** One closed position ~10 months ago + one ~2 months ago. */
   async function seedOldAndRecent(cookie: string): Promise<string> {
     const userId = await getCurrentUserId(cookie);
     const account = await createAccount(cookie, 'USD');
@@ -500,7 +504,7 @@ describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () 
     return userId;
   }
 
-  /** A 12-month window ending now — wider than the free 6-month floor. */
+  /** A 12-month window ending now. */
   function wideQuery(): string {
     return buildPerfQuery({
       granularity: 'month',
@@ -523,7 +527,6 @@ describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () 
   }
 
   type ClampBody = {
-    tierWindow?: { clamped: boolean; effectiveStart: string; lookbackMonths: number };
     currencies: Array<{
       code: string;
       stats: { totalPositions: number };
@@ -531,39 +534,30 @@ describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () 
     }>;
   };
 
-  it('clamps and marks the response for an enforced Free user; history metadata stays unclamped', async () => {
+  it('returns the full requested window for a gated Free user — no tierWindow key (REQ-1.1)', async () => {
     const cookie = await registerAndGetCookie();
     await seedOldAndRecent(cookie);
     config.FEATURE_GATING = true;
 
     const res = await getRequest(`/api/performance?${wideQuery()}`, cookie);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as ClampBody;
-
-    expect(body.tierWindow).toBeDefined();
-    expect(body.tierWindow!.clamped).toBe(true);
-    expect(body.tierWindow!.lookbackMonths).toBe(6);
-    // effectiveStart ≈ now − 6 calendar months (the route computes the floor
-    // at request time; a generous tolerance keeps this clock-independent).
-    const effective = new Date(body.tierWindow!.effectiveStart).getTime();
-    expect(Math.abs(effective - computeLookbackFloor(new Date(), 6).getTime())).toBeLessThan(
-      2 * DAY_MS,
-    );
+    const text = await res.text();
+    // No lookback clamp on any tier: the additive marker is never emitted.
+    expect(text).not.toContain('tierWindow');
+    const body = JSON.parse(text) as ClampBody;
 
     const usd = body.currencies.find((c) => c.code === 'USD')!;
-    // Stats cover only the clamped window (the 10-months-ago row excluded)…
-    expect(usd.stats.totalPositions).toBe(1);
-    // …while history metadata is UNCLAMPED (OD#9 — powers the upgrade notice).
+    // The full 12-month window is returned: BOTH the ~10-months-ago and the
+    // ~2-months-ago positions are counted — nothing is clamped away.
+    expect(usd.stats.totalPositions).toBe(2);
     expect(usd.historyRange.totalClosedPositions).toBe(2);
-    expect(new Date(usd.historyRange.earliestClosedAt!).getTime()).toBeLessThan(effective);
   });
 
   it('keeps every requested-window schema 400 unchanged for a gated Free user', async () => {
     const cookie = await registerAndGetCookie();
     config.FEATURE_GATING = true;
 
-    // START_BEFORE_MIN still hard-400s even though the clamp would move
-    // start far past 2000-01-01.
+    // START_BEFORE_MIN hard-400s: validation runs on the requested window.
     const minRes = await getRequest(
       `/api/performance?${buildPerfQuery({ start: '1999-12-31T00:00:00.000Z' })}`,
       cookie,
@@ -584,8 +578,7 @@ describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () 
     const orderBody = (await orderRes.json()) as { error: { details?: Record<string, string> } };
     expect(JSON.stringify(orderBody.error.details)).toContain('strictly before end');
 
-    // BUCKET_COUNT_CAP evaluated on the REQUESTED window, even though the
-    // clamped window would be well under the cap.
+    // BUCKET_COUNT_CAP evaluated on the REQUESTED window.
     const capRes = await getRequest(
       `/api/performance?${buildPerfQuery({
         granularity: 'day',
@@ -612,41 +605,5 @@ describe('GET /api/performance — tier lookback clamp (plan-tiers L3/D13)', () 
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { details?: Record<string, string> } };
     expect(JSON.stringify(body.error.details)).toContain('on or after 2000-01-01');
-  });
-
-  it('applies no floor for a Pro user — response byte-identical to gating off', async () => {
-    const cookie = await registerAndGetCookie();
-    const userId = await seedOldAndRecent(cookie);
-    const query = wideQuery(); // pin ONE query string for both requests
-
-    config.FEATURE_GATING = false;
-    const offRes = await getRequest(`/api/performance?${query}`, cookie);
-    expect(offRes.status).toBe(200);
-    const offText = await offRes.text();
-    expect(offText).not.toContain('tierWindow');
-
-    await upgradeToPro(userId);
-    config.FEATURE_GATING = true;
-    const proRes = await getRequest(`/api/performance?${query}`, cookie);
-    expect(proRes.status).toBe(200);
-    expect(await proRes.text()).toBe(offText);
-  });
-
-  it('applies no floor for an admin — response byte-identical to gating off', async () => {
-    const cookie = await registerAndGetCookie();
-    const userId = await seedOldAndRecent(cookie);
-    const query = wideQuery();
-
-    config.FEATURE_GATING = false;
-    const offRes = await getRequest(`/api/performance?${query}`, cookie);
-    expect(offRes.status).toBe(200);
-    const offText = await offRes.text();
-    expect(offText).not.toContain('tierWindow');
-
-    await db.update(users).set({ isAdmin: true }).where(eq(users.id, userId));
-    config.FEATURE_GATING = true;
-    const adminRes = await getRequest(`/api/performance?${query}`, cookie);
-    expect(adminRes.status).toBe(200);
-    expect(await adminRes.text()).toBe(offText);
   });
 });
