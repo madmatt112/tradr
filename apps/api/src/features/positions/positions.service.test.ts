@@ -466,7 +466,7 @@ describe('telemetry capture — position events', () => {
     vi.restoreAllMocks();
   });
 
-  it('createPosition fires position_created once with opaque distinctId + assetType only, after commit', async () => {
+  it('createPosition fires position_created at most once with opaque distinctId + assetType + server-sourced isDemo, after commit', async () => {
     const { userId, accountId } = await seedUserAndAccount();
     const captureSpy = vi.spyOn(posthog, 'captureServerEvent').mockImplementation(() => {});
 
@@ -477,17 +477,44 @@ describe('telemetry capture — position events', () => {
       { isAdmin: false },
     );
 
+    // Exactly one event from the outer create — never twice for one position.
     expect(captureSpy).toHaveBeenCalledTimes(1);
+    // Non-demo account → isDemo false, read server-side from accounts.is_demo.
     expect(captureSpy).toHaveBeenCalledWith('position_created', {
       distinctId: userId,
-      properties: { assetType: 'stock' },
+      properties: { assetType: 'stock', isDemo: false },
     });
     // Properties carry identifiers/enums only — no financial fields.
-    expect(Object.keys(captureSpy.mock.calls[0]![1].properties!)).toEqual(['assetType']);
+    expect(Object.keys(captureSpy.mock.calls[0]![1].properties!)).toEqual(['assetType', 'isDemo']);
 
     // After-commit: the position is persisted and queryable.
     const rows = await db.select().from(positions).where(eq(positions.id, position.id));
     expect(rows).toHaveLength(1);
+  });
+
+  it('createPosition reports isDemo true for a demo account (server-sourced, never from the request)', async () => {
+    const [user] = await db
+      .insert(users)
+      .values({ email: uniqueEmail(), passwordHash: 'x'.repeat(60) })
+      .returning();
+    const [account] = await db
+      .insert(accounts)
+      .values({ userId: user!.id, name: 'Demo Account', currency: 'USD', isDemo: true })
+      .returning();
+    const captureSpy = vi.spyOn(posthog, 'captureServerEvent').mockImplementation(() => {});
+
+    await createPosition(
+      db,
+      user!.id,
+      { accountId: account!.id, symbol: 'AAPL', side: 'long', assetType: 'stock' },
+      { isAdmin: false },
+    );
+
+    expect(captureSpy).toHaveBeenCalledTimes(1);
+    expect(captureSpy).toHaveBeenCalledWith('position_created', {
+      distinctId: user!.id,
+      properties: { assetType: 'stock', isDemo: true },
+    });
   });
 
   it('closePosition fires position_closed once with assetType from the returned row, after commit', async () => {
