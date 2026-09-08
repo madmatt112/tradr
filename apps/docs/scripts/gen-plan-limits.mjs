@@ -25,8 +25,7 @@ const OUT = join(scriptDir, '../src/content/docs/user-guide/reference/plan-limit
 const ROWS = [
   ['accounts', 'Accounts', 'Brokerage accounts you can track at once.'],
   ['positions', 'Positions', 'Stored positions across every account.'],
-  ['lookbackMonths', 'History window', 'How far back the performance charts can read.', 'months'],
-  ['csvImports', 'CSV imports / month', 'Import runs, not rows.'],
+  ['csvImports', 'CSV imports (lifetime)', 'Import runs, not rows.'],
 ];
 
 /** Pull one object literal out of the source and read its numeric/null fields. */
@@ -72,7 +71,7 @@ const out = [];
 out.push('---');
 out.push('title: Plan limits');
 out.push(
-  'description: What the Free and Pro plans allow on the hosted app — accounts, positions, history window, and CSV imports. Self-hosted instances have no limits.',
+  'description: What the Free and Pro plans allow on the hosted app — accounts, positions, and CSV imports. Self-hosted instances have no limits.',
 );
 out.push('---');
 out.push('');
@@ -103,8 +102,6 @@ out.push('');
 for (const [, label, meaning] of ROWS) {
   out.push(`- **${label}** — ${meaning}`);
 }
-out.push('');
-out.push('Monthly counters reset at the start of each calendar month, measured in UTC.');
 out.push('');
 out.push('## Next steps');
 out.push('');
