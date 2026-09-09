@@ -569,6 +569,35 @@ jobs:
             exit 1
           fi
 
+          # 4. /_headers is a hosted Pages cache-policy file the container carries
+          # but must never serve: `location = /_headers { return 404; }` (REQ-6.5).
+          # `curl -s` (no -f) — a 404 is the pass, so -f would red on success.
+          headers_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/_headers")
+          echo "/_headers -> $headers_code"
+          if [ "$headers_code" != "404" ]; then
+            echo "expected 404 for /_headers (the container must not serve the Pages policy file; got $headers_code)"
+            exit 1
+          fi
+
+          # 5. A vanished /assets/*.js is a REAL 404, not the SPA shell (REQ-7.2,
+          # REQ-7.3): the `location ~* ^/assets/` regex declares no try_files, so
+          # nginx answers its own 404 rather than falling through to /index.html.
+          # Pins the recovery contract — a stale tab must see 404, not 200 HTML.
+          missing_asset_code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/assets/does-not-exist-deadbeef.js")
+          echo "/assets/does-not-exist-deadbeef.js -> $missing_asset_code"
+          if [ "$missing_asset_code" != "404" ]; then
+            echo "expected 404 for a missing /assets/*.js (SPA fallback must not swallow it; got $missing_asset_code)"
+            exit 1
+          fi
+
+          # 6. The image ships NO top-level 404.html (REQ-7.2, REQ-10.2): the 404
+          # document lives only at /assets/404.html for the hosted deploy.
+          # `test ! -f` exits 0 when the file is absent (the pass state).
+          if ! docker run --rm --entrypoint test "$web_image" ! -f /usr/share/nginx/html/404.html; then
+            echo "found /usr/share/nginx/html/404.html in the web image (there must be no top-level 404 page)"
+            exit 1
+          fi
+
       # (k) /metrics is ABSENT by default (observability REQ-7.1, REQ-7.5). The
       # stack booted from the .env that ./docker/quickstart.sh copied from
       # .env.example, where METRICS_ENABLED=false — so this is the REAL default
