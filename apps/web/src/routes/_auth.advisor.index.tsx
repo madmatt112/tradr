@@ -1,6 +1,8 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { lazy, Suspense } from 'react';
 
+import { ChunkErrorBoundary } from '@/components/ChunkErrorBoundary';
+import { ChunkLoadFallback } from '@/components/ChunkLoadFallback';
 import { isAdvisorEnabledForRoute } from '@/hooks/useRegistrationEnabled';
 
 // INDEX route, deliberately — NOT `_auth.advisor.tsx`. Flat-file dot nesting makes
@@ -21,9 +23,11 @@ const AdvisorPage = lazy(() =>
 
 function AdvisorIndexRoute() {
   return (
-    <Suspense fallback={<div className="p-6 text-muted-foreground">Loading advisor…</div>}>
-      <AdvisorPage conversationId={null} />
-    </Suspense>
+    <ChunkErrorBoundary fallback={({ reload }) => <ChunkLoadFallback onReload={reload} />}>
+      <Suspense fallback={<div className="p-6 text-muted-foreground">Loading advisor…</div>}>
+        <AdvisorPage conversationId={null} />
+      </Suspense>
+    </ChunkErrorBoundary>
   );
 }
 
