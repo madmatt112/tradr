@@ -38,6 +38,12 @@ server {
         add_header Cache-Control "no-store" always;
     }
 
+    # Cloudflare Pages cache policy, shipped in the SPA bundle for hosted deploys.
+    # Inert here — nginx has its own rules above — and not served as a file.
+    location = /_headers {
+        return 404;
+    }
+
     # SSE streaming: matches both advisor stream routes
     # (/api/advisor/conversations/<id|new>/messages/stream). [^/]+ matches the
     # conversation :id and the literal `new`. Response buffering is disabled via
