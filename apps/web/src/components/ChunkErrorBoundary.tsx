@@ -38,7 +38,7 @@ type State =
  * stated failure with a recovery. Any other error is re-thrown from `render()`
  * so the next boundary above (the root `errorComponent`) handles it.
  *
- * Generalised from the performance page's original `ChartErrorBoundary`: the
+ * Generalised from the chart boundary that used to live in PerformancePage: the
  * reload decision, the one-reload guard and the cache-refresh-then-reload
  * helper all live in `lib/chunkRecovery`, never re-implemented here.
  */
