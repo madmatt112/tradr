@@ -5,12 +5,17 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { setRouter } from './lib/api';
+import { installChunkRecovery } from './lib/chunkRecovery';
 import { queryClient } from './lib/queryClient';
 import { initPostHogClient } from './lib/telemetry/posthog';
 import { routeTree } from './routeTree.gen';
 import './index.css';
 const router = createRouter({ routeTree });
 setRouter(router);
+
+// Register the single chunk-preload-error listener before render, so it exists
+// before any lazy import can fail (design Component 3).
+installChunkRecovery();
 
 declare module '@tanstack/react-router' {
   interface Register {
