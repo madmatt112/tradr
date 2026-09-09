@@ -69,7 +69,9 @@ afterEach(() => {
 
 describe('the vite:preloadError listener', () => {
   function dispatch(payload: unknown) {
-    const event = new Event('vite:preloadError');
+    // cancelable so `event.defaultPrevented` can actually flip if the listener
+    // ever called preventDefault — otherwise the deviation-1 assertion is vacuous.
+    const event = new Event('vite:preloadError', { cancelable: true });
     (event as { payload?: unknown }).payload = payload;
     window.dispatchEvent(event);
     return event;
