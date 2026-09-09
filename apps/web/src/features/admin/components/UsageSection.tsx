@@ -17,6 +17,8 @@
 
 import { lazy, Suspense, useMemo, useState } from 'react';
 
+import { ChunkErrorBoundary } from '@/components/ChunkErrorBoundary';
+import { ChunkLoadFallback } from '@/components/ChunkLoadFallback';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -118,9 +120,13 @@ export function UsageSection() {
           {data.series.length === 0 ? (
             <p className="text-sm text-muted-foreground">No usage recorded in this period.</p>
           ) : (
-            <Suspense fallback={<Skeleton className="h-[320px] w-full" />}>
-              <UsageChart series={data.series} />
-            </Suspense>
+            <ChunkErrorBoundary
+              fallback={({ reload }) => <ChunkLoadFallback compact onReload={reload} />}
+            >
+              <Suspense fallback={<Skeleton className="h-[320px] w-full" />}>
+                <UsageChart series={data.series} />
+              </Suspense>
+            </ChunkErrorBoundary>
           )}
 
           <div className="space-y-2">

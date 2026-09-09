@@ -2,6 +2,8 @@ import { Suspense, useEffect, useId, useRef } from 'react';
 
 import type { WidgetPlacement } from '@tradr/shared';
 
+import { ChunkErrorBoundary } from '@/components/ChunkErrorBoundary';
+import { ChunkLoadFallback } from '@/components/ChunkLoadFallback';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -123,9 +125,13 @@ export function WidgetCard({
         </div>
       </header>
       <div className="flex-1 overflow-auto p-3">
-        <Suspense fallback={<Skeleton className="h-full w-full" />}>
-          <Body placement={widget} onUpdateConfig={onUpdateConfig ?? (() => undefined)} />
-        </Suspense>
+        <ChunkErrorBoundary
+          fallback={({ reload }) => <ChunkLoadFallback compact onReload={reload} />}
+        >
+          <Suspense fallback={<Skeleton className="h-full w-full" />}>
+            <Body placement={widget} onUpdateConfig={onUpdateConfig ?? (() => undefined)} />
+          </Suspense>
+        </ChunkErrorBoundary>
       </div>
     </section>
   );
