@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type Response } from '@playwright/test';
 
 import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
 
@@ -122,6 +122,24 @@ function countConfigFetches(page: Page): () => number {
   return () => count;
 }
 
+/**
+ * A `page.waitForResponse` predicate matching a `/config.js` response of one
+ * resource type: `'script'` for the classic boot `<script>` load, `'fetch'` for
+ * a monitor poll. Bind the returned promise BEFORE the action that triggers the
+ * request (goto or clock fast-forward) so the response can never be missed while
+ * the fake clock drives things.
+ */
+function configResponse(resourceType: 'script' | 'fetch') {
+  return (response: Response): boolean => {
+    if (response.request().resourceType() !== resourceType) return false;
+    try {
+      return new URL(response.url()).pathname === '/config.js';
+    } catch {
+      return false;
+    }
+  };
+}
+
 /** Serve a 404 for a single hashed chunk (never the app shell's own JS). */
 async function route404Chunk(page: Page, glob: string): Promise<void> {
   await page.route(glob, (route) =>
@@ -139,10 +157,9 @@ async function waitForAuthShell(page: Page): Promise<void> {
 }
 
 test.describe('app update prompt', () => {
-  // Desktop-only: the prompt / broadcast / inert / chunk cases are
-  // viewport-agnostic, so the mobile projects add flake without coverage.
-  test.skip(({ isMobile }) => Boolean(isMobile), 'Desktop-only suite.');
-
+  // Viewport-agnostic cases (prompt / broadcast / inert / chunk), so the suite
+  // runs on every project — including Mobile Chrome (iPhone 13 = webkit) for
+  // engine coverage.
   test.beforeEach(async ({ page }) => {
     // FIRST, so the backstop is matched LAST; per-case routes register after.
     await mockAppShell(page);
@@ -217,44 +234,68 @@ test.describe('app update prompt', () => {
   });
 
   test('4 — a second tab learns of the update via broadcast', async ({ page, context }) => {
-    // Tab 1 — the tab that polls and finds the update.
-    await routeVersionedConfig(page, { boot: BOOT, served: SERVED });
-    await page.clock.install();
-
-    // Tab 2 — same context (shared BroadcastChannel and, per Playwright, one
-    // clock for the whole context). Its own /config.js serves ITS boot version
-    // for BOTH the script and the poll, so its own poll never finds an update;
-    // any prompt it shows can only have come from the broadcast. It sits on
-    // /login (public, mounts UpdatePrompt from __root, needs no authed shell).
+    // Tab 2 — same context as tab 1 (shared BroadcastChannel and, per Playwright,
+    // one fake clock for the whole BrowserContext). Opened first so it is always
+    // torn down in `finally`, even when an assertion throws.
     const tab2 = await context.newPage();
-    const tab2Served: string[] = [];
-    await routeVersionedConfig(tab2, { boot: BOOT, served: BOOT }, (served) =>
-      tab2Served.push(served),
-    );
-    // /login reads /api/config for the registration flag; stub it so tab 2 is
-    // hermetic (it has no mockAppShell — it needs no authenticated shell).
-    await tab2.route('**/api/config', (route) =>
-      route.fulfill(json({ registrationEnabled: true, advisorEnabled: true })),
-    );
-    await tab2.goto('/login');
-    await expect(tab2.getByRole('button', { name: 'Log in' })).toBeVisible();
+    try {
+      // Tab 1 — the tab that polls and finds the update.
+      await routeVersionedConfig(page, { boot: BOOT, served: SERVED });
 
-    await page.goto('/dashboard');
-    await waitForAuthShell(page);
+      // Tab 2's own /config.js serves ITS boot version for BOTH the script and
+      // the poll, so its own poll never finds an update; any prompt it shows can
+      // only have come from the broadcast. It sits on /login (public, mounts
+      // UpdatePrompt from __root, needs no authed shell).
+      const tab2Served: string[] = [];
+      await routeVersionedConfig(tab2, { boot: BOOT, served: BOOT }, (served) =>
+        tab2Served.push(served),
+      );
+      // /login reads /api/config for the registration flag; stub it so tab 2 is
+      // hermetic (it has no mockAppShell — it needs no authenticated shell).
+      await tab2.route('**/api/config', (route) =>
+        route.fulfill(json({ registrationEnabled: true, advisorEnabled: true })),
+      );
 
-    // The shared clock advances both intervals: tab 1 finds SERVED and
-    // broadcasts; tab 2 polls BOOT (no update) and only hears via the channel.
-    await page.clock.fastForward(5 * 60_000);
+      // The clock is context-wide, so it must be installed BEFORE either tab
+      // navigates: a tab that boots on the real clock schedules its poll interval
+      // on real time and `fastForward` would never fire it.
+      await page.clock.install();
 
-    await expect(page.getByText(TITLE)).toBeVisible();
-    await expect(tab2.getByText(TITLE)).toBeVisible();
-    await expect(tab2.getByText(MONO_LINE)).toBeVisible();
+      // Boot tab 2 fully before advancing: its classic <script src="/config.js">
+      // is served (boot version is BOOT, so the monitor is active — not inert)
+      // and its shell has rendered (the mount effect has started the poll
+      // interval under the fake clock). Bind the boot response BEFORE the goto.
+      const tab2Booted = tab2.waitForResponse(configResponse('script'));
+      await tab2.goto('/login');
+      await tab2Booted;
+      await expect(tab2.getByRole('button', { name: 'Log in' })).toBeVisible();
 
-    // Every poll tab 2 made returned its own boot version — it never self-detected.
-    expect(tab2Served.length).toBeGreaterThan(0);
-    expect(tab2Served.every((v) => v === BOOT)).toBe(true);
+      // Boot tab 1 fully: its authenticated shell has rendered, so its monitor's
+      // poll interval is likewise registered under the fake clock.
+      const tab1Booted = page.waitForResponse(configResponse('script'));
+      await page.goto('/dashboard');
+      await tab1Booted;
+      await waitForAuthShell(page);
 
-    await tab2.close();
+      // Advance the shared clock. Bind BOTH polls' responses BEFORE the action so
+      // neither can be missed: tab 1's poll finds SERVED and broadcasts; tab 2's
+      // poll finds BOOT (no update) and only hears via the channel.
+      const tab1Polled = page.waitForResponse(configResponse('fetch'));
+      const tab2Polled = tab2.waitForResponse(configResponse('fetch'));
+      await page.clock.fastForward(5 * 60_000);
+      await tab1Polled;
+      await tab2Polled;
+
+      await expect(page.getByText(TITLE)).toBeVisible();
+      await expect(tab2.getByText(TITLE)).toBeVisible();
+      await expect(tab2.getByText(MONO_LINE)).toBeVisible();
+
+      // Every poll tab 2 made returned its own boot version — it never self-detected.
+      expect(tab2Served.length).toBeGreaterThan(0);
+      expect(tab2Served.every((v) => v === BOOT)).toBe(true);
+    } finally {
+      await tab2.close();
+    }
   });
 
   test('5 — no config.js means the monitor never polls (inert)', async ({ page }) => {
@@ -275,7 +316,20 @@ test.describe('app update prompt', () => {
     await expect(page.getByText(TITLE)).toHaveCount(0);
   });
 
-  test('6 — a vanished route chunk reloads once, then offers recovery', async ({ page }) => {
+  test('6 — a vanished route chunk reloads once, then offers recovery', async ({
+    page,
+    browserName,
+  }) => {
+    // Recovery cache-busts the failed chunk using the URL in the error message
+    // before reloading; webkit's message ("Importing a module script failed.")
+    // carries no URL, so the manual Reload takes the plain-reload path, which is
+    // flaky under load. The recovery loop is covered on chromium, whose message
+    // carries the URL.
+    test.skip(
+      browserName === 'webkit',
+      'Plain-reload recovery is flaky on webkit; covered on chromium.',
+    );
+
     // ChangelogPage fires this once its releases query resolves.
     await page.route('**/api/changelog/viewed', (route) => route.fulfill(json({})));
     // Only the changelog chunk 404s — never the app shell's own JS, never /api.
