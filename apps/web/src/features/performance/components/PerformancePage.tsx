@@ -1,7 +1,8 @@
-import { Component, lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense } from 'react';
 
 import type { Granularity, PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
 
+import { ChunkErrorBoundary } from '@/components/ChunkErrorBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
 import { isTimezoneRejected } from '@/lib/invalidTimezone';
 
@@ -29,86 +30,6 @@ import { WeekStartChangedBanner } from './WeekStartChangedBanner';
 // alias-aware Vite import lives at module scope so the dynamic-import path
 // is statically analyzable — Vite needs that to emit the chunk.
 const EquityCurveChart = lazy(() => import('@/features/performance/components/EquityCurveChart'));
-
-// ---------------------------------------------------------------------------
-// Vite chunk-404 detection
-// ---------------------------------------------------------------------------
-//
-// When a deploy happens while the user is on the page, the lazy chunk's
-// hashed filename in the running HTML may no longer exist on the server.
-// Vite throws errors with one of these two messages depending on the browser
-// (Chrome / Firefox vs. Safari). Anything else propagates to the root
-// boundary unmodified.
-const VITE_CHUNK_404_REGEX =
-  /Failed to fetch dynamically imported module|Importing a module script failed/i;
-
-function isChunkLoadError(err: unknown): boolean {
-  if (err === null || err === undefined) return false;
-  const message =
-    typeof err === 'string'
-      ? err
-      : err instanceof Error
-        ? err.message
-        : typeof (err as { message?: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : '';
-  return VITE_CHUNK_404_REGEX.test(message);
-}
-
-interface ChartErrorBoundaryProps {
-  children: ReactNode;
-  /** Override the reload action — primarily used by tests to assert wiring. */
-  onReload?: () => void;
-}
-
-type ChartErrorBoundaryState =
-  | { kind: 'idle' }
-  | { kind: 'chunk' }
-  | { kind: 'rethrow'; error: Error };
-
-/**
- * Error boundary scoped to the lazy chart. Catches *only* the Vite chunk-404
- * pattern and renders `ChartChunkStaleBanner`; any other error is re-thrown
- * from `render()` so the next boundary above (the root error boundary)
- * handles it.
- *
- * We deliberately keep this inline rather than reaching for a library — the
- * detection logic is one regex and a tiny class component, and dragging in a
- * boundary library would balloon the surface area.
- */
-export class ChartErrorBoundary extends Component<
-  ChartErrorBoundaryProps,
-  ChartErrorBoundaryState
-> {
-  state: ChartErrorBoundaryState = { kind: 'idle' };
-
-  static getDerivedStateFromError(error: unknown): ChartErrorBoundaryState {
-    if (isChunkLoadError(error)) return { kind: 'chunk' };
-    // Coerce non-Error throwables into an Error so the rethrow path always
-    // propagates a sensible value. React only ever surfaces `unknown` here.
-    const err = error instanceof Error ? error : new Error(String(error));
-    return { kind: 'rethrow', error: err };
-  }
-
-  componentDidCatch(): void {
-    // Intentionally empty: state transitions in `getDerivedStateFromError`
-    // drive what `render()` does, including re-throwing non-chunk errors so
-    // the parent boundary catches them.
-  }
-
-  render(): ReactNode {
-    if (this.state.kind === 'chunk') {
-      return <ChartChunkStaleBanner onReload={this.props.onReload} />;
-    }
-    if (this.state.kind === 'rethrow') {
-      // Throwing from `render()` lets React's reconciler propagate the error
-      // up to the next boundary, instead of leaving this boundary in a state
-      // where it keeps re-rendering children that already threw.
-      throw this.state.error;
-    }
-    return this.props.children;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -170,7 +91,7 @@ export interface PerformancePageProps {
  *   - Banner stack (DataQuality, InvalidTimezone, WeekStartChanged)
  *   - Empty-state branches (PerformanceEmptyState)
  *   - Selectors (Timeframe + Currency) at the top
- *   - Lazy chart inside Suspense + ChartErrorBoundary
+ *   - Lazy chart inside Suspense + ChunkErrorBoundary
  *   - StatsPanel + BreakdownTable
  *
  * Per Design §Component 7, this is the SINGLE composition site. The chart
@@ -328,7 +249,7 @@ export function PerformancePage({ params }: PerformancePageProps) {
         />
       </div>
 
-      <ChartErrorBoundary>
+      <ChunkErrorBoundary fallback={({ reload }) => <ChartChunkStaleBanner onReload={reload} />}>
         <Suspense fallback={<EquityCurveChartSkeleton />}>
           {/*
             This page stacks the chart in normal flow, so nothing above it
@@ -342,7 +263,7 @@ export function PerformancePage({ params }: PerformancePageProps) {
             className="h-[320px]"
           />
         </Suspense>
-      </ChartErrorBoundary>
+      </ChunkErrorBoundary>
 
       <StatsPanel stats={activeCurrency.stats} currency={currencyCode} />
 
