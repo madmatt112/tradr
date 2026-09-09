@@ -11,6 +11,7 @@ import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { UpdatePrompt } from '@/components/UpdatePrompt';
 import { VersionBadge } from '@/components/VersionBadge';
 import { useSessionPresence } from '@/hooks/useAuth';
 import { captureClientException } from '@/lib/telemetry/posthog';
@@ -94,6 +95,7 @@ export const Route = createRootRoute({
     <TooltipProvider>
       <Outlet />
       <Toaster />
+      <UpdatePrompt />
       <VersionBadge />
     </TooltipProvider>
   ),

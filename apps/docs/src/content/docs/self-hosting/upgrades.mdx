@@ -52,6 +52,40 @@ therefore erases the released version, and `/api/health` silently drops its
 it out.
 :::
 
+### Open tabs during an upgrade
+
+A running tab does not need a manual reload after an upgrade. On an image that
+carries `APP_VERSION`, each tab checks the served version about every five
+minutes while it is visible. It also checks again as soon as you return to the
+tab. When the served version differs from the version the tab started with,
+Tradr shows an update prompt. Select **Reload** to move to the new version. You
+lose anything unsaved on the page.
+
+A part of a page can fail to load after an upgrade, because its code file no
+longer exists on the new version. Tradr reloads the tab one time by itself to
+recover. If the reload does not recover the page, Tradr shows a prompt with a
+**Reload** button instead.
+
+A locally built image has no `APP_VERSION` and reports no version (see the note
+above). A tab on such an image does not check for updates and shows no prompt.
+The value `localdev` is reserved. A tab treats `localdev` as an unset version,
+and also shows no prompt.
+
+The container carries a file named `/_headers`. This file is a Cloudflare Pages
+cache policy for the hosted deployment only. The container does not serve the
+file, and a self-hosted stack does not use it. You can ignore it.
+
+:::caution[A proxy in front of the container must obey the cache headers]
+Tradr sets `no-store` on `/config.js` and `no-cache` on `index.html`, so the
+container is correct on its own. A reverse proxy or CDN in front of the
+container must obey these two directives. If the proxy keeps an old copy of
+`index.html`, the tab holds the version it started with, while `/config.js`
+reports the new served version. The two versions never agree, and the update
+prompt returns after every reload. To correct this, change the cache
+configuration of the proxy. For a proxy in front of the stack, see
+[Put TLS in front of the stack](/self-hosting/tls-reverse-proxy/).
+:::
+
 ### Which version bump matters
 
 Tradr is pre-1.0, so the usual semver reading is inverted:

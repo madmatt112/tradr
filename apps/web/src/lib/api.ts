@@ -20,11 +20,17 @@ export function resolveApiUrl(path: string): string {
   return base + path;
 }
 
+// The reserved boot version that means "no deploy stamp": local dev, or a
+// self-host container with APP_VERSION unset. Defined once here so the version
+// badge and the update monitor share a single source rather than each
+// re-hardcoding the literal.
+export const LOCALDEV = 'localdev';
+
 // Deploy-stamped version string for the corner badge (components/VersionBadge).
 // The deploy workflows write it into config.js; nothing writes it in local dev,
-// so absence reads as 'localdev'.
+// so absence reads as LOCALDEV.
 export function appVersion(): string {
-  return (typeof window !== 'undefined' && window.__TRADR_CONFIG__?.appVersion) || 'localdev';
+  return (typeof window !== 'undefined' && window.__TRADR_CONFIG__?.appVersion) || LOCALDEV;
 }
 
 // Whether the configured API origin differs from the page origin (split-origin).

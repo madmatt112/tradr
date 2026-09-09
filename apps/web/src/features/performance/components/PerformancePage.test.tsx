@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { Component, act, type ReactNode } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -49,10 +49,32 @@ vi.mock('@/lib/telemetry/posthog', () => ({
 // Replace the chart's lazy chunk with a synchronous stub so jsdom doesn't have
 // to resolve a real `import('./EquityCurveChart')`. The stub renders a marker
 // div; tests assert presence of either the marker (happy path) OR the skeleton
-// (loading state) OR the chunk-stale banner (boundary path).
+// (loading state) OR the chunk-stale banner (boundary path). When
+// `chartChunkFailure.shouldThrow` is set, the stub throws the Vite chunk-404
+// message so the shared boundary's fallback path is exercised through the page.
+// The holder comes from `vi.hoisted` because `vi.mock` is hoisted above the file
+// and its factory cannot close over a plain top-level `let`.
+const chartChunkFailure = vi.hoisted(() => ({ shouldThrow: false }));
 vi.mock('@/features/performance/components/EquityCurveChart', () => ({
-  default: () => <div data-testid="equity-curve-chart-stub" />,
+  default: () => {
+    if (chartChunkFailure.shouldThrow) {
+      throw new Error('Failed to fetch dynamically imported module: /assets/chart-abc.js');
+    }
+    return <div data-testid="equity-curve-chart-stub" />;
+  },
 }));
+
+// Keep the chunk-recovery guard from actually reloading the jsdom tab when the
+// boundary catches the chart failure above: return false so the boundary renders
+// its fallback (the stale banner) instead of navigating. Every other export
+// stays real, so `isChunkLoadError` still classifies the thrown error.
+vi.mock('@/lib/chunkRecovery', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/chunkRecovery')>('@/lib/chunkRecovery');
+  return {
+    ...actual,
+    attemptAutomaticReload: () => false,
+  };
+});
 
 // Stub the shadcn Select primitive — Radix relies on pointer-event machinery
 // missing from jsdom. We only need a rendered select-shaped surface for the
@@ -90,7 +112,7 @@ import { __resetInvalidTimezoneState, recordRejectedTimezone } from '@/lib/inval
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 
 import { ChartChunkStaleBanner } from './ChartChunkStaleBanner';
-import { ChartErrorBoundary, PerformancePage } from './PerformancePage';
+import { PerformancePage } from './PerformancePage';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -183,6 +205,7 @@ beforeEach(() => {
   vi.mocked(captureClientEvent).mockClear();
   sessionStorage.clear();
   __resetInvalidTimezoneState();
+  chartChunkFailure.shouldThrow = false;
 });
 
 afterEach(() => {
@@ -479,87 +502,26 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
   });
 });
 
-describe('ChartErrorBoundary — Vite chunk-404 detection', () => {
-  it('renders ChartChunkStaleBanner when child throws "Failed to fetch dynamically imported module"', () => {
-    function Boom(): never {
-      throw new Error('Failed to fetch dynamically imported module: /assets/chart-abc.js');
-    }
-    // Suppress React's expected error-log spam during the throw.
+describe('PerformancePage — chart chunk failure (shared boundary)', () => {
+  it('renders the chunk-stale banner when the lazy chart chunk fails to load', async () => {
+    // The chart's lazy chunk throws the Vite chunk-404 message; the shared
+    // ChunkErrorBoundary catches it and renders ChartChunkStaleBanner through
+    // its fallback. `attemptAutomaticReload` is mocked to false so the fallback
+    // renders instead of reloading the jsdom tab.
+    chartChunkFailure.shouldThrow = true;
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { container, root } = mountWith(
-      <ChartErrorBoundary onReload={() => {}}>
-        <Boom />
-      </ChartErrorBoundary>,
-    );
+    useQueryMock.mockReturnValue({
+      data: buildResponse(),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    // Let React.lazy / Suspense resolve the stub, which then throws on render.
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(container.querySelector('[data-testid="chart-chunk-stale-banner"]')).not.toBeNull();
-    unmount(container, root);
-    errSpy.mockRestore();
-  });
-
-  it('renders ChartChunkStaleBanner for the Safari "Importing a module script failed" message', () => {
-    function Boom(): never {
-      throw new Error('Importing a module script failed.');
-    }
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { container, root } = mountWith(
-      <ChartErrorBoundary onReload={() => {}}>
-        <Boom />
-      </ChartErrorBoundary>,
-    );
-    expect(container.querySelector('[data-testid="chart-chunk-stale-banner"]')).not.toBeNull();
-    unmount(container, root);
-    errSpy.mockRestore();
-  });
-
-  it('renders the children when there is no error', () => {
-    const { container, root } = mountWith(
-      <ChartErrorBoundary>
-        <div data-testid="child" />
-      </ChartErrorBoundary>,
-    );
-    expect(container.querySelector('[data-testid="child"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="chart-chunk-stale-banner"]')).toBeNull();
-    unmount(container, root);
-  });
-
-  it('rethrows non-chunk errors so a parent boundary catches them', () => {
-    // Parent boundary that mirrors what the root error boundary does:
-    // capture any error from children and surface a fallback marker.
-    class TestParentBoundary extends Component<{ children: ReactNode }, { caught: Error | null }> {
-      state = { caught: null as Error | null };
-      static getDerivedStateFromError(error: Error) {
-        return { caught: error };
-      }
-      componentDidCatch(): void {
-        // swallow — the test asserts state directly
-      }
-      render(): ReactNode {
-        if (this.state.caught) {
-          return <div data-testid="parent-boundary-fallback">{this.state.caught.message}</div>;
-        }
-        return this.props.children;
-      }
-    }
-
-    function Boom(): never {
-      throw new Error('totally unrelated bug');
-    }
-
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { container, root } = mountWith(
-      <TestParentBoundary>
-        <ChartErrorBoundary>
-          <Boom />
-        </ChartErrorBoundary>
-      </TestParentBoundary>,
-    );
-    // The chart boundary did NOT swallow the non-chunk error: the parent
-    // boundary's fallback rendered with the original message.
-    const fallback = container.querySelector('[data-testid="parent-boundary-fallback"]');
-    expect(fallback).not.toBeNull();
-    expect(fallback?.textContent).toBe('totally unrelated bug');
-    // And the chunk-stale banner did NOT render (this isn't a chunk error).
-    expect(container.querySelector('[data-testid="chart-chunk-stale-banner"]')).toBeNull();
     unmount(container, root);
     errSpy.mockRestore();
   });

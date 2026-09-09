@@ -29,6 +29,8 @@ import Markdown, { type Components } from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 
+import { ChunkErrorBoundary } from '@/components/ChunkErrorBoundary';
+
 // Isolated chunk: importing shiki only happens when a code block first renders.
 const ShikiCodeBlock = lazy(() => import('./ShikiCodeBlock'));
 
@@ -105,9 +107,23 @@ const components: Components = {
       </pre>
     );
     return (
-      <Suspense fallback={fallback}>
-        <ShikiCodeBlock code={raw.replace(/\n$/, '')} lang={lang} />
-      </Suspense>
+      // The Shiki chunk degrades in place: never auto-reload here, the transcript
+      // composer may hold unsaved text. The ordinary update prompt takes over.
+      <ChunkErrorBoundary
+        recovery="inline"
+        fallback={() => (
+          <>
+            {fallback}
+            <p className="text-sm text-muted-foreground">
+              Syntax highlighting is unavailable until you reload.
+            </p>
+          </>
+        )}
+      >
+        <Suspense fallback={fallback}>
+          <ShikiCodeBlock code={raw.replace(/\n$/, '')} lang={lang} />
+        </Suspense>
+      </ChunkErrorBoundary>
     );
   },
   // A fenced block's `code` handler above returns its OWN block wrapper (the
