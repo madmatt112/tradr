@@ -196,6 +196,129 @@ describe('normalizeRow — dates (REQ-5.3, REQ-7.4)', () => {
   });
 });
 
+describe('normalizeRow — expiry (REQ-2.2)', () => {
+  // A non-UTC timezone proves the expiry is a plain calendar date, never shifted.
+  const TOKYO: NormalizeOptions = { ...US, timezone: 'Asia/Tokyo' };
+
+  it('iso YYYY-MM-DD -> plain calendar date, no timezone shift', () => {
+    const r = ok(normalizeRow(row({ expiry: '2026-03-20' }), { ...TOKYO, expiryFormat: 'iso' }));
+    expect(r.row.values.expiry).toBe('2026-03-20');
+  });
+
+  it('yyyymmdd (Flex) -> YYYY-MM-DD, no timezone shift', () => {
+    const r = ok(normalizeRow(row({ expiry: '20260320' }), { ...TOKYO, expiryFormat: 'yyyymmdd' }));
+    expect(r.row.values.expiry).toBe('2026-03-20');
+  });
+
+  it('dd-mon-yy (TradeZella) -> YYYY-MM-DD with year 2000+YY, no timezone shift', () => {
+    const r = ok(
+      normalizeRow(row({ expiry: '28 Oct 22' }), { ...TOKYO, expiryFormat: 'dd-mon-yy' }),
+    );
+    expect(r.row.values.expiry).toBe('2022-10-28');
+  });
+
+  it('dd-mon-yy month table is case-insensitive', () => {
+    const r = ok(
+      normalizeRow(row({ expiry: '28 OCT 22' }), { ...TOKYO, expiryFormat: 'dd-mon-yy' }),
+    );
+    expect(r.row.values.expiry).toBe('2022-10-28');
+  });
+
+  it('a value not matching the declared format is DATE_FORMAT_MISMATCH naming the format', () => {
+    const result = normalizeRow(row({ expiry: '28 Oct 22' }), { ...US, expiryFormat: 'iso' });
+    expect(Array.isArray(result)).toBe(true);
+    const err = (result as { code: string; tradrField?: string; message: string }[])[0];
+    expect(err.code).toBe('DATE_FORMAT_MISMATCH');
+    expect(err.tradrField).toBe('expiry');
+    expect(err.message).toContain('YYYY-MM-DD');
+  });
+
+  it('a matching-but-impossible calendar date is DATE_INVALID', () => {
+    const result = normalizeRow(row({ expiry: '20260230' }), { ...US, expiryFormat: 'yyyymmdd' });
+    expect(Array.isArray(result)).toBe(true);
+    const err = (result as { code: string; tradrField?: string }[])[0];
+    expect(err.code).toBe('DATE_INVALID');
+    expect(err.tradrField).toBe('expiry');
+  });
+});
+
+describe('normalizeRow — strike/multiplier plain decimal (REQ-4.1)', () => {
+  // Canonical Decimal.toFixed() form drops trailing zeros; strike/multiplier are
+  // stored plain — not quantized to 8 dp and never given a `rounded` warning.
+  it('strike stores a plain decimal with no rounded warning (400.0000 -> "400")', () => {
+    const r = ok(normalizeRow(row({ strike: '400.0000' }), US));
+    expect(r.row.values.strike).toBe('400');
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('strike keeps 4-dp precision, not quantized to 8 dp, no rounded warning', () => {
+    const r = ok(normalizeRow(row({ strike: '1.2345' }), US));
+    expect(r.row.values.strike).toBe('1.2345');
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('multiplier is stored as a plain decimal', () => {
+    const r = ok(normalizeRow(row({ multiplier: '100' }), US));
+    expect(r.row.values.multiplier).toBe('100');
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('a non-numeric strike is a located NUMBER_UNPARSEABLE with tradrField set', () => {
+    const result = normalizeRow(row({ strike: 'abc' }), US);
+    expect(Array.isArray(result)).toBe(true);
+    const err = (result as { code: string; tradrField?: string }[])[0];
+    expect(err.code).toBe('NUMBER_UNPARSEABLE');
+    expect(err.tradrField).toBe('strike');
+  });
+});
+
+describe('normalizeRow — sign conventions (seam 1, REQ-3.2, REQ-1.7)', () => {
+  // The stored quantity is the magnitude (canonical toFixed form, no trailing
+  // zeros); direction is carried by an added/verified `action`.
+  it('signedQuantity: a negative quantity stores the magnitude and derives action=sell', () => {
+    const r = ok(normalizeRow(row({ quantity: '-100' }), { ...US, signedQuantity: true }));
+    expect(r.row.values.quantity).toBe('100');
+    expect(r.row.values.action).toBe('sell');
+  });
+
+  it('signedQuantity: a positive quantity derives action=buy', () => {
+    const r = ok(normalizeRow(row({ quantity: '100' }), { ...US, signedQuantity: true }));
+    expect(r.row.values.quantity).toBe('100');
+    expect(r.row.values.action).toBe('buy');
+  });
+
+  it('signedQuantity: a sign contradicting a mapped action is QUANTITY_SIGN_CONTRADICTION', () => {
+    const result = normalizeRow(row({ quantity: '-100', action: 'buy' }), {
+      ...US,
+      signedQuantity: true,
+    });
+    expect(Array.isArray(result)).toBe(true);
+    const err = (result as { code: string; tradrField?: string; message: string }[])[0];
+    expect(err.code).toBe('QUANTITY_SIGN_CONTRADICTION');
+    expect(err.tradrField).toBe('quantity');
+    expect(err.message).toContain('-100');
+  });
+
+  it('signedQuantity: a type-mapped row (no action) sets action from the sign, type untouched', () => {
+    const r = ok(
+      normalizeRow(row({ quantity: '-100', type: 'exit' }), { ...US, signedQuantity: true }),
+    );
+    expect(r.row.values.action).toBe('sell');
+    expect(r.row.values.type).toBe('exit');
+  });
+
+  it('signedFees: a negative fee stores the magnitude (a cost either way)', () => {
+    const r = ok(normalizeRow(row({ fees: '-0.65' }), { ...US, signedFees: true }));
+    expect(r.row.values.fees).toBe('0.65');
+  });
+
+  it('undeclared: a negative quantity passes through unchanged (refused downstream)', () => {
+    const r = ok(normalizeRow(row({ quantity: '-100' }), US));
+    expect(r.row.values.quantity).toBe('-100');
+    expect(r.row.values.action).toBeUndefined();
+  });
+});
+
 describe('normalizeRow — passthrough + multi-error collection', () => {
   it('passes enum/text fields through unchanged', () => {
     const r = ok(
