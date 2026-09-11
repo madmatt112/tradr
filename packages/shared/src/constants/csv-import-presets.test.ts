@@ -149,6 +149,28 @@ describe('csv-import-presets', () => {
     expect(EXECUTION_FIELDS).toContain('symbol');
   });
 
+  it('tradezella declares the Single->option synonym in mapping.transforms, not at preset level', () => {
+    const tradezella = CSV_IMPORT_PRESETS.find((p) => p.id === 'tradezella')!;
+    expect(tradezella.mapping.transforms?.assetType?.Single).toBe('option');
+    expect(tradezella.transforms).toBeUndefined();
+  });
+
+  it('every preset declaring the composed contract form also declares an expiryFormat', () => {
+    for (const preset of CSV_IMPORT_PRESETS) {
+      if (preset.mapping.contractForm === 'composed') {
+        expect(preset.mapping.expiryFormat).toBeDefined();
+      }
+    }
+  });
+
+  it('every preset declaring the descriptor contract form maps a descriptor column', () => {
+    for (const preset of CSV_IMPORT_PRESETS) {
+      if (preset.mapping.contractForm === 'descriptor') {
+        expect(preset.mapping.columns.descriptor).toBeDefined();
+      }
+    }
+  });
+
   // --- Negative proofs: deliberately broken presets must fail ---
 
   it('a malformed preset fails schema validation', () => {
