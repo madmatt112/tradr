@@ -614,6 +614,7 @@ describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.
       'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,1234.567,C', // OCC_STRIKE_NOT_REPRESENTABLE
       '1ABC,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,250,C', // OCC_BAD_UNDERLYING
       'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2050-01-16,250,C', // OCC_DATE_RANGE
+      'ABCDEF,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,12345.678,C', // OCC_COMPACT_TOO_LONG
     ].join('\n');
     const res = await previewImport(
       db,
@@ -681,10 +682,21 @@ describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.
         csvColumn: 'Expiry',
       }),
     );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_COMPACT_TOO_LONG',
+        rowNumber: 7,
+        tradrField: 'symbol',
+        csvColumn: 'Symbol',
+      }),
+    );
     // A located message names the row and the offending value (illustrative text).
     const strikeRange = res.errors.find((e) => e.code === 'OCC_STRIKE_RANGE');
     expect(strikeRange?.message).toMatch(/row\s*2/i);
     expect(strikeRange?.message).toContain('100000');
+    const tooLong = res.errors.find((e) => e.code === 'OCC_COMPACT_TOO_LONG');
+    expect(tooLong?.message).toMatch(/row\s*7/i);
+    expect(tooLong?.message).toContain('ABCDEF');
   });
 
   it('(b) locates missing composed cells and a contract field on a stock row', async () => {
