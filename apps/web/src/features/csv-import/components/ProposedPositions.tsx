@@ -11,7 +11,29 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { decodeOptionContract } from '@/features/positions/utils/optionContract';
 import { cn } from '@/lib/utils';
+
+/**
+ * The position label: for an option whose stored symbol decodes, the contract in
+ * words (e.g. "AAPL 20 Mar 2026 $250 Call") with the exact stored compact symbol
+ * beside it; otherwise the raw symbol as-is (REQ-5.1). Uses the same decoder the
+ * read side uses (`decodeOptionContract`, `optionContract.ts`).
+ */
+function ContractLabel({ scope }: { scope: ProposedPosition['scope'] }) {
+  const contract = scope.assetType === 'option' ? decodeOptionContract(scope.symbol) : null;
+  if (!contract) {
+    return <span className="font-medium">{scope.symbol}</span>;
+  }
+  return (
+    <>
+      <span className="font-medium">
+        {contract.underlying} {contract.expiryLabel} {contract.strikeLabel} {contract.typeLabel}
+      </span>
+      <span className="text-xs text-muted-foreground font-mono">{scope.symbol}</span>
+    </>
+  );
+}
 
 interface ProposedPositionsProps {
   positions: ProposedPosition[];
@@ -61,7 +83,7 @@ export function ProposedPositions({
         {positions.map((pos, pi) => (
           <div key={`${pos.scope.symbol}-${pi}`} className="space-y-2">
             <div className="flex items-center gap-2">
-              <span className="font-medium">{pos.scope.symbol}</span>
+              <ContractLabel scope={pos.scope} />
               <Badge variant={pos.side === 'long' ? 'default' : 'secondary'}>{pos.side}</Badge>
               <Badge variant="outline">{pos.closes ? 'closes' : 'open'}</Badge>
               {pos.scope.assetType === 'option' && <Badge variant="outline">option</Badge>}
