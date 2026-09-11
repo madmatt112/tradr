@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
 import type { CsvPreviewRequest } from '@tradr/shared';
+import { readCsvImportSample } from '@tradr/shared/node/csv-import-samples';
 
 import { bootstrap } from '@/app';
 import { db } from '@/db';
@@ -594,5 +595,564 @@ describe('commitImport — refusals & recovery (Component 7/8)', () => {
     ).rejects.toMatchObject({
       code: 'CSV_IMPORT_IN_PROGRESS',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Option path — integration cases (design Testing Strategy → Integration,
+// service half). Every assertion is on code/rowNumber/tradrField/csvColumn (and
+// that a message names the row and value), never a byte-exact message string.
+// ---------------------------------------------------------------------------
+
+describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.2)', () => {
+  it('(b) locates each OCC encoder error on its row and field (composed form)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees,Expiry,Strike,Right',
+      'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,100000,C', // OCC_STRIKE_RANGE
+      'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,0.0001,C', // OCC_STRIKE_PRECISION
+      'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,1234.567,C', // OCC_STRIKE_NOT_REPRESENTABLE
+      '1ABC,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,250,C', // OCC_BAD_UNDERLYING
+      'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2050-01-16,250,C', // OCC_DATE_RANGE
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'composed',
+          expiryFormat: 'iso',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+            expiry: 'Expiry',
+            strike: 'Strike',
+            right: 'Right',
+          },
+        },
+      }),
+    );
+    expect(res.committable).toBe(false);
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_STRIKE_RANGE',
+        rowNumber: 2,
+        tradrField: 'strike',
+        csvColumn: 'Strike',
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_STRIKE_PRECISION',
+        rowNumber: 3,
+        tradrField: 'strike',
+        csvColumn: 'Strike',
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_STRIKE_NOT_REPRESENTABLE',
+        rowNumber: 4,
+        tradrField: 'strike',
+        csvColumn: 'Strike',
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_BAD_UNDERLYING',
+        rowNumber: 5,
+        tradrField: 'symbol',
+        csvColumn: 'Symbol',
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_DATE_RANGE',
+        rowNumber: 6,
+        tradrField: 'expiry',
+        csvColumn: 'Expiry',
+      }),
+    );
+    // A located message names the row and the offending value (illustrative text).
+    const strikeRange = res.errors.find((e) => e.code === 'OCC_STRIKE_RANGE');
+    expect(strikeRange?.message).toMatch(/row\s*2/i);
+    expect(strikeRange?.message).toContain('100000');
+  });
+
+  it('(b) locates missing composed cells and a contract field on a stock row', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees,Expiry,Strike,Right',
+      'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,,,', // 3x CONTRACT_FIELD_MISSING
+      'AAPL,STOCK,BUY,100,10,2026-01-01,1,2026-03-20,,', // CONTRACT_FIELD_ON_STOCK
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'composed',
+          expiryFormat: 'iso',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+            expiry: 'Expiry',
+            strike: 'Strike',
+            right: 'Right',
+          },
+        },
+      }),
+    );
+    for (const field of ['expiry', 'strike', 'right']) {
+      expect(res.errors).toContainEqual(
+        expect.objectContaining({
+          code: 'CONTRACT_FIELD_MISSING',
+          rowNumber: 2,
+          tradrField: field,
+        }),
+      );
+    }
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'CONTRACT_FIELD_ON_STOCK',
+        rowNumber: 3,
+        tradrField: 'expiry',
+        csvColumn: 'Expiry',
+      }),
+    );
+  });
+
+  it('(b) locates an unmatched occ-symbol cell as OCC_NO_FORM_MATCH on symbol', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL  260320C0025000,OPTION,BUY,1.75,1,2026-01-05,0.65',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'occ-symbol',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OCC_NO_FORM_MATCH',
+        rowNumber: 2,
+        tradrField: 'symbol',
+        csvColumn: 'Symbol',
+      }),
+    );
+  });
+
+  it('(b) locates an unparseable descriptor as CONTRACT_DESCRIPTOR_UNPARSEABLE', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Side,Quantity,Price,Date,Option',
+      'AAPL,BUY,1,2.50,2026-01-05,JAN 12 CALL',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'descriptor',
+          columns: {
+            symbol: 'Symbol',
+            action: 'Side',
+            quantity: 'Quantity',
+            price: 'Price',
+            filledAt: 'Date',
+            descriptor: 'Option',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'CONTRACT_DESCRIPTOR_UNPARSEABLE',
+        rowNumber: 2,
+        tradrField: 'descriptor',
+        csvColumn: 'Option',
+      }),
+    );
+  });
+
+  it('(c) refuses a multiplier of 10 on the multiplier field (REQ-4.1)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Multiplier',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,10',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'occ-symbol',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            multiplier: 'Multiplier',
+          },
+        },
+      }),
+    );
+    const err = res.errors.find((e) => e.code === 'OPTION_MULTIPLIER_UNSUPPORTED');
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OPTION_MULTIPLIER_UNSUPPORTED',
+        rowNumber: 2,
+        tradrField: 'multiplier',
+        csvColumn: 'Multiplier',
+      }),
+    );
+    expect(err?.message).toContain('10');
+  });
+
+  it('(c) refuses a Tradervue mini descriptor on the descriptor field (REQ-4.1)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Side,Quantity,Price,Date,Option',
+      'AAPL,BUY,1,2.50,2026-01-05,APR26 13 375 PUT M',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'descriptor',
+          columns: {
+            symbol: 'Symbol',
+            action: 'Side',
+            quantity: 'Quantity',
+            price: 'Price',
+            filledAt: 'Date',
+            descriptor: 'Option',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OPTION_MULTIPLIER_UNSUPPORTED',
+        rowNumber: 2,
+        tradrField: 'descriptor',
+        csvColumn: 'Option',
+      }),
+    );
+  });
+
+  it('(d) refuses an OPT lifecycle code but imports a STK row carrying the same code (REQ-4.2)', async () => {
+    const { userId, accountId } = await seedAccount();
+    // Synthetic Trades-shaped rows — never a committed sample edited to carry a code.
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes',
+      'AAPL  120121C00400000,OPT,BUY,1,1.75,2012-01-05,A',
+      'AAPL,STK,BUY,100,121.50,2012-01-05,A',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        dateFormat: 'iso',
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'occ-symbol',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'AssetClass',
+            action: 'Buy/Sell',
+            quantity: 'Quantity',
+            price: 'TradePrice',
+            filledAt: 'DateTime',
+            eventCode: 'Notes/Codes',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'OPTION_EVENT_NOT_SUPPORTED',
+        rowNumber: 2,
+        tradrField: 'eventCode',
+        csvColumn: 'Notes/Codes',
+      }),
+    );
+    // The STK row's `A` is not a lifecycle event on a stock: it imports as stock.
+    expect(
+      res.positions.some((p) => p.scope.assetType === 'stock' && p.scope.symbol === 'AAPL'),
+    ).toBe(true);
+  });
+
+  it('(e) emits one derived_expiry warning for a day-less monthly descriptor (REQ-3.5)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Side,Quantity,Price,Date,Option',
+      'AAPL,BUY,1,2.50,2026-01-05,JAN 12 125 CALL',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'descriptor',
+          columns: {
+            symbol: 'Symbol',
+            action: 'Side',
+            quantity: 'Quantity',
+            price: 'Price',
+            filledAt: 'Date',
+            descriptor: 'Option',
+          },
+        },
+      }),
+    );
+    const derived = res.warnings.filter((w) => w.kind === 'derived_expiry');
+    expect(derived).toHaveLength(1);
+    expect(derived[0].rowNumber).toBe(2);
+  });
+
+  it('(g) refuses a fractional option quantity on its row', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL260320C250,OPTION,BUY,1.75,0.5,2026-01-05,0.65',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'occ-symbol',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+          },
+        },
+      }),
+    );
+    expect(res.committable).toBe(false);
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({ code: 'OPTION_FRACTIONAL_QUANTITY', rowNumber: 2 }),
+    );
+  });
+
+  it('(j) refuses a BUY row whose signed quantity contradicts the action', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL,STOCK,BUY,100,-100,2026-01-01,1',
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          signedQuantity: true,
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'QUANTITY_SIGN_CONTRADICTION',
+        rowNumber: 2,
+        tradrField: 'quantity',
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-form contract identity (REQ-1.3, 3.2 end to end)
+// ---------------------------------------------------------------------------
+
+describe('previewImport — cross-form contract identity', () => {
+  it('(f) collapses padded OCC-21, Form 3 and Form 4 of one contract to a single scope', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL  120121C00400000,OPTION,BUY,1.75,1,2012-01-05,0.65', // padded OCC-21
+      'AAPL120121C00400000,OPTION,BUY,1.80,1,2012-01-05,0.65', // Form 3
+      'AAPL120121C400,OPTION,SELL,2.25,2,2012-01-06,0.65', // Form 4
+    ].join('\n');
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'occ-symbol',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toHaveLength(0);
+    expect(res.positions).toHaveLength(1);
+    expect(res.positions[0].scope.symbol).toBe('AAPL120121C400');
+  });
+
+  it('(f) re-maps the Interactive Brokers sample as composed to the identical compact symbol', async () => {
+    const { userId, accountId } = await seedAccount();
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      readCsvImportSample('interactive-brokers'),
+      execRequest(accountId, {
+        dateFormat: 'iso-datetime',
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'composed',
+          expiryFormat: 'yyyymmdd',
+          signedQuantity: true,
+          signedFees: true,
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'AssetClass',
+            action: 'Buy/Sell',
+            quantity: 'Quantity',
+            price: 'TradePrice',
+            filledAt: 'DateTime',
+            fees: 'IBCommission',
+            multiplier: 'Multiplier',
+            underlying: 'UnderlyingSymbol',
+            expiry: 'Expiry',
+            strike: 'Strike',
+            right: 'Put/Call',
+          },
+        },
+      }),
+    );
+    expect(res.errors).toHaveLength(0);
+    const option = res.positions.find((p) => p.scope.assetType === 'option');
+    expect(option).toBeDefined();
+    expect(option?.scope.symbol).toBe('AAPL120121C400');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Option re-import duplicate gate (REQ-6.1) — needs the live ledger close hook.
+// ---------------------------------------------------------------------------
+
+describe('previewImport — option duplicate gate on re-import (REQ-6.1)', () => {
+  beforeAll(() => {
+    bootstrap().catch(() => {});
+  });
+  afterAll(() => {
+    unregisterCloseHook('ledger');
+  });
+
+  it('(h) re-importing a committed option file trips the duplicate affirmation gate', async () => {
+    const { userId, accountId } = await seedAccount();
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+      'AAPL260320C250,OPTION,SELL,2.25,1,2026-01-06,0.65',
+    ].join('\n');
+    const req = execRequest(accountId, {
+      mapping: {
+        rowShape: 'execution',
+        contractForm: 'occ-symbol',
+        columns: {
+          symbol: 'Symbol',
+          assetType: 'Type',
+          action: 'Side',
+          price: 'Price',
+          quantity: 'Quantity',
+          filledAt: 'Date',
+          fees: 'Fees',
+        },
+      },
+    });
+
+    const first = await previewImport(db, userId, accountId, bytes(csv), req);
+    expect(first.committable).toBe(true);
+    expect(first.requiresDuplicateAffirmation).toBe(false);
+
+    const summary = await commitImport(db, userId, first.token, false, { isAdmin: false });
+    expect(summary.positionsCreated).toBe(1);
+
+    const second = await previewImport(db, userId, accountId, bytes(csv), req);
+    expect(second.requiresDuplicateAffirmation).toBe(true);
+    expect(second.committable).toBe(true); // affirmation gate, not a hard block
   });
 });

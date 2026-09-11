@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 
+import { CSV_IMPORT_PRESETS } from '@tradr/shared';
+import { readCsvImportSample } from '@tradr/shared/node/csv-import-samples';
+
 import app from '@/app';
 import { config } from '@/lib/config';
 
@@ -472,5 +475,175 @@ describe('POST /api/csv-import/preview — deceptive Content-Length (REQ-1.6)', 
         code: 'PAYLOAD_TOO_LARGE',
       });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Option path — route-level integration cases (design Testing Strategy →
+// Integration, preview-route half). Assertions are on code/rowNumber/tradrField/
+// csvColumn and HTTP status, never a byte-exact message string.
+// ---------------------------------------------------------------------------
+
+/** Build a preview request straight from a shipped preset (as the conformance path does). */
+function presetRequest(accountId: string, presetId: string) {
+  const preset = CSV_IMPORT_PRESETS.find((p) => p.id === presetId)!;
+  return {
+    accountId,
+    rowShape: preset.rowShape,
+    mapping: preset.mapping,
+    presetId: preset.id,
+    timezone: 'UTC',
+    dateFormat: preset.dateFormat,
+    numberFormat: preset.numberFormat,
+  };
+}
+
+describe('POST /api/csv-import/preview — option integration (§32)', () => {
+  it('(a) previews a mixed stock + option file as committable with both kinds proposed (REQ-1.2)', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL,STOCK,BUY,100,10,2026-01-01,1',
+      'AAPL,STOCK,SELL,110,10,2026-01-02,1',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+      'AAPL260320C250,OPTION,SELL,2.25,1,2026-01-06,0.65',
+    ].join('\n');
+    const base = execRequest(accountId);
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'occ-symbol' } };
+
+    const res = await postPreview(cookie, csv, request);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.committable).toBe(true);
+    expect(body.errors).toHaveLength(0);
+    expect(body.summary.positions).toBe(2);
+    const assetTypes = body.positions
+      .map((p: { scope: { assetType: string } }) => p.scope.assetType)
+      .sort();
+    expect(assetTypes).toEqual(['option', 'stock']);
+  });
+
+  it('(i) previews the shipped Interactive Brokers sample through the route with zero errors and two positions', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const csv = new TextDecoder().decode(readCsvImportSample('interactive-brokers'));
+
+    const res = await postPreview(cookie, csv, presetRequest(accountId, 'interactive-brokers'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.errors).toHaveLength(0);
+    expect(body.committable).toBe(true);
+    expect(body.summary.positions).toBe(2);
+    const option = body.positions.find(
+      (p: { scope: { assetType: string } }) => p.scope.assetType === 'option',
+    );
+    expect(option).toBeDefined();
+    expect(option.scope.symbol).toBe('AAPL120121C400');
+  });
+
+  it('(k) an option row with no declared contract form is a located CONTRACT_FORM_MISSING error', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+    ].join('\n');
+    // execRequest declares no contractForm.
+    const res = await postPreview(cookie, csv, execRequest(accountId));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.committable).toBe(false);
+    expect(body.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'CONTRACT_FORM_MISSING',
+        rowNumber: 2,
+        tradrField: 'symbol',
+        csvColumn: 'Symbol',
+      }),
+    );
+  });
+
+  it('(k) a composed mapping with no expiry format is a mapping-shape error at row 0', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees,Expiry,Strike,Right',
+      'AAPL,OPTION,BUY,1.75,1,2026-01-05,0.65,2026-03-20,250,C',
+    ].join('\n');
+    const base = execRequest(accountId, {
+      symbol: 'Symbol',
+      assetType: 'Type',
+      action: 'Side',
+      price: 'Price',
+      quantity: 'Quantity',
+      filledAt: 'Date',
+      fees: 'Fees',
+      expiry: 'Expiry',
+      strike: 'Strike',
+      right: 'Right',
+    });
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'composed' } };
+
+    const res = await postPreview(cookie, csv, request);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.errors).toContainEqual(
+      expect.objectContaining({ code: 'MAPPING_EXPIRY_FORMAT_MISSING', rowNumber: 0 }),
+    );
+  });
+
+  it('(l) the Interactive Brokers preset against a file with no Multiplier column is MAPPING_COLUMN_ABSENT at row 0', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    // Every preset-mapped column present except Multiplier.
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,IBCommission,Notes/Codes',
+      'AAPL,STK,BUY,100,121.50,2012-01-05,-1.00,',
+    ].join('\n');
+
+    const res = await postPreview(cookie, csv, presetRequest(accountId, 'interactive-brokers'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'MAPPING_COLUMN_ABSENT',
+        rowNumber: 0,
+        tradrField: 'multiplier',
+        csvColumn: 'Multiplier',
+      }),
+    );
+  });
+
+  it('(m) an empty required Symbol cell previews 200 with a located row error and no phantom position (regression)', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      ',OPTION,BUY,1.75,1,2026-01-05,0.65', // empty required Symbol
+      'AAPL,STOCK,BUY,100,10,2026-01-01,1',
+      'AAPL,STOCK,SELL,110,10,2026-01-02,1',
+    ].join('\n');
+    const base = execRequest(accountId);
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'occ-symbol' } };
+
+    const res = await postPreview(cookie, csv, request);
+    // The pre-existing crash: this input reached neutralizeCsvCell(undefined). It
+    // must now be a located error at 200, never a 500.
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'ROW_MISSING_REQUIRED_FIELD',
+        rowNumber: 2,
+        tradrField: 'symbol',
+        csvColumn: 'Symbol',
+      }),
+    );
+    expect(body.committable).toBe(false);
+    // The empty-symbol option row yields no proposed position; the stock round-trip stands.
+    expect(body.summary.positions).toBe(1);
+    expect(body.positions).toHaveLength(1);
+    expect(body.positions[0].scope.assetType).toBe('stock');
   });
 });
