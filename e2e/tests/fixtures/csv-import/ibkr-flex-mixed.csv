@@ -1,0 +1,5 @@
+Symbol,Description,UnderlyingSymbol,Strike,Expiry,Put/Call,Multiplier,AssetClass,Buy/Sell,Open/CloseIndicator,Quantity,TradePrice,IBCommission,DateTime,Notes/Codes
+AAPL,,,,,,1,STK,BUY,O,100,121.50,-1.00,"2026-01-05;09:30:00",
+AAPL,,,,,,1,STK,SELL,C,-100,123.10,-1.00,"2026-01-05;15:55:00",
+AAPL  260320C00250000,,AAPL,250,20260320,C,100,OPT,BUY,O,1,1.75,-0.65,"2026-01-05;09:31:00",
+AAPL  260320C00250000,,AAPL,250,20260320,C,100,OPT,SELL,C,-1,2.25,-0.65,"2026-01-05;15:50:00",
