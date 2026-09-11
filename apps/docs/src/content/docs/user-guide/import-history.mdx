@@ -56,8 +56,9 @@ or by mapping each field by hand.
 
 **Presets** pre-fill the mapping for a known export format — Interactive Brokers
 Flex Query trades, a generic one-row-per-fill layout, and formats used by common
-journalling tools. Choosing one fills the fields in; you can then adjust any of
-them. A preset is a starting point, not a lock.
+journalling tools. A preset for a format with options also sets the option
+contract form (see [Options](#options)). Choosing one fills the fields in; you
+can then adjust any of them. A preset is a starting point, not a lock.
 
 Set these alongside the mapping:
 
@@ -77,6 +78,9 @@ For execution rows, these fields are **required**:
 - Filled at (date/time)
 - Exactly **one** of Type (entry/exit) or Action (buy/sell)
 
+A preset that declares a descriptor column satisfies **Asset type** from that
+column. The Tradervue preset works this way.
+
 **Preview import** stays disabled until all of them are mapped, and the page
 lists what is still missing.
 
@@ -85,6 +89,10 @@ Every field maps to a **column in your file**. There is no "treat every row as a
 stock" option, so an export with no asset-type column cannot be mapped as it
 stands — including some formats Tradr ships a preset for.
 
+A preset descriptor column is the exception. It supplies the asset type from the
+descriptor, so you do not map an asset-type column. The Tradervue preset does
+this.
+
 Add the column before you upload. One value for every row is fine:
 
 ```
@@ -92,6 +100,65 @@ Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees
 AAPL,STK,BUY,100,181.50,2026-03-02T09:35:00,1.00
 ```
 :::
+
+## Options
+
+Tradr imports option trades. It stores each option position as a compact OCC
+symbol, for example `NVDA260321C120`.
+
+### Choose the contract form
+
+Tell Tradr where to find the option contract in each row. Set the **contract
+form** in the mapping. There are three forms:
+
+| Contract form | Where Tradr finds the contract | Preset |
+| --- | --- | --- |
+| **OCC symbol** | The Symbol column holds a full OCC contract symbol. | Interactive Brokers |
+| **Separate columns** | Separate columns hold the expiry, strike, and call or put. The underlying comes from the Symbol column. | TradeZella |
+| **Descriptor** | One column holds a text descriptor of the contract. This form is preset-only. | Tradervue |
+
+For the separate-columns form, also set the **Expiry format**. The Expiry format
+tells Tradr how to read the expiry column. The choices are ISO, `YYYYMMDD`, and
+`DD-MON-YY`.
+
+### 100-share contracts only
+
+Tradr represents 100-share option contracts only. It refuses a row with a
+different multiplier. It also refuses a mini contract.
+
+### Which rows to export
+
+Export the **Trades** section of your report only.
+
+Tradr refuses assignment, exercise, and expiration rows. Tradr does not yet
+import option lifecycle events. Close or remove these contracts by hand.
+
+A contract with no closing row stays open, the same as a stock position.
+
+### Interactive Brokers Flex Query
+
+Build a **Trades** Flex Query for the Interactive Brokers preset. Include these
+fields:
+
+`Symbol`, `AssetClass`, `Buy/Sell`, `Quantity`, `TradePrice`, `IBCommission`,
+`DateTime`, `Multiplier`, and `Notes/Codes`.
+
+Set the **Date format** to ISO date and time.
+
+The preset reads signed values. A negative quantity is a sale. A negative
+commission is a cost. Tradr stores the size either way.
+
+To map the contract with separate columns instead of the OCC symbol, also
+include `UnderlyingSymbol`, `Strike`, `Expiry`, and `Put/Call`. Then switch the
+contract form to separate columns.
+
+### Tradervue monthly options
+
+A Tradervue monthly option names a month but no day. Tradr derives the expiry as
+the third Friday of that month.
+
+This derived date can differ from the broker's OCC expiration date. So the same
+contract imported from an OCC symbol may not match as a duplicate.
 
 ## Step 4 — Read the preview
 
@@ -157,6 +224,10 @@ today. Preview carefully — that is what the step is for.
 - **The P&L in the preview is not what you expect** — check whether your export
   already nets fees out of the price. Tradr subtracts mapped fees itself, so fees
   counted twice show up here, before anything is written.
+- **An option Symbol fails to parse** — switch the contract form to separate
+  columns and map the underlying, expiry, strike, and call or put.
+- **Every option row failed on the expiry** — the **Expiry format** does not
+  match the expiry column.
 
 ## Related
 
