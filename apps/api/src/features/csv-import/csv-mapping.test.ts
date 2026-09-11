@@ -140,6 +140,91 @@ describe('validateMappingShape', () => {
       expect.objectContaining({ code: 'MAPPING_FIELD_MISSING', tradrField: 'exitPrice' }),
     );
   });
+
+  it('does not require an assetType column when a descriptor supplies it (REQ-2.8)', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      contractForm: 'descriptor',
+      columns: {
+        symbol: 'Symbol',
+        descriptor: 'Descriptor',
+        action: 'Action',
+        quantity: 'Quantity',
+        price: 'Price',
+        filledAt: 'FilledAt',
+      },
+    };
+    const headers = ['Symbol', 'Descriptor', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const errors = validateMappingShape(headers, m);
+    expect(
+      errors.some((e) => e.code === 'MAPPING_FIELD_MISSING' && e.tradrField === 'assetType'),
+    ).toBe(false);
+  });
+
+  it('requires the descriptor column for the descriptor contract form (REQ-3.5)', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      contractForm: 'descriptor',
+      columns: {
+        symbol: 'Symbol',
+        assetType: 'AssetType',
+        action: 'Action',
+        quantity: 'Quantity',
+        price: 'Price',
+        filledAt: 'FilledAt',
+      },
+    };
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const errors = validateMappingShape(headers, m);
+    expect(errors).toContainEqual(
+      expect.objectContaining({ code: 'MAPPING_FIELD_MISSING', tradrField: 'descriptor' }),
+    );
+  });
+
+  it('requires an expiry format for the composed contract form (REQ-2.6)', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      contractForm: 'composed',
+      columns: {
+        symbol: 'Symbol',
+        assetType: 'AssetType',
+        action: 'Action',
+        quantity: 'Quantity',
+        price: 'Price',
+        filledAt: 'FilledAt',
+      },
+    };
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const errors = validateMappingShape(headers, m);
+    expect(errors).toContainEqual(
+      expect.objectContaining({ code: 'MAPPING_EXPIRY_FORMAT_MISSING' }),
+    );
+  });
+
+  it('still requires assetType for the occ-symbol and composed forms', () => {
+    for (const contractForm of ['occ-symbol', 'composed'] as const) {
+      const m: Mapping = {
+        rowShape: 'execution',
+        contractForm,
+        // A descriptor column is present, proving the exemption keys on the
+        // descriptor FORM, not merely on a mapped descriptor column.
+        expiryFormat: 'iso',
+        columns: {
+          symbol: 'Symbol',
+          descriptor: 'Descriptor',
+          action: 'Action',
+          quantity: 'Quantity',
+          price: 'Price',
+          filledAt: 'FilledAt',
+        },
+      };
+      const headers = ['Symbol', 'Descriptor', 'Action', 'Quantity', 'Price', 'FilledAt'];
+      const errors = validateMappingShape(headers, m);
+      expect(errors).toContainEqual(
+        expect.objectContaining({ code: 'MAPPING_FIELD_MISSING', tradrField: 'assetType' }),
+      );
+    }
+  });
 });
 
 describe('applyMapping transforms', () => {
@@ -197,6 +282,33 @@ describe('applyMapping transforms', () => {
     // No TRANSFORM_NO_MATCH errors — the declared synonyms resolve.
     expect(errors.some((e) => e.code === 'TRANSFORM_NO_MATCH')).toBe(false);
     expect(rows.map((r) => r.values.side)).toEqual(['long', 'short', 'long']);
+  });
+
+  it('canonicalizes right (C/Call/PUT and a declared synonym)', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      columns: { right: 'Right' },
+      transforms: { right: { CE: 'call', PE: 'put' } },
+    };
+    const p = parsed(['Right'], [['C'], ['Call'], ['PUT'], ['ce'], ['PE']]);
+    const { rows, errors } = applyMapping(p, m);
+    expect(errors.some((e) => e.code === 'TRANSFORM_NO_MATCH')).toBe(false);
+    expect(rows.map((r) => r.values.right)).toEqual(['call', 'call', 'put', 'call', 'put']);
+  });
+
+  it('reports a located cell error for an unmatched right value', () => {
+    const m: Mapping = { rowShape: 'execution', columns: { right: 'Right' } };
+    const p = parsed(['Right'], [['neither']]);
+    const { rows, errors } = applyMapping(p, m);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        code: 'TRANSFORM_NO_MATCH',
+        rowNumber: 2,
+        tradrField: 'right',
+        csvColumn: 'Right',
+      }),
+    );
+    expect(rows[0].values.right).toBeUndefined();
   });
 });
 
@@ -292,5 +404,64 @@ describe('applyMapping row conformance', () => {
       entryPrice: '150',
       exitDate: '2024-01-05',
     });
+  });
+});
+
+describe('applyMapping descriptor-derived assetType', () => {
+  it('derives assetType from the descriptor cell (populated -> option, empty -> stock)', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      contractForm: 'descriptor',
+      columns: { descriptor: 'Descriptor' },
+    };
+    const p = parsed(['Descriptor'], [['AAPL 20260320 C 150'], ['']]);
+    const { rows } = applyMapping(p, m);
+    expect(rows.map((r) => r.values.assetType)).toEqual(['option', 'stock']);
+  });
+
+  it('the descriptor is authoritative over a mapped assetType column', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      contractForm: 'descriptor',
+      columns: { assetType: 'AssetType', descriptor: 'Descriptor' },
+    };
+    const p = parsed(['AssetType', 'Descriptor'], [['Stock', 'AAPL 20260320 C 150']]);
+    const { rows } = applyMapping(p, m);
+    expect(rows[0].values.assetType).toBe('option');
+  });
+
+  it('a descriptor column absent from the file is COLUMN_ABSENT and never silently typed', () => {
+    const m: Mapping = {
+      rowShape: 'execution',
+      contractForm: 'descriptor',
+      columns: {
+        symbol: 'Symbol',
+        descriptor: 'Descriptor',
+        action: 'Action',
+        quantity: 'Quantity',
+        price: 'Price',
+        filledAt: 'FilledAt',
+      },
+    };
+    // Descriptor is mapped but the header is not in the file.
+    const headers = ['Symbol', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    expect(validateMappingShape(headers, m)).toContainEqual(
+      expect.objectContaining({
+        code: 'MAPPING_COLUMN_ABSENT',
+        tradrField: 'descriptor',
+        csvColumn: 'Descriptor',
+      }),
+    );
+
+    const p = parsed(headers, [['AAPL', 'BUY', '10', '150', '2024-01-02']]);
+    const { rows, errors } = applyMapping(p, m);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        code: 'ROW_MISSING_REQUIRED_FIELD',
+        rowNumber: 2,
+        tradrField: 'assetType',
+      }),
+    );
+    expect(rows[0].values.assetType).toBeUndefined();
   });
 });
