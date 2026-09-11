@@ -147,22 +147,29 @@ describe('POST /api/csv-import/preview — classification', () => {
     expect(body.errors.some((e: { code: string }) => e.code === 'SEGMENT_CROSSES_FLAT')).toBe(true);
   });
 
-  it('rejects option rows with a blocking per-row error (options unsupported)', async () => {
+  it('an option row carrying a valid contract previews as a committable option position', async () => {
     const cookie = await registerAndGetCookie();
     const accountId = await createAccount(cookie);
     const csv = [
       'Symbol,Type,Side,Price,Quantity,Date,Fees',
-      'AAPL,OPTION,BUY,1,1,2026-01-01,0',
-      'AAPL,OPTION,SELL,2,1,2026-01-02,0',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+      'AAPL260320C250,OPTION,SELL,2.25,1,2026-01-06,0.65',
     ].join('\n');
 
-    const res = await postPreview(cookie, csv, execRequest(accountId));
+    const base = execRequest(accountId);
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'occ-symbol' } };
+
+    const res = await postPreview(cookie, csv, request);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.committable).toBe(false);
-    expect(body.errors.some((e: { code: string }) => e.code === 'OPTIONS_NOT_SUPPORTED')).toBe(
-      true,
-    );
+    expect(body.committable).toBe(true);
+    expect(body.summary.positions).toBe(1);
+    expect(body.positions).toHaveLength(1);
+    expect(body.positions[0].scope.symbol).toBe('AAPL260320C250');
+    expect(body.positions[0].scope.assetType).toBe('option');
+    expect(body.positions[0].closes).toBe(true);
+    // (2.25 − 1.75) × 1 × 100 − 0.65 − 0.65.
+    expect(body.positions[0].proposedPnl).toBeCloseTo(48.7, 2);
   });
 });
 

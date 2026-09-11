@@ -1,10 +1,7 @@
 import { Decimal } from 'decimal.js';
 
 import {
-  CreateFillSchema,
-  CreatePositionSchema,
   CURRENCY_CODES,
-  getCurrencyMinorUnits,
   type CsvPreviewRequest,
   type CsvPreviewResponse,
   type LocatedError,
@@ -19,7 +16,6 @@ import {
   resolveWritableAccountId,
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
-import { aggregateFills, computePnlFromTotals } from '@/features/positions/pnl';
 import { countPositionsByUser } from '@/features/positions/positions.query';
 import {
   addFillTx,
@@ -27,10 +23,6 @@ import {
   createPositionTx,
   openPositionTx,
 } from '@/features/positions/positions.service';
-import {
-  validateSegmentInvariants,
-  type InMemoryFill,
-} from '@/features/positions/segment-invariants';
 import { config } from '@/lib/config';
 import { AppError, NotFoundError, ValidationError } from '@/lib/errors';
 import { captureServerEvent } from '@/lib/posthog';
@@ -51,17 +43,17 @@ import {
   type CommittedResult,
 } from './csv-import.query';
 import { guardRowCount } from './csv-import.upload';
-import { applyMapping, validateMappingShape } from './csv-mapping';
-import { normalizeRow, type NormalizedRow } from './csv-normalize';
 import { parseCsv } from './csv-parse';
-import { segment, type Segment } from './csv-segment';
+import { runPipeline, toInstant } from './csv-pipeline';
+import type { Segment } from './csv-segment';
 
 // ---------------------------------------------------------------------------
 // Preview service (design Component 6) — the write-free preview that guarantees
-// a clean preview ⇒ no commit rollback. Orchestrates the pure pipeline
-// (parse → map → normalize → segment → validateSegmentInvariants → duplicate
-// scan) then writes EXACTLY ONE `csv_import_staging` row keyed to a single-use
-// token. No positions/fills/ledger writes happen here (REQ-6.1).
+// a clean preview ⇒ no commit rollback. Parses, runs the pure pipeline
+// (`runPipeline`, design Component 5: map → normalize → contract resolution →
+// segment → per-segment validation + P&L), scans for duplicates, then writes
+// EXACTLY ONE `csv_import_staging` row keyed to a single-use token. No
+// positions/fills/ledger writes happen here (REQ-6.1).
 //
 // Formula/CSV injection is neutralized at ONE point — `neutralizeCsvCell` is
 // applied to every string cell value as it enters the response/staging payload
@@ -131,17 +123,6 @@ function capWarnings(items: LocatedWarning[]): LocatedWarning[] {
 }
 
 /**
- * Canonical UTC instant (`…Z`) for a normalized ISO timestamp. The normalizer
- * emits offset form (`…+00:00`) for date-only inputs; `CreateFillSchema` uses
- * Zod `.datetime()` (offset-less, `Z`-only) and the DB stores a `timestamptz`
- * instant, so the preview validates/stores/dup-keys the same canonical instant
- * the commit will persist — keeping preview == commit fidelity.
- */
-function toInstant(iso: string): string {
-  return new Date(iso).toISOString();
-}
-
-/**
  * Build a duplicate match-key (design Component 12). The account is already
  * scoped by the query, so the key is `symbol + filledAt(instant) + price +
  * quantity + type`. Numerics are canonicalized via Decimal so `"10"` (incoming)
@@ -201,18 +182,6 @@ export async function previewImport(
   // BEFORE building the full in-memory result → 413 CSV_IMPORT_TOO_MANY_ROWS.
   guardRowCount(parsed.rowCount);
 
-  // 2) Mapping shape — reported before any row processing (REQ-2.4).
-  const mappingErrors = validateMappingShape(parsed.headers, request.mapping);
-  for (const e of mappingErrors) {
-    errors.push({
-      rowNumber: 0,
-      csvColumn: e.csvColumn,
-      tradrField: e.tradrField,
-      code: e.code,
-      message: e.message,
-    });
-  }
-
   // No `fees` column mapped → fills default fees to 0 (REQ-10.2).
   if (!request.mapping.columns.fees) {
     warnings.push({
@@ -230,47 +199,16 @@ export async function previewImport(
     });
   }
 
-  // 3) Map + transform.
-  const mapped = applyMapping(parsed, request.mapping);
-  for (const e of mapped.errors) {
-    errors.push({
-      rowNumber: e.rowNumber,
-      csvColumn: e.csvColumn,
-      tradrField: e.tradrField,
-      code: e.code,
-      message: e.message,
-    });
-  }
-
-  // 4) Normalize each row, collecting per-row located errors and warnings.
-  const normalizedRows: NormalizedRow[] = [];
-  for (const row of mapped.rows) {
-    const result = normalizeRow(row, {
-      timezone: request.timezone,
-      dateFormat: request.dateFormat,
-      numberFormat: request.numberFormat,
-    });
-    if (Array.isArray(result)) {
-      errors.push(...result);
-      continue;
-    }
-    normalizedRows.push(result.row);
-    warnings.push(...result.warnings);
-  }
-
-  // 5) Segment.
-  const segResult = segment(normalizedRows, request.mapping.rowShape);
-  errors.push(...segResult.errors);
-  warnings.push(...segResult.warnings);
-
-  // 6) Per-segment field validation + invariant dry-run + P&L + options reject.
-  const proposedPositions: ProposedPosition[] = [];
-  let totalFills = 0;
-  for (const seg of segResult.segments) {
-    validateSegment(seg, errors);
-    proposedPositions.push(buildProposedPosition(seg, account.currency));
-    totalFills += seg.executions.length;
-  }
+  // 2–6) Pure pipeline (design Component 5): mapping shape, map + transform
+  // (excluding mapping-errored rows), normalize, contract resolution, segment,
+  // per-segment field validation + invariant dry-run + P&L. DB-free — the
+  // conformance test runs this same code path. Placed after the two warnings
+  // above so today's warning order is preserved.
+  const pipeline = runPipeline(parsed, request, account.currency);
+  errors.push(...pipeline.errors);
+  warnings.push(...pipeline.warnings);
+  const proposedPositions = pipeline.proposedPositions;
+  const totalFills = pipeline.totalFills;
 
   // 7) Duplicate scan (design Component 12) — windowed to the file's date span.
   let requiresDuplicateAffirmation = false;
@@ -279,7 +217,7 @@ export async function previewImport(
       db,
       userId,
       accountId,
-      segResult.segments,
+      pipeline.segments,
       warnings,
     );
   }
@@ -665,116 +603,6 @@ async function replaySegment(
   }
 
   return pos.id;
-}
-
-// ---------------------------------------------------------------------------
-// Per-segment validation (field schema + invariants + options reject)
-// ---------------------------------------------------------------------------
-
-function validateSegment(seg: Segment, errors: LocatedError[]): void {
-  // Options rejection (REQ-5.2) — blocking, per row.
-  if (seg.scope.assetType === 'option') {
-    for (const exec of seg.executions) {
-      errors.push({
-        rowNumber: exec.sourceRow,
-        tradrField: 'assetType',
-        code: 'OPTIONS_NOT_SUPPORTED',
-        message: 'Options import is not supported yet.',
-      });
-    }
-    return;
-  }
-
-  // Field validation against the shared schemas (normalized values, REQ-5.1).
-  const positionCheck = CreatePositionSchema.safeParse({
-    accountId: '00000000-0000-0000-0000-000000000000',
-    symbol: seg.scope.symbol,
-    side: seg.side,
-    assetType: seg.scope.assetType,
-  });
-  if (!positionCheck.success) {
-    const issue = positionCheck.error.issues[0];
-    errors.push({
-      rowNumber: seg.executions[0]?.sourceRow ?? 0,
-      tradrField: 'symbol',
-      code: 'FIELD_INVALID',
-      message: issue.message,
-    });
-  }
-
-  for (const exec of seg.executions) {
-    const fillCheck = CreateFillSchema.safeParse({
-      type: exec.type,
-      price: exec.price,
-      quantity: exec.quantity,
-      fees: exec.fees,
-      filledAt: toInstant(exec.filledAt),
-    });
-    if (!fillCheck.success) {
-      for (const issue of fillCheck.error.issues) {
-        errors.push({
-          rowNumber: exec.sourceRow,
-          tradrField: String(issue.path[0] ?? ''),
-          code: 'FIELD_INVALID',
-          message: issue.message,
-        });
-      }
-    }
-  }
-
-  // Cross-fill invariant dry-run — the SAME predicates the live services run.
-  const inMemory: InMemoryFill[] = seg.executions.map((e) => ({
-    type: e.type,
-    quantity: e.quantity,
-    filledAt: e.filledAt,
-  }));
-  const openedAt = seg.executions[0]?.filledAt ?? null;
-  const closedAt = seg.executions[seg.executions.length - 1]?.filledAt ?? null;
-  const invariantErrors = validateSegmentInvariants(inMemory, {
-    assetType: seg.scope.assetType === 'option' ? 'option' : 'stock',
-    closes: seg.closes,
-    openedAt,
-    closedAt,
-  });
-  for (const ie of invariantErrors) {
-    const rowNumber =
-      ie.fillIndex !== null
-        ? (seg.executions[ie.fillIndex]?.sourceRow ?? 0)
-        : (seg.executions[0]?.sourceRow ?? 0);
-    errors.push({ rowNumber, code: ie.code, message: ie.message });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Proposed-position P&L (reuses aggregateFills/computePnlFromTotals — no DB)
-// ---------------------------------------------------------------------------
-
-function buildProposedPosition(seg: Segment, currency: string): ProposedPosition {
-  const assetType = seg.scope.assetType === 'option' ? 'option' : 'stock';
-  const totals = aggregateFills(
-    seg.executions.map((e) => ({
-      type: e.type,
-      price: e.price,
-      quantity: e.quantity,
-      fees: e.fees,
-    })),
-  );
-  const pnl = computePnlFromTotals(totals, seg.side, assetType, getCurrencyMinorUnits(currency));
-
-  return {
-    scope: { symbol: seg.scope.symbol, assetType },
-    side: seg.side,
-    closes: seg.closes,
-    fills: seg.executions.map((e) => ({
-      type: e.type,
-      price: e.price,
-      quantity: e.quantity,
-      fees: e.fees,
-      filledAt: toInstant(e.filledAt),
-      sourceRow: e.sourceRow,
-    })),
-    proposedPnl: pnl.realizedPnl ?? undefined,
-  };
 }
 
 // ---------------------------------------------------------------------------

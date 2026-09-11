@@ -140,21 +140,46 @@ describe('previewImport — staging + classification', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Options rejection (REQ-5.2)
+// Option contracts (REQ-1.1)
 // ---------------------------------------------------------------------------
 
-describe('previewImport — options rejection', () => {
-  it('rejects option rows with a blocking error per row', async () => {
+describe('previewImport — option contracts', () => {
+  it('an option row carrying a valid contract previews as a committable option position', async () => {
     const { userId, accountId } = await seedAccount();
     const csv = [
       'Symbol,Type,Side,Price,Quantity,Date,Fees',
-      'AAPL,OPTION,BUY,1,1,2026-01-01,0',
-      'AAPL,OPTION,SELL,2,1,2026-01-02,0',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+      'AAPL260320C250,OPTION,SELL,2.25,1,2026-01-06,0.65',
     ].join('\n');
-    const res = await previewImport(db, userId, accountId, bytes(csv), execRequest(accountId));
-    expect(res.committable).toBe(false);
-    const optErrors = res.errors.filter((e) => e.code === 'OPTIONS_NOT_SUPPORTED');
-    expect(optErrors.length).toBeGreaterThanOrEqual(1);
+    const res = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      execRequest(accountId, {
+        mapping: {
+          rowShape: 'execution',
+          contractForm: 'occ-symbol',
+          columns: {
+            symbol: 'Symbol',
+            assetType: 'Type',
+            action: 'Side',
+            price: 'Price',
+            quantity: 'Quantity',
+            filledAt: 'Date',
+            fees: 'Fees',
+          },
+        },
+      }),
+    );
+    expect(res.committable).toBe(true);
+    expect(res.summary.positions).toBe(1);
+    expect(res.positions).toHaveLength(1);
+    expect(res.positions[0].scope.symbol).toBe('AAPL260320C250');
+    expect(res.positions[0].scope.assetType).toBe('option');
+    expect(res.positions[0].closes).toBe(true);
+    // (2.25 − 1.75) × 1 × 100 − 0.65 − 0.65.
+    expect(res.positions[0].proposedPnl).toBeCloseTo(48.7, 2);
   });
 });
 
