@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import { parseOccSymbol } from '../options';
 
+import { TagSchema } from './tag';
+
 const sideEnum = z.enum(['long', 'short']);
 const assetTypeEnum = z.enum(['stock', 'option']);
 const statusEnum = z.enum(['draft', 'open', 'closed']);
@@ -195,6 +197,9 @@ export const PositionListItemSchema = z.object({
   // of entry fees, and is NEGATIVE for shorts (remaining proceeds are a
   // liability). Cost basis only; it never moves with the market.
   openCostBasis: z.number(),
+  // Tags attached to this position. Optional so the shape is backward-compatible
+  // and callers that do not join tags can omit it.
+  tags: z.array(TagSchema).optional(),
 });
 
 export const PositionDetailSchema = z.object({
@@ -235,6 +240,9 @@ export const PositionDetailSchema = z.object({
   // of entry fees, and is NEGATIVE for shorts (remaining proceeds are a
   // liability). Cost basis only; it never moves with the market.
   openCostBasis: z.number(),
+  // Tags attached to this position. Optional so the shape is backward-compatible
+  // and callers that do not join tags can omit it.
+  tags: z.array(TagSchema).optional(),
 });
 
 export type CreatePositionInput = z.infer<typeof CreatePositionSchema>;
