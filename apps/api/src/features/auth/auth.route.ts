@@ -436,6 +436,10 @@ userPreferencesRouter.put('/users/me/timezone', validate('json', UserTimezoneSch
  *                   type: string
  *                   format: date-time
  *                   description: Absent until the calculator has been used.
+ *                 starterTagsAnsweredAt:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Absent until the user has answered the starter tags offer.
  *                 coachMarksSeen:
  *                   type: array
  *                   items: { type: string }

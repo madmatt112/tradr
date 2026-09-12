@@ -43,6 +43,7 @@ import {
 import { initStockQuoteCache } from '@/features/symbols/stock-quote.client';
 import symbolsRouter from '@/features/symbols/symbols.route';
 import { syncSymbolsIfStale } from '@/features/symbols/symbols.service';
+import tagsRouter from '@/features/tags/tags.route';
 import { isMetricsConfigured } from '@/lib/config';
 import {
   loadEncryptionKeyMaterial,
@@ -132,6 +133,7 @@ app.route('/api/positions', positions);
 app.route('/api/positions', fillsRouter);
 app.route('/api/performance', performance);
 app.route('/api/symbols', symbolsRouter);
+app.route('/api/tags', tagsRouter);
 // Mounted bare at /api so it can own the absolute /api/users/me/buying-power-basis
 // path, matching the accounting and expenses preference routes below.
 app.route('/api', calculatorPreferencesRouter);
