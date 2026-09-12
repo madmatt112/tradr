@@ -73,10 +73,7 @@ export function TagFilterControl({
             <>
               <DropdownMenuItem disabled>No tags yet</DropdownMenuItem>
               <DropdownMenuItem asChild className="cursor-pointer">
-                {/* `/settings/tags` is registered by the Settings Tags tab
-                    (design Component 15); the cast keeps this typed against the
-                    router until that route exists. */}
-                <Link to={'/settings/tags' as never}>Manage tags in Settings</Link>
+                <Link to="/settings/tags">Manage tags in Settings</Link>
               </DropdownMenuItem>
             </>
           ) : (

@@ -44,6 +44,7 @@ import { Route as AdvisorRoute } from '../_auth.settings.advisor';
 import { Route as ProfileRoute } from '../_auth.settings.profile';
 import { Route as AccountRoute } from '../_auth.settings.account';
 import { Route as HelpRoute } from '../_auth.settings.help';
+import { Route as TagsRoute } from '../_auth.settings.tags';
 
 // The real routes are typed against the app's route registration; re-hosting
 // them under a fresh root requires loosening those option types.
@@ -53,6 +54,7 @@ const advisorOpts = AdvisorRoute.options as any;
 const profileOpts = ProfileRoute.options as any;
 const accountOpts = AccountRoute.options as any;
 const helpOpts = HelpRoute.options as any;
+const tagsOpts = TagsRoute.options as any;
 
 // ---- Test router ----------------------------------------------------------
 // Re-host the real Settings routes under a fresh root so we can exercise the
@@ -90,6 +92,13 @@ function buildRouter(initialPath: string) {
     path: '/help',
     component: helpOpts.component,
   });
+  // Re-hosted so the layout's `<Link to="/settings/tags">` tab trigger has a
+  // matching route; the component only mounts if a test navigates here.
+  const tags = createRoute({
+    getParentRoute: () => settingsLayout as any,
+    path: '/tags',
+    component: tagsOpts.component,
+  });
   // A stub, not the real Billing tab (which polls the tier): it exists only as
   // the redirect target when the advisor is withdrawn.
   const billing = createRoute({
@@ -99,7 +108,7 @@ function buildRouter(initialPath: string) {
   });
 
   const routeTree = rootRoute.addChildren([
-    settingsLayout.addChildren([advisor, billing, profile, account, help]),
+    settingsLayout.addChildren([advisor, billing, profile, account, help, tags]),
   ]);
 
   return createRouter({
@@ -130,13 +139,14 @@ afterEach(() => {
 // ---- Tests ----------------------------------------------------------------
 
 describe('Settings tabbed layout', () => {
-  it('case 1: renders the three tab triggers (Advisor, Profile, Account)', async () => {
+  it('case 1: renders the tab triggers (Advisor, Profile, Account, Tags)', async () => {
     renderAt('/settings/advisor');
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /Advisor/i })).toBeTruthy();
     });
     expect(screen.getByRole('tab', { name: /Profile/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Account/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Tags/i })).toBeTruthy();
   });
 
   it('case 2: navigating to /settings redirects to /settings/advisor', async () => {
