@@ -11,10 +11,18 @@ vi.mock('@/lib/telemetry/posthog', () => ({
   captureClientEvent: (...args: unknown[]) => captureClientEvent(...args),
 }));
 
-// Stub the router — the list calls useNavigate() for whole-row navigation.
+// Stub the router — the list calls useNavigate() for whole-row navigation and
+// useSearch() to read its filters from the URL.
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
   useNavigate: () => vi.fn(),
+  useSearch: () => ({}),
+}));
+
+// The list now renders the tag filter control and Tags column; stub the tags
+// list to empty so this suite stays focused on the create-dialog event.
+vi.mock('@/features/tags/hooks/useTags', () => ({
+  useTags: () => ({ data: [] }),
 }));
 
 // Mock the data hooks so the component renders without TanStack Query / the API.
