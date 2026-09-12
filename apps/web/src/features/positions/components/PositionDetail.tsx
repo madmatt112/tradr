@@ -1,4 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
+import { Tag } from 'lucide-react';
 import { useState } from 'react';
 
 import { DrawerToggle } from '@/components/layout/DrawerToggle';
@@ -19,6 +20,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
+import { TagChipList } from '@/features/tags/components/TagChip';
+import { TagPicker } from '@/features/tags/components/TagPicker';
 import { formatCurrency } from '@/lib/format';
 
 import {
@@ -50,6 +53,7 @@ export function PositionDetailView({ positionId }: Props) {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [fillDialogOpen, setFillDialogOpen] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -131,6 +135,20 @@ export function PositionDetailView({ positionId }: Props) {
               {optionContract.typeLabel}
             </p>
           )}
+          {/* Tags as chips beneath the symbol row, plus Edit tags — available on
+              every status, so tagging is part of logging the trade (REQ-4.1/4.2). */}
+          <div className="flex flex-wrap items-center gap-2">
+            <TagChipList tags={position.tags ?? []} />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="cursor-pointer"
+              onClick={() => setTagsOpen(true)}
+            >
+              <Tag className="size-4" />
+              Edit tags
+            </Button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" className="cursor-pointer" onClick={() => setEditOpen(true)}>
@@ -371,6 +389,17 @@ export function PositionDetailView({ positionId }: Props) {
 
       {/* Edit Dialog */}
       <PositionEditDialog open={editOpen} onOpenChange={setEditOpen} position={position} />
+
+      {/* Tags picker — mounted only while open so the bare detail suites (no
+          QueryClient) keep mounting without stubbing it. */}
+      {tagsOpen && (
+        <TagPicker
+          open={tagsOpen}
+          onOpenChange={setTagsOpen}
+          positionId={position.id}
+          currentTags={position.tags ?? []}
+        />
+      )}
 
       {/* Delete Confirmation */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
