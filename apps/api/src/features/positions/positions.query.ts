@@ -40,7 +40,7 @@ export async function countPositionsByUser(
 export function findPositionListByUser(
   db: Database | Transaction,
   userId: string,
-  filters?: { status?: string; accountId?: string },
+  filters?: { status?: string; accountId?: string; tag?: string[] },
 ) {
   const conditions = [eq(positions.userId, userId)];
   if (filters?.status) {
@@ -65,7 +65,8 @@ export function findPositionListByUser(
       fs.options_max_per_fill,
       agg.entry_qty, agg.exit_qty,
       agg.entry_cost, agg.exit_cost,
-      agg.entry_fees, agg.exit_fees
+      agg.entry_fees, agg.exit_fees,
+      tg.tags
     FROM positions p
     JOIN accounts a ON a.id = p.account_id
     LEFT JOIN brokerages b ON b.id = a.brokerage_id
@@ -80,9 +81,30 @@ export function findPositionListByUser(
         COALESCE(SUM(CASE WHEN f.type = 'exit'  THEN f.fees END), 0) AS exit_fees
       FROM fills f WHERE f.position_id = p.id
     ) agg ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(
+        json_agg(
+          json_build_object('id', t.id, 'name', t.name, 'category', t.category, 'color', t.color)
+          ORDER BY array_position(ARRAY['setup','emotion','mistake','general']::text[], t.category), lower(t.name)
+        ),
+        '[]'::json
+      ) AS tags
+      FROM position_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.position_id = p.id
+    ) tg ON true
     WHERE p.user_id = ${userId}
     ${filters?.status ? sql`AND p.status = ${filters.status}` : sql``}
     ${filters?.accountId ? sql`AND p.account_id = ${filters.accountId}` : sql``}
+    ${
+      filters?.tag?.length
+        ? sql.join(
+            filters.tag.map(
+              (id) =>
+                sql`AND EXISTS (SELECT 1 FROM position_tags pt WHERE pt.position_id = p.id AND pt.tag_id = ${id})`,
+            ),
+            sql` `,
+          )
+        : sql``
+    }
     ORDER BY p.updated_at DESC
   `);
 }

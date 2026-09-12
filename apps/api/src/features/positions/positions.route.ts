@@ -6,8 +6,10 @@ import {
   UpdatePositionSchema,
   ReopenPositionSchema,
 } from '@tradr/shared/schemas/position';
+import { TagIdListParamSchema, SetPositionTagsSchema } from '@tradr/shared/schemas/tag';
 
 import { db } from '@/db';
+import { setPositionTags } from '@/features/tags/tags.service';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 
@@ -37,6 +39,7 @@ const ParamSchema = z.object({ id: z.string().uuid() });
 const ListQuerySchema = z.object({
   status: z.enum(['draft', 'open', 'closed']).optional(),
   accountId: z.string().uuid().optional(),
+  tag: TagIdListParamSchema,
 });
 
 /**
@@ -94,13 +97,62 @@ positions.post('/', validate('json', CreatePositionSchema), async (c) => {
   return c.json(position, 201);
 });
 
+/**
+ * @swagger
+ * /api/positions:
+ *   get:
+ *     summary: List the user's positions.
+ *     description: >
+ *       Authed. Returns the user's positions (newest first), each carrying its
+ *       `tags` array ordered by category then case-insensitive name. Optional
+ *       filters may be combined.
+ *     tags: [Positions]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema: { type: string, enum: [draft, open, closed] }
+ *       - in: query
+ *         name: accountId
+ *         required: false
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: tag
+ *         required: false
+ *         schema: { type: string }
+ *         description: >
+ *           Comma-separated tag UUIDs; positions must carry every listed tag (AND
+ *           semantics). Elements that are not UUIDs are ignored; an unknown id
+ *           matches nothing.
+ *     responses:
+ *       200: { description: 'The user''s positions, each with a `tags` array.' }
+ *       400: { description: Validation error (e.g. an invalid accountId). }
+ */
 positions.get('/', validate('query', ListQuerySchema), async (c) => {
   const userId = c.get('userId');
-  const { status, accountId } = c.req.valid('query');
-  const list = await listPositions(db, userId, { status, accountId });
+  const { status, accountId, tag } = c.req.valid('query');
+  const list = await listPositions(db, userId, { status, accountId, tag });
   return c.json(list, 200);
 });
 
+/**
+ * @swagger
+ * /api/positions/{id}:
+ *   get:
+ *     summary: Get a position's detail.
+ *     description: >
+ *       Authed. Returns the position with its fills, computed P&L, and its
+ *       `tags` array ordered by category then case-insensitive name.
+ *     tags: [Positions]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200: { description: 'The position detail, including its `tags` array.' }
+ *       404: { description: Position not found (or not owned by the user). }
+ */
 positions.get('/:id', validate('param', ParamSchema), async (c) => {
   const userId = c.get('userId');
   const { id } = c.req.valid('param');
@@ -194,6 +246,54 @@ positions.delete('/:id', validate('param', ParamSchema), async (c) => {
   await removePosition(db, id, userId);
   return c.body(null, 204);
 });
+
+/**
+ * @swagger
+ * /api/positions/{id}/tags:
+ *   put:
+ *     summary: Replace a position's tag set.
+ *     description: >
+ *       Authed. Replaces the position's entire tag set with the supplied ids
+ *       (replace-set semantics, not a merge). Duplicate ids collapse to one.
+ *       Ownership of the position and of every tag is checked before the
+ *       per-position cap. Tagging is allowed in any status.
+ *     tags: [Positions]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [tagIds]
+ *             properties:
+ *               tagIds:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200: { description: 'The position''s tags after the replace, ordered by category then name.' }
+ *       400: { description: Validation error. }
+ *       404: { description: The position or one of the tags was not found (or not owned by the user). }
+ *       409:
+ *         description: >
+ *           `TAG_LIMIT_REACHED` — the set exceeds the per-position tag cap.
+ */
+positions.put(
+  '/:id/tags',
+  validate('param', ParamSchema),
+  validate('json', SetPositionTagsSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { id } = c.req.valid('param');
+    const { tagIds } = c.req.valid('json');
+    const tags = await setPositionTags(db, id, userId, tagIds);
+    return c.json(tags, 200);
+  },
+);
 
 const OpenSchema = z.object({ openedAt: z.string().datetime().optional() });
 const CloseSchema = z.object({ closedAt: z.string().datetime().optional() });

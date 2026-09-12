@@ -2839,6 +2839,54 @@
       }
     },
     "/api/positions": {
+      "get": {
+        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name. Optional filters may be combined.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "draft",
+                "open",
+                "closed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "accountId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated tag UUIDs; positions must carry every listed tag (AND semantics). Elements that are not UUIDs are ignored; an unknown id matches nothing.\n",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's positions, each with a `tags` array."
+          },
+          "400": {
+            "description": "Validation error (e.g. an invalid accountId)."
+          }
+        },
+        "summary": "List the user's positions.",
+        "tags": [
+          "Positions"
+        ]
+      },
       "post": {
         "description": "Authed. Creates a draft position in one of the user's accounts. When feature gating is enabled and the user is a non-admin Free user, the create is refused with `403 TIER_LIMIT_POSITIONS` at the position cap, or `403 TIER_ACCOUNT_NOT_WRITABLE` when over the account cap and targeting an account other than the writable designation. Admins and gating-off deployments pass through unchanged. Existing-data management (close/fills/edit/delete) is never blocked.\n",
         "requestBody": {
@@ -2940,6 +2988,32 @@
           }
         },
         "summary": "Delete a position (any status).",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "get": {
+        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The position detail, including its `tags` array."
+          },
+          "404": {
+            "description": "Position not found (or not owned by the user)."
+          }
+        },
+        "summary": "Get a position's detail.",
         "tags": [
           "Positions"
         ]
@@ -3321,6 +3395,62 @@
           }
         },
         "summary": "Reopen a same-day closed position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/tags": {
+      "put": {
+        "description": "Authed. Replaces the position's entire tag set with the supplied ids (replace-set semantics, not a merge). Duplicate ids collapse to one. Ownership of the position and of every tag is checked before the per-position cap. Tagging is allowed in any status.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "tagIds": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "tagIds"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The position's tags after the replace, ordered by category then name."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "404": {
+            "description": "The position or one of the tags was not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "`TAG_LIMIT_REACHED` — the set exceeds the per-position tag cap.\n"
+          }
+        },
+        "summary": "Replace a position's tag set.",
         "tags": [
           "Positions"
         ]
