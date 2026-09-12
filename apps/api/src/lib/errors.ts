@@ -42,6 +42,18 @@ export class ConflictError extends AppError {
   }
 }
 
+export class TagNameTakenError extends AppError {
+  constructor() {
+    super(409, 'TAG_NAME_TAKEN', 'A tag with this name already exists');
+  }
+}
+
+export class TagLimitError extends AppError {
+  constructor(public limit: number) {
+    super(409, 'TAG_LIMIT_REACHED', `Tag limit of ${limit} reached`);
+  }
+}
+
 export class RateLimitError extends AppError {
   constructor(public retryAfter: number) {
     super(429, 'RATE_LIMITED', 'Too many requests');
