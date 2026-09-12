@@ -51,10 +51,17 @@ export function handleCreatePositionError(
  * reads the same cache entry through the same fetcher rather than a second copy
  * of the key that could drift from this one.
  */
-export function positionsListQuery(filters?: { status?: string; accountId?: string }) {
+export function positionsListQuery(filters?: {
+  status?: string;
+  accountId?: string;
+  tag?: string[];
+}) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.accountId) params.set('accountId', filters.accountId);
+  // The array reaches here already sorted (buildListFilters), so `a,b` and `b,a`
+  // share one cache entry keyed on `filters` (REQ-3.6).
+  if (filters?.tag?.length) params.set('tag', filters.tag.join(','));
   const query = params.toString();
 
   return queryOptions({
@@ -70,7 +77,7 @@ export function positionsListQuery(filters?: { status?: string; accountId?: stri
  * A disabled query reports `data: undefined`, `isLoading: false`, `isError: false`.
  */
 export function usePositions(
-  filters?: { status?: string; accountId?: string },
+  filters?: { status?: string; accountId?: string; tag?: string[] },
   options?: { enabled?: boolean },
 ) {
   return useQuery({
