@@ -29,6 +29,16 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  *   4. MALFORMED — an execution CSV with an unparseable price and an invalid date
  *      → the preview surfaces clear located (row/field) blocking errors, confirm
  *      stays disabled, and the app does not crash (no stack trace).
+ *   5. HAPPY (options, preset) — an IBKR Flex mixed stock+option CSV via the
+ *      `interactive-brokers` preset → preview shows two proposed positions, the
+ *      option one labelled in words ("AAPL 20 Mar 2026 $250 Call") with its
+ *      compact OCC symbol (`AAPL260320C250`) beside it → confirm → /positions
+ *      shows the decoded option row with ×100 P&L ($48.70) and the stock row
+ *      ($158.00) (REQ-5.1, REQ-5.2, REQ-1.2, REQ-3.2).
+ *   6. MALFORMED CONTRACT — an IBKR Flex CSV whose option symbol matches no
+ *      contract form → one located (row/column/field) blocking error on the
+ *      option row, the stock position still proposed, confirm disabled, no crash
+ *      (REQ-1.6, REQ-7.3).
  *
  * Auth + seed follow the live-stack convention (dashboard.spec.ts,
  * advisor-tools.spec.ts): register a unique user via POST /api/auth/register
@@ -350,6 +360,88 @@ test.describe('csv-import', () => {
 
     // The app did not crash: the import heading is still mounted and no raw
     // error boundary / stack trace surfaced.
+    await expect(page.getByRole('heading', { name: 'Import trades from CSV' })).toBeVisible();
+    await expect(page.getByText(/at .*\.ts:\d+/)).toHaveCount(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 5 — IBKR Flex mixed (stock + option) via preset → two positions,
+  // decoded option label + compact symbol, ×100 P&L on /positions.
+  // -------------------------------------------------------------------------
+  test('IBKR Flex mixed: option previews with decoded label, imports with ×100 P&L', async ({
+    page,
+  }) => {
+    const { accountName } = await setup(page, 'mixed');
+
+    await pickAccountAndFile(page, accountName, 'ibkr-flex-mixed.csv');
+    await chooseFromSelect(page, 'Preset (optional)', 'Interactive Brokers (Flex Query — Trades)');
+
+    await runPreview(page);
+
+    // Two proposed positions — the AAPL stock round-trip and the AAPL option
+    // round-trip. The option block shows the decoded contract in words plus the
+    // exact stored compact symbol beside it (REQ-5.1).
+    await expect(page.getByText('Proposed positions (2)')).toBeVisible();
+    await expect(page.getByText('AAPL 20 Mar 2026 $250 Call')).toBeVisible();
+    await expect(page.getByText('AAPL260320C250')).toBeVisible();
+
+    // The mixed file is fully committable — no blocking errors card.
+    await expect(page.getByText(/Blocking errors/)).toHaveCount(0);
+
+    const confirmBtn = page.getByRole('button', { name: 'Confirm import' });
+    await expect(confirmBtn).toBeEnabled();
+    await confirmBtn.click();
+
+    await expect(page.getByText('Import complete')).toBeVisible();
+    await expect(page.getByText(/Added\s+2\s+positions/)).toBeVisible();
+
+    await page.getByRole('link', { name: 'View imported positions' }).click();
+    await expect(page).toHaveURL(/\/positions/);
+
+    // Option row — located by the compact label chip "20 Mar 26 · $250C"
+    // (PositionList decode). Both imported rows carry "AAPL", so filter on the
+    // option-only "$250C" to avoid a strict-mode match on the stock row.
+    // Option P&L: (2.25 − 1.75) × 100 − 0.65 − 0.65 = $48.70.
+    const optionRow = page.getByRole('row').filter({ hasText: '$250C' });
+    await expect(optionRow).toBeVisible();
+    await expect(optionRow).toContainText('closed');
+    await expect(optionRow).toContainText('48.70');
+
+    // Stock row — the AAPL row that is NOT the option row. Same stock round-trip
+    // as scenario 1: (123.10 − 121.50) × 100 − 1 − 1 = $158.00.
+    const stockRow = page
+      .getByRole('row')
+      .filter({ hasText: 'AAPL' })
+      .filter({ hasNotText: '$250C' });
+    await expect(stockRow).toBeVisible();
+    await expect(stockRow).toContainText('158.00');
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 6 — IBKR Flex with a malformed option contract → one located
+  // error on the option row, the stock position still proposed, confirm off.
+  // -------------------------------------------------------------------------
+  test('IBKR Flex malformed contract: located error on the option row, stock still proposed', async ({
+    page,
+  }) => {
+    const { accountName } = await setup(page, 'badopt');
+
+    await pickAccountAndFile(page, accountName, 'ibkr-flex-malformed-contract.csv');
+    await chooseFromSelect(page, 'Preset (optional)', 'Interactive Brokers (Flex Query — Trades)');
+
+    await runPreview(page);
+
+    // Exactly one blocking error, located on the option row (row 4), the Symbol
+    // column, the symbol field — the 7-digit strike matches no contract form.
+    await expect(page.getByText('Blocking errors (1)')).toBeVisible();
+    await expect(page.getByText('Row 4 · column "Symbol" · field symbol')).toBeVisible();
+
+    // The two valid stock fills still segment into one proposed position.
+    await expect(page.getByText('Proposed positions (1)')).toBeVisible();
+
+    // Confirm stays disabled while a blocking error remains (REQ-12.3), and the
+    // app did not crash (heading mounted, no raw stack trace) — scenario 4's guard.
+    await expect(page.getByRole('button', { name: 'Confirm import' })).toBeDisabled();
     await expect(page.getByRole('heading', { name: 'Import trades from CSV' })).toBeVisible();
     await expect(page.getByText(/at .*\.ts:\d+/)).toHaveCount(0);
   });

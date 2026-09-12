@@ -57,6 +57,15 @@ function surfaceCodedPreviewError(err: unknown): never {
  *       `Content-Length` below the cap does not bypass it — so an oversized
  *       upload is rejected with 413. The multipart `request` part is itself
  *       capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).
+ *
+ *       Option rows are supported. The mapping declares a contract form —
+ *       `occ-symbol` (the Symbol column carries an OCC contract symbol),
+ *       `composed` (separate underlying / expiry / strike / call-put columns,
+ *       with a declared `expiryFormat`), or `descriptor` (preset-only,
+ *       Tradervue's Option column) — and every option position is staged and
+ *       stored as the compact OCC symbol (e.g. `NVDA260321C120`). Assignment,
+ *       exercise and expiration rows and non-100 multipliers are refused per
+ *       row.
  *     tags: [CSV Import]
  *     requestBody:
  *       required: true
@@ -75,6 +84,10 @@ function surfaceCodedPreviewError(err: unknown): never {
  *                 description: >
  *                   A JSON string (CsvPreviewRequest): `{ accountId, rowShape,
  *                   mapping, presetId?, timezone, dateFormat, numberFormat }`.
+ *                   Option rows add `mapping.contractForm` and, for the composed
+ *                   form, `mapping.expiryFormat`. The preset-only
+ *                   `mapping.signedQuantity` and `mapping.signedFees` read the
+ *                   magnitude from a signed quantity or commission column.
  *     responses:
  *       200:
  *         description: >

@@ -57,6 +57,8 @@ const webPort = new URL(baseURL).port || '5173';
 // spawning a server. Under 'test' the e2e server-under-test would never start.
 const apiEnv: Record<string, string> = {
   NODE_ENV: 'development',
+  // csv-import-options / d-7c9626bb: pin TZ so offset-less Flex datetimes parse to deterministic instants across CI runners (the pin buys CI determinism, not a seam fix).
+  TZ: 'UTC',
   PORT: String(apiPort),
   // 5433, not 5432: a native Postgres owns 5433 locally and shadows the compose
   // container, which is why every vitest project points there too. CI overrides

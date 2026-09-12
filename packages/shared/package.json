@@ -8,6 +8,7 @@
     "./schemas/*": "./src/schemas/*.ts",
     "./lib/*": "./src/lib/*.ts",
     "./constants/*": "./src/constants/*.ts",
+    "./node/*": "./src/node/*.ts",
     "./utils/*": "./src/utils/*.ts"
   },
   "scripts": {

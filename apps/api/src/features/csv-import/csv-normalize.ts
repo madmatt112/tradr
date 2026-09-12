@@ -1,6 +1,12 @@
 import { Decimal } from 'decimal.js';
 
-import type { DateFormat, LocatedError, LocatedWarning, NumberFormat } from '@tradr/shared';
+import type {
+  DateFormat,
+  ExpiryFormat,
+  LocatedError,
+  LocatedWarning,
+  NumberFormat,
+} from '@tradr/shared';
 
 import type { MappedRow } from './csv-mapping';
 
@@ -37,6 +43,12 @@ export interface NormalizeOptions {
   dateFormat: DateFormat;
   /** Declared number format; defaults to `us` upstream (REQ-5.4). */
   numberFormat: NumberFormat;
+  /** Declared expiry format for the `expiry` cell only; defaults to `iso`. */
+  expiryFormat?: ExpiryFormat;
+  /** Preset-only: the `quantity` cell's sign carries direction (seam 1). */
+  signedQuantity?: boolean;
+  /** Preset-only: the `fees` cell's sign marks a cost; the magnitude is stored. */
+  signedFees?: boolean;
 }
 
 /**
@@ -64,6 +76,14 @@ const QUANTITY_FIELDS = ['entryQuantity', 'exitQuantity'] as const;
 /** Every field that must be quantized + magnitude-bounded. */
 const QUANTIZED_FIELDS: readonly string[] = [...NUMERIC_FIELDS, ...QUANTITY_FIELDS];
 
+/**
+ * Plain-decimal fields (`strike`, `multiplier`): stored as a plain decimal
+ * string with NO 8-dp quantization, NO magnitude bound and NO `rounded` warning
+ * — the encoder owns the strike bounds (Component 4). `multiplier` is kept only
+ * for Component 4's comparison; the segmenter never persists it.
+ */
+const PLAIN_DECIMAL_FIELDS: readonly string[] = ['strike', 'multiplier'];
+
 /** Date fields normalized to ISO-8601 with offset (REQ-5.3). */
 const DATE_FIELDS: readonly string[] = ['filledAt', 'entryDate', 'exitDate'];
 
@@ -75,6 +95,10 @@ const ENUM_OR_TEXT_FIELDS: readonly string[] = [
   'type',
   'action',
   'notes',
+  'underlying',
+  'descriptor',
+  'right',
+  'eventCode',
 ];
 
 /** Scale of `fills.price`/`quantity`/`fees` (`positions.schema.ts:60-62`). */
@@ -101,6 +125,9 @@ export function normalizeRow(
   const out: Record<string, string> = {};
   const warnings: LocatedWarning[] = [];
   const errors: LocatedError[] = [];
+  // Direction derived from a signed `quantity` cell (seam 1); reconciled with an
+  // explicit `action` after the loop, once every cell has been seen.
+  let quantityDirection: 'buy' | 'sell' | undefined;
 
   for (const [field, raw] of Object.entries(mappedRow.values)) {
     if (QUANTIZED_FIELDS.includes(field)) {
@@ -114,10 +141,20 @@ export function normalizeRow(
         });
         continue;
       }
+      // Sign conventions (seam 1): a declared signed column carries direction in
+      // its sign — store the MAGNITUDE and derive the direction. Undeclared, the
+      // signed value passes through the normal path (refused downstream).
+      let value = result.value;
+      if (opts.signedQuantity && field === 'quantity') {
+        quantityDirection = value.isNegative() ? 'sell' : 'buy';
+        value = value.abs();
+      } else if (opts.signedFees && field === 'fees') {
+        value = value.abs();
+      }
       // Quantize to the column scale BEFORE the magnitude bound (order matters:
       // quantization can carry into a new integer digit).
-      const quantized = result.value.toDecimalPlaces(COLUMN_SCALE, Decimal.ROUND_HALF_UP);
-      if (!quantized.equals(result.value)) {
+      const quantized = value.toDecimalPlaces(COLUMN_SCALE, Decimal.ROUND_HALF_UP);
+      if (!quantized.equals(value)) {
         warnings.push({
           rowNumber: sourceRow,
           csvColumn: field,
@@ -136,6 +173,31 @@ export function normalizeRow(
         continue;
       }
       out[field] = quantized.toFixed();
+    } else if (PLAIN_DECIMAL_FIELDS.includes(field)) {
+      // strike/multiplier: plain decimal, no quantization, no bound, no warning.
+      const result = normalizeNumber(raw, opts.numberFormat);
+      if ('error' in result) {
+        errors.push({
+          rowNumber: sourceRow,
+          tradrField: field,
+          code: result.error,
+          message: result.message,
+        });
+        continue;
+      }
+      out[field] = result.value.toFixed();
+    } else if (field === 'expiry') {
+      const result = normalizeExpiry(raw, opts.expiryFormat ?? 'iso');
+      if ('error' in result) {
+        errors.push({
+          rowNumber: sourceRow,
+          tradrField: 'expiry',
+          code: result.error,
+          message: result.message,
+        });
+        continue;
+      }
+      out.expiry = result.value;
     } else if (DATE_FIELDS.includes(field)) {
       const result = normalizeDate(raw, opts.dateFormat, opts.timezone);
       if ('error' in result) {
@@ -153,6 +215,26 @@ export function normalizeRow(
     } else {
       // Unknown field: pass through unchanged rather than drop it.
       out[field] = raw;
+    }
+  }
+
+  // Seam 1, after the loop so a mapped `action` (Component 2) is visible: a
+  // signed-quantity direction that contradicts an explicit action is an error;
+  // with no action, publish the derived direction so the segmenter sees a
+  // positive magnitude plus an explicit direction (csv-segment.ts:183-187).
+  if (quantityDirection !== undefined) {
+    const action = mappedRow.values.action;
+    if (action === 'buy' || action === 'sell') {
+      if (action !== quantityDirection) {
+        errors.push({
+          rowNumber: sourceRow,
+          tradrField: 'quantity',
+          code: 'QUANTITY_SIGN_CONTRADICTION',
+          message: `Row ${sourceRow} has quantity ${mappedRow.values.quantity} but action ${action.toUpperCase()}; under this preset a negative quantity is a sell.`,
+        });
+      }
+    } else {
+      out.action = quantityDirection;
     }
   }
 
@@ -177,7 +259,7 @@ const MAX_NUMERIC_INPUT_LEN = 64;
  * CR/DR; `eu` treats `,` as the decimal point. Returns a located error for any
  * value that does not parse — never a silently mis-parsed amount.
  */
-function normalizeNumber(raw: string, format: NumberFormat): NumberResult {
+export function normalizeNumber(raw: string, format: NumberFormat): NumberResult {
   const original = raw;
   if (raw.length > MAX_NUMERIC_INPUT_LEN) {
     return {
@@ -258,6 +340,29 @@ const EXPECTED: Record<DateFormat, string> = {
   'iso-datetime': 'ISO-8601 datetime',
 };
 
+/** Expected wording per {@link ExpiryFormat}, beside {@link EXPECTED}. */
+const EXPECTED_EXPIRY: Record<ExpiryFormat, string> = {
+  iso: 'YYYY-MM-DD',
+  yyyymmdd: 'YYYYMMDD',
+  'dd-mon-yy': 'DD Mon YY',
+};
+
+/** Case-insensitive month abbreviation -> 1-based month, for `dd-mon-yy`. */
+const EXPIRY_MONTHS: Record<string, number> = {
+  JAN: 1,
+  FEB: 2,
+  MAR: 3,
+  APR: 4,
+  MAY: 5,
+  JUN: 6,
+  JUL: 7,
+  AUG: 8,
+  SEP: 9,
+  OCT: 10,
+  NOV: 11,
+  DEC: 12,
+};
+
 /**
  * Normalize a broker date to ISO-8601 with offset (REQ-5.3). The declared format
  * is honored exactly and never guessed; a value not matching it is a located
@@ -325,6 +430,60 @@ function normalizeDate(raw: string, format: DateFormat, timezone: string): DateR
     };
   }
   return { value: iso };
+}
+
+/**
+ * Normalize a broker expiry to a plain `YYYY-MM-DD` calendar date (REQ-2.2): no
+ * time, no timezone shift. The declared {@link ExpiryFormat} is honored exactly
+ * and never guessed. A value not matching it is `DATE_FORMAT_MISMATCH`; a value
+ * that matches but is not a real calendar date is `DATE_INVALID` — the same two
+ * codes {@link normalizeDate} uses, each naming the expected format.
+ */
+function normalizeExpiry(raw: string, format: ExpiryFormat): DateResult {
+  const s = raw.trim();
+  const expectedMsg = `expected format ${EXPECTED_EXPIRY[format]}`;
+  const mismatch = (): DateResult => ({
+    error: 'DATE_FORMAT_MISMATCH',
+    message: `Value "${raw}" does not match ${expectedMsg}.`,
+  });
+
+  let year: number;
+  let month: number;
+  let day: number;
+  if (format === 'iso') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (!m) return mismatch();
+    year = Number(m[1]);
+    month = Number(m[2]);
+    day = Number(m[3]);
+  } else if (format === 'yyyymmdd') {
+    const m = /^(\d{4})(\d{2})(\d{2})$/.exec(s);
+    if (!m) return mismatch();
+    year = Number(m[1]);
+    month = Number(m[2]);
+    day = Number(m[3]);
+  } else {
+    // dd-mon-yy, e.g. "28 Oct 22": year is 2000 + YY.
+    const m = /^(\d{1,2}) ([A-Za-z]{3}) (\d{2})$/.exec(s);
+    if (!m) return mismatch();
+    const mon = EXPIRY_MONTHS[m[2].toUpperCase()];
+    if (mon === undefined) return mismatch();
+    day = Number(m[1]);
+    month = mon;
+    year = 2000 + Number(m[3]);
+  }
+
+  if (!isRealDate(year, month, day)) {
+    return {
+      error: 'DATE_INVALID',
+      message: `Value "${raw}" is not a real calendar date (${expectedMsg}).`,
+    };
+  }
+
+  const yyyy = String(year).padStart(4, '0');
+  const mm = String(month).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  return { value: `${yyyy}-${mm}-${dd}` };
 }
 
 /** True iff (year, month, day) is a real Gregorian calendar date. */

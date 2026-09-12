@@ -1766,7 +1766,7 @@
     },
     "/api/csv-import/preview": {
       "post": {
-        "description": "First call of the preview→commit handshake. Parses, maps, normalizes, segments, and dry-runs the uploaded CSV against the target account, returning the proposed positions/fills plus per-row/per-cell errors and warnings — and a single-use `token` the client passes to `/api/csv-import/commit`. No trade data is written; the only side effect is staging one preview row per user (a newer preview supersedes the prior one). The body is read with an actual-bytes byte cap (`CSV_IMPORT_MAX_FILE_BYTES`, default 10 MiB) — a deceptive `Content-Length` below the cap does not bypass it — so an oversized upload is rejected with 413. The multipart `request` part is itself capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).\n",
+        "description": "First call of the preview→commit handshake. Parses, maps, normalizes, segments, and dry-runs the uploaded CSV against the target account, returning the proposed positions/fills plus per-row/per-cell errors and warnings — and a single-use `token` the client passes to `/api/csv-import/commit`. No trade data is written; the only side effect is staging one preview row per user (a newer preview supersedes the prior one). The body is read with an actual-bytes byte cap (`CSV_IMPORT_MAX_FILE_BYTES`, default 10 MiB) — a deceptive `Content-Length` below the cap does not bypass it — so an oversized upload is rejected with 413. The multipart `request` part is itself capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).\nOption rows are supported. The mapping declares a contract form — `occ-symbol` (the Symbol column carries an OCC contract symbol), `composed` (separate underlying / expiry / strike / call-put columns, with a declared `expiryFormat`), or `descriptor` (preset-only, Tradervue's Option column) — and every option position is staged and stored as the compact OCC symbol (e.g. `NVDA260321C120`). Assignment, exercise and expiration rows and non-100 multipliers are refused per row.\n",
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -1778,7 +1778,7 @@
                     "type": "string"
                   },
                   "request": {
-                    "description": "A JSON string (CsvPreviewRequest): `{ accountId, rowShape, mapping, presetId?, timezone, dateFormat, numberFormat }`.\n",
+                    "description": "A JSON string (CsvPreviewRequest): `{ accountId, rowShape, mapping, presetId?, timezone, dateFormat, numberFormat }`. Option rows add `mapping.contractForm` and, for the composed form, `mapping.expiryFormat`. The preset-only `mapping.signedQuantity` and `mapping.signedFees` read the magnitude from a signed quantity or commission column.\n",
                     "type": "string"
                   }
                 },

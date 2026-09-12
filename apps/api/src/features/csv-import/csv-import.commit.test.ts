@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, it, expect } from 'vitest';
 
+import { parseOccSymbol } from '@tradr/shared';
+
 import app from '@/app';
 import { db } from '@/db';
 import { fills, ledgerEntries, positions, subscriptions, users } from '@/db/schema';
@@ -302,6 +304,55 @@ describe('POST /api/csv-import/commit — replay lifecycle', () => {
     const posId = summary.positionIds[0] as string;
     const [pos] = await db.select().from(positions).where(eq(positions.id, posId));
     expect(pos!.status).toBe('open');
+  });
+
+  it('commits a mixed stock + option file: option row stores a compact OCC symbol, ×100 realised P&L in the ledger, inside the bulk tx (REQ-1.3, 1.6, 5.2, 7.1)', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    // The task-5 option pair (previews as AAPL260320C250 / assetType option,
+    // P&L 48.70) plus a stock pair → two closed positions.
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+      'AAPL260320C250,OPTION,SELL,2.25,1,2026-01-06,0.65',
+      'MSFT,STOCK,BUY,50,5,2026-01-03,0',
+      'MSFT,STOCK,SELL,60,5,2026-01-04,0',
+    ].join('\n');
+    const base = execRequest(accountId);
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'occ-symbol' } };
+    const token = await stageToken(cookie, csv, request);
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+    const summary = await res.json();
+    expect(summary.positionsCreated).toBe(2);
+    expect(summary.fillsCreated).toBe(4);
+
+    // The option position's STORED symbol is the compact OCC form and decodes
+    // (REQ-1.3, REQ-5.2 stored form) — createPositionTx runs no Zod, so the
+    // preview is the only gate; this proves what actually landed in `positions`.
+    const rows = await db.select().from(positions).where(eq(positions.accountId, accountId));
+    const opt = rows.find((p) => p.assetType === 'option');
+    expect(opt).toBeDefined();
+    expect(opt!.symbol).toBe('AAPL260320C250');
+    expect(parseOccSymbol(opt!.symbol).ok).toBe(true);
+    expect(opt!.status).toBe('closed');
+
+    // Two fills for the option position.
+    const optFills = await db.select().from(fills).where(eq(fills.positionId, opt!.id));
+    expect(optFills).toHaveLength(2);
+
+    // The close hook fired INSIDE the bulk tx: exactly one position_pnl entry
+    // whose realised P&L is ×100 through contractMultiplier (REQ-1.6, REQ-7.1).
+    const ledger = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, opt!.id));
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.entryType).toBe('position_pnl');
+    expect(ledger[0]!.direction).toBe('credit');
+    // (2.25 − 1.75) × 1 × 100 − 0.65 − 0.65 = 48.70.
+    expect(Number(ledger[0]!.amount)).toBeCloseTo(48.7, 2);
   });
 });
 
@@ -823,6 +874,60 @@ describe('POST /api/csv-import/commit — tier enforcement (plan-tiers L6/L1/L2)
     const summary = await committed.json();
     expect(summary.positionsCreated).toBe(2);
     expect(await getCommittedCount(userId)).toBe(1);
+  });
+
+  // REQ-6.2: the positions cap sees no difference for options — an over-cap
+  // OPTION batch is refused atomically with the same 403, cap-and-batch-size
+  // message, and staging-intact / L6-untouched semantics as a stock batch. No
+  // new tier property or lever.
+  it('refuses an over-cap OPTION batch atomically with 403 TIER_LIMIT_POSITIONS, exactly as a stock batch (REQ-6.2)', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getUserId(cookie);
+    const accountId = await createAccount(cookie);
+
+    // Seed cap−1 existing positions; the staged option batch of 2 overflows by one.
+    const cap = getTierLimits('free').positions!;
+    const rows = Array.from({ length: cap - 1 }, (_, i) => ({
+      userId,
+      accountId,
+      symbol: `SEED${i}`,
+      side: 'long',
+      assetType: 'equity',
+      status: 'open',
+    }));
+    // performance-charts §8.2 audit: status='open' is CHECK-safe.
+    // eslint-disable-next-line no-restricted-syntax
+    await db.insert(positions).values(rows);
+
+    // Two distinct option contracts → a batch of two option positions.
+    const twoOptionCsv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL260320C250,OPTION,BUY,1.75,1,2026-01-05,0.65',
+      'AAPL260320C250,OPTION,SELL,2.25,1,2026-01-06,0.65',
+      'AAPL260320C260,OPTION,BUY,1.1,1,2026-01-05,0.65',
+      'AAPL260320C260,OPTION,SELL,1.4,1,2026-01-06,0.65',
+    ].join('\n');
+    const base = execRequest(accountId);
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'occ-symbol' } };
+    const token = await stageToken(cookie, twoOptionCsv, request);
+
+    config.FEATURE_GATING = true;
+    const refused = await postCommit(cookie, token);
+    expect(refused.status).toBe(403);
+    const body = await refused.json();
+    expect(body.error.code).toBe('TIER_LIMIT_POSITIONS');
+    // Same message shape as a stock batch: names the cap AND the batch size.
+    expect(body.error.message).toContain(String(cap));
+    expect(body.error.message).toContain('2 positions');
+
+    // Atomic whole-batch refusal: no partial import, L6 untouched, staging intact.
+    const userPositions = await db
+      .select({ id: positions.id })
+      .from(positions)
+      .where(eq(positions.userId, userId));
+    expect(userPositions).toHaveLength(cap - 1);
+    expect(await getCommittedCount(userId)).toBe(0);
+    expect(await stagedStatus(token)).toBe('staged');
   });
 
   // L1 writability (D18): over-cap, only the designated account accepts the

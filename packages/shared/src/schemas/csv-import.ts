@@ -6,6 +6,11 @@ export const DateFormatSchema = z.enum(['iso', 'us', 'eu', 'iso-datetime']);
 
 export const NumberFormatSchema = z.enum(['us', 'eu']);
 
+export const ContractFormSchema = z.enum(['occ-symbol', 'composed', 'descriptor']);
+
+// iso = YYYY-MM-DD · yyyymmdd = Flex 20260320 · dd-mon-yy = TradeZella "28 Oct 22"
+export const ExpiryFormatSchema = z.enum(['iso', 'yyyymmdd', 'dd-mon-yy']);
+
 export const MappingSchema = z.object({
   rowShape: RowShapeSchema,
   // Tradr field -> CSV column name. Fields vary by row shape (Component 2),
@@ -16,6 +21,13 @@ export const MappingSchema = z.object({
   transforms: z.record(z.string(), z.record(z.string(), z.string())).optional(),
   delimiter: z.enum([',', ';', '\t']).optional(),
   hasHeader: z.boolean().optional(),
+  contractForm: ContractFormSchema.optional(),
+  // Composed form only.
+  expiryFormat: ExpiryFormatSchema.optional(),
+  // Preset-only: the quantity column's sign carries direction.
+  signedQuantity: z.boolean().optional(),
+  // Preset-only: the fees column's sign marks a cost; the magnitude is stored.
+  signedFees: z.boolean().optional(),
 });
 
 export const CsvPreviewRequestSchema = z.object({
@@ -46,6 +58,7 @@ export const LocatedWarningSchema = z.object({
     'direction_inferred',
     'currency_hint_mismatch',
     'rounded',
+    'derived_expiry',
   ]),
   message: z.string(),
 });
@@ -113,6 +126,8 @@ export const CsvPresetSchema = z.object({
 export type RowShape = z.infer<typeof RowShapeSchema>;
 export type DateFormat = z.infer<typeof DateFormatSchema>;
 export type NumberFormat = z.infer<typeof NumberFormatSchema>;
+export type ContractForm = z.infer<typeof ContractFormSchema>;
+export type ExpiryFormat = z.infer<typeof ExpiryFormatSchema>;
 export type Mapping = z.infer<typeof MappingSchema>;
 export type CsvPreviewRequest = z.infer<typeof CsvPreviewRequestSchema>;
 export type LocatedError = z.infer<typeof LocatedErrorSchema>;

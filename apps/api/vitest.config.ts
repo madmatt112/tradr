@@ -11,6 +11,8 @@ export default defineConfig({
   test: {
     setupFiles: ['src/test-setup.ts'],
     env: {
+      // csv-import-options / d-7c9626bb: pin TZ so offset-less Flex datetimes parse to deterministic instants in CI (the pin buys CI determinism, not a seam fix).
+      TZ: 'UTC',
       DATABASE_URL: 'postgresql://postgres:postgres@localhost:5433/tradr_test',
       SESSION_SECRET: 'test-secret-that-is-at-least-32-characters-long',
       NODE_ENV: 'test',

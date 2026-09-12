@@ -18,7 +18,7 @@ import type { ParsedCsv } from './csv-parse';
  */
 
 /** A field whose value is canonicalized via a transform map. */
-type TransformField = 'side' | 'assetType' | 'type' | 'action';
+type TransformField = 'side' | 'assetType' | 'type' | 'action' | 'right';
 
 /**
  * A mapping-level error, reported before any row processing. Located by Tradr
@@ -130,9 +130,15 @@ const CANONICAL_TRANSFORMS: Record<TransformField, Record<string, string>> = {
     SELL: 'sell',
     SLD: 'sell',
   },
+  right: {
+    C: 'call',
+    CALL: 'call',
+    P: 'put',
+    PUT: 'put',
+  },
 };
 
-const TRANSFORM_FIELDS: TransformField[] = ['side', 'assetType', 'type', 'action'];
+const TRANSFORM_FIELDS: TransformField[] = ['side', 'assetType', 'type', 'action', 'right'];
 
 /**
  * Build the effective transform map for a field: the canonical map with any
@@ -154,8 +160,11 @@ function effectiveTransformMap(field: TransformField, mapping: Mapping): Record<
  * every detected error; an empty array means the mapping is structurally sound.
  *
  * Checks, in order:
- *  - each required field for the declared shape is mapped (missing -> error);
+ *  - each required field for the declared shape is mapped (missing -> error),
+ *    except `assetType` when a descriptor column supplies it (REQ-2.8);
  *  - for `execution`, exactly one of (`type` | `action`) is mapped;
+ *  - the descriptor contract form maps its descriptor column, and the composed
+ *    form declares an expiry format (REQ-2.6, REQ-3.5);
  *  - every mapped column actually exists in the file's headers.
  */
 export function validateMappingShape(headers: string[], mapping: Mapping): MappingError[] {
@@ -163,8 +172,14 @@ export function validateMappingShape(headers: string[], mapping: Mapping): Mappi
   const columns = mapping.columns;
   const headerSet = new Set(headers);
 
+  // A mapped descriptor column derives the asset type (REQ-2.8), so under the
+  // descriptor form it satisfies the assetType requirement.
+  const descriptorSuppliesAssetType =
+    mapping.contractForm === 'descriptor' && Boolean(columns.descriptor);
+
   // 1. Required fields present.
   for (const field of REQUIRED_FIELDS[mapping.rowShape]) {
+    if (field === 'assetType' && descriptorSuppliesAssetType) continue;
     if (!columns[field]) {
       errors.push({
         tradrField: field,
@@ -191,7 +206,23 @@ export function validateMappingShape(headers: string[], mapping: Mapping): Mappi
     }
   }
 
-  // 3. Every mapped column exists in the file.
+  // 3. Contract-form shape: the descriptor form needs its column, the composed
+  // form needs an expiry format (REQ-2.6, REQ-3.5).
+  if (mapping.contractForm === 'descriptor' && !columns.descriptor) {
+    errors.push({
+      tradrField: 'descriptor',
+      code: 'MAPPING_FIELD_MISSING',
+      message: `Required field "descriptor" is not mapped to a column.`,
+    });
+  }
+  if (mapping.contractForm === 'composed' && !mapping.expiryFormat) {
+    errors.push({
+      code: 'MAPPING_EXPIRY_FORMAT_MISSING',
+      message: 'The composed contract form needs an expiry format.',
+    });
+  }
+
+  // 4. Every mapped column exists in the file.
   for (const [field, column] of Object.entries(columns)) {
     if (column && !headerSet.has(column)) {
       errors.push({
@@ -236,6 +267,12 @@ export function applyMapping(parsed: ParsedCsv, mapping: Mapping): ApplyMappingR
     if (index !== undefined) fieldColumns.push({ field, index });
   }
 
+  // A resolved descriptor column derives the asset type per row (REQ-2.8,
+  // REQ-3.5). When the column did not resolve against the headers, leave
+  // assetType untouched so the row-shape check still fires (never all-stock).
+  const descriptorResolved =
+    mapping.contractForm === 'descriptor' && fieldColumns.some((fc) => fc.field === 'descriptor');
+
   const required = REQUIRED_FIELDS[mapping.rowShape];
 
   parsed.rows.forEach((rawRow, i) => {
@@ -264,6 +301,12 @@ export function applyMapping(parsed: ParsedCsv, mapping: Mapping): ApplyMappingR
       } else {
         values[field] = raw;
       }
+    }
+
+    // The descriptor is authoritative for the asset type: a populated cell is an
+    // option, an empty one a stock; this overwrites any mapped assetType column.
+    if (descriptorResolved) {
+      values.assetType = values.descriptor !== undefined ? 'option' : 'stock';
     }
 
     // Non-conforming row: a required field absent after mapping/transform is a

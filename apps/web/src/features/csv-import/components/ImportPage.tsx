@@ -14,7 +14,7 @@ import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { docsUrl } from '@/lib/docs';
 
 import { useCsvPreview } from '../hooks/useCsvPreview';
-import { targetFieldsForShape } from '../lib/fields';
+import { isRequiredFieldSatisfied, targetFieldsForShape } from '../lib/fields';
 import { readHeaderHints } from '../lib/readHeaderHints';
 
 import { AccountPicker } from './AccountPicker';
@@ -35,8 +35,9 @@ const initialMapper = (): ColumnMapperValue => ({
   presetId: null,
   rowShape: 'execution',
   // Timezone defaults to UTC for correction (REQ-7.4); the rest are the
-  // design defaults.
-  mapping: { rowShape: 'execution', columns: {} },
+  // design defaults. The mapping always declares a contract form and expiry
+  // format so the preview request carries them (Component 10).
+  mapping: { rowShape: 'execution', columns: {}, contractForm: 'occ-symbol', expiryFormat: 'iso' },
   timezone: 'UTC',
   dateFormat: 'iso',
   numberFormat: 'us',
@@ -103,15 +104,17 @@ export function ImportPage() {
   }, [file, mapper.mapping.delimiter]);
 
   const missingRequired = useMemo(() => {
-    const fields = targetFieldsForShape(mapper.rowShape);
-    const mapped = mapper.mapping.columns;
-    const missing = fields.filter((f) => f.required && !mapped[f.field]).map((f) => f.label);
+    const fields = targetFieldsForShape(mapper.rowShape, mapper.mapping.contractForm);
+    const missing = fields
+      .filter((f) => f.required && !isRequiredFieldSatisfied(f.field, mapper.mapping))
+      .map((f) => f.label);
     // execution requires EXACTLY ONE of type | action (REQ-2.2).
-    if (mapper.rowShape === 'execution' && !mapped.type && !mapped.action) {
+    const { type, action } = mapper.mapping.columns;
+    if (mapper.rowShape === 'execution' && !type && !action) {
       missing.push('Type or Action');
     }
     return missing;
-  }, [mapper.rowShape, mapper.mapping.columns]);
+  }, [mapper.rowShape, mapper.mapping]);
 
   const canPreview = !!accountId && !!file && missingRequired.length === 0 && !preview.isPending;
 

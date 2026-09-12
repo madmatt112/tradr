@@ -17,10 +17,18 @@ import type { CsvPreset } from '../schemas/csv-import';
  *
  * Headers are sourced from real export samples (committed fixtures), never
  * invented:
- *   - interactive-brokers: IBKR Trades Flex Query field codes
- *     (Symbol, DateTime, Buy/Sell, Quantity, TradePrice, IBCommission, AssetClass).
+ *   - interactive-brokers: IBKR Trades Flex Query field codes (Symbol,
+ *     Description, UnderlyingSymbol, Strike, Expiry, Put/Call, Multiplier,
+ *     AssetClass, Buy/Sell, Open/CloseIndicator, Quantity, TradePrice,
+ *     IBCommission, DateTime, Notes/Codes). The preset maps Multiplier and
+ *     Notes/Codes; the composed contract columns (UnderlyingSymbol, Strike,
+ *     Expiry, Put/Call) sit in the sample unmapped so a user can switch the
+ *     contract form in the mapper. A stock row's Multiplier `1` is an inferred
+ *     vendor value (the Trades Flex fields page documents no stock multiplier);
+ *     it drives no assertion, since the multiplier check is option-only.
  *   - tradezella: TradeZella generic CSV upload template
- *     (Date, Time, Symbol, Buy/Sell, Quantity, Price, Spread, …, Commission, Fees).
+ *     (Date, Time, Symbol, Buy/Sell, Quantity, Price, Spread, Expiration,
+ *     Strike, Call/Put, Commission, Fees).
  *   - tradervue: Tradervue generic import format
  *     (Time, Date, Quantity, Symbol, Side, Price, Option, Commission, …).
  *   - generic-execution: Tradr's own canonical one-row-per-fill template.
@@ -46,6 +54,11 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
     numberFormat: 'us',
     mapping: {
       rowShape: 'execution',
+      contractForm: 'occ-symbol',
+      // Flex signs Quantity (negative = sold) and IBCommission (negative =
+      // paid); the magnitude is stored either way (REQ-3.1).
+      signedQuantity: true,
+      signedFees: true,
       columns: {
         symbol: 'Symbol',
         assetType: 'AssetClass',
@@ -54,6 +67,8 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
         price: 'TradePrice',
         filledAt: 'DateTime',
         fees: 'IBCommission',
+        multiplier: 'Multiplier',
+        eventCode: 'Notes/Codes',
       },
     },
   },
@@ -65,6 +80,13 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
     numberFormat: 'us',
     mapping: {
       rowShape: 'execution',
+      contractForm: 'composed',
+      expiryFormat: 'dd-mon-yy',
+      // The `Spread` column carries the asset type; `Single` is TradeZella's
+      // label for a single-leg option (REQ-3.4). `Stock` is canonical stock;
+      // Future/Forex/Crypto stay unmatched (unrepresentable). The synonym lives
+      // in `mapping.transforms`, the path `applyPreset` forwards.
+      transforms: { assetType: { Single: 'option' } },
       columns: {
         symbol: 'Symbol',
         assetType: 'Spread',
@@ -73,6 +95,9 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
         price: 'Price',
         filledAt: 'Date',
         fees: 'Commission',
+        expiry: 'Expiration',
+        strike: 'Strike',
+        right: 'Call/Put',
       },
     },
   },
@@ -84,9 +109,10 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
     numberFormat: 'us',
     mapping: {
       rowShape: 'execution',
-      // Tradervue's generic format has no plain asset-type column (the `Option`
-      // column only carries an option descriptor when present), so `assetType`
-      // is left unmapped for the user to complete (REQ-3.4).
+      contractForm: 'descriptor',
+      // Tradervue's `Option` column carries a per-row option descriptor
+      // (e.g. `JAN 12 125 CALL`) that supplies the asset type, so `assetType`
+      // stays unmapped by design (REQ-2.8).
       columns: {
         symbol: 'Symbol',
         action: 'Side',
@@ -94,6 +120,7 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
         price: 'Price',
         filledAt: 'Date',
         fees: 'Commission',
+        descriptor: 'Option',
       },
     },
   },
@@ -105,6 +132,7 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
     numberFormat: 'us',
     mapping: {
       rowShape: 'execution',
+      contractForm: 'occ-symbol',
       columns: {
         symbol: 'Symbol',
         assetType: 'AssetType',
