@@ -8,6 +8,11 @@ import {
   createPositionTx,
   openPositionTx,
 } from '@/features/positions/positions.service';
+import {
+  ensureStarterTagsTx,
+  recordStarterAnswerTx,
+  setPositionTagsTx,
+} from '@/features/tags/tags.service';
 import { ConflictError } from '@/lib/errors';
 import { withTransaction } from '@/lib/transaction';
 
@@ -60,6 +65,8 @@ interface DemoTradeBase {
   notes?: string;
   stopLoss?: string;
   targetPrice?: string;
+  /** Starter-tag NAMES, resolved to ids at seed time. */
+  tags?: readonly string[];
 }
 
 interface DemoClosedTrade extends DemoTradeBase {
@@ -114,6 +121,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     exitPrice: '191.20',
     exitAt: '2026-02-19T18:20:00.000Z',
     notes: 'Breakout above the January range on volume',
+    tags: ['breakout', 'calm'],
   },
   {
     status: 'closed',
@@ -135,6 +143,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     exitPrice: '109.50',
     exitAt: '2026-03-04T19:30:00.000Z',
     notes: 'Cut it early — the thesis broke on the guidance',
+    tags: ['early exit', 'anxious'],
   },
   {
     status: 'closed',
@@ -146,6 +155,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     exitPrice: '236.40',
     exitAt: '2026-03-18T15:45:00.000Z',
     notes: 'Faded the opening gap',
+    tags: ['reversal'],
   },
   {
     status: 'closed',
@@ -167,6 +177,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     exitPrice: '545.60',
     exitAt: '2026-04-24T19:10:00.000Z',
     notes: 'Trend continuation, added on the pullback',
+    tags: ['pullback'],
   },
   {
     status: 'closed',
@@ -188,6 +199,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     exitPrice: '168.90',
     exitAt: '2026-05-19T18:15:00.000Z',
     notes: 'Stopped out at the structural low',
+    tags: ['frustrated'],
   },
   {
     status: 'closed',
@@ -209,6 +221,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     exitPrice: '478.30',
     exitAt: '2026-07-08T19:00:00.000Z',
     notes: 'Scaled out into strength',
+    tags: ['calm'],
   },
   {
     status: 'open',
@@ -250,6 +263,7 @@ const DEMO_TRADES: readonly DemoTrade[] = [
     stopLoss: '66.00',
     targetPrice: '74.50',
     notes: 'Waiting for a close above the range high before taking it',
+    tags: ['breakout'],
   },
 ];
 
@@ -314,6 +328,12 @@ export async function seedDemoAccount(db: Database, userId: string) {
       latchedDisplayCurrency: latched.length > 0,
     });
 
+    // Create the starter set (idempotent by name) so the sample trades have
+    // something to tag with, and record that the offer has been answered: a demo
+    // user is never offered the starter set again (REQ-6.3).
+    const { byLowerName } = await ensureStarterTagsTx(tx, userId);
+    await recordStarterAnswerTx(tx, userId);
+
     for (const trade of DEMO_TRADES) {
       const position = await createPositionTx(tx, userId, {
         accountId: row.id,
@@ -324,6 +344,14 @@ export async function seedDemoAccount(db: Database, userId: string) {
         stopLoss: trade.stopLoss ?? null,
         targetPrice: trade.targetPrice ?? null,
       });
+
+      if (trade.tags) {
+        const ids = trade.tags.map((n) => byLowerName.get(n.toLowerCase()));
+        if (ids.some((id) => id === undefined)) {
+          throw new Error(`demo seed: unknown starter tag in ${trade.symbol}`);
+        }
+        await setPositionTagsTx(tx, position.id, userId, ids as string[]);
+      }
 
       // Drafts get their entry fill too, so the user can open one from the UI
       // exactly as they would their own planned trade.
