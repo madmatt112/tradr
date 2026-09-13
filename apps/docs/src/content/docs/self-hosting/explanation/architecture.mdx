@@ -26,27 +26,27 @@ default.
 On boot the api runs its migrations **automatically** inside `bootstrap()` before
 it serves traffic, serialised by a PostgreSQL session-level advisory lock
 (`apps/api/src/db/migrate.ts`). Migrations are **forward-only** — there is no
-down/rollback — which is why the upgrade policy is *back up before every upgrade*.
+down/rollback — which is why the upgrade policy is _back up before every upgrade_.
 
 ## The HTTP surface
 
 Every endpoint is mounted under `/api` and documented in the generated **API
-reference** (in the sidebar under *Run it yourself*), which is produced from the
+reference** (in the sidebar under _Run it yourself_), which is produced from the
 API source so it always matches what the app serves.
 
 ## Repository layout
 
 The source is one pnpm workspace. `pnpm-workspace.yaml` declares the members:
 
-| Path | What it is |
-| --- | --- |
-| `apps/api` | The Hono API and the `tradr` CLI |
-| `apps/web` | The React SPA |
-| `apps/docs` | This documentation site (Astro + Starlight) |
+| Path              | What it is                                                          |
+| ----------------- | ------------------------------------------------------------------- |
+| `apps/api`        | The Hono API and the `tradr` CLI                                    |
+| `apps/web`        | The React SPA                                                       |
+| `apps/docs`       | This documentation site (Astro + Starlight)                         |
 | `packages/shared` | Zod schemas, constants, and pure calculation code used by both apps |
-| `e2e` | The Playwright suite that drives a real web + api stack |
-| `bench` | Performance benchmarks |
-| `docker` | The container build context and entrypoints |
+| `e2e`             | The Playwright suite that drives a real web + api stack             |
+| `bench`           | Performance benchmarks                                              |
+| `docker`          | The container build context and entrypoints                         |
 
 Both apps are organised as **vertical feature slices** — everything for one
 feature lives in one directory (`apps/api/src/features/positions/`,

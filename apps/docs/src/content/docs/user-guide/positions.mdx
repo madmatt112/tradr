@@ -14,8 +14,8 @@ app does at each step.
 ## Before you start
 
 A position belongs to an account, so create one first. **New Position** stays
-disabled until you have at least one, and its tooltip reads *Create an account
-first*.
+disabled until you have at least one, and its tooltip reads _Create an account
+first_.
 
 Before you create your first account, the dashboard shows a **Welcome to Tradr**
 setup screen instead of the widget grid. **Create my first account** on that
@@ -49,11 +49,11 @@ in that banner when you are ready to enter your own.
 A position is always in exactly one of three states, shown as a badge on the row
 and on the detail page.
 
-| State | Meaning | What you can do |
-| --- | --- | --- |
-| **draft** | Planned, not in the market. No fills, no effect on your balance. | Edit anything, add an entry fill, open, delete |
-| **open** | In the market. At least one entry fill, not fully exited. | Add fills, edit the plan and notes, delete |
-| **closed** | Fully exited. Entry and exit quantities match. | Edit the plan and notes, reopen, delete |
+| State      | Meaning                                                          | What you can do                                |
+| ---------- | ---------------------------------------------------------------- | ---------------------------------------------- |
+| **draft**  | Planned, not in the market. No fills, no effect on your balance. | Edit anything, add an entry fill, open, delete |
+| **open**   | In the market. At least one entry fill, not fully exited.        | Add fills, edit the plan and notes, delete     |
+| **closed** | Fully exited. Entry and exit quantities match.                   | Edit the plan and notes, reopen, delete        |
 
 A draft costs nothing and commits nothing. Use it to write a trade down before you
 take it.
@@ -100,8 +100,8 @@ Options are counted in whole contracts. A fractional option quantity is rejected
 :::
 
 :::tip[The first time you open a position]
-A one-off tip opens beside the **Fills** heading, headed *Scale in and out with
-fills*. Choose **Got it** to dismiss it, or **Read more** to open this page. It
+A one-off tip opens beside the **Fills** heading, headed _Scale in and out with
+fills_. Choose **Got it** to dismiss it, or **Read more** to open this page. It
 does not come back, and it does not appear on a closed position — there is no
 **Add Fill** button there for it to introduce.
 
@@ -124,10 +124,10 @@ Set a target of 210.00 and a stop of 185.00.
 
 ### How the two ratios are calculated
 
-| Metric | Meaning |
-| --- | --- |
+| Metric         | Meaning                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------ |
 | **Target R/R** | Planned reward per unit of risk: distance to your target divided by distance to your stop. |
-| **Actual R/R** | What you actually got, in the same units. Signed, so a loss shows negative. |
+| **Actual R/R** | What you actually got, in the same units. Signed, so a loss shows negative.                |
 
 Both measure from your **average entry**, not your first fill. This has a
 consequence worth knowing: **scaling in moves your average entry, so it moves your
@@ -178,14 +178,14 @@ The example exits the remaining 90 shares at 205.00, fees 1.00.
 **Expected result:** the status changes to **closed** without any further action.
 The final figures for the example:
 
-| Metric | Value |
-| --- | --- |
-| Avg Entry | 191.6667 |
-| Avg Exit | 203.0000 |
-| Gross P&L | +$1,700.00 |
-| Net P&L | +$1,696.00 |
-| Actual R/R | +1.70 |
-| Return % | +5.9% |
+| Metric     | Value      |
+| ---------- | ---------- |
+| Avg Entry  | 191.6667   |
+| Avg Exit   | 203.0000   |
+| Gross P&L  | +$1,700.00 |
+| Net P&L    | +$1,696.00 |
+| Actual R/R | +1.70      |
+| Return %   | +5.9%      |
 
 **There is no separate "close" step to remember.** The **Close Position** button
 stays disabled while any quantity is still open, and by the time it would be
@@ -269,14 +269,14 @@ keep their other tags.
 
 The **Positions** list shows, per position:
 
-| Column | Meaning |
-| --- | --- |
-| Entry Price / Exit Price | Quantity-weighted averages across the fills |
-| Target Price | Your planned exit, if you set one |
-| Target R/R · Actual R/R | Planned and realized reward per unit of risk |
-| # Open · # Closed | Units still open, and units exited |
-| P&L | Realized net P&L, including exits on positions that are still open |
-| Tags | The tags on the position — up to three chips and a +N marker that lists the rest |
+| Column                   | Meaning                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| Entry Price / Exit Price | Quantity-weighted averages across the fills                                      |
+| Target Price             | Your planned exit, if you set one                                                |
+| Target R/R · Actual R/R  | Planned and realized reward per unit of risk                                     |
+| # Open · # Closed        | Units still open, and units exited                                               |
+| P&L                      | Realized net P&L, including exits on positions that are still open               |
+| Tags                     | The tags on the position — up to three chips and a +N marker that lists the rest |
 
 The tabs above the table — **All**, **Draft**, **Open**, **Closed** — filter by
 state, and the **Tags** control narrows the list to positions carrying every
