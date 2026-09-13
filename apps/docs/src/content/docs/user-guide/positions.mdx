@@ -237,6 +237,34 @@ Deletion is permanent — there is no undo, and the fills go with it. To take a
 position out of your statistics without losing the record, there is no archive
 today; the honest options are to keep it or to delete it.
 
+## Tags
+
+Tags let you label a position with what you traded and how it went. Each tag
+belongs to one of four categories: **Setups**, **Emotions**, **Mistakes**, and
+**General**. A tag chip shows a category letter before the name — **S** for a
+setup, **E** for an emotion, **M** for a mistake, and **G** for a general tag.
+
+Create and manage your tags on **Settings → Tags**. Add a tag there, rename it,
+give it a colour, or delete it.
+
+A new user is offered a starter set of sixteen tags once. Choose **Add the
+starter set** to create them, or **Start from scratch** to skip them. You can add
+the tags you skipped later. Use **Add starter tags** on the same tab.
+
+Apply tags from a position's page. Select **Edit tags**, tick the tags you want,
+and save. You can tag a position in any state — draft, open, or closed.
+
+The **Tags** control above the list filters the list. Select one or more tags.
+The list then shows only positions that carry every tag you selected. The
+selection is written to the address as `/positions?tag=…`, so you can reload or
+bookmark a filtered view.
+
+The list shows up to three chips per position. A `+N` marker follows them and
+lists the rest.
+
+Deleting a tag removes it from every position that carries it. Those positions
+keep their other tags.
+
 ## What the columns mean
 
 The **Positions** list shows, per position:
@@ -248,9 +276,11 @@ The **Positions** list shows, per position:
 | Target R/R · Actual R/R | Planned and realized reward per unit of risk |
 | # Open · # Closed | Units still open, and units exited |
 | P&L | Realized net P&L, including exits on positions that are still open |
+| Tags | The tags on the position — up to three chips and a +N marker that lists the rest |
 
 The tabs above the table — **All**, **Draft**, **Open**, **Closed** — filter by
-state.
+state, and the **Tags** control narrows the list to positions carrying every
+selected tag.
 
 Full definitions of every figure are in the
 [metrics glossary](/user-guide/reference/metrics-glossary/).
