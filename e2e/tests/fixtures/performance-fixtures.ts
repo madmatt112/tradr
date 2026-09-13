@@ -491,6 +491,14 @@ export async function mockAppShell(page: Page): Promise<void> {
     route.fulfill(json({ releases: [], lastViewedAt: '1970-01-01T00:00:00.000Z' })),
   );
   await page.route(/\/api\/positions(\?.*)?$/, (route) => route.fulfill(json([])));
+  // The positions list mounts the tag filter and the detail mounts the tag
+  // picker, and both read the full tag vocabulary, so `/api/tags` is shell
+  // surface on every positions view. Unmocked it 401s against the synthetic
+  // session and trips the /login redirect described above. Empty is the neutral
+  // answer: no tags, so neither control paints a surface a spec was not written
+  // for. Anchored on the collection so it does not swallow the `/tags/:id`
+  // mutation routes, which no spec fires on load.
+  await page.route(/\/api\/tags(\?.*)?$/, (route) => route.fulfill(json([])));
   await page.route('**/api/users/me/display-currency', (route) =>
     route.fulfill(json({ currency: 'USD' })),
   );

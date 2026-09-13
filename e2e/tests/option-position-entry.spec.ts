@@ -190,7 +190,7 @@ test.describe.serial('Option position entry — full flow', () => {
     await expect(page.getByText('option', { exact: true })).toBeVisible();
 
     // --- EDIT: structured fields PREFILLED with NORMALISED values ---
-    await page.getByRole('button', { name: 'Edit' }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
     const editDialog = page.getByRole('dialog');
     await expect(editDialog.getByRole('heading', { name: 'Edit Position' })).toBeVisible();
 
