@@ -13,10 +13,10 @@ backup restores before you need it to.
 
 Two things, and they live in different places.
 
-| What | Where | Lost without it |
-| --- | --- | --- |
-| **Your data** | the `pgdata` Docker volume | Accounts, positions, fills, ledger entries, notes |
-| **Your secrets** | the `.env` file | The ability to read part of a restored database — see below |
+| What             | Where                      | Lost without it                                             |
+| ---------------- | -------------------------- | ----------------------------------------------------------- |
+| **Your data**    | the `pgdata` Docker volume | Accounts, positions, fills, ledger entries, notes           |
+| **Your secrets** | the `.env` file            | The ability to read part of a restored database — see below |
 
 The database holds everything the application stores, uploaded images included:
 object storage is a hosted capability and stays unconfigured here. So a plain
@@ -36,8 +36,8 @@ Copy `.env` to the same place you keep your backups. Treat it as a secret. It
 contains `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `ENCRYPTION_KEY`.
 
 <HostedOnly>
-  Backups on `app.tradr.cloud` are managed for you. This page is for operators who
-  run their own instance.
+  Backups on `app.tradr.cloud` are managed for you. This page is for operators who run their own
+  instance.
 </HostedOnly>
 
 ## Find your volume name

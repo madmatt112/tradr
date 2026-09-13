@@ -21,7 +21,7 @@
   },
   "lint-staged": {
     "*.{ts,tsx}": "eslint --fix",
-    "*.{ts,tsx,json,md,css}": "prettier --write"
+    "*.{ts,tsx,json,md,mdx,css}": "prettier --write"
   },
   "devDependencies": {
     "dependency-cruiser": "^17.3.10",

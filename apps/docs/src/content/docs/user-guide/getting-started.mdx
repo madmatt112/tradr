@@ -21,9 +21,8 @@ instance, the screens are identical. The few differences are called out in
 **Self-hosted** notes.
 
 <SelfHosted>
-  Open your instance at its own address instead (by default
-  `http://localhost:8080`). See [Self-host with Docker
-  Compose](/self-hosting/docker-compose/) to stand one up first.
+  Open your instance at its own address instead (by default `http://localhost:8080`). See [Self-host
+  with Docker Compose](/self-hosting/docker-compose/) to stand one up first.
 </SelfHosted>
 
 ## Before you start
@@ -44,7 +43,10 @@ You need:
 **Expected result:** you land on a setup screen headed **Welcome to Tradr**. It is
 not an empty dashboard. Below it sits a **Get set up** checklist of four items.
 
-<Screenshot name="dashboard-first-login" alt="The Tradr dashboard on first login. A Welcome to Tradr card offers Create my first account, Walk me through it, and Add sample data, above a Get set up checklist of four items." />
+<Screenshot
+  name="dashboard-first-login"
+  alt="The Tradr dashboard on first login. A Welcome to Tradr card offers Create my first account, Walk me through it, and Add sample data, above a Get set up checklist of four items."
+/>
 
 The welcome card offers three ways forward:
 
@@ -53,8 +55,8 @@ The welcome card offers three ways forward:
 - **Add sample data** — a ready-made account to look around in.
 
 <HostedOnly>
-  You may be asked to verify your email. Follow the link in the message to
-  confirm. You can still explore before verifying.
+  You may be asked to verify your email. Follow the link in the message to confirm. You can still
+  explore before verifying.
 </HostedOnly>
 
 <SelfHosted>
@@ -77,7 +79,10 @@ never places or executes trades. You record trades you have already made.
 2. Fill in the form described below.
 3. Choose **Create**.
 
-<Screenshot name="new-account-dialog" alt="The New Account dialog, showing its six fields: Name, Currency, Trading-day timezone, Starting balance, Default risk %, and Brokerage." />
+<Screenshot
+  name="new-account-dialog"
+  alt="The New Account dialog, showing its six fields: Name, Currency, Trading-day timezone, Starting balance, Default risk %, and Brokerage."
+/>
 
 The form has six fields, in this order.
 
@@ -118,7 +123,10 @@ and an unlabelled last column holding a **⋯** menu with **Edit** and **Delete*
 in it. Balances are not in this list. They appear in the dashboard's **Account
 Balances** widget.
 
-<Screenshot name="accounts-list" alt="The Accounts page, listing one account under a Name column and a Currency column, with an unlabelled third column holding a row menu. A banner above it marks the figures on screen as sample data." />
+<Screenshot
+  name="accounts-list"
+  alt="The Accounts page, listing one account under a Name column and a Currency column, with an unlabelled third column holding a row menu. A banner above it marks the figures on screen as sample data."
+/>
 
 The figure above carries the sample account rather than one of your own, so the
 sample-data banner sits above it.
@@ -140,12 +148,12 @@ Setting one zone never sets the other. Changing your reporting timezone leaves
 every account's trading-day timezone untouched. Changing an account's leaves your
 reporting timezone untouched.
 
-| | Trading-day timezone | Reporting timezone |
-| --- | --- | --- |
-| Belongs to | One account | You |
-| Set under | The account form | Settings → Profile |
-| Decides | Whether a position can be re-entered the same day | How your P&L is bucketed by day, week and month |
-| Starts as | `America/New_York` | The zone your browser reported at registration |
+|            | Trading-day timezone                              | Reporting timezone                              |
+| ---------- | ------------------------------------------------- | ----------------------------------------------- |
+| Belongs to | One account                                       | You                                             |
+| Set under  | The account form                                  | Settings → Profile                              |
+| Decides    | Whether a position can be re-entered the same day | How your P&L is bucketed by day, week and month |
+| Starts as  | `America/New_York`                                | The zone your browser reported at registration  |
 
 ### Prefer to look around first?
 
@@ -191,7 +199,10 @@ the **Per-unit risk**, the **Actual dollar risk**, and the **Total position
 value**. With a target, a **Risk / Reward** card adds the **Per-unit reward** and
 the **Risk/Reward ratio**.
 
-<Screenshot name="calculator" alt="The Trade Calculator, with entry 182.40, stop 178.00 and target 191.20 on the left, and a Position Sizing card reading 113 units on the right beside a Risk / Reward card." />
+<Screenshot
+  name="calculator"
+  alt="The Trade Calculator, with entry 182.40, stop 178.00 and target 191.20 on the left, and a Position Sizing card reading 113 units on the right beside a Risk / Reward card."
+/>
 
 The figure above risks $500 at the prices the worked AAPL trade below uses. Entry
 182.40 against a stop at 178.00 is $4.40 of risk per share, which buys 113 shares
@@ -210,11 +221,11 @@ and the options mode.
 A position in Tradr is one trade and every fill that belongs to it. It moves
 through three states.
 
-| State | Meaning |
-| --- | --- |
-| **Draft** | A plan you have not entered. It posts nothing to your ledger and leaves your balance where it was. |
-| **Open** | You are in the trade. Its cost is held against the account as position value. |
-| **Closed** | You have exited in full. |
+| State      | Meaning                                                                                            |
+| ---------- | -------------------------------------------------------------------------------------------------- |
+| **Draft**  | A plan you have not entered. It posts nothing to your ledger and leaves your balance where it was. |
+| **Open**   | You are in the trade. Its cost is held against the account as position value.                      |
+| **Closed** | You have exited in full.                                                                           |
 
 1. Open **Positions**.
 2. Choose **New Position**.
@@ -242,7 +253,7 @@ is unchanged, because a draft is a plan rather than a trade.
 Choose **Open Position**.
 
 The button stays disabled until an entry fill exists, and its tooltip then reads
-*Add an entry fill first*.
+_Add an entry fill first_.
 
 **Expected result:** the position is tagged **open**. Its cost is now held
 against the account as position value.
@@ -262,13 +273,16 @@ your account balance as it lands, which is the moment your balance moves.
 
 When your exits balance the entered quantity, Tradr closes the position itself.
 **Close Position** stays disabled while any quantity is still open, with the
-tooltip *Exit the full quantity first*. The button covers the cases the automatic
+tooltip _Exit the full quantity first_. The button covers the cases the automatic
 path does not.
 
 **Expected result:** the position is tagged **closed** and carries its realized
 figures.
 
-<Screenshot name="position-detail" alt="A closed AAPL position, showing average entry and exit prices, gross and net P&L, return percent, notes, and a Fills table with one entry fill and one exit fill." />
+<Screenshot
+  name="position-detail"
+  alt="A closed AAPL position, showing average entry and exit prices, gross and net P&L, return percent, notes, and a Fills table with one entry fill and one exit fill."
+/>
 
 The figure above is the sample account's closed AAPL position. It entered 50
 shares at 182.40 and exited at 191.20, paying 1.00 in fees each side. Gross P&L
@@ -301,7 +315,10 @@ See [Customise the dashboard](/user-guide/dashboard/).
 a breakdown table by period. With one closed position you get a single row. The
 picture fills in as you log more.
 
-<Screenshot name="performance" alt="The Performance page, showing an equity curve, a Statistics panel with total positions, net P&L and win rate, and a monthly breakdown table." />
+<Screenshot
+  name="performance"
+  alt="The Performance page, showing an equity curve, a Statistics panel with total positions, net P&L and win rate, and a monthly breakdown table."
+/>
 
 The figure above is the sample account across six months. It shows 10 closed
 positions, a total net P&L of +$1,728.00, and a win rate of 70.0%.

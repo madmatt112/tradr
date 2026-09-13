@@ -15,13 +15,13 @@ Rather than duplicating pages, the docs mark divergent flows **inline** with one
 of two callouts. Both are thin wrappers over Starlight's `<Aside>`:
 
 <HostedOnly>
-  Applies to `app.tradr.cloud` (the managed app): managed backups, wallet credits,
-  billing, and feature gating.
+  Applies to `app.tradr.cloud` (the managed app): managed backups, wallet credits, billing, and
+  feature gating.
 </HostedOnly>
 
 <SelfHosted>
-  Applies to a self-run instance: you supply your own LLM key, and you run and
-  back up your own database.
+  Applies to a self-run instance: you supply your own LLM key, and you run and back up your own
+  database.
 </SelfHosted>
 
 Use `<HostedOnly>` / `<SelfHosted>` from `src/components/` in any `.mdx`
@@ -29,13 +29,13 @@ page where a step only applies to one deployment.
 
 ## What differs
 
-| Area | Hosted (`app.tradr.cloud`) | Self-hosted |
-| --- | --- | --- |
-| Backups | Managed, automatic | You run and restore your own |
-| LLM access | Wallet credits (platform keys) | Bring your own key (BYOK) |
-| Billing | Stripe wallet | None |
-| Feature gating | On (plan limits apply) | Off by default |
-| Migrations | Run for you | Auto-run on API startup |
+| Area           | Hosted (`app.tradr.cloud`)     | Self-hosted                  |
+| -------------- | ------------------------------ | ---------------------------- |
+| Backups        | Managed, automatic             | You run and restore your own |
+| LLM access     | Wallet credits (platform keys) | Bring your own key (BYOK)    |
+| Billing        | Stripe wallet                  | None                         |
+| Feature gating | On (plan limits apply)         | Off by default               |
+| Migrations     | Run for you                    | Auto-run on API startup      |
 
 :::note
 This page is a stub — the table above is the placeholder for the full map.

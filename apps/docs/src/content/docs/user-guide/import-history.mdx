@@ -1,6 +1,6 @@
 ---
-title: "Import your history"
-description: "Bring an existing trading history into Tradr with a broker CSV: upload, map columns, preview, and commit. Includes what Tradr does and does not connect to directly."
+title: 'Import your history'
+description: 'Bring an existing trading history into Tradr with a broker CSV: upload, map columns, preview, and commit. Includes what Tradr does and does not connect to directly.'
 ---
 
 CSV import is how you bring an existing trading history into Tradr. Export the
@@ -33,8 +33,8 @@ trades twice. There is no de-duplication.
 Open **Import** and pick the account under **1. Target account**.
 
 :::tip[The first time you open this page]
-A one-off tip opens beside the **Import trades from CSV** heading, headed *Bring
-your history in from a CSV*. Choose **Got it** to dismiss it, or **Read more** to
+A one-off tip opens beside the **Import trades from CSV** heading, headed _Bring
+your history in from a CSV_. Choose **Got it** to dismiss it, or **Read more** to
 open this page. It does not come back.
 
 The tip does not appear when your plan has no CSV imports left, because you could
@@ -62,12 +62,12 @@ can then adjust any of them. A preset is a starting point, not a lock.
 
 Set these alongside the mapping:
 
-| Setting | What it controls |
-| --- | --- |
-| **Row shape** | Whether each row is one fill (**Execution**) or a whole round trip with entry and exit on one line (**Round-trip**). Set independently of the preset. |
-| **Timezone** | The zone your export's timestamps are written in. This is neither the account's trading-day timezone nor your reporting timezone. |
-| **Date format** | How to read the date column — ISO, US, and so on. |
-| **Number format** | Whether `1,234.56` or `1.234,56`. |
+| Setting           | What it controls                                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Row shape**     | Whether each row is one fill (**Execution**) or a whole round trip with entry and exit on one line (**Round-trip**). Set independently of the preset. |
+| **Timezone**      | The zone your export's timestamps are written in. This is neither the account's trading-day timezone nor your reporting timezone.                     |
+| **Date format**   | How to read the date column — ISO, US, and so on.                                                                                                     |
+| **Number format** | Whether `1,234.56` or `1.234,56`.                                                                                                                     |
 
 For execution rows, these fields are **required**:
 
@@ -99,6 +99,7 @@ Add the column before you upload. One value for every row is fine:
 Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees
 AAPL,STK,BUY,100,181.50,2026-03-02T09:35:00,1.00
 ```
+
 :::
 
 ## Options
@@ -111,11 +112,11 @@ symbol, for example `NVDA260321C120`.
 Tell Tradr where to find the option contract in each row. Set the **contract
 form** in the mapping. There are three forms:
 
-| Contract form | Where Tradr finds the contract | Preset |
-| --- | --- | --- |
-| **OCC symbol** | The Symbol column holds a full OCC contract symbol. | Interactive Brokers |
-| **Separate columns** | Separate columns hold the expiry, strike, and call or put. The underlying comes from the Symbol column. | TradeZella |
-| **Descriptor** | One column holds a text descriptor of the contract. This form is preset-only. | Tradervue |
+| Contract form        | Where Tradr finds the contract                                                                          | Preset              |
+| -------------------- | ------------------------------------------------------------------------------------------------------- | ------------------- |
+| **OCC symbol**       | The Symbol column holds a full OCC contract symbol.                                                     | Interactive Brokers |
+| **Separate columns** | Separate columns hold the expiry, strike, and call or put. The underlying comes from the Symbol column. | TradeZella          |
+| **Descriptor**       | One column holds a text descriptor of the contract. This form is preset-only.                           | Tradervue           |
 
 For the separate-columns form, also set the **Expiry format**. The Expiry format
 tells Tradr how to read the expiry column. The choices are ISO, `YYYYMMDD`, and
@@ -166,13 +167,13 @@ Select **Preview import**. Nothing has been written yet — this is the check.
 
 The summary counts what Tradr found:
 
-| | Meaning |
-| --- | --- |
-| **Rows parsed** | Data rows read from the file |
-| **Rows valid** | Rows that mapped cleanly |
+|                      | Meaning                                                             |
+| -------------------- | ------------------------------------------------------------------- |
+| **Rows parsed**      | Data rows read from the file                                        |
+| **Rows valid**       | Rows that mapped cleanly                                            |
 | **Rows with errors** | Rows Tradr could not read. They are listed with their line numbers. |
-| **Positions** | Positions these rows will become |
-| **Fills** | Fills across those positions |
+| **Positions**        | Positions these rows will become                                    |
+| **Fills**            | Fills across those positions                                        |
 
 Below the summary, each proposed position is shown with its fills and, when the
 rows close it, its proposed P&L.

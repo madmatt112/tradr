@@ -176,13 +176,13 @@ The set stays bounded. Each mounted router adds at most one wildcard value.
 
 ### The other labels
 
-| Label     | On                                                                 | Values                                                                                                                                     |
-| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `method`  | `tradr_http_requests_total`, `tradr_http_request_duration_seconds` | The HTTP method: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`.                                                                                  |
-| `status`  | `tradr_http_requests_total`                                        | The numeric HTTP status code, as a string.                                                                                                 |
-| `state`   | `tradr_db_connections`                                             | `active`, `idle`, `idle_in_transaction`. Exactly three, enumerated explicitly, so a state outside that set adds no series. See below.      |
-| `version` | `tradr_build_info`, `tradr_web_build_info`                         | `APP_VERSION` verbatim, or `unknown`.                                                                                                      |
-| `commit`  | `tradr_build_info`, `tradr_web_build_info`                         | The text after the final `-` in `APP_VERSION`, or `unknown`.                                                                               |
+| Label     | On                                                                 | Values                                                                                                                                |
+| --------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `method`  | `tradr_http_requests_total`, `tradr_http_request_duration_seconds` | The HTTP method: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`.                                                                             |
+| `status`  | `tradr_http_requests_total`                                        | The numeric HTTP status code, as a string.                                                                                            |
+| `state`   | `tradr_db_connections`                                             | `active`, `idle`, `idle_in_transaction`. Exactly three, enumerated explicitly, so a state outside that set adds no series. See below. |
+| `version` | `tradr_build_info`, `tradr_web_build_info`                         | `APP_VERSION` verbatim, or `unknown`.                                                                                                 |
+| `commit`  | `tradr_build_info`, `tradr_web_build_info`                         | The text after the final `-` in `APP_VERSION`, or `unknown`.                                                                          |
 
 ### `state` is not Postgres's spelling
 
@@ -313,7 +313,7 @@ sum without (state) (tradr_db_connections) / tradr_db_pool_max
 ```
 
 `without (state)` is the load-bearing part, and a bare `sum()` breaks this query
-twice over. `sum()` drops *every* label, `job` and `instance` included, so the
+twice over. `sum()` drops _every_ label, `job` and `instance` included, so the
 left-hand side has nothing left to match `tradr_db_pool_max` on and the
 expression returns no result at all — not a wrong number, nothing. It would also
 be exactly the across-instance sum the section above warns against, because these

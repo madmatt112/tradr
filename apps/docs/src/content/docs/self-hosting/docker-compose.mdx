@@ -15,11 +15,11 @@ external integration is opt-in.
 
 Tradr ships as three services on one private bridge network:
 
-| Service | Image | Role | Published port |
-| --- | --- | --- | --- |
-| `web` | built from `docker/Dockerfile.web` | Nginx serving the static SPA + reverse-proxying `/api` to the api service | `${WEB_PORT:-8080}` → container `:80` |
-| `api` | built from `docker/Dockerfile.api` | Node.js Hono server; stateless, all state in Postgres | none (internal only) |
-| `postgres` | `postgres:16` | PostgreSQL 16 with a persistent volume | none (internal only) |
+| Service    | Image                              | Role                                                                      | Published port                        |
+| ---------- | ---------------------------------- | ------------------------------------------------------------------------- | ------------------------------------- |
+| `web`      | built from `docker/Dockerfile.web` | Nginx serving the static SPA + reverse-proxying `/api` to the api service | `${WEB_PORT:-8080}` → container `:80` |
+| `api`      | built from `docker/Dockerfile.api` | Node.js Hono server; stateless, all state in Postgres                     | none (internal only)                  |
+| `postgres` | `postgres:16`                      | PostgreSQL 16 with a persistent volume                                    | none (internal only)                  |
 
 Only `web` exposes a host port. `postgres` and `api` are reachable only inside
 the compose network. This keeps the database and API off the public internet by
@@ -37,8 +37,8 @@ default.
 - **`git`** and **`openssl`** (for generating secrets).
 
 <HostedOnly>
-  None of this applies to `app.tradr.cloud` — the managed platform runs the same
-  images on managed infrastructure. This page is for running your own instance.
+  None of this applies to `app.tradr.cloud` — the managed platform runs the same images on managed
+  infrastructure. This page is for running your own instance.
 </HostedOnly>
 
 ## Step 1 — Clone the repository
@@ -310,9 +310,8 @@ Backup commands, a restore procedure, and the shipped drill that proves a backup
 restores are in [Back up and restore](/self-hosting/backup-restore/).
 
 <HostedOnly>
-  On `app.tradr.cloud` backups are managed for you (daily platform backups) — you
-  never run `pg_dump`. That page is for self-hosters, who own their own backup
-  schedule.
+  On `app.tradr.cloud` backups are managed for you (daily platform backups) — you never run
+  `pg_dump`. That page is for self-hosters, who own their own backup schedule.
 </HostedOnly>
 
 ## Troubleshooting
@@ -335,11 +334,11 @@ the authoritative version.
 
 ### Services
 
-| Service | Image | Published port | Notes |
-| --- | --- | --- | --- |
-| `postgres` | `postgres:16` | none | Data in the `pgdata` named volume at `/var/lib/postgresql/data` |
-| `api` | built from `docker/Dockerfile.api` | none | Reads `.env` via `env_file`; runs migrations on boot |
-| `web` | built from `docker/Dockerfile.web` | `${WEB_PORT:-8080}` → `:80` | Nginx: serves the SPA, proxies `/api` to `api` |
+| Service    | Image                              | Published port              | Notes                                                           |
+| ---------- | ---------------------------------- | --------------------------- | --------------------------------------------------------------- |
+| `postgres` | `postgres:16`                      | none                        | Data in the `pgdata` named volume at `/var/lib/postgresql/data` |
+| `api`      | built from `docker/Dockerfile.api` | none                        | Reads `.env` via `env_file`; runs migrations on boot            |
+| `web`      | built from `docker/Dockerfile.web` | `${WEB_PORT:-8080}` → `:80` | Nginx: serves the SPA, proxies `/api` to `api`                  |
 
 `postgres` and `api` are deliberately **not** published. Only `web` exposes a
 host port, so the database and the API stay off the public interface by default.
@@ -376,10 +375,10 @@ Each release publishes multi-arch images to GHCR. To run those rather than
 building locally, replace the `build:` block on a service with a pinned tag:
 
 ```yaml
-  api:
-    image: ghcr.io/madmatt112/tradr-api:0.5.4
-  web:
-    image: ghcr.io/madmatt112/tradr-web:0.5.4
+api:
+  image: ghcr.io/madmatt112/tradr-api:0.5.4
+web:
+  image: ghcr.io/madmatt112/tradr-web:0.5.4
 ```
 
 Pin an explicit version rather than a floating tag, so an upgrade is a decision

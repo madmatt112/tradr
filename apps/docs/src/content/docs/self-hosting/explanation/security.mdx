@@ -66,11 +66,11 @@ outbound calls, no error reporting.
 
 Each of these is off until you turn it on:
 
-| Configured | What is sent |
-| --- | --- |
-| Analytics | Product events — no trade data, users identified by an opaque id |
-| Email | Address and message content to your SMTP server |
-| Market data | The symbols you look up |
+| Configured  | What is sent                                                     |
+| ----------- | ---------------------------------------------------------------- |
+| Analytics   | Product events — no trade data, users identified by an opaque id |
+| Email       | Address and message content to your SMTP server                  |
+| Market data | The symbols you look up                                          |
 
 ## Network exposure
 
@@ -94,9 +94,9 @@ stuffing and brute force. On a single instance the counters are in memory, so
 they reset when the api restarts.
 
 <SelfHosted>
-  There is no lockout after N failed attempts, and no CAPTCHA. For an instance
-  with a handful of known users that is a reasonable trade; if yours is exposed to
-  the internet with open registration, put an authenticating proxy in front.
+  There is no lockout after N failed attempts, and no CAPTCHA. For an instance with a handful of
+  known users that is a reasonable trade; if yours is exposed to the internet with open
+  registration, put an authenticating proxy in front.
 </SelfHosted>
 
 ## What is off by default
