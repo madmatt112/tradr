@@ -100,6 +100,14 @@
   --color-info: oklch(0.5 0.2 258);
   --color-info-foreground: oklch(0.99 0 0);
 
+  /* Categorical tag swatches (tags-and-setups): decorative tint, never the only channel */
+  --color-tag-1: oklch(0.62 0.12 112);
+  --color-tag-2: oklch(0.6 0.1 172);
+  --color-tag-3: oklch(0.62 0.11 215);
+  --color-tag-4: oklch(0.58 0.14 290);
+  --color-tag-5: oklch(0.58 0.15 320);
+  --color-tag-6: oklch(0.62 0.14 345);
+
   /* --- Radii --- */
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
@@ -184,6 +192,14 @@
   --color-warning-foreground: oklch(0.18 0.02 55);
   --color-info: oklch(0.72 0.14 250);
   --color-info-foreground: oklch(0.18 0.02 250);
+
+  /* Categorical tag swatches (tags-and-setups): decorative tint, never the only channel */
+  --color-tag-1: oklch(0.76 0.13 112);
+  --color-tag-2: oklch(0.74 0.11 172);
+  --color-tag-3: oklch(0.76 0.12 215);
+  --color-tag-4: oklch(0.74 0.14 290);
+  --color-tag-5: oklch(0.74 0.15 320);
+  --color-tag-6: oklch(0.76 0.14 345);
 }
 
 @layer base {

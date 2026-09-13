@@ -2,9 +2,19 @@ import Decimal from 'decimal.js';
 import { asc, eq, inArray } from 'drizzle-orm';
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 
+import { STARTER_TAGS } from '@tradr/shared/constants/tags';
+
 import app from '@/app';
 import { db } from '@/db';
-import { accounts as accountsTable, fills, ledgerEntries, positions, users } from '@/db/schema';
+import {
+  accounts as accountsTable,
+  fills,
+  ledgerEntries,
+  positions,
+  positionTags,
+  tags as tagsTable,
+  users,
+} from '@/db/schema';
 import {
   insertPositionCloseLedgerEntries,
   postFillLedgerEntries,
@@ -125,7 +135,27 @@ async function readSeededData(userId: string) {
 
   const ledgerRows = await db.select().from(ledgerEntries).where(eq(ledgerEntries.userId, userId));
 
+  // Every tag→position assignment for the user, read through the join so a
+  // dropped `setPositionTagsTx` call or a mis-resolved name is visible.
+  const tagAssignments = await db
+    .select({ symbol: positions.symbol, name: tagsTable.name, category: tagsTable.category })
+    .from(positionTags)
+    .innerJoin(tagsTable, eq(positionTags.tagId, tagsTable.id))
+    .innerJoin(positions, eq(positionTags.positionId, positions.id))
+    .where(eq(positions.userId, userId));
+
+  // Every tag the user owns, whatever it is assigned to.
+  const tagRows = await db
+    .select({ name: tagsTable.name, category: tagsTable.category, color: tagsTable.color })
+    .from(tagsTable)
+    .where(eq(tagsTable.userId, userId))
+    .orderBy(asc(tagsTable.name));
+
   return {
+    tagRows,
+    tags: tagAssignments.sort((a, b) =>
+      `${a.symbol}${a.name}`.localeCompare(`${b.symbol}${b.name}`),
+    ),
     positions: positionRows.map((p) => ({
       symbol: p.symbol,
       side: p.side,
@@ -225,6 +255,42 @@ describe('POST /api/accounts/demo', () => {
     // Closed positions have both fills; the planned one has only its entry.
     expect(data.fills).toHaveLength(14 + 10);
     expect(data.fills.filter((f) => f.symbol === 'UBER')).toHaveLength(1);
+
+    // The whole starter set exists — sixteen tags, each matching STARTER_TAGS
+    // case-insensitively, all colourless.
+    expect(data.tagRows).toHaveLength(16);
+    const starterByLower = new Map(data.tagRows.map((t) => [t.name.toLowerCase(), t]));
+    for (const starter of STARTER_TAGS) {
+      const row = starterByLower.get(starter.name.toLowerCase());
+      expect(row, starter.name).toBeDefined();
+      expect(row!.category).toBe(starter.category);
+      expect(row!.color).toBeNull();
+    }
+
+    // Exactly the seven-trade assignment table (nine rows); the other seven
+    // trades carry no tags.
+    expect(data.tags).toEqual([
+      { symbol: 'AAPL', name: 'breakout', category: 'setup' },
+      { symbol: 'AAPL', name: 'calm', category: 'emotion' },
+      { symbol: 'GOOGL', name: 'frustrated', category: 'emotion' },
+      { symbol: 'NVDA', name: 'anxious', category: 'emotion' },
+      { symbol: 'NVDA', name: 'early exit', category: 'mistake' },
+      { symbol: 'QQQ', name: 'calm', category: 'emotion' },
+      { symbol: 'SPY', name: 'pullback', category: 'setup' },
+      { symbol: 'TSLA', name: 'reversal', category: 'setup' },
+      { symbol: 'UBER', name: 'breakout', category: 'setup' },
+    ]);
+
+    // The seed counts as answering the starter offer (REQ-6.3), so it is never
+    // shown to a demo user.
+    const onboarding = await getOnboarding(cookie);
+    expect(onboarding.starterTagsAnsweredAt).toBeDefined();
+
+    // The seed drove the tags service's Tx functions directly: the load event
+    // fired and no per-tag create event did.
+    const events = capturedEvents();
+    expect(events).toContain('demo_data_loaded');
+    expect(events).not.toContain('tag_created');
   });
 
   it('produces identical data for two users seeded independently', async () => {
@@ -450,6 +516,39 @@ describe('POST /api/accounts/demo', () => {
     expect(fillAgeInDays).toBeLessThan(90);
     expect(fillAgeInDays).toBeGreaterThan(0);
   });
+
+  it('folds into a vocabulary the user already has, creating only the missing starters', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+
+    // A tag whose name collides case-insensitively with a starter, created
+    // before the user asks for sample data.
+    const created = await authedRequest('POST', '/api/tags', cookie, {
+      name: 'Breakout',
+      category: 'setup',
+    });
+    expect(created.status).toBe(201);
+
+    // Only the seed's own events are of interest below.
+    vi.mocked(captureServerEvent).mockClear();
+    expect((await authedRequest('POST', '/api/accounts/demo', cookie)).status).toBe(201);
+
+    const data = await readSeededData(userId);
+    // Sixteen, not seventeen: fifteen starters were created and the existing
+    // Breakout was reused rather than duplicated.
+    expect(data.tagRows).toHaveLength(16);
+    expect(data.tagRows.filter((t) => t.name.toLowerCase() === 'breakout')).toHaveLength(1);
+
+    // AAPL carries the user's own pre-existing tag, spelling and all.
+    const aaplTags = data.tags.filter((t) => t.symbol === 'AAPL').map((t) => t.name);
+    expect(aaplTags).toContain('Breakout');
+    expect(aaplTags).not.toContain('breakout');
+
+    // The seed created the fifteen through ensureStarterTagsTx, not the create
+    // endpoint, so no tag_created fired during the seed itself.
+    const events = capturedEvents();
+    expect(events).toContain('demo_data_loaded');
+    expect(events).not.toContain('tag_created');
+  });
 });
 
 /**
@@ -519,6 +618,12 @@ describe('DELETE /api/accounts/:id?cascade=demo', () => {
 
     const list = await authedRequest('GET', '/api/accounts', cookie);
     expect(await list.json()).toEqual([]);
+
+    // The join rows cascaded with the positions, but the sixteen tags survive:
+    // sample data is disposable, the user's vocabulary is not.
+    const after = await readSeededData(userId);
+    expect(after.tagRows).toHaveLength(16);
+    expect(after.tags).toEqual([]);
   });
 
   it('clears the display currency the seed set, so a later real account sets its own', async () => {
@@ -733,7 +838,11 @@ describe('the private demo marker is invisible to the client and safe from it', 
     expect(await readDemoMarker(userId)).toEqual({ accountId, latchedDisplayCurrency: true });
 
     const body = await getOnboarding(cookie);
-    expect(body).toEqual({ status: 'pending', coachMarksSeen: [] });
+    expect(body.status).toBe('pending');
+    expect(body.coachMarksSeen).toEqual([]);
+    // The seed also stamps the starter-offer answer time — that IS a published
+    // key; the point here is that the private demo marker beside it is not.
+    expect(typeof body.starterTagsAnsweredAt).toBe('string');
     expect('demo' in body).toBe(false);
     // And the internal account id is not in the payload under any other key
     // either — it is not the client's to know, whatever it might be nested in.
@@ -750,8 +859,14 @@ describe('the private demo marker is invisible to the client and safe from it', 
       coachMarkSeen: 'csv-import',
     });
     expect(patched.status).toBe(200);
-    // The merged state on the way back out carries no more than the GET does.
-    expect(await patched.json()).toEqual({ status: 'done', coachMarksSeen: ['csv-import'] });
+    // The merged state on the way back out carries no more than the GET does —
+    // the two published keys the PATCH set plus the seed's answer time, and no
+    // private demo marker.
+    const patchedBody = (await patched.json()) as Record<string, unknown>;
+    expect(patchedBody.status).toBe('done');
+    expect(patchedBody.coachMarksSeen).toEqual(['csv-import']);
+    expect(typeof patchedBody.starterTagsAnsweredAt).toBe('string');
+    expect('demo' in patchedBody).toBe(false);
 
     // The merge rewrote only the keys the body named. A read-modify-write
     // through the state schema would have parsed the marker away right here,

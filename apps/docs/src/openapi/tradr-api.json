@@ -2839,6 +2839,54 @@
       }
     },
     "/api/positions": {
+      "get": {
+        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name. Optional filters may be combined.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "enum": [
+                "draft",
+                "open",
+                "closed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "accountId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated tag UUIDs; positions must carry every listed tag (AND semantics). Elements that are not UUIDs are ignored; an unknown id matches nothing.\n",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's positions, each with a `tags` array."
+          },
+          "400": {
+            "description": "Validation error (e.g. an invalid accountId)."
+          }
+        },
+        "summary": "List the user's positions.",
+        "tags": [
+          "Positions"
+        ]
+      },
       "post": {
         "description": "Authed. Creates a draft position in one of the user's accounts. When feature gating is enabled and the user is a non-admin Free user, the create is refused with `403 TIER_LIMIT_POSITIONS` at the position cap, or `403 TIER_ACCOUNT_NOT_WRITABLE` when over the account cap and targeting an account other than the writable designation. Admins and gating-off deployments pass through unchanged. Existing-data management (close/fills/edit/delete) is never blocked.\n",
         "requestBody": {
@@ -2940,6 +2988,32 @@
           }
         },
         "summary": "Delete a position (any status).",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "get": {
+        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The position detail, including its `tags` array."
+          },
+          "404": {
+            "description": "Position not found (or not owned by the user)."
+          }
+        },
+        "summary": "Get a position's detail.",
         "tags": [
           "Positions"
         ]
@@ -3326,6 +3400,62 @@
         ]
       }
     },
+    "/api/positions/{id}/tags": {
+      "put": {
+        "description": "Authed. Replaces the position's entire tag set with the supplied ids (replace-set semantics, not a merge). Duplicate ids collapse to one. Ownership of the position and of every tag is checked before the per-position cap. Tagging is allowed in any status.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "tagIds": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "tagIds"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The position's tags after the replace, ordered by category then name."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "404": {
+            "description": "The position or one of the tags was not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "`TAG_LIMIT_REACHED` — the set exceeds the per-position tag cap.\n"
+          }
+        },
+        "summary": "Replace a position's tag set.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
     "/api/symbols/quote-config": {
       "get": {
         "description": "Returns `{ stockQuoteConfigured: boolean }` so the frontend can gate the pull-last-price affordance without probing the quote endpoint. Gates solely on the presence of the provider key. Requires an authenticated session.\n",
@@ -3463,6 +3593,237 @@
         "summary": "Delayed spot last-price for a symbol.",
         "tags": [
           "Symbols"
+        ]
+      }
+    },
+    "/api/tags": {
+      "get": {
+        "description": "Authed. Returns every tag the user owns, ordered by category (Setups, Emotions, Mistakes, General) then case-insensitive name, each with the number of positions it is attached to. Tag names are unique per user case-insensitively across every category.\n",
+        "responses": {
+          "200": {
+            "description": "The user's tags",
+            "each with a positionCount.": null
+          },
+          "401": {
+            "description": "No valid session."
+          }
+        },
+        "summary": "List the user's tags.",
+        "tags": [
+          "Tags"
+        ]
+      },
+      "post": {
+        "description": "Authed. Names are unique per user case-insensitively across every category, so the same name cannot exist twice even under different categories. Colour is optional. Subject to a per-user cap.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "category": {
+                    "enum": [
+                      "setup",
+                      "emotion",
+                      "mistake",
+                      "general"
+                    ],
+                    "type": "string"
+                  },
+                  "color": {
+                    "enum": [
+                      "tag-1",
+                      "tag-2",
+                      "tag-3",
+                      "tag-4",
+                      "tag-5",
+                      "tag-6"
+                    ],
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 40,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "category"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created tag."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "409": {
+            "description": "`TAG_NAME_TAKEN` — a tag with this name already exists for the user (case-insensitive, across categories); or `TAG_LIMIT_REACHED` — the per-user tag cap has been reached.\n"
+          }
+        },
+        "summary": "Create a tag.",
+        "tags": [
+          "Tags"
+        ]
+      }
+    },
+    "/api/tags/starter": {
+      "post": {
+        "description": "Authed. `accept` creates any of the sixteen starter tags the user does not already have and returns the ones it created; `decline` creates nothing. Both record that the offer was answered so it is not shown again. `accept` is idempotent by name (case-insensitive): a second accept returns an empty `created` and makes no duplicates.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "answer": {
+                    "enum": [
+                      "accept",
+                      "decline"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The answer and the tags an `accept` created (empty on `decline` and on an already-complete `accept`).\n"
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "409": {
+            "description": "`TAG_LIMIT_REACHED` — the starter set cannot fit under the per-user tag cap.\n"
+          }
+        },
+        "summary": "Answer the starter-tags offer.",
+        "tags": [
+          "Tags"
+        ]
+      }
+    },
+    "/api/tags/{id}": {
+      "delete": {
+        "description": "Authed. Removing a tag detaches it from every position it was attached to; it is never refused for being in use.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "404": {
+            "description": "No such tag for this user."
+          }
+        },
+        "summary": "Delete a tag.",
+        "tags": [
+          "Tags"
+        ]
+      },
+      "put": {
+        "description": "Authed. Every field is optional but at least one must be present. Names stay unique per user case-insensitively across every category; a case-only self-rename is allowed.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "minProperties": 1,
+                "properties": {
+                  "category": {
+                    "enum": [
+                      "setup",
+                      "emotion",
+                      "mistake",
+                      "general"
+                    ],
+                    "type": "string"
+                  },
+                  "color": {
+                    "enum": [
+                      "tag-1",
+                      "tag-2",
+                      "tag-3",
+                      "tag-4",
+                      "tag-5",
+                      "tag-6"
+                    ],
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 40,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated tag."
+          },
+          "400": {
+            "description": "Validation error."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "404": {
+            "description": "No such tag for this user."
+          },
+          "409": {
+            "description": "`TAG_NAME_TAKEN` — a tag with this name already exists for the user (case-insensitive, across categories).\n"
+          }
+        },
+        "summary": "Edit a tag.",
+        "tags": [
+          "Tags"
         ]
       }
     },
@@ -3630,6 +3991,11 @@
                     "sidebarPinned": {
                       "description": "Whether the nav rail is pinned to its expanded state. Absent until the user (or the client's one-time seed) has expressed a preference.\n",
                       "type": "boolean"
+                    },
+                    "starterTagsAnsweredAt": {
+                      "description": "Absent until the user has answered the starter tags offer.",
+                      "format": "date-time",
+                      "type": "string"
                     },
                     "status": {
                       "description": "`pending` not started, `active` running, `skipped` dismissed (recoverable — set it back to start again), `done` completed.\n",

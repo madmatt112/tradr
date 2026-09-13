@@ -1,6 +1,7 @@
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { useState } from 'react';
 
+import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Numeric } from '@/components/Numeric';
 import { Button } from '@/components/ui/button';
@@ -16,11 +17,15 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
+import { TagChipList } from '@/features/tags/components/TagChip';
+import { TagFilterControl } from '@/features/tags/components/TagFilterControl';
+import { useTags } from '@/features/tags/hooks/useTags';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
 
 import { usePositions } from '../hooks/usePositions';
+import { buildListFilters } from '../utils/listFilters';
 import { decodeOptionContract } from '../utils/optionContract';
 import { positionAgeDays } from '../utils/positionAge';
 import { shouldNavigateFromRowClick } from '../utils/rowNavigation';
@@ -37,12 +42,18 @@ const STATUS_TABS = [
 ] as const;
 
 export function PositionList() {
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  // The list filters live in the URL so a filtered view is shareable and
+  // reload-safe (REQ-3.3). `buildListFilters` returns `undefined` for the empty
+  // view, which keys `['positions', 'list', undefined]` — the same key the
+  // no-filter call has always used.
+  const search = useSearch({ from: '/_auth/positions/' });
+  const navigate = useNavigate();
+  const filters = buildListFilters(search);
   const [dialogOpen, setDialogOpen] = useState(false);
   const { data: accounts } = useAccounts();
-  const { data: positions, isLoading } = usePositions(
-    statusFilter === 'all' ? undefined : { status: statusFilter },
-  );
+  const { data: positions, isLoading } = usePositions(filters);
+  const tagsQuery = useTags();
+  const selectedTagIds = filters?.tag ?? [];
   const inspectPosition = useDrawerStore((s) => s.inspectPosition);
   const inspectedId = useDrawerStore((s) => s.inspectedPosition?.id ?? null);
   // The browse/inspect two-state: while the drawer is open the wide columns
@@ -96,15 +107,38 @@ export function PositionList() {
         }
       />
 
-      <Tabs value={statusFilter} onValueChange={setStatusFilter} className="mb-4">
-        <TabsList>
-          {STATUS_TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value} className="cursor-pointer">
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <div className="mb-4 flex items-center gap-3">
+        <Tabs
+          value={search.status ?? 'all'}
+          onValueChange={(value) =>
+            navigate({
+              to: '/positions',
+              search: (prev) => ({
+                ...prev,
+                status: value === 'all' ? undefined : (value as 'draft' | 'open' | 'closed'),
+              }),
+            })
+          }
+        >
+          <TabsList>
+            {STATUS_TABS.map((tab) => (
+              <TabsTrigger key={tab.value} value={tab.value} className="cursor-pointer">
+                {tab.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <TagFilterControl
+          tags={tagsQuery.data ?? []}
+          selectedIds={selectedTagIds}
+          onChange={(ids) =>
+            navigate({
+              to: '/positions',
+              search: (prev) => ({ ...prev, tag: [...ids].sort().join(',') || undefined }),
+            })
+          }
+        />
+      </div>
 
       {isLoading ? (
         <div className="space-y-3">
@@ -113,7 +147,30 @@ export function PositionList() {
           <Skeleton className="h-10 w-full" />
         </div>
       ) : !positions?.length ? (
-        <div className="py-12 text-center text-muted-foreground">No positions found.</div>
+        filters === undefined ? (
+          <EmptyState
+            title="No positions yet"
+            description="Log your first position to see it here."
+          />
+        ) : (
+          <EmptyState
+            title="No positions match this filter"
+            action={
+              <Button
+                variant="outline"
+                className="cursor-pointer"
+                onClick={() =>
+                  navigate({
+                    to: '/positions',
+                    search: { status: undefined, tag: undefined },
+                  })
+                }
+              >
+                Clear filters
+              </Button>
+            }
+          />
+        )
       ) : (
         <Table className="text-sm">
           <TableHeader>
@@ -121,6 +178,7 @@ export function PositionList() {
               <TableHead>Symbol</TableHead>
               <TableHead>Side</TableHead>
               <TableHead>Status</TableHead>
+              {!drawerOpen && <TableHead className="hidden md:table-cell">Tags</TableHead>}
               {!drawerOpen && <TableHead>Account</TableHead>}
               <TableHead className="text-right">Qty</TableHead>
               {!drawerOpen && <TableHead className="text-right">Entry</TableHead>}
@@ -180,6 +238,11 @@ export function PositionList() {
                   <TableCell className="py-0">
                     <PositionStatusChip status={pos.status} />
                   </TableCell>
+                  {!drawerOpen && (
+                    <TableCell className="hidden py-0 md:table-cell">
+                      <TagChipList tags={pos.tags ?? []} max={3} />
+                    </TableCell>
+                  )}
                   {!drawerOpen && <TableCell className="py-0">{pos.accountName}</TableCell>}
                   <TableCell className="py-0 text-right">
                     <Numeric

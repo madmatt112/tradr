@@ -167,6 +167,13 @@ const NET_NEW_ROLES = [
   '--color-warning-foreground',
   '--color-info',
   '--color-info-foreground',
+  // Categorical tag swatches (tags-and-setups) — decorative tints, both-theme.
+  '--color-tag-1',
+  '--color-tag-2',
+  '--color-tag-3',
+  '--color-tag-4',
+  '--color-tag-5',
+  '--color-tag-6',
 ];
 
 // Surfaces a status callout (`text-{status}` on a `bg-{status}/10` tint inside
@@ -174,6 +181,20 @@ const NET_NEW_ROLES = [
 const STATUS_SURFACES = ['--color-background', '--color-card', '--color-popover'];
 const STATUS_ROLES = ['--color-success', '--color-warning', '--color-info'];
 const TINT_ALPHA = 0.1;
+
+// Categorical tag swatches (tags-and-setups): the chip is `bg-tag-N/10
+// text-foreground`, so the gate checks `--color-foreground` text over each
+// tag role composited at TINT_ALPHA on background/card/popover. The chip
+// border is deliberately NOT held to the 3:1 separator floor — the colour is
+// decorative and never the only channel (the category letter carries meaning).
+const TAG_ROLES = [
+  '--color-tag-1',
+  '--color-tag-2',
+  '--color-tag-3',
+  '--color-tag-4',
+  '--color-tag-5',
+  '--color-tag-6',
+];
 
 // ---- finding sink ----------------------------------------------------------
 const findings = [];
@@ -201,13 +222,9 @@ function checkPair(theme, label, fgName, bgName, min, map) {
     return;
   }
   if (ratio < min) {
-    report(
-      `[${theme}] AA FAIL ${label}: ${fgName} on ${bgName} = ${ratio.toFixed(2)} < ${min}`,
-    );
+    report(`[${theme}] AA FAIL ${label}: ${fgName} on ${bgName} = ${ratio.toFixed(2)} < ${min}`);
   } else {
-    console.log(
-      `[${theme}] OK ${label}: ${fgName} on ${bgName} = ${ratio.toFixed(2)} >= ${min}`,
-    );
+    console.log(`[${theme}] OK ${label}: ${fgName} on ${bgName} = ${ratio.toFixed(2)} >= ${min}`);
   }
 }
 
@@ -241,6 +258,40 @@ function checkStatusOnTint(theme, statusName, surfaceName, map) {
   }
 }
 
+// Categorical tag chip: `--color-foreground` text on a `bg-tag-N/10` tint over
+// each surface (tags-and-setups). The border is decorative, so it is not gated.
+function checkForegroundOnTagTint(theme, tagName, surfaceName, map) {
+  const tag = map.get(tagName);
+  const surface = map.get(surfaceName);
+  const foreground = map.get('--color-foreground');
+  if (tag === undefined) {
+    report(`[${theme}] MISSING required role ${tagName} (tint pair on ${surfaceName})`);
+    return;
+  }
+  if (surface === undefined) {
+    report(`[${theme}] MISSING required role ${surfaceName} (tint pair for ${tagName})`);
+    return;
+  }
+  if (foreground === undefined) {
+    report(`[${theme}] MISSING required role --color-foreground (tint pair for ${tagName})`);
+    return;
+  }
+  let ratio;
+  try {
+    const tint = composite(gamutMapToSrgb(tag), TINT_ALPHA, gamutMapToSrgb(surface));
+    ratio = contrastRatio(gamutMapToSrgb(foreground), tint);
+  } catch (err) {
+    report(`[${theme}] color error in tag tint ${tagName}/${surfaceName}: ${err.message}`);
+    return;
+  }
+  const label = `foreground-as-text on bg-{tag}/10 over ${surfaceName} (${tagName})`;
+  if (ratio < 4.5) {
+    report(`[${theme}] AA FAIL ${label} = ${ratio.toFixed(2)} < 4.5`);
+  } else {
+    console.log(`[${theme}] OK ${label} = ${ratio.toFixed(2)} >= 4.5`);
+  }
+}
+
 // ---- per-theme contrast (required-minimum adjacency set) ------------------
 function checkContrast(theme, map) {
   const surfaces = ['--color-background', '--color-card', '--color-popover'];
@@ -254,17 +305,45 @@ function checkContrast(theme, map) {
   }
 
   // popover-foreground on popover (the feedback surface's popover body text).
-  checkPair(theme, 'popover-foreground/popover', '--color-popover-foreground', '--color-popover', 4.5, map);
+  checkPair(
+    theme,
+    'popover-foreground/popover',
+    '--color-popover-foreground',
+    '--color-popover',
+    4.5,
+    map,
+  );
 
   // primary-foreground on primary (on-amber ≥ 4.5).
   checkPair(theme, 'on-amber (primary)', '--color-primary-foreground', '--color-primary', 4.5, map);
 
   // secondary/accent foreground on their fills.
-  checkPair(theme, 'secondary-foreground/secondary', '--color-secondary-foreground', '--color-secondary', 4.5, map);
-  checkPair(theme, 'accent-foreground/accent', '--color-accent-foreground', '--color-accent', 4.5, map);
+  checkPair(
+    theme,
+    'secondary-foreground/secondary',
+    '--color-secondary-foreground',
+    '--color-secondary',
+    4.5,
+    map,
+  );
+  checkPair(
+    theme,
+    'accent-foreground/accent',
+    '--color-accent-foreground',
+    '--color-accent',
+    4.5,
+    map,
+  );
 
   // destructive solid-fill foreground.
-  checkPair(theme, 'destructive-foreground/destructive', '--color-destructive-foreground', '--color-destructive', 4.5, map);
+  checkPair(
+    theme,
+    'destructive-foreground/destructive',
+    '--color-destructive-foreground',
+    '--color-destructive',
+    4.5,
+    map,
+  );
 
   // focus (ring) vs adjacent surfaces — non-text ≥ 3.
   for (const s of surfaces) {
@@ -291,6 +370,14 @@ function checkContrast(theme, map) {
     }
     // Any solid bg-{status} fill's *-foreground pair.
     checkPair(theme, `${role}-foreground/${role}`, `${role}-foreground`, role, 4.5, map);
+  }
+
+  // Categorical tag chips: foreground text on each tag's /10 tint over every
+  // surface (tags-and-setups). Border is decorative — not gated.
+  for (const role of TAG_ROLES) {
+    for (const s of STATUS_SURFACES) {
+      checkForegroundOnTagTint(theme, role, s, map);
+    }
   }
 
   // disabled-opacity-50 foreground vs surfaces (R10.6): the 50%-opacity
@@ -343,6 +430,20 @@ const DISTINCTNESS_PAIRS = [
   ['--color-warning', '--color-gain'],
   ['--color-warning', '--color-loss'],
   ['--color-destructive', '--color-loss'], // danger vs loss
+  // Categorical tag swatches must stay distinct from the amber brand accent and
+  // the gain/loss P&L colours they sit beside (tags-and-setups).
+  ...[
+    '--color-tag-1',
+    '--color-tag-2',
+    '--color-tag-3',
+    '--color-tag-4',
+    '--color-tag-5',
+    '--color-tag-6',
+  ].flatMap((tag) => [
+    [tag, '--color-primary'],
+    [tag, '--color-gain'],
+    [tag, '--color-loss'],
+  ]),
 ];
 
 function checkDistinctness(theme, map) {
@@ -376,9 +477,13 @@ function checkBothThemePresence(lightMap, darkMap) {
     const inLight = lightMap.has(role);
     const inDark = darkMap.has(role);
     if (inLight && !inDark) {
-      report(`[both-theme] R1.4 FAIL: ${role} is in @theme but not re-valued in .dark (ships light-only)`);
+      report(
+        `[both-theme] R1.4 FAIL: ${role} is in @theme but not re-valued in .dark (ships light-only)`,
+      );
     } else if (!inLight && inDark) {
-      report(`[both-theme] R1.4 FAIL: ${role} is in .dark but not declared in @theme (ships dark-only)`);
+      report(
+        `[both-theme] R1.4 FAIL: ${role} is in .dark but not declared in @theme (ships dark-only)`,
+      );
     } else if (!inLight && !inDark) {
       report(`[both-theme] MISSING net-new role ${role} from both @theme and .dark`);
     } else {

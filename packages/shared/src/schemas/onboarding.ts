@@ -53,6 +53,9 @@ export const OnboardingStateSchema = z.object({
   // Z-form ISO timestamp, matching every other `.datetime()` field in this
   // package (positions' filledAt, changelog's publishedAt).
   calculatorFirstUsedAt: z.string().datetime().optional(),
+  // When the user answered the one-shot starter-tags offer (accept or decline).
+  // Its presence is what retires the offer, so it is a fact, not a preference.
+  starterTagsAnsweredAt: z.string().datetime().optional(),
   // Surface keys, treated as a set. Order is not meaningful and duplicates are
   // prevented by the server-side merge, not by the type.
   coachMarksSeen: z.array(z.string()).default([]),

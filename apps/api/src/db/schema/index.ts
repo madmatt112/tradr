@@ -12,3 +12,4 @@ export * from './wallet.schema';
 export * from './admin.schema';
 export * from './email-tokens.schema';
 export * from './symbols.schema';
+export * from './tags.schema';

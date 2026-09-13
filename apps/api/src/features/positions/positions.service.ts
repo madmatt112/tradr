@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 
-import { getCurrencyMinorUnits, parseOccSymbol } from '@tradr/shared';
+import { getCurrencyMinorUnits, parseOccSymbol, type Tag } from '@tradr/shared';
 
 import type { Database, Transaction } from '@/db';
 import {
@@ -9,6 +9,7 @@ import {
   resolveWritableAccountId,
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
+import { findTagsByPosition } from '@/features/tags/tags.query';
 import {
   AppError,
   NotFoundError,
@@ -56,7 +57,7 @@ function isPgError(err: unknown): err is PgError {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type RawRow = Record<string, any>;
+type RawRow = Record<string, any> & { tags?: Tag[] | null };
 
 // Calendar date (YYYY-MM-DD) of `date` as observed in the given IANA timezone.
 // `Intl.DateTimeFormat('en-CA', …)` renders the zone-local date in ISO order
@@ -461,7 +462,7 @@ export async function createPositionTx(
 export async function listPositions(
   db: Database,
   userId: string,
-  filters?: { status?: string; accountId?: string },
+  filters?: { status?: string; accountId?: string; tag?: string[] },
 ) {
   const rows = await findPositionListByUser(db, userId, filters);
 
@@ -531,6 +532,10 @@ export async function listPositions(
       accountName: row.account_name,
       accountCurrency: row.account_currency,
       accountTimezone: row.account_timezone,
+      // Tags ordered category-then-name by the LATERAL's `array_position`; `[]`
+      // when the position carries none (design decision 7: tags never touch
+      // `updated_at`, so they ride the read paths only).
+      tags: row.tags ?? [],
       ...pnl,
       brokerageName,
       grossPnl,
@@ -561,6 +566,7 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   const row = positionRows[0];
   const { position, accountCurrency, accountTimezone } = row;
   const fillRows = await findFillsByPosition(db, position.id);
+  const tags = await findTagsByPosition(db, position.id);
 
   const totals = aggregateFills(
     fillRows.map((f) => ({
@@ -609,6 +615,8 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     // here so the frontend need not duplicate or guess the account's zone.
     accountTimezone,
     fills: fillRows,
+    // Category-then-name ordered tag set; `[]` when the position carries none.
+    tags,
     ...pnl,
     brokerageName,
     grossPnl,

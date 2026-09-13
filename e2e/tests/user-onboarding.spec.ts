@@ -1059,7 +1059,7 @@ test.describe('user onboarding', () => {
     // One click, from the notice itself.
     await page.getByTestId('demo-banner-remove').click();
     await expect(page.getByTestId('demo-banner')).toHaveCount(0);
-    await expect(page.getByText('No positions found.')).toBeVisible();
+    await expect(page.getByText('No positions yet')).toBeVisible();
 
     // Nothing left behind: the user is back to having no accounts at all, which
     // is the state the zero-state is for.

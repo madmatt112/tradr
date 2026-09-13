@@ -43,5 +43,6 @@ export const makePosition = (overrides: Partial<PositionListItem> = {}): Positio
   closedAt: null,
   createdAt: '2026-05-01T12:00:00.000Z',
   updatedAt: '2026-05-01T12:00:00.000Z',
+  tags: [],
   ...overrides,
 });

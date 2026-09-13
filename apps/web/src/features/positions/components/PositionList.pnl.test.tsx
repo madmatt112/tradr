@@ -8,10 +8,18 @@ import { usePositions } from '@/features/positions/hooks/usePositions';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// Stub the router <Link> with a plain anchor — no router context needed.
+// Stub the router <Link> with a plain anchor — no router context needed. The
+// list reads its filters from the URL, so the mock also answers useSearch.
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
   useNavigate: () => vi.fn(),
+  useSearch: () => ({}),
+}));
+
+// The list now renders the tag filter control and the Tags column; this suite is
+// about the P&L cell, so stub the tags list to empty.
+vi.mock('@/features/tags/hooks/useTags', () => ({
+  useTags: () => ({ data: [] }),
 }));
 
 // Row actions need TanStack Query + Radix portals; this suite is about the P&L

@@ -1,6 +1,7 @@
 export * from './schemas/auth';
 export * from './schemas/account';
 export * from './schemas/position';
+export * from './schemas/tag';
 export * from './schemas/brokerage';
 export {
   LedgerDirection,
@@ -128,6 +129,7 @@ export type {
 export * from './constants/currencies';
 export * from './constants/timezones';
 export * from './constants/expense-categories';
+export * from './constants/tags';
 export { CSV_IMPORT_PRESETS } from './constants/csv-import-presets';
 export * from './lib/occ';
 export * from './fees';
