@@ -57,8 +57,10 @@ import {
   expenses,
   fills,
   ledgerEntries,
+  positionTags,
   positions,
   sessions,
+  tags,
   usageRecords,
   users,
   walletTransactions,
@@ -1158,6 +1160,15 @@ async function seedFullUser(): Promise<{
   });
 
   await db.insert(brokerages).values({ userId: user.id, name: `custom-${++seedCounter}` });
+
+  // A tag the reset must remove (REQ-1.7), attached to the seeded position so
+  // the cascade of the join row through the position is exercised too.
+  const [tag] = await db
+    .insert(tags)
+    .values({ userId: user.id, name: `setup-${++seedCounter}`, category: 'setup' })
+    .returning({ id: tags.id });
+  await db.insert(positionTags).values({ positionId: position!.id, tagId: tag!.id });
+
   await db.insert(dashboardLayouts).values({ userId: user.id, widgets: [] });
   await db.insert(advisorProviderKeys).values({
     userId: user.id,
@@ -1188,6 +1199,7 @@ describe('POST /api/admin/users/:id/reset', () => {
       ledger_entries: 1,
       expenses: 1,
       brokerages: 1,
+      tags: 1,
     });
 
     expect(await db.select().from(accounts).where(eq(accounts.userId, target.id))).toHaveLength(0);
@@ -1216,6 +1228,38 @@ describe('POST /api/admin/users/:id/reset', () => {
 
     const [row] = await db.select().from(users).where(eq(users.id, target.id));
     expect(row!.onboarding).toEqual({});
+  });
+
+  // THE CONTRAST WITH A SELF-SERVICE DELETE (REQ-8.2). A user who deletes their
+  // own tags keeps the `starterTagsAnsweredAt` stamp, so the one-shot offer
+  // stays retired. A reset returns the account to its post-registration state:
+  // the stamp is cleared with the rest of onboarding AND the tags are gone, so
+  // the reset user meets the offer again exactly as a new user would.
+  it('clears the starter-offer answer along with the tags', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    const targetToken = await seedSession(target.id);
+
+    // The target answers the one-shot offer, retiring it.
+    const answered = await app.request('/api/tags/starter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: `session=${targetToken}` },
+      body: JSON.stringify({ answer: 'decline' }),
+    });
+    expect(answered.status).toBe(200);
+    const beforeOnboarding = (await (
+      await get('/api/users/me/onboarding', targetToken)
+    ).json()) as { starterTagsAnsweredAt?: string };
+    expect(beforeOnboarding.starterTagsAnsweredAt).toBeDefined();
+
+    await postReset(target.id, { confirmEmail: target.email }, admin.token);
+
+    const afterOnboarding = (await (await get('/api/users/me/onboarding', targetToken)).json()) as {
+      starterTagsAnsweredAt?: string;
+    };
+    expect(afterOnboarding.starterTagsAnsweredAt).toBeUndefined();
+    const afterTags = (await (await get('/api/tags', targetToken)).json()) as unknown[];
+    expect(afterTags).toEqual([]);
   });
 
   it('keeps settings by default — BYOK keys, dashboard layout and preferences survive', async () => {
@@ -1459,6 +1503,7 @@ describe('GET /api/admin/users/:id/reset-preview', () => {
       ledgerEntries: 1,
       expenses: 1,
       brokerages: 1,
+      tags: 1,
     });
     // Always counted, whatever the caller intends to do with the flag.
     expect(body.settings).toMatchObject({ providerKeys: 1, dashboardLayouts: 1 });

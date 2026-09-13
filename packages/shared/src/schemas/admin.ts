@@ -119,6 +119,7 @@ export const AdminResetPreviewSchema = z.object({
     expenses: z.number().int().nonnegative(),
     brokerages: z.number().int().nonnegative(),
     csvImportStaging: z.number().int().nonnegative(),
+    tags: z.number().int().nonnegative(),
   }),
   /** Destroyed only when `removeSettings` is true. */
   settings: z.object({

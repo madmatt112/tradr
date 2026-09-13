@@ -51,6 +51,7 @@ const PREVIEW = {
     expenses: 0,
     brokerages: 1,
     csvImportStaging: 0,
+    tags: 1,
   },
   settings: {
     providerKeys: 2,
@@ -100,6 +101,7 @@ describe('FactoryResetDialog — what it shows', () => {
     expect(counts.textContent).toContain('112 fills');
     expect(counts.textContent).toContain('89 ledger entries');
     expect(counts.textContent).toContain('1 custom brokerage');
+    expect(counts.textContent).toContain('1 tag');
     // Zero-count tables are left out rather than shown as "0 expenses" — the
     // list is meant to be read, not audited.
     expect(counts.textContent).not.toContain('expense');

@@ -80,6 +80,7 @@ export function FactoryResetDialog({ user, onClose }: FactoryResetDialogProps) {
         countLabel(preview.data.tradingData.ledgerEntries, 'ledger entry', 'ledger entries'),
         countLabel(preview.data.tradingData.expenses, 'expense'),
         countLabel(preview.data.tradingData.brokerages, 'custom brokerage'),
+        countLabel(preview.data.tradingData.tags, 'tag'),
       ].filter((label): label is string => label !== null)
     : [];
 

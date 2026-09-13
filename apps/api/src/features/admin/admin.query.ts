@@ -17,6 +17,7 @@ import {
   ledgerEntries,
   positions,
   sessions,
+  tags,
   usageRecords,
   users,
   walletTransactions,
@@ -744,6 +745,12 @@ export async function deleteTradingData(
     await tx.delete(positions).where(eq(positions.userId, userId)).returning({ id: positions.id })
   ).length;
 
+  // 2b. Tags — the join rows already went with the positions; the vocabulary
+  //     goes here so a reset returns to zero tags (REQ-1.7).
+  counts.tags = (
+    await tx.delete(tags).where(eq(tags.userId, userId)).returning({ id: tags.id })
+  ).length;
+
   // 3. Staged CSV rows — cascade from accounts anyway, deleted explicitly so the
   //    count is reported rather than silently absorbed.
   counts.csv_import_staging = (
@@ -890,6 +897,7 @@ export async function countResettableData(
     expenses: number;
     brokerages: number;
     csvImportStaging: number;
+    tags: number;
   };
   settings: {
     providerKeys: number;
@@ -907,6 +915,7 @@ export async function countResettableData(
     expenseCount,
     brokerageCount,
     stagingCount,
+    tagCount,
     providerKeyCount,
     externalKeyCount,
     personaCount,
@@ -920,6 +929,7 @@ export async function countResettableData(
     countBy(db, expenses, expenses.userId, userId),
     countBy(db, brokerages, brokerages.userId, userId),
     countBy(db, csvImportStaging, csvImportStaging.userId, userId),
+    countBy(db, tags, tags.userId, userId),
     countBy(db, advisorProviderKeys, advisorProviderKeys.userId, userId),
     countBy(db, externalApiKeys, externalApiKeys.userId, userId),
     countBy(db, advisorPersonas, advisorPersonas.userId, userId),
@@ -936,6 +946,7 @@ export async function countResettableData(
       expenses: expenseCount,
       brokerages: brokerageCount,
       csvImportStaging: stagingCount,
+      tags: tagCount,
     },
     settings: {
       providerKeys: providerKeyCount,
