@@ -148,6 +148,47 @@ async function partsOf(sql: postgres.Sql, messageId: string): Promise<Part[]> {
   return row!.content_parts;
 }
 
+async function seedUserAndPosition(
+  sql: postgres.Sql,
+): Promise<{ userId: string; positionId: string }> {
+  const [u] = await sql<{ id: string }[]>`
+    INSERT INTO users (email, password_hash)
+    VALUES (${`u-${randomUUID()}@example.com`}, ${'x'.repeat(60)})
+    RETURNING id
+  `;
+  const [a] = await sql<{ id: string }[]>`
+    INSERT INTO accounts (user_id, name, currency, starting_balance)
+    VALUES (${u!.id}, 'test', 'USD', 0)
+    RETURNING id
+  `;
+  const [p] = await sql<{ id: string }[]>`
+    INSERT INTO positions (user_id, account_id, symbol, side, asset_type, status)
+    VALUES (${u!.id}, ${a!.id}, 'AAPL', 'long', 'stock', 'open')
+    RETURNING id
+  `;
+  return { userId: u!.id, positionId: p!.id };
+}
+
+async function insertPositionImage(
+  sql: postgres.Sql,
+  positionId: string,
+  part: Part,
+): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    INSERT INTO position_images (position_id, part)
+    VALUES (${positionId}, ${sql.json(part as never)})
+    RETURNING id
+  `;
+  return row!.id;
+}
+
+async function partOf(sql: postgres.Sql, imageId: string): Promise<Part> {
+  const [row] = await sql<{ part: Part }[]>`
+    SELECT part FROM position_images WHERE id = ${imageId}
+  `;
+  return row!.part;
+}
+
 // -----------------------------------------------------------------------------------
 
 describe('migrateToInline (REQ-3.1/3.3/3.4 — idempotent, resumable, report-and-continue)', () => {
@@ -284,6 +325,139 @@ describe('runGc (REQ-3.2 — age-guarded sweep protects put-before-commit)', () 
       expect(storage.deleted).toEqual([agedOrphan]);
       expect(storage.objects.has(liveKey)).toBe(true); // referenced key never deleted
       expect(storage.objects.has(youngOrphan)).toBe(true); // put-before-commit guard
+      expect(storage.objects.has(agedOrphan)).toBe(false);
+    } finally {
+      await sql.end();
+    }
+  });
+});
+
+describe('migrateToInline — position images (REQ-6.2, D10)', () => {
+  const DB = `tradr_test_storage_pmigrate_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  it('re-inlines a position pointer, marks a gone one unrecoverable, preserves inline, reports position counts', async () => {
+    const sql = client(url);
+    const storage = new FakeStorage();
+    try {
+      const { userId, positionId } = await seedUserAndPosition(sql);
+
+      const okKey = `positions/${userId}/${randomUUID()}`;
+      const goneKey = `positions/${userId}/${randomUUID()}`;
+      const okBytes = Buffer.from([5, 6, 7, 8]);
+      storage.seed(okKey, okBytes); // fetchable
+      // goneKey intentionally NOT seeded → storage.get throws (gone out-of-band).
+
+      const okImage = await insertPositionImage(sql, positionId, {
+        type: 'image',
+        format: 'png',
+        storage: { kind: 'object', key: okKey },
+      });
+      const goneImage = await insertPositionImage(sql, positionId, {
+        type: 'image',
+        format: 'jpeg',
+        storage: { kind: 'object', key: goneKey },
+      });
+      // Already inline — must be untouched and never selected.
+      const inlineImage = await insertPositionImage(sql, positionId, {
+        type: 'image',
+        format: 'webp',
+        dataBase64: Buffer.from([9]).toString('base64'),
+      });
+
+      const result = await migrateToInline(sql, storage);
+
+      // No advisor rows in this scratch DB, so only the position counts move.
+      expect(result.scannedRows).toBe(0);
+      expect(result.migratedParts).toBe(0);
+      expect(result.unrecoverableParts).toBe(0);
+      expect(result.positionImagesMigrated).toBe(1); // okKey
+      expect(result.positionImagesUnrecoverable).toBe(1); // goneKey
+
+      // ok pointer → inline base64 (fetched bytes); storage key dropped.
+      expect(await partOf(sql, okImage)).toEqual({
+        type: 'image',
+        format: 'png',
+        dataBase64: okBytes.toString('base64'),
+      });
+      // gone pointer → unrecoverable marker (REQ-3.3).
+      expect(await partOf(sql, goneImage)).toEqual({
+        type: 'image',
+        format: 'jpeg',
+        storage: { kind: 'unrecoverable' },
+      });
+      // inline row untouched.
+      expect(await partOf(sql, inlineImage)).toEqual({
+        type: 'image',
+        format: 'webp',
+        dataBase64: Buffer.from([9]).toString('base64'),
+      });
+
+      // IDEMPOTENT: a second run finds no object pointers left.
+      const second = await migrateToInline(sql, storage);
+      expect(second.positionImagesMigrated).toBe(0);
+      expect(second.positionImagesUnrecoverable).toBe(0);
+    } finally {
+      await sql.end();
+    }
+  });
+});
+
+describe('runGc — position images (REQ-6.1, D10)', () => {
+  const DB = `tradr_test_storage_pgc_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  it('keeps a live positions/ key and deletes an aged orphan under positions/', async () => {
+    const sql = client(url);
+    const storage = new FakeStorage();
+    try {
+      const { userId, positionId } = await seedUserAndPosition(sql);
+      const now = Date.now();
+      const ageFloorMs = 600_000; // 10 min
+
+      const liveKey = `positions/${userId}/${randomUUID()}`;
+      const agedOrphan = `positions/${userId}/${randomUUID()}`;
+
+      // liveKey is referenced by a persisted position-image pointer → live set.
+      await insertPositionImage(sql, positionId, {
+        type: 'image',
+        format: 'png',
+        storage: { kind: 'object', key: liveKey },
+      });
+
+      storage.seed(liveKey, Buffer.from([1]), new Date(now - 5 * ageFloorMs));
+      storage.seed(agedOrphan, Buffer.from([3]), new Date(now - 2 * ageFloorMs));
+
+      const result = await runGc(sql, storage, { now, ageFloorMs });
+
+      expect(result.liveKeys).toBe(1);
+      expect(result.listed).toBe(2);
+      expect(result.listedByPrefix).toEqual({ 'advisor/': 0, 'positions/': 2 });
+      expect(result.deleted).toBe(1);
+      expect(result.keptReferenced).toBe(1);
+      expect(result.keptTooYoung).toBe(0);
+
+      // Only the aged unreferenced object under positions/ was deleted.
+      expect(storage.deleted).toEqual([agedOrphan]);
+      expect(storage.objects.has(liveKey)).toBe(true); // referenced key never deleted
       expect(storage.objects.has(agedOrphan)).toBe(false);
     } finally {
       await sql.end();

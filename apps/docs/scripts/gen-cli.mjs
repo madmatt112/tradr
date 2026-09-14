@@ -132,7 +132,7 @@ const DETAILS = {
   },
   'storage gc': {
     title: 'storage gc',
-    summary: 'Delete bucket objects no conversation references any more.',
+    summary: 'Delete bucket objects no position or conversation references any more.',
     body: [
       'Reclaims objects orphaned by deleted records and retried uploads. Like',
       '`migrate-to-inline`, it applies only to an instance with object storage',
