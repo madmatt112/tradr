@@ -13,3 +13,4 @@ export * from './admin.schema';
 export * from './email-tokens.schema';
 export * from './symbols.schema';
 export * from './tags.schema';
+export * from './position-images.schema';
