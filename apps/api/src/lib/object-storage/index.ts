@@ -70,3 +70,13 @@ export function getObjectStorage(): ObjectStorage | null {
 export function advisorImageKey(userId: string): string {
   return `advisor/${userId}/${randomUUID()}`;
 }
+
+/**
+ * The bucket key for a new position screenshot: `positions/{userId}/{randomUUID()}`
+ * (D9). `positions/{userId}/` is the per-user prefix account deletion (§39) lists
+ * and deletes (REQ-8.1). Like `advisorImageKey`, the id is random and generated at
+ * the write seam; resolution and gc never parse it for identity.
+ */
+export function positionImageKey(userId: string): string {
+  return `positions/${userId}/${randomUUID()}`;
+}

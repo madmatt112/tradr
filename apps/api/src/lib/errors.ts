@@ -54,6 +54,24 @@ export class TagLimitError extends AppError {
   }
 }
 
+export class PositionImageLimitError extends AppError {
+  constructor(public limit: number) {
+    super(409, 'POSITION_IMAGE_LIMIT', `A position can hold at most ${limit} screenshots`);
+  }
+}
+
+export class ImageFormatMismatchError extends AppError {
+  constructor() {
+    super(400, 'IMAGE_FORMAT_MISMATCH', 'Image bytes do not match the declared format');
+  }
+}
+
+export class PositionImageTooLargeError extends AppError {
+  constructor() {
+    super(400, 'IMAGE_TOO_LARGE', 'Image exceeds the size limit');
+  }
+}
+
 export class RateLimitError extends AppError {
   constructor(public retryAfter: number) {
     super(429, 'RATE_LIMITED', 'Too many requests');
