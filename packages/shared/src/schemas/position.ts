@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { parseOccSymbol } from '../options';
 
+import { ClassificationSchema } from './performance';
 import { TagSchema } from './tag';
 
 const sideEnum = z.enum(['long', 'short']);
@@ -200,6 +201,10 @@ export const PositionListItemSchema = z.object({
   // Tags attached to this position. Optional so the shape is backward-compatible
   // and callers that do not join tags can omit it.
   tags: z.array(TagSchema).optional(),
+  // Winning/losing/breakeven by rounded net P&L (R9/R10). Only closed positions
+  // carry one; null for draft/open rows. Optional so callers that do not compute
+  // it can omit the key.
+  classification: ClassificationSchema.nullable().optional(),
 });
 
 export const PositionDetailSchema = z.object({
@@ -243,6 +248,10 @@ export const PositionDetailSchema = z.object({
   // Tags attached to this position. Optional so the shape is backward-compatible
   // and callers that do not join tags can omit it.
   tags: z.array(TagSchema).optional(),
+  // Winning/losing/breakeven by rounded net P&L (R9/R10). Only closed positions
+  // carry one; null for draft/open rows. Optional so callers that do not compute
+  // it can omit the key.
+  classification: ClassificationSchema.nullable().optional(),
 });
 
 export type CreatePositionInput = z.infer<typeof CreatePositionSchema>;

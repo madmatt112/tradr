@@ -40,7 +40,7 @@ export async function countPositionsByUser(
 export function findPositionListByUser(
   db: Database | Transaction,
   userId: string,
-  filters?: { status?: string; accountId?: string; tag?: string[] },
+  filters?: { status?: string; accountId?: string; tag?: string[]; classification?: string },
 ) {
   const conditions = [eq(positions.userId, userId)];
   if (filters?.status) {
@@ -93,6 +93,7 @@ export function findPositionListByUser(
     ) tg ON true
     WHERE p.user_id = ${userId}
     ${filters?.status ? sql`AND p.status = ${filters.status}` : sql``}
+    ${filters?.classification && !filters?.status ? sql`AND p.status = 'closed'` : sql``}
     ${filters?.accountId ? sql`AND p.account_id = ${filters.accountId}` : sql``}
     ${
       filters?.tag?.length

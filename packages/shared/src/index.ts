@@ -50,23 +50,37 @@ export type {
 } from './schemas/symbol';
 export {
   GranularitySchema,
+  CLASSIFICATIONS,
+  ClassificationSchema,
+  BREAKDOWN_DIMENSIONS,
+  BreakdownDimensionSchema,
+  TimeframeExcludedSchema,
   PerformanceQuerySchema,
   PerformanceResponseSchema,
   PerformanceCurrencySchema,
   PerformanceStatsSchema,
   SeriesBucketSchema,
   EquityCurvePointSchema,
+  BreakdownQuerySchema,
+  BreakdownRowSchema,
+  BreakdownCurrencySchema,
+  BreakdownResponseSchema,
   computeBucketCount,
   resolveTimezone,
 } from './schemas/performance';
 export type {
   Granularity,
+  BreakdownDimension,
   PerformanceQueryInput,
   PerformanceResponse,
   PerformanceCurrency,
   PerformanceStats,
   SeriesBucket,
   EquityCurvePoint,
+  BreakdownQueryInput,
+  BreakdownRow,
+  BreakdownCurrency,
+  BreakdownResponse,
 } from './schemas/performance';
 export {
   ExpenseCategoryEnum,

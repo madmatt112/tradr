@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PerformanceQuerySchema } from '@tradr/shared';
+import { BreakdownResponseSchema, PerformanceQuerySchema } from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -605,5 +605,179 @@ describe('GET /api/performance — full unclamped window (REQ-1.1)', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { details?: Record<string, string> } };
     expect(JSON.stringify(body.error.details)).toContain('on or after 2000-01-01');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/performance/breakdown — the per-dimension breakdown route (R3.1,
+// R3.2, R3.8, R3.9). No tier gate and no is*Configured branch: the route is
+// identical on every tier and with nothing hosted configured.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/performance/breakdown', () => {
+  const prevGating = config.FEATURE_GATING;
+  afterEach(() => {
+    config.FEATURE_GATING = prevGating;
+  });
+
+  function buildBreakdownQuery(overrides: Record<string, string> = {}): string {
+    const params: Record<string, string> = {
+      by: 'symbol',
+      start: '2026-01-01T00:00:00.000Z',
+      end: '2026-01-31T00:00:00.000Z',
+      tz: 'UTC',
+      ...overrides,
+    };
+    return new URLSearchParams(params).toString();
+  }
+
+  async function seedWindow(cookie: string): Promise<void> {
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    await seedPositions(db, {
+      userId,
+      accountId: account.id,
+      count: 6,
+      status: 'closed',
+      closedAtRange: {
+        start: new Date('2026-01-05T00:00:00Z'),
+        end: new Date('2026-01-25T00:00:00Z'),
+      },
+      rngSeed: 23,
+    });
+  }
+
+  it('returns 401 when no session cookie is present', async () => {
+    const res = await getRequest(`/api/performance/breakdown?${buildBreakdownQuery()}`);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('UNAUTHORIZED');
+  });
+
+  describe('400 validation paths key details by field', () => {
+    const cases: Array<{ name: string; overrides: Record<string, string>; field: string }> = [
+      { name: 'INVALID_TIMEZONE', overrides: { tz: 'NotAZone' }, field: 'tz' },
+      { name: 'INVALID_DATE', overrides: { start: 'not-a-date' }, field: 'start' },
+      {
+        name: 'START_NOT_BEFORE_END',
+        overrides: { start: '2026-02-01T00:00:00.000Z', end: '2026-01-01T00:00:00.000Z' },
+        field: 'start',
+      },
+      {
+        name: 'START_BEFORE_MIN',
+        overrides: { start: '1999-12-31T00:00:00.000Z' },
+        field: 'start',
+      },
+      {
+        name: 'END_BEYOND_TODAY_PLUS_ONE',
+        overrides: { end: '2030-01-01T00:00:00.000Z' },
+        field: 'end',
+      },
+      { name: 'UNSUPPORTED_CURRENCY', overrides: { currency: 'XYZ' }, field: 'currency' },
+      { name: 'a value outside the by enum', overrides: { by: 'nonsense' }, field: 'by' },
+    ];
+
+    it.each(cases)(
+      'rejects $name with a 400 whose details name $field',
+      async ({ overrides, field }) => {
+        const cookie = await registerAndGetCookie();
+        const res = await getRequest(
+          `/api/performance/breakdown?${buildBreakdownQuery(overrides)}`,
+          cookie,
+        );
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as {
+          error: { code: string; details?: Record<string, string> };
+        };
+        expect(body.error.code).toBe('VALIDATION_ERROR');
+        expect(body.error.details).toBeDefined();
+        expect(body.error.details).toHaveProperty(field);
+      },
+    );
+  });
+
+  it('returns a 200 body that parses under BreakdownResponseSchema', async () => {
+    const cookie = await registerAndGetCookie();
+    await seedWindow(cookie);
+    const res = await getRequest(`/api/performance/breakdown?${buildBreakdownQuery()}`, cookie);
+    expect(res.status).toBe(200);
+    const parsed = BreakdownResponseSchema.parse(await res.json());
+    expect(parsed.by).toBe('symbol');
+    expect(parsed.currencies.length).toBeGreaterThan(0);
+  });
+
+  it('echoes resolvedWeekStartDay from config (R3.8)', async () => {
+    const cookie = await registerAndGetCookie();
+    await seedWindow(cookie);
+    const res = await getRequest(`/api/performance/breakdown?${buildBreakdownQuery()}`, cookie);
+    expect(res.status).toBe(200);
+    const body = BreakdownResponseSchema.parse(await res.json());
+    expect(body.resolvedWeekStartDay).toBe(config.WEEK_START_DAY);
+  });
+
+  it('sets multiValued true only for by=tag', async () => {
+    const cookie = await registerAndGetCookie();
+    await seedWindow(cookie);
+    for (const by of ['symbol', 'weekday', 'hour'] as const) {
+      const res = await getRequest(
+        `/api/performance/breakdown?${buildBreakdownQuery({ by })}`,
+        cookie,
+      );
+      expect(res.status).toBe(200);
+      const body = BreakdownResponseSchema.parse(await res.json());
+      expect(body.multiValued).toBe(false);
+    }
+    const tagRes = await getRequest(
+      `/api/performance/breakdown?${buildBreakdownQuery({ by: 'tag' })}`,
+      cookie,
+    );
+    expect(tagRes.status).toBe(200);
+    const tagBody = BreakdownResponseSchema.parse(await tagRes.json());
+    expect(tagBody.multiValued).toBe(true);
+  });
+
+  it('reports the same dataQuality.timeframeExcluded as /api/performance for the same window (DD11)', async () => {
+    const cookie = await registerAndGetCookie();
+    await seedWindow(cookie);
+
+    const perfRes = await getRequest(`/api/performance?${buildPerfQuery()}`, cookie);
+    expect(perfRes.status).toBe(200);
+    const perfBody = (await perfRes.json()) as {
+      dataQuality: { timeframeExcluded: unknown };
+    };
+
+    const breakdownRes = await getRequest(
+      `/api/performance/breakdown?${buildBreakdownQuery()}`,
+      cookie,
+    );
+    expect(breakdownRes.status).toBe(200);
+    const breakdownBody = BreakdownResponseSchema.parse(await breakdownRes.json());
+
+    expect(breakdownBody.dataQuality.timeframeExcluded).toEqual(
+      perfBody.dataQuality.timeframeExcluded,
+    );
+  });
+
+  it('behaves identically with feature gating on and off (R3.9)', async () => {
+    const cookie = await registerAndGetCookie();
+    await seedWindow(cookie);
+
+    config.FEATURE_GATING = false;
+    const ungatedRes = await getRequest(
+      `/api/performance/breakdown?${buildBreakdownQuery()}`,
+      cookie,
+    );
+    expect(ungatedRes.status).toBe(200);
+    const ungated = BreakdownResponseSchema.parse(await ungatedRes.json());
+
+    config.FEATURE_GATING = true;
+    const gatedRes = await getRequest(
+      `/api/performance/breakdown?${buildBreakdownQuery()}`,
+      cookie,
+    );
+    expect(gatedRes.status).toBe(200);
+    const gated = BreakdownResponseSchema.parse(await gatedRes.json());
+
+    expect(gated).toEqual(ungated);
   });
 });

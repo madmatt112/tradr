@@ -1,6 +1,11 @@
 import { lazy, Suspense } from 'react';
 
-import type { Granularity, PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
+import type {
+  BreakdownDimension,
+  Granularity,
+  PerformanceQueryInput,
+  PerformanceResponse,
+} from '@tradr/shared';
 
 import { ChunkErrorBoundary } from '@/components/ChunkErrorBoundary';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -9,13 +14,16 @@ import { isTimezoneRejected } from '@/lib/invalidTimezone';
 import { isInvalidTimezoneError, usePerformance } from '../hooks/usePerformance';
 import type { PerformancePreset } from '../utils/derivePresetRange';
 
+import { BreakdownDimensionSelector } from './BreakdownDimensionSelector';
 import { BreakdownTable } from './BreakdownTable';
 import { ChartChunkStaleBanner } from './ChartChunkStaleBanner';
 import { CurrencySelector } from './CurrencySelector';
 import { DataQualityBanner, hasAnyDataQualityIssue } from './DataQualityBanner';
+import { DimensionBreakdownTable } from './DimensionBreakdownTable';
 import { EquityCurveChartSkeleton } from './EquityCurveChartSkeleton';
 import { InvalidTimezoneBanner } from './InvalidTimezoneBanner';
 import { PerformanceEmptyState } from './PerformanceEmptyState';
+import { PnlCalendar } from './PnlCalendar';
 import { StatsPanel } from './StatsPanel';
 import { TimeframeSelector } from './TimeframeSelector';
 import { WeekStartChangedBanner } from './WeekStartChangedBanner';
@@ -60,7 +68,7 @@ function granularityToPreset(granularity: Granularity): PerformancePreset {
 }
 
 /** Pick the currency object for the active query, falling back to the first. */
-function pickActiveCurrency(
+export function pickActiveCurrency(
   data: PerformanceResponse,
   requested: string | undefined,
 ): PerformanceResponse['currencies'][number] | null {
@@ -83,6 +91,13 @@ function pickActiveCurrency(
 export interface PerformancePageProps {
   /** Validated performance query params from the route's `useSearch()`. */
   params: PerformanceQueryInput;
+  /**
+   * The calendar month (`YYYY-MM`), resolved from the route — the URL `month`
+   * when present, else the current month in the query timezone (Component 17).
+   */
+  month: string;
+  /** The breakdown dimension (URL `by=`), resolved from the route. */
+  by: BreakdownDimension;
 }
 
 /**
@@ -99,7 +114,7 @@ export interface PerformancePageProps {
  * boundary lives here so the boundary's own code is in the main bundle and
  * survives the chunk fetch failure it is meant to render.
  */
-export function PerformancePage({ params }: PerformancePageProps) {
+export function PerformancePage({ params, month, by }: PerformancePageProps) {
   const { data, isLoading, isError, error } = usePerformance(params);
 
   // ---- Loading -----------------------------------------------------------
@@ -267,12 +282,22 @@ export function PerformancePage({ params }: PerformancePageProps) {
 
       <StatsPanel stats={activeCurrency.stats} currency={currencyCode} />
 
+      <PnlCalendar
+        params={params}
+        month={month}
+        resolvedWeekStartDay={resolvedWeekStartDay}
+        timezone={resolvedTimezone}
+      />
+
       <BreakdownTable
         series={activeCurrency.series}
         granularity={params.granularity}
         tz={resolvedTimezone}
         currency={currencyCode}
       />
+
+      <BreakdownDimensionSelector value={by} />
+      <DimensionBreakdownTable by={by} params={params} currency={currencyCode} />
     </div>
   );
 }

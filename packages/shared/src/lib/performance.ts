@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits } from '../constants/currencies';
 import {
+  CLASSIFICATIONS,
   computeBucketCount,
   type EquityCurvePoint,
   type Granularity,
@@ -14,7 +15,7 @@ import {
 // The `lib → schemas` direction is allowed; dependency-cruiser blocks the reverse.
 export { computeBucketCount };
 
-export type Classification = 'winning' | 'losing' | 'breakeven';
+export type Classification = (typeof CLASSIFICATIONS)[number];
 
 export interface ClassifiedPosition {
   id: string;
@@ -104,7 +105,7 @@ export function classifyPosition(netPnl: Decimal, currency: string): Classificat
   return rounded.isPositive() ? 'winning' : 'losing';
 }
 
-function decimalSum(values: readonly Decimal[]): Decimal {
+export function decimalSum(values: readonly Decimal[]): Decimal {
   let acc = new Decimal(0);
   for (const v of values) acc = acc.plus(v);
   return acc;
@@ -160,6 +161,13 @@ export function computePositionSetStatistics(
   const sumWins = decimalSum(winsPnl);
   const sumLosses = decimalSum(lossesPnl);
 
+  // Expectancy (D1): the mean net P&L per position over THIS function's own
+  // population, unrounded like avgWin/avgLoss. Computed here, never from the
+  // response's `totalNetPnl` — a partial exit makes the service override that
+  // field with the realization-summed total (buildCurrencyEntry), which is a
+  // different population.
+  const expectancy = total === 0 ? null : totalNetPnl.div(total).toString();
+
   const winRate = decided === 0 ? null : percent(winsCount, decided);
   const breakevenRate = total === 0 ? null : percent(breakevens, total);
 
@@ -184,6 +192,7 @@ export function computePositionSetStatistics(
     profitFactor,
     largestWin,
     largestLoss,
+    expectancy,
     hasWins: winsCount > 0,
     hasLosses: lossesCount > 0,
   };

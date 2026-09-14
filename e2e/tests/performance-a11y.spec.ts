@@ -2,6 +2,7 @@ import { expect, type Page } from '@playwright/test';
 
 import {
   mockAppShell,
+  mockBreakdown,
   PERF_URL,
   POPULATED_RESPONSE,
   SESSION_RESPONSE,
@@ -52,6 +53,7 @@ test.describe('Performance page — keyboard accessibility', () => {
 
   test('Tab flow reaches the timeframe presets and currency selector', async ({ page }) => {
     await mockPerformance(page, POPULATED_RESPONSE);
+    await mockBreakdown(page);
     await page.goto(PERF_URL);
     await expect(page.getByTestId('performance-page')).toBeVisible();
 
@@ -91,6 +93,53 @@ test.describe('Performance page — keyboard accessibility', () => {
     expect(reachedCurrency).toBe(true);
   });
 
+  // ---- (R2.5, R6.7) Tab reaches the calendar month nav, net/gross toggle ---
+  //       and the dimension selector on the populated page. -----------------
+
+  test('Tab flow reaches the month navigation, net/gross toggle and dimension selector', async ({
+    page,
+  }) => {
+    await mockPerformance(page, POPULATED_RESPONSE);
+    await mockBreakdown(page);
+    await page.goto(PERF_URL);
+    await expect(page.getByTestId('performance-page')).toBeVisible();
+    // The calendar and dimension selector are on the populated page.
+    await expect(page.getByTestId('pnl-calendar')).toBeVisible();
+    await expect(page.getByTestId('breakdown-dimension-selector')).toBeVisible();
+
+    // Start the pass from the currency selector — the last selector before the
+    // chart/calendar/breakdown region and itself proven reachable by the test
+    // above — so the traversal covers exactly the region under test (the month
+    // navigation, the net/gross toggle and the dimension tabs) without paying
+    // for the whole sidebar + drawer tab order first.
+    await page.getByTestId('currency-selector').focus();
+
+    // Tab forward and collect what gets focused. The month nav prev, the
+    // net/gross toggle and all four dimension tabs must appear (next is disabled
+    // at the current month, so it is out of the tab order by design). The bound
+    // fails fast on a regression that drops one of them.
+    const targets = [
+      'calendar-prev',
+      'calendar-figure-net',
+      'calendar-figure-gross',
+      'breakdown-dimension-symbol',
+      'breakdown-dimension-weekday',
+      'breakdown-dimension-hour',
+      'breakdown-dimension-tag',
+    ];
+    const reached = new Set<string>();
+    for (let i = 0; i < 40 && reached.size < targets.length; i++) {
+      await page.keyboard.press('Tab');
+      const testid = await page.evaluate(
+        () => document.activeElement?.getAttribute('data-testid') ?? null,
+      );
+      if (testid) reached.add(testid);
+    }
+    for (const target of targets) {
+      expect(reached.has(target), `Tab never reached ${target}`).toBe(true);
+    }
+  });
+
   // ---- Banner dismiss reachable + activatable via Enter --------------------
 
   test('Tab flow reaches the InvalidTimezoneBanner dismiss button and Enter activates it', async ({
@@ -105,6 +154,7 @@ test.describe('Performance page — keyboard accessibility', () => {
       resolvedTimezone: 'UTC',
     };
     await mockPerformance(page, populatedWithTzMismatch);
+    await mockBreakdown(page);
 
     await page.addInitScript(() => {
       try {
@@ -149,6 +199,7 @@ test.describe('Performance page — keyboard accessibility', () => {
       resolvedTimezone: 'UTC',
     };
     await mockPerformance(page, populatedWithTzMismatch);
+    await mockBreakdown(page);
 
     await page.addInitScript(() => {
       try {

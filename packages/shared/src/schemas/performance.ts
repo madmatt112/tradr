@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import { CURRENCY_CODES } from '../constants/currencies';
 
+import { TagSchema } from './tag';
+
 // Resolves an IANA timezone via Intl. Rejects Unicode-extension-decorated IDs
 // (e.g. `America/New_York-u-ca-japanese`) which Intl silently strips. Throws
 // `Error('invalid_timezone')` on failure so callers can catch by message.
@@ -16,6 +18,18 @@ export function resolveTimezone(tz: string): string {
 
 export const GranularitySchema = z.enum(['day', 'week', 'month', 'year']);
 export type Granularity = z.infer<typeof GranularitySchema>;
+
+// The wire enum for the positions list filter and the `classification` field.
+// `lib/performance.ts` re-derives its `Classification` type from this array (the
+// allowed `lib → schemas` direction).
+export const CLASSIFICATIONS = ['winning', 'losing', 'breakeven'] as const;
+export const ClassificationSchema = z.enum(CLASSIFICATIONS);
+
+// The breakdown dimensions a caller may group by. The extension point §41 adds
+// `compliance` to.
+export const BREAKDOWN_DIMENSIONS = ['symbol', 'weekday', 'hour', 'tag'] as const;
+export const BreakdownDimensionSchema = z.enum(BREAKDOWN_DIMENSIONS);
+export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -184,6 +198,7 @@ export const PerformanceStatsSchema = z.object({
   }),
   largestWin: decimalString.nullable(),
   largestLoss: decimalString.nullable(),
+  expectancy: decimalString.nullable(),
   hasWins: z.boolean(),
   hasLosses: z.boolean(),
 });
@@ -200,15 +215,18 @@ export const PerformanceCurrencySchema = z.object({
   stats: PerformanceStatsSchema,
 });
 
+// Extracted so the performance and breakdown responses share one shape.
+export const TimeframeExcludedSchema = z.object({
+  total: z.number().int().nonnegative(),
+  unsupported: z.number().int().nonnegative(),
+  mismatch: z.number().int().nonnegative(),
+});
+
 export const PerformanceResponseSchema = z.object({
   resolvedTimezone: z.string(),
   resolvedWeekStartDay: z.union([z.literal(0), z.literal(1)]),
   dataQuality: z.object({
-    timeframeExcluded: z.object({
-      total: z.number().int().nonnegative(),
-      unsupported: z.number().int().nonnegative(),
-      mismatch: z.number().int().nonnegative(),
-    }),
+    timeframeExcluded: TimeframeExcludedSchema,
     historyExcluded: z.object({
       total: z.number().int().nonnegative(),
       closed_at_null: z.number().int().nonnegative(),
@@ -224,92 +242,99 @@ export const PerformanceResponseSchema = z.object({
 const BUCKET_COUNT_CAP = 1095;
 const MIN_START = new Date('2000-01-01T00:00:00.000Z');
 
-export const PerformanceQuerySchema = z
-  .object({
-    granularity: GranularitySchema,
-    start: z.string(),
-    end: z.string(),
-    tz: z.string().default('UTC'),
-    currency: z.string().optional(),
-  })
-  .superRefine((data, ctx) => {
-    // 1. timezone — short-circuit with z.NEVER so later refinements don't run
-    //    and return a noisy second issue against a broken tz.
-    try {
-      resolveTimezone(data.tz);
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'INVALID_TIMEZONE' },
-        message: `Invalid timezone: ${data.tz}`,
-        path: ['tz'],
-      });
-      return z.NEVER;
-    }
+// Shared window refinement for both the performance and breakdown queries. Steps
+// 1 (timezone), 2 (ISO dates), 3 (range) and 5 (currency) run for both; step 4
+// (bucket cap) runs only when `granularity` is present — the breakdown query has
+// no buckets to cap (R3.2).
+function refineWindow(
+  data: {
+    start: string;
+    end: string;
+    tz: string;
+    currency?: string;
+    granularity?: Granularity;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  // 1. timezone — short-circuit with z.NEVER so later refinements don't run
+  //    and return a noisy second issue against a broken tz.
+  try {
+    resolveTimezone(data.tz);
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'INVALID_TIMEZONE' },
+      message: `Invalid timezone: ${data.tz}`,
+      path: ['tz'],
+    });
+    return z.NEVER;
+  }
 
-    // 2. ISO date parsing
-    const start = new Date(data.start);
-    const end = new Date(data.end);
-    if (Number.isNaN(start.getTime())) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'INVALID_DATE' },
-        message: 'start must be a valid ISO date',
-        path: ['start'],
-      });
-      return;
-    }
-    if (Number.isNaN(end.getTime())) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'INVALID_DATE' },
-        message: 'end must be a valid ISO date',
-        path: ['end'],
-      });
-      return;
-    }
+  // 2. ISO date parsing
+  const start = new Date(data.start);
+  const end = new Date(data.end);
+  if (Number.isNaN(start.getTime())) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'INVALID_DATE' },
+      message: 'start must be a valid ISO date',
+      path: ['start'],
+    });
+    return;
+  }
+  if (Number.isNaN(end.getTime())) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'INVALID_DATE' },
+      message: 'end must be a valid ISO date',
+      path: ['end'],
+    });
+    return;
+  }
 
-    // 3. Date-range constraints — each a separate refinement so `details`
-    //    names the failing constraint (not a bundled "date range invalid").
-    let rangeHasError = false;
-    if (start.getTime() >= end.getTime()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'START_NOT_BEFORE_END' },
-        message: 'start must be strictly before end',
-        path: ['start'],
-      });
-      rangeHasError = true;
-    }
-    if (start.getTime() < MIN_START.getTime()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'START_BEFORE_MIN' },
-        message: 'start must be on or after 2000-01-01',
-        path: ['start'],
-      });
-      rangeHasError = true;
-    }
-    // end <= today(tz) + 1 day — interpreted strictly: end must not be past
-    // local midnight-of-tomorrow. `end` is an exclusive upper bound, so
-    // end = start-of-tomorrow = today + 1 day is the maximum accepted value.
-    const now = new Date();
-    const nowLocalMs = localMsInTz(now, data.tz);
-    const todayStartLocalMs = Math.floor(nowLocalMs / DAY_MS) * DAY_MS;
-    const tomorrowStartLocalMs = todayStartLocalMs + DAY_MS;
-    const endLocalMs = localMsInTz(end, data.tz);
-    if (endLocalMs > tomorrowStartLocalMs) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'END_BEYOND_TODAY_PLUS_ONE' },
-        message: 'end must be on or before (today + 1 day) in the provided tz',
-        path: ['end'],
-      });
-      rangeHasError = true;
-    }
-    if (rangeHasError) return;
+  // 3. Date-range constraints — each a separate refinement so `details`
+  //    names the failing constraint (not a bundled "date range invalid").
+  let rangeHasError = false;
+  if (start.getTime() >= end.getTime()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'START_NOT_BEFORE_END' },
+      message: 'start must be strictly before end',
+      path: ['start'],
+    });
+    rangeHasError = true;
+  }
+  if (start.getTime() < MIN_START.getTime()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'START_BEFORE_MIN' },
+      message: 'start must be on or after 2000-01-01',
+      path: ['start'],
+    });
+    rangeHasError = true;
+  }
+  // end <= today(tz) + 1 day — interpreted strictly: end must not be past
+  // local midnight-of-tomorrow. `end` is an exclusive upper bound, so
+  // end = start-of-tomorrow = today + 1 day is the maximum accepted value.
+  const now = new Date();
+  const nowLocalMs = localMsInTz(now, data.tz);
+  const todayStartLocalMs = Math.floor(nowLocalMs / DAY_MS) * DAY_MS;
+  const tomorrowStartLocalMs = todayStartLocalMs + DAY_MS;
+  const endLocalMs = localMsInTz(end, data.tz);
+  if (endLocalMs > tomorrowStartLocalMs) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'END_BEYOND_TODAY_PLUS_ONE' },
+      message: 'end must be on or before (today + 1 day) in the provided tz',
+      path: ['end'],
+    });
+    rangeHasError = true;
+  }
+  if (rangeHasError) return;
 
-    // 4. Bucket count cap — arithmetic-only, O(1).
+  // 4. Bucket count cap — arithmetic-only, O(1). Only a granularity-bearing
+  //    query (the performance query) has buckets to cap.
+  if (data.granularity !== undefined) {
     const bucketCount = computeBucketCount(start, end, data.granularity, data.tz, 0);
     if (bucketCount > BUCKET_COUNT_CAP) {
       ctx.addIssue({
@@ -320,22 +345,71 @@ export const PerformanceQuerySchema = z
       });
       return;
     }
+  }
 
-    // 5. Currency whitelist (only when present).
-    if (
-      data.currency !== undefined &&
-      !(CURRENCY_CODES as readonly string[]).includes(data.currency)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        params: { code: 'UNSUPPORTED_CURRENCY' },
-        message: `Currency ${data.currency} is not in SUPPORTED_CURRENCIES`,
-        path: ['currency'],
-      });
-    }
-  });
+  // 5. Currency whitelist (only when present).
+  if (
+    data.currency !== undefined &&
+    !(CURRENCY_CODES as readonly string[]).includes(data.currency)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      params: { code: 'UNSUPPORTED_CURRENCY' },
+      message: `Currency ${data.currency} is not in SUPPORTED_CURRENCIES`,
+      path: ['currency'],
+    });
+  }
+}
+
+export const PerformanceQuerySchema = z
+  .object({
+    granularity: GranularitySchema,
+    start: z.string(),
+    end: z.string(),
+    tz: z.string().default('UTC'),
+    currency: z.string().optional(),
+  })
+  .superRefine(refineWindow);
+
+export const BreakdownQuerySchema = z
+  .object({
+    by: BreakdownDimensionSchema,
+    start: z.string(),
+    end: z.string(),
+    tz: z.string().default('UTC'),
+    currency: z.string().optional(),
+  })
+  .superRefine(refineWindow);
+
+export const BreakdownRowSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  tag: TagSchema.nullable(),
+  stats: PerformanceStatsSchema,
+});
+
+export const BreakdownCurrencySchema = z.object({
+  code: z.string(),
+  total: PerformanceStatsSchema,
+  rows: z.array(BreakdownRowSchema),
+});
+
+export const BreakdownResponseSchema = z.object({
+  by: BreakdownDimensionSchema,
+  multiValued: z.boolean(),
+  resolvedTimezone: z.string(),
+  resolvedWeekStartDay: z.union([z.literal(0), z.literal(1)]),
+  dataQuality: z.object({
+    timeframeExcluded: TimeframeExcludedSchema,
+  }),
+  currencies: z.array(BreakdownCurrencySchema),
+});
 
 export type PerformanceQueryInput = z.infer<typeof PerformanceQuerySchema>;
+export type BreakdownQueryInput = z.infer<typeof BreakdownQuerySchema>;
+export type BreakdownRow = z.infer<typeof BreakdownRowSchema>;
+export type BreakdownCurrency = z.infer<typeof BreakdownCurrencySchema>;
+export type BreakdownResponse = z.infer<typeof BreakdownResponseSchema>;
 export type SeriesBucket = z.infer<typeof SeriesBucketSchema>;
 export type EquityCurvePoint = z.infer<typeof EquityCurvePointSchema>;
 export type PerformanceStats = z.infer<typeof PerformanceStatsSchema>;

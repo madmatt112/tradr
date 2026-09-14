@@ -69,7 +69,7 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sat: 6,
 };
 
-function localPartsInTz(utc: Date, tz: string): LocalParts {
+export function localPartsInTz(utc: Date, tz: string): LocalParts {
   const parts = getPartsDtf(tz).formatToParts(utc);
   let year = 0;
   let month = 0;
@@ -107,7 +107,7 @@ function localMidnight(year: number, month1Indexed: number, day: number, tz: str
 }
 
 /** UTC instant at local 00:00 of the day-after `now` in `tz`. */
-function localStartOfTomorrow(now: Date, tz: string): Date {
+export function localStartOfTomorrow(now: Date, tz: string): Date {
   const { year, month, day } = localPartsInTz(now, tz);
   return localMidnight(year, month, day + 1, tz);
 }
@@ -118,7 +118,7 @@ function localStartOfYear(year: number, tz: string): Date {
 }
 
 /** UTC instant at local first-of-month for (year, month1) in `tz`. */
-function localStartOfMonth(year: number, month1: number, tz: string): Date {
+export function localStartOfMonth(year: number, month1: number, tz: string): Date {
   return localMidnight(year, month1, 1, tz);
 }
 

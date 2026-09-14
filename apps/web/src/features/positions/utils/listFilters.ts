@@ -10,18 +10,20 @@ import { parseTagIdList } from '@tradr/shared/schemas/tag';
  * Returns the literal `undefined` when nothing is filtered, so the no-filter call
  * keys `['positions', 'list', undefined]` — the walkthrough coupling
  * (`useWalkthrough.ts`) depends on that exact key. Otherwise it returns an object
- * that carries `status` only when set and `tag` only when non-empty; never a key
- * with an `undefined` value.
+ * that carries `status` only when set, `tag` only when non-empty, and
+ * `classification` only when set; never a key with an `undefined` value.
  */
 export function buildListFilters(search: {
   status?: string;
   tag?: string;
-}): { status?: string; tag?: string[] } | undefined {
-  const { status } = search;
+  classification?: string;
+}): { status?: string; tag?: string[]; classification?: string } | undefined {
+  const { status, classification } = search;
   const tag = parseTagIdList(search.tag);
-  if (!status && tag.length === 0) return undefined;
+  if (!status && tag.length === 0 && !classification) return undefined;
   return {
     ...(status && { status }),
     ...(tag.length && { tag }),
+    ...(classification && { classification }),
   };
 }

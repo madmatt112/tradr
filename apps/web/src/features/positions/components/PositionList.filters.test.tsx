@@ -71,6 +71,37 @@ vi.mock('@/stores/drawer.store', () => ({
 vi.mock('./CreatePositionDialog', () => ({ CreatePositionDialog: () => null }));
 vi.mock('./PositionRowActions', () => ({ PositionRowActions: () => null }));
 
+// Replace the Radix Select with a native <select> so the Result filter is
+// driveable in jsdom (Radix relies on pointer-capture APIs jsdom lacks). The
+// only behaviour under test is onValueChange → navigate; SelectItem becomes a
+// real <option> so `user.selectOptions` can pick one.
+vi.mock('@/components/ui/select', () => ({
+  Select: ({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value: string;
+    onValueChange: (v: string) => void;
+    children: React.ReactNode;
+  }) => (
+    <select
+      aria-label="Result"
+      data-testid="result-select"
+      value={value}
+      onChange={(e) => onValueChange(e.currentTarget.value)}
+    >
+      {children}
+    </select>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
+    <option value={value}>{children}</option>
+  ),
+}));
+
 import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
 
 import { PositionsSearchSchema } from '@/routes/_auth/positions/index';
@@ -208,5 +239,71 @@ describe('PositionList — URL-driven filters', () => {
     renderAt('/positions');
 
     expect(await screen.findByText('No positions yet')).toBeTruthy();
+  });
+});
+
+describe('PositionList — classification (result) filter + Breakeven badge', () => {
+  it('reads ?classification=breakeven into the filter object and the cache key', async () => {
+    h.rows = [makePosition({ status: 'closed', classification: 'breakeven' })];
+    renderAt('/positions?classification=breakeven');
+
+    await waitFor(() => expect(h.recordedFilters.length).toBeGreaterThan(0));
+    const recorded = h.recordedFilters.at(-1);
+    expect(recorded).toEqual({ classification: 'breakeven' });
+    // The classification rides in `filters`, so it lands in the cache key too.
+    expect(positionsListQuery(recorded as any).queryKey).toEqual(
+      positionsListQuery(buildListFilters({ classification: 'breakeven' })).queryKey,
+    );
+  });
+
+  it('a garbage ?classification=foo degrades to no result filter', async () => {
+    h.rows = [makePosition()];
+    renderAt('/positions?classification=foo');
+
+    await waitFor(() => expect(h.recordedFilters.length).toBeGreaterThan(0));
+    expect(h.recordedFilters.at(-1)).toBeUndefined();
+  });
+
+  it('selecting a result writes ?classification without touching status', async () => {
+    const user = userEvent.setup();
+    h.rows = [makePosition()];
+    const { router } = renderAt('/positions?status=open');
+
+    await user.selectOptions(await screen.findByTestId('result-select'), 'breakeven');
+    await waitFor(() => {
+      expect(router.state.location.search.classification).toBe('breakeven');
+      expect(router.state.location.search.status).toBe('open');
+    });
+  });
+
+  it('Clear filters resets classification alongside status and tag', async () => {
+    const user = userEvent.setup();
+    h.rows = [];
+    const { router } = renderAt(`/positions?status=open&tag=${A}&classification=breakeven`);
+
+    await user.click(await screen.findByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+  });
+
+  it('renders the Breakeven badge only on a breakeven row', async () => {
+    h.rows = [
+      makePosition({
+        id: '00000000-0000-0000-0000-000000000001',
+        symbol: 'EVEN',
+        status: 'closed',
+        classification: 'breakeven',
+      }),
+      makePosition({
+        id: '00000000-0000-0000-0000-000000000002',
+        symbol: 'WINR',
+        status: 'closed',
+        classification: 'winning',
+      }),
+    ];
+    const { container } = renderAt('/positions');
+
+    await screen.findByText('EVEN');
+    const badges = container.querySelectorAll('[aria-label*="rounds to zero"]');
+    expect(badges).toHaveLength(1);
   });
 });

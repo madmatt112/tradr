@@ -217,6 +217,7 @@ const PERF_RESPONSE = {
         profitFactor: 1.5,
         largestWin: '120.00',
         largestLoss: '-80.00',
+        expectancy: '5.00',
         hasWins: true,
         hasLosses: true,
       },

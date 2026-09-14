@@ -1,6 +1,7 @@
 import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits, parseOccSymbol, type Tag } from '@tradr/shared';
+import { classifyPosition } from '@tradr/shared/lib/performance';
 
 import type { Database, Transaction } from '@/db';
 import {
@@ -462,11 +463,11 @@ export async function createPositionTx(
 export async function listPositions(
   db: Database,
   userId: string,
-  filters?: { status?: string; accountId?: string; tag?: string[] },
+  filters?: { status?: string; accountId?: string; tag?: string[]; classification?: string },
 ) {
   const rows = await findPositionListByUser(db, userId, filters);
 
-  return (rows as RawRow[]).map((row) => {
+  const mapped = (rows as RawRow[]).map((row) => {
     const totals: FillTotals = {
       entryQty: String(row.entry_qty),
       exitQty: String(row.exit_qty),
@@ -502,6 +503,14 @@ export async function listPositions(
     // Fees actually recorded on the fills, not a schedule estimate.
     const brokerageFees = pnl.fees ?? 0;
 
+    // Winning/losing/breakeven from the SAME formula the performance endpoint
+    // uses (classifyPosition rounds to currency minor units, then compares to
+    // zero — R9/R10). Only a closed row with a computed net P&L carries one.
+    const classification =
+      row.status === 'closed' && netPnl !== null
+        ? classifyPosition(new Decimal(netPnl), row.account_currency)
+        : null;
+
     // Trade-plan fields & R/R (R14). `target_price`/`stop_loss` arrive via
     // `p.*` as raw Drizzle numeric strings — pass them straight into
     // computeRiskReward (numeric rule: no parseFloat/Number). The response
@@ -536,6 +545,7 @@ export async function listPositions(
       // when the position carries none (design decision 7: tags never touch
       // `updated_at`, so they ride the read paths only).
       tags: row.tags ?? [],
+      classification,
       ...pnl,
       brokerageName,
       grossPnl,
@@ -555,6 +565,13 @@ export async function listPositions(
       ),
     };
   });
+
+  // Classification filter (DD10): applied in JS over each row's own computed
+  // field, never re-derived in SQL. `findPositionListByUser` has already
+  // narrowed to closed rows when no explicit status was given.
+  return filters?.classification
+    ? mapped.filter((p) => p.classification === filters.classification)
+    : mapped;
 }
 
 export async function getPositionDetail(db: Database, id: string, userId: string) {
@@ -594,6 +611,13 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   const grossPnl = pnl.grossPnl;
   const brokerageFees = pnl.fees ?? 0;
 
+  // Same classification formula as the list path (classifyPosition, R9/R10):
+  // only a closed position with a computed net P&L carries one; null otherwise.
+  const classification =
+    position.status === 'closed' && netPnl !== null
+      ? classifyPosition(new Decimal(netPnl), accountCurrency)
+      : null;
+
   // Trade-plan fields & R/R (R14). `position.targetPrice`/`position.stopLoss`
   // are raw Drizzle numeric strings — pass straight into computeRiskReward
   // (numeric rule), and convert to numbers for the response via decimal.js.
@@ -617,6 +641,7 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     fills: fillRows,
     // Category-then-name ordered tag set; `[]` when the position carries none.
     tags,
+    classification,
     ...pnl,
     brokerageName,
     grossPnl,

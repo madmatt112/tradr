@@ -64,6 +64,7 @@ export function StatsPanel({ stats, currency }: StatsPanelProps) {
           <span>{formatProfitFactor(stats.profitFactor, stats.hasWins, stats.hasLosses)}</span>
         ),
     },
+    { label: 'Expectancy', render: () => money(stats.expectancy, 'auto') },
     { label: 'Largest Win', render: () => money(stats.largestWin, 'auto') },
     { label: 'Largest Loss', render: () => money(stats.largestLoss, 'auto') },
   ];

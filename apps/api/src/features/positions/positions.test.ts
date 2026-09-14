@@ -1690,3 +1690,180 @@ describe('positions closed-delete + ledger reversal (R4 amendment, task 23b)', (
     expect(getRes.status).toBe(404);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Classification on the list item and the detail, and the ?classification=
+// list filter (task 4, R9/R10). classifyPosition is the single formula shared
+// with GET /api/performance, so the SAME zero-net position must read as a
+// breakeven on both surfaces (R9.2 latch agreement). No close/reverse hooks are
+// registered — classification never needs the ledger, and reopen skips the
+// (absent) reversal.
+// ---------------------------------------------------------------------------
+
+describe('positions classification (R9/R10)', () => {
+  // Build an open→full-exit position (the balancing exit auto-closes it, R7)
+  // with a controlled net P&L. entry 10.00 ×100 fee 1.00, exit `exitPrice` ×100
+  // fee 1.00: net = (exitPrice − 10.00) × 100 − 2.00. Default dates sit inside a
+  // single New York day so a later reopen passes the same-day guard.
+  async function buildClosed(
+    cookie: string,
+    accountId: string,
+    exitPrice: string,
+    opts: { openedAt?: string; closedAt?: string } = {},
+  ) {
+    const openedAt = opts.openedAt ?? '2025-03-10T15:00:00Z';
+    const closedAt = opts.closedAt ?? '2025-03-10T18:00:00Z';
+    const pos = await createTestPosition(cookie, accountId, { symbol: 'AAPL' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '100',
+      fees: '1.00',
+      filledAt: openedAt,
+    });
+    await openTestPosition(cookie, pos.id, openedAt);
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: exitPrice,
+      quantity: '100',
+      fees: '1.00',
+      filledAt: closedAt,
+    });
+    return pos;
+  }
+
+  it('classifies a zero-net closed position as breakeven on both list and detail, and clears it on reopen', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await buildClosed(cookie, account.id, '10.02');
+
+    const detail = await (await authedRequest('GET', `/api/positions/${pos.id}`, cookie)).json();
+    expect(detail.status).toBe('closed');
+    // (10.02 − 10.00) × 100 − 2.00 fees = exactly zero → breakeven.
+    expect(detail.netPnl === 0).toBe(true);
+    expect(detail.classification).toBe('breakeven');
+
+    const list = await (await authedRequest('GET', '/api/positions', cookie)).json();
+    const item = list.find((p: { id: string }) => p.id === pos.id);
+    expect(item.classification).toBe('breakeven');
+
+    // Reopen (same New York day as openedAt) → open, classification null.
+    const reopen = await authedRequest('POST', `/api/positions/${pos.id}/reopen`, cookie, {
+      reopenedAt: '2025-03-10T20:00:00Z',
+    });
+    expect(reopen.status).toBe(200);
+    const reopened = await (await authedRequest('GET', `/api/positions/${pos.id}`, cookie)).json();
+    expect(reopened.status).toBe('open');
+    expect(reopened.classification).toBeNull();
+  });
+
+  it('has a null classification for an open position on both list and detail', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createTestPosition(cookie, account.id);
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '100',
+      fees: '1.00',
+      filledAt: '2025-03-10T15:00:00Z',
+    });
+    await openTestPosition(cookie, pos.id, '2025-03-10T15:00:00Z');
+
+    const detail = await (await authedRequest('GET', `/api/positions/${pos.id}`, cookie)).json();
+    expect(detail.status).toBe('open');
+    expect(detail.classification).toBeNull();
+
+    const list = await (await authedRequest('GET', '/api/positions', cookie)).json();
+    expect(list.find((p: { id: string }) => p.id === pos.id).classification).toBeNull();
+  });
+
+  it('agrees with GET /api/performance — the zero-net position is a breakeven in its close window (R9.2)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    await buildClosed(cookie, account.id, '10.02');
+
+    const query = new URLSearchParams({
+      granularity: 'day',
+      start: '2025-03-01T00:00:00.000Z',
+      end: '2025-03-31T00:00:00.000Z',
+      tz: 'UTC',
+      currency: 'USD',
+    }).toString();
+    const res = await authedRequest('GET', `/api/performance?${query}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const usd = body.currencies.find((c: { code: string }) => c.code === 'USD');
+    expect(usd.stats.totalPositions).toBe(1);
+    expect(usd.stats.breakevenRate).toBe(100);
+    expect(usd.stats.winRate).toBeNull();
+  });
+
+  it('filters the list to a single classification (?classification=breakeven)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const breakeven = await buildClosed(cookie, account.id, '10.02');
+    await buildClosed(cookie, account.id, '11.00'); // winning
+    await buildClosed(cookie, account.id, '9.00'); // losing
+
+    const res = await authedRequest('GET', '/api/positions?classification=breakeven', cookie);
+    expect(res.status).toBe(200);
+    const list = await res.json();
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(breakeven.id);
+    expect(list[0].classification).toBe('breakeven');
+  });
+
+  it('returns the matching row for each of winning and losing', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const winning = await buildClosed(cookie, account.id, '11.00');
+    const losing = await buildClosed(cookie, account.id, '9.00');
+    await buildClosed(cookie, account.id, '10.02'); // breakeven
+
+    const won = await (
+      await authedRequest('GET', '/api/positions?classification=winning', cookie)
+    ).json();
+    expect(won).toHaveLength(1);
+    expect(won[0].id).toBe(winning.id);
+    expect(won[0].classification).toBe('winning');
+
+    const lost = await (
+      await authedRequest('GET', '/api/positions?classification=losing', cookie)
+    ).json();
+    expect(lost).toHaveLength(1);
+    expect(lost[0].id).toBe(losing.id);
+    expect(lost[0].classification).toBe('losing');
+  });
+
+  it('rejects an unknown classification value with 400', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('GET', '/api/positions?classification=nope', cookie);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns an empty list for status=open combined with a classification', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    await buildClosed(cookie, account.id, '11.00'); // a winning CLOSED position
+
+    // An open position that could otherwise be mistaken for a match.
+    const openPos = await createTestPosition(cookie, account.id);
+    await addFill(cookie, openPos.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '100',
+      fees: '1.00',
+      filledAt: '2025-03-10T15:00:00Z',
+    });
+    await openTestPosition(cookie, openPos.id, '2025-03-10T15:00:00Z');
+
+    const res = await authedRequest(
+      'GET',
+      '/api/positions?status=open&classification=winning',
+      cookie,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveLength(0);
+  });
+});

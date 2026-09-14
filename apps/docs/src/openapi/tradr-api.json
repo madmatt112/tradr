@@ -2838,9 +2838,84 @@
         ]
       }
     },
+    "/api/performance/breakdown": {
+      "get": {
+        "description": "Authed. Segments the closed-in-window position set by one dimension and returns per-currency statistics for each group plus the window total. Query validation (timezone, ISO dates, minimum start date, date order, currency) always runs on the REQUESTED window on every tier; there is no bucket-count cap because the breakdown has no buckets.\n",
+        "parameters": [
+          {
+            "description": "Dimension to group by. This enum is the extension point later specs add dimensions to; `trading-rules` adds `compliance`.\n",
+            "in": "query",
+            "name": "by",
+            "required": true,
+            "schema": {
+              "enum": [
+                "symbol",
+                "weekday",
+                "hour",
+                "tag"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": true,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The breakdown response: per-currency `total` and `rows`, plus the `multiValued` flag (true only for `by=tag`, where a position counts once per tag)."
+          },
+          "400": {
+            "description": "Validation error (invalid timezone, invalid dates, start before 2000-01-01, start not before end, end beyond today + 1 day, unsupported currency) — identical on every tier."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "503": {
+            "description": "TIMEOUT or CLIENT_ABORT."
+          }
+        },
+        "summary": "Per-dimension performance breakdown for one window.",
+        "tags": [
+          "Performance"
+        ]
+      }
+    },
     "/api/positions": {
       "get": {
-        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name. Optional filters may be combined.\n",
+        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name and its `classification` (`winning`, `losing` or `breakeven` for a closed position, `null` for a draft or open one). Optional filters may be combined.\n",
         "parameters": [
           {
             "in": "query",
@@ -2870,6 +2945,20 @@
             "name": "tag",
             "required": false,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keep only positions with this outcome (AND-combined with the other filters). Only closed positions carry a classification, so combining it with `status=draft` or `status=open` returns an empty list.\n",
+            "in": "query",
+            "name": "classification",
+            "required": false,
+            "schema": {
+              "enum": [
+                "winning",
+                "losing",
+                "breakeven"
+              ],
               "type": "string"
             }
           }

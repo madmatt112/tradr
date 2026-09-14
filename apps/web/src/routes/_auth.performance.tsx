@@ -3,16 +3,18 @@ import { useEffect } from 'react';
 import { z } from 'zod';
 
 import type { PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
-import { GranularitySchema } from '@tradr/shared/schemas/performance';
+import { BreakdownDimensionSchema, GranularitySchema } from '@tradr/shared/schemas/performance';
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PerformancePage } from '@/features/performance/components/PerformancePage';
 import { buildPerformanceDefaults } from '@/features/performance/utils/buildPerformanceDefaults';
+import { currentMonthInTz } from '@/features/performance/utils/deriveCalendarWindow';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 import { api } from '@/lib/api';
 import { isTimezoneRejected } from '@/lib/invalidTimezone';
 import { queryClient } from '@/lib/queryClient';
+import { readTzProvenance, writeTzProvenance } from '@/lib/reportingTzProvenance';
 
 // ---- Deep-link-safe search parsing -----------------------------------------
 // A bare `/performance` used to CRASH to the root error boundary: the strict
@@ -30,6 +32,15 @@ const PerformanceSearchSchema = z.object({
   end: z.string().optional().catch(undefined),
   tz: z.string().optional().catch(undefined),
   currency: z.string().optional().catch(undefined),
+  // The calendar month (`YYYY-MM`) and breakdown dimension are URL state so a
+  // shared link and a reload restore them (D5, R6.1). Same degrade-to-absent
+  // form as the window params: a malformed value never crashes the route.
+  month: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+    .optional()
+    .catch(undefined),
+  by: BreakdownDimensionSchema.optional().catch(undefined),
 });
 
 type PerformanceSearch = z.infer<typeof PerformanceSearchSchema>;
@@ -52,6 +63,34 @@ function toParams(search: PerformanceSearch): PerformanceQueryInput {
     tz: search.tz ?? 'UTC',
     ...(search.currency !== undefined ? { currency: search.currency } : {}),
   };
+}
+
+/**
+ * The URL-`tz` resync decision (Component 9), extracted so it is testable
+ * without a router render. `write` is the zone to record as "the stored zone
+ * the URL was last reconciled to" (`null` leaves the record alone); `navigateTo`
+ * is the zone to rewrite the URL `tz` to (`null` leaves the URL alone).
+ *
+ *   - incomplete URL, or the zone still loading → do nothing. The resync runs
+ *     only on a complete URL, never on the redirecting bare state.
+ *   - empty record → adopt the stored zone but KEEP the URL `tz`, so a fresh
+ *     context opening a shared `?tz=X` link is left alone (Usability NFR).
+ *   - record equals the stored zone → in step, nothing to do.
+ *   - record differs but the URL already carries the stored zone → record only.
+ *   - record differs and the URL still carries the old zone → record and rewrite
+ *     `tz` (the in-session zone change / stale-reload case, R1.9).
+ */
+export function decideTzResync(
+  complete: boolean,
+  timezone: string | undefined,
+  recorded: string | null,
+  urlTz: string | undefined,
+): { write: string | null; navigateTo: string | null } {
+  if (!complete || timezone === undefined) return { write: null, navigateTo: null };
+  if (recorded === null) return { write: timezone, navigateTo: null };
+  if (recorded === timezone) return { write: null, navigateTo: null };
+  if (urlTz === timezone) return { write: timezone, navigateTo: null };
+  return { write: timezone, navigateTo: timezone };
 }
 
 // ---- Shared query options --------------------------------------------------
@@ -123,10 +162,27 @@ function PerformanceRouteComponent() {
         ...buildPerformanceDefaults(timezone),
         ...(search.tz !== undefined ? { tz: search.tz } : {}),
         ...(search.currency !== undefined ? { currency: search.currency } : {}),
+        ...(search.month !== undefined ? { month: search.month } : {}),
+        ...(search.by !== undefined ? { by: search.by } : {}),
       },
       replace: true,
     });
-  }, [complete, timezone, navigate, search.tz, search.currency]);
+  }, [complete, timezone, navigate, search.tz, search.currency, search.month, search.by]);
+
+  // Component 9: keep the URL `tz` in step with the STORED reporting zone, so a
+  // zone changed on Settings → Profile re-buckets the calendar and breakdown
+  // when the user returns to a complete performance URL or reloads a stale one.
+  // It is driven off the reload-durable provenance record, never a per-mount
+  // previous value or the mutation's `onSuccess` — neither fires for that flow
+  // (R1.9). The defaults effect never runs on a complete URL (`complete` above),
+  // so on a complete URL this is the only writer of `tz`.
+  useEffect(() => {
+    const { write, navigateTo } = decideTzResync(complete, timezone, readTzProvenance(), search.tz);
+    if (write !== null) writeTzProvenance(write);
+    if (navigateTo !== null) {
+      void navigate({ search: (prev) => ({ ...prev, tz: navigateTo }), replace: true });
+    }
+  }, [complete, timezone, search.tz, navigate]);
 
   // Snapshot the validated search params for the cleanup closure. We capture
   // here (not inside the cleanup) so that an in-flight effect-cleanup cancels
@@ -151,7 +207,14 @@ function PerformanceRouteComponent() {
     <>
       <PageHeader page="Performance" />
       {params !== null ? (
-        <PerformancePage params={params} />
+        <PerformancePage
+          params={params}
+          // `params.tz` is a defined string on any complete render (`toParams`)
+          // but is not validated as an IANA zone, so the month helper guards it
+          // with a UTC fallback rather than throwing.
+          month={search.month ?? currentMonthInTz(new Date(), params.tz)}
+          by={search.by ?? 'symbol'}
+        />
       ) : (
         // The one-render window while defaults derive (or the zone loads).
         <div data-testid="performance-page" className="space-y-4">

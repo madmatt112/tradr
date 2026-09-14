@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { PerformanceResponseSchema, type PerformanceQueryInput } from '@tradr/shared';
 
 import { db } from '@/db';
-import { accounts, positions, users } from '@/db/schema';
+import { accounts, fills, positions, users } from '@/db/schema';
 import { seedFills, seedPositions } from '@/db/seed';
 import { InvalidTimezoneError, TimeoutError } from '@/lib/errors';
 
@@ -175,6 +175,106 @@ describe('getPerformance', () => {
     expect(eurEntry.historyRange.totalClosedPositions).toBe(3);
     expect(usdEntry.stats.totalPositions).toBe(5);
     expect(eurEntry.stats.totalPositions).toBe(3);
+    // Expectancy is present on every currency entry (R7.1 / R7.2).
+    for (const c of result.currencies) {
+      expect(c.stats.expectancy).not.toBeNull();
+    }
+  });
+
+  // (b2) Expectancy is the flat-population mean, NOT totalNetPnl ÷ totalPositions.
+  // A still-open position with a partial exit realizes P&L into bucket B — moving
+  // the series-summed totalNetPnl buildCurrencyEntry overrides — but never enters
+  // the flat population expectancy is computed over. That is the D1 distinction.
+  it('serves expectancy as the flat mean, distinct from totalNetPnl ÷ totalPositions on a partial exit (D1)', async () => {
+    const user = await createUser();
+    const usd = await createAccount(user.id, 'USD');
+
+    // Positions go in via raw SQL: db.insert(positions) is lint-forbidden outside
+    // the positions feature (its audit/invariant layer). Map returned ids by
+    // symbol — RETURNING order is not guaranteed to match the VALUES list.
+    const inserted = await db.execute<{ id: string; symbol: string }>(sql`
+      INSERT INTO positions (user_id, account_id, symbol, side, asset_type, status, opened_at, closed_at)
+      VALUES
+        (${user.id}, ${usd.id}, 'AAPL', 'long', 'stock', 'closed', '2026-01-05T00:00:00Z'::timestamptz, '2026-01-10T00:00:00Z'::timestamptz),
+        (${user.id}, ${usd.id}, 'MSFT', 'long', 'stock', 'closed', '2026-01-06T00:00:00Z'::timestamptz, '2026-01-11T00:00:00Z'::timestamptz),
+        (${user.id}, ${usd.id}, 'NVDA', 'long', 'stock', 'open',   '2026-01-07T00:00:00Z'::timestamptz, NULL)
+      RETURNING id, symbol
+    `);
+    const idOf = (symbol: string) => inserted.find((r) => r.symbol === symbol)!.id;
+    const win200Id = idOf('AAPL');
+    const win100Id = idOf('MSFT');
+    const openPartialId = idOf('NVDA');
+
+    await db.insert(fills).values([
+      // Closed +200: entry 100 @ 10, exit 100 @ 12.
+      {
+        positionId: win200Id,
+        type: 'entry',
+        price: '10',
+        quantity: '100',
+        filledAt: new Date('2026-01-09T00:00:00Z'),
+      },
+      {
+        positionId: win200Id,
+        type: 'exit',
+        price: '12',
+        quantity: '100',
+        filledAt: new Date('2026-01-10T00:00:00Z'),
+      },
+      // Closed +100: entry 100 @ 10, exit 100 @ 11.
+      {
+        positionId: win100Id,
+        type: 'entry',
+        price: '10',
+        quantity: '100',
+        filledAt: new Date('2026-01-09T00:00:00Z'),
+      },
+      {
+        positionId: win100Id,
+        type: 'exit',
+        price: '11',
+        quantity: '100',
+        filledAt: new Date('2026-01-11T00:00:00Z'),
+      },
+      // Still-open partial exit +200: entry 100 @ 10, exit 50 @ 14.
+      {
+        positionId: openPartialId,
+        type: 'entry',
+        price: '10',
+        quantity: '100',
+        filledAt: new Date('2026-01-08T00:00:00Z'),
+      },
+      {
+        positionId: openPartialId,
+        type: 'exit',
+        price: '14',
+        quantity: '50',
+        filledAt: new Date('2026-01-12T00:00:00Z'),
+      },
+    ]);
+
+    const result = await getPerformance(
+      db,
+      user.id,
+      defaultInput(),
+      freshController().signal,
+      Date.now(),
+    );
+
+    const usdEntry = result.currencies.find((c) => c.code === 'USD')!;
+    for (const c of result.currencies) {
+      expect(c.stats.expectancy).not.toBeNull();
+    }
+    // Flat population is the two closed trades: (200 + 100) / 2 = 150.
+    expect(usdEntry.stats.totalPositions).toBe(2);
+    expect(usdEntry.stats.expectancy).toBe('150');
+    // Bucket B carries the partial exit too: totalNetPnl = 200 + 100 + 200 = 500,
+    // so totalNetPnl ÷ totalPositions = 250, which expectancy must NOT be.
+    expect(usdEntry.stats.totalNetPnl).toBe('500');
+    const naive = new Decimal(usdEntry.stats.totalNetPnl)
+      .div(usdEntry.stats.totalPositions)
+      .toString();
+    expect(usdEntry.stats.expectancy).not.toBe(naive);
   });
 
   // (c) Zero closed positions

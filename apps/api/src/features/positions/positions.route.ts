@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { ClassificationSchema } from '@tradr/shared/schemas/performance';
 import {
   CreatePositionSchema,
   UpdatePositionSchema,
@@ -40,6 +41,7 @@ const ListQuerySchema = z.object({
   status: z.enum(['draft', 'open', 'closed']).optional(),
   accountId: z.string().uuid().optional(),
   tag: TagIdListParamSchema,
+  classification: ClassificationSchema.optional(),
 });
 
 /**
@@ -104,8 +106,10 @@ positions.post('/', validate('json', CreatePositionSchema), async (c) => {
  *     summary: List the user's positions.
  *     description: >
  *       Authed. Returns the user's positions (newest first), each carrying its
- *       `tags` array ordered by category then case-insensitive name. Optional
- *       filters may be combined.
+ *       `tags` array ordered by category then case-insensitive name and its
+ *       `classification` (`winning`, `losing` or `breakeven` for a closed
+ *       position, `null` for a draft or open one). Optional filters may be
+ *       combined.
  *     tags: [Positions]
  *     parameters:
  *       - in: query
@@ -124,14 +128,22 @@ positions.post('/', validate('json', CreatePositionSchema), async (c) => {
  *           Comma-separated tag UUIDs; positions must carry every listed tag (AND
  *           semantics). Elements that are not UUIDs are ignored; an unknown id
  *           matches nothing.
+ *       - in: query
+ *         name: classification
+ *         required: false
+ *         schema: { type: string, enum: [winning, losing, breakeven] }
+ *         description: >
+ *           Keep only positions with this outcome (AND-combined with the other
+ *           filters). Only closed positions carry a classification, so combining
+ *           it with `status=draft` or `status=open` returns an empty list.
  *     responses:
  *       200: { description: 'The user''s positions, each with a `tags` array.' }
  *       400: { description: Validation error (e.g. an invalid accountId). }
  */
 positions.get('/', validate('query', ListQuerySchema), async (c) => {
   const userId = c.get('userId');
-  const { status, accountId, tag } = c.req.valid('query');
-  const list = await listPositions(db, userId, { status, accountId, tag });
+  const { status, accountId, tag, classification } = c.req.valid('query');
+  const list = await listPositions(db, userId, { status, accountId, tag, classification });
   return c.json(list, 200);
 });
 

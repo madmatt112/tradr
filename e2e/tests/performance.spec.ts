@@ -3,6 +3,7 @@ import { expect, type Page } from '@playwright/test';
 import {
   INVALID_TIMEZONE_RESPONSE,
   mockAppShell,
+  mockBreakdown,
   NO_ACCOUNTS_RESPONSE,
   PERF_URL,
   POPULATED_RESPONSE,
@@ -96,6 +97,7 @@ test.describe('Performance page', () => {
     page,
   }) => {
     await mockPerformance(page, POPULATED_RESPONSE);
+    await mockBreakdown(page);
     await page.goto(PERF_URL);
 
     await expect(page.getByTestId('performance-page')).toBeVisible();
@@ -119,6 +121,7 @@ test.describe('Performance page', () => {
         body: JSON.stringify(POPULATED_RESPONSE),
       });
     });
+    await mockBreakdown(page);
 
     await page.goto(PERF_URL);
     await expect(page.getByTestId('performance-page')).toBeVisible();
@@ -144,6 +147,7 @@ test.describe('Performance page', () => {
     page,
   }) => {
     await mockPerformance(page, POPULATED_RESPONSE);
+    await mockBreakdown(page);
     await page.goto(PERF_URL);
     await expect(page.getByTestId('performance-page')).toBeVisible();
 
@@ -228,6 +232,7 @@ test.describe('Performance page', () => {
     page,
   }) => {
     await mockPerformance(page, POPULATED_RESPONSE);
+    await mockBreakdown(page);
 
     // Vite emits the chart in its own chunk because PerformancePage uses
     // `React.lazy(() => import('@/features/performance/components/EquityCurveChart'))`.
