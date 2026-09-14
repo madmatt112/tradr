@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 
-import { CURRENCY_CODES } from '@tradr/shared';
+import { CURRENCY_CODES, type Tag } from '@tradr/shared';
 
 import type { Database, Transaction } from '@/db';
 
@@ -24,6 +24,7 @@ export interface SnapshotPosition {
   id: string;
   side: string;
   assetType: string;
+  symbol: string;
   currency: string;
   /**
    * NULL for a position that is not currently flat. Such positions still
@@ -36,6 +37,8 @@ export interface SnapshotPosition {
   lastFlatAt: string | null;
   lastFlatNetPnl: string | null;
   fills: SnapshotFill[];
+  /** The position's tags, ordered by tag id. Empty when untagged. */
+  tags: Tag[];
 }
 
 export interface TimeframeSnapshot {
@@ -85,7 +88,7 @@ export async function fetchTimeframeSnapshot(
       -- performance.service.ts §buckets. Fee-schedule columns are gone: fees
       -- come from fills.fees and are never re-applied at read time.
       SELECT DISTINCT
-        p.id, p.side, p.asset_type, p.closed_at, p.status,
+        p.id, p.side, p.asset_type, p.symbol, p.closed_at, p.status,
         p.last_flat_at, p.last_flat_net_pnl,
         a.currency
       FROM positions p
@@ -120,6 +123,16 @@ export async function fetchTimeframeSnapshot(
       JOIN closed c ON c.id = f.position_id
       GROUP BY f.position_id
     ),
+    position_tag_sets AS (
+      SELECT pt.position_id,
+             jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name,
+                                          'category', t.category, 'color', t.color)
+                       ORDER BY t.id) AS tags
+      FROM position_tags pt
+      JOIN tags t ON t.id = pt.tag_id AND t.user_id = ${userId}
+      JOIN closed c ON c.id = pt.position_id
+      GROUP BY pt.position_id
+    ),
     timeframe_excluded AS (
       SELECT DISTINCT p.id,
         (a.currency <> ALL(${supported}::text[])) AS is_unsupported_currency,
@@ -144,11 +157,15 @@ export async function fetchTimeframeSnapshot(
       'positions', COALESCE((
         SELECT jsonb_agg(jsonb_build_object(
           'id', c.id, 'side', c.side, 'assetType', c.asset_type,
+          'symbol', c.symbol,
           'currency', c.currency, 'closedAt', c.closed_at, 'status', c.status,
           'lastFlatAt', c.last_flat_at, 'lastFlatNetPnl', c.last_flat_net_pnl::text,
-          'fills', COALESCE(pf.fills, '[]'::jsonb)
+          'fills', COALESCE(pf.fills, '[]'::jsonb),
+          'tags', COALESCE(pts.tags, '[]'::jsonb)
         ))
-        FROM closed c LEFT JOIN position_fills pf ON pf.position_id = c.id
+        FROM closed c
+          LEFT JOIN position_fills pf ON pf.position_id = c.id
+          LEFT JOIN position_tag_sets pts ON pts.position_id = c.id
       ), '[]'::jsonb),
       'timeframeExcluded', (SELECT jsonb_build_object(
         'total',       total,

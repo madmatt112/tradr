@@ -8,6 +8,7 @@ import {
   type SeriesBucket,
   PerformanceResponseSchema,
 } from '@tradr/shared';
+import type { BreakdownPosition } from '@tradr/shared/lib/breakdown';
 import {
   buildCumulativeSeries,
   classifyPosition,
@@ -38,6 +39,19 @@ import {
 const CHUNK_SIZE = 1000;
 const TIMEOUT_MS = 10_000;
 
+/**
+ * Resolve the request's `tz` to a reporting IANA zone, throwing the HTTP-shaped
+ * `InvalidTimezoneError` when it does not resolve. Extracted so the breakdown
+ * service resolves the timezone identically.
+ */
+export function resolveRequestTimezone(tz: string): string {
+  try {
+    return resolveTimezone(tz);
+  } catch {
+    throw new InvalidTimezoneError(`Invalid timezone: ${tz}`);
+  }
+}
+
 export async function getPerformance(
   db: Database,
   userId: string,
@@ -45,12 +59,7 @@ export async function getPerformance(
   abortSignal: AbortSignal,
   startTime: number,
 ): Promise<PerformanceResponse> {
-  let resolvedTimezone: string;
-  try {
-    resolvedTimezone = resolveTimezone(input.tz);
-  } catch {
-    throw new InvalidTimezoneError(`Invalid timezone: ${input.tz}`);
-  }
+  const resolvedTimezone = resolveRequestTimezone(input.tz);
 
   const requestedStart = new Date(input.start);
   const endInstant = new Date(input.end);
@@ -138,12 +147,12 @@ export async function getPerformance(
  *    partial exit move total P&L and the equity curve immediately instead of
  *    staying invisible until the position goes flat.
  */
-async function classifyTimeframePositions(
+export async function classifyTimeframePositions(
   positions: readonly SnapshotPosition[],
   abortSignal: AbortSignal,
   startTime: number,
-): Promise<{ flat: ClassifiedPosition[]; realizations: CurrencyRealization[] }> {
-  const flat: ClassifiedPosition[] = [];
+): Promise<{ flat: BreakdownPosition[]; realizations: CurrencyRealization[] }> {
+  const flat: BreakdownPosition[] = [];
   const realizations: CurrencyRealization[] = [];
 
   for (let i = 0; i < positions.length; i++) {
@@ -196,7 +205,7 @@ interface CurrencyRealization {
  * `grossPnl` is still surfaced for the fee-attribution breakdown; it is the
  * pre-fee figure, and `fees` is the sum actually recorded on the fills.
  */
-function classifyOne(position: SnapshotPosition): ClassifiedPosition | null {
+function classifyOne(position: SnapshotPosition): BreakdownPosition | null {
   // Bucket A (design: "requires flat"). Keyed on the LATCHED flat snapshot, not
   // on live `closedAt`:
   //
@@ -246,6 +255,9 @@ function classifyOne(position: SnapshotPosition): ClassifiedPosition | null {
     fees,
     closedAt: new Date(flatAt),
     classification,
+    symbol: position.symbol,
+    assetType,
+    tags: position.tags,
   };
 }
 
