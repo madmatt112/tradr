@@ -1,6 +1,6 @@
 ---
 title: Metrics glossary
-description: Exact definitions of every figure Tradr computes — gross and net P&L, return percentage, both risk/reward ratios, win rate, profit factor, and how fees are allocated.
+description: Exact definitions of every figure Tradr computes — gross and net P&L, return percentage, both risk/reward ratios, win rate, profit factor, expectancy, and how the breakdowns and calendar group your closed positions.
 ---
 
 Every number in Tradr is derived from your fills. Nothing is stored as a running
@@ -133,6 +133,42 @@ ratio, and reporting one would flatter a two-trade record.
 
 The single best and single worst net P&L in range.
 
+### Expectancy
+
+```
+sum of net P&L over closed positions ÷ total positions
+```
+
+The average net P&L a position returns. Unlike win rate, **the denominator is
+the total**, not the decided trades — so every breakeven is counted, each one
+pulling the figure toward zero.
+
+The same figure follows from the averages:
+
+```
+(wins ÷ total) × average win + (losses ÷ total) × average loss
+```
+
+The weights divide by the total, so a run of scratches lowers your expectancy
+even though a breakeven adds nothing to the numerator.
+
+Null when nothing has closed in range.
+
+### Sharpe ratio
+
+Tradr does not report a Sharpe ratio.
+
+A Sharpe ratio is built from a series of period returns measured against a
+capital base, and Tradr keeps neither. Return is measured per position, against
+what the closed portion cost — see Return % above — not against your account
+over time. Balances are current, not historical, so there is no record of what
+the account was worth period by period to take a mean and a standard deviation
+from.
+
+Reporting one would first need a capital-base series — your account value over
+time — with deposits and withdrawals separated out, so that funding the account
+is not read as a gain.
+
 ### Equity curve
 
 The running total of net P&L, bucket by bucket, over the range you selected. It
@@ -140,6 +176,66 @@ starts at zero rather than at your account balance: it shows what your trading
 did, not what your account is worth.
 
 Bucket boundaries come from your reporting timezone, described below.
+
+## Breakdowns
+
+A breakdown groups your **closed positions that went flat inside the range**, one
+currency at a time, and reports the statistics above for each group.
+
+The population is narrower than the statistics above. Only positions that went
+flat — reached zero open quantity — at an instant inside the selected range are
+grouped. A position that merely had a fill in the range, but went flat outside
+it, is left out. Each currency is grouped on its own.
+
+### By symbol
+
+One row per instrument. An **option groups under its underlying**, so every
+contract on the same stock shares one row; a stock groups under its own symbol.
+
+### By weekday and by hour
+
+Both read **the moment the position went flat**, expressed in your reporting
+timezone — the same instant that places the position on the calendar. A position
+that went flat late on a Friday evening is a Friday, and stays a Friday wherever
+you open Tradr.
+
+### Rows that add up, and rows that overlap
+
+By symbol, by weekday and by hour, **each position lands in exactly one row**, so
+the rows add up to the range total.
+
+By tag they do not. A position is **counted once under each of its tags**, so a
+position with two tags appears in two rows and the rows can total more than the
+range. An **Untagged** row holds every position with no tag, so nothing is
+missing even though the rows no longer sum to the total.
+
+### Why the total can differ from the Statistics panel
+
+A breakdown's total is the **closed-in-range** total: only the positions that
+went flat inside the range. The Statistics panel is wider — it counts every flat
+position the range brings into view, including ones that had a fill inside the
+range but went flat outside it. So the breakdown's total P&L, its position count
+and its rates can all read differently from the panel; they are answering
+different questions.
+
+## Calendar
+
+Each day cell carries two figures from two different events.
+
+**The P&L is the realised P&L of the fills that landed that day** — the same rule
+as the daily series and the equity curve above. A partial exit counts on the day
+it filled, so a cell can show a P&L for a position that has not closed.
+
+**The position count is the number of positions that went flat that day.** A
+position whose fills span more than one day adds its realised P&L to each of
+those days, but is counted once, on the day it went flat.
+
+Days come from your reporting timezone, the same zone the rest of this page uses.
+
+A **week row's total covers only the days of the shown month** — the trailing and
+leading days that belong to a neighbouring month are not added in. The **month
+total** equals that month's bucket on the performance chart: the same daily P&L,
+summed a different way.
 
 ## Things worth knowing
 
