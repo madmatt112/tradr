@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { parseOccSymbol } from '../options';
 
 import { ClassificationSchema } from './performance';
+import { PositionImageSchema } from './position-image';
 import { TagSchema } from './tag';
 
 const sideEnum = z.enum(['long', 'short']);
@@ -248,6 +249,9 @@ export const PositionDetailSchema = z.object({
   // Tags attached to this position. Optional so the shape is backward-compatible
   // and callers that do not join tags can omit it.
   tags: z.array(TagSchema).optional(),
+  // Screenshots attached to this position, in creation order. Optional so the
+  // shape stays backward-compatible and callers that do not join images omit it.
+  images: z.array(PositionImageSchema).optional(),
   // Winning/losing/breakeven by rounded net P&L (R9/R10). Only closed positions
   // carry one; null for draft/open rows. Optional so callers that do not compute
   // it can omit the key.

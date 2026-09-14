@@ -228,6 +228,14 @@ export type {
   ProviderKeyPatch,
 } from './schemas/advisor';
 export {
+  POSITION_IMAGE_MAX_BYTES,
+  POSITION_IMAGE_MAX_COUNT,
+  PositionImageFormatSchema,
+  UploadPositionImageSchema,
+  PositionImageSchema,
+} from './schemas/position-image';
+export type { UploadPositionImage, PositionImage } from './schemas/position-image';
+export {
   WalletBalanceSchema,
   CreditPackSchema,
   UsageRecordSchema,
