@@ -25,6 +25,7 @@ import { withTransaction } from '@/lib/transaction';
 import { insertFill, findFillById, updateFill, deleteFill } from './fills.query';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import type { FillTotals } from './pnl';
+import { findPositionImagesByPosition } from './position-images.query';
 import {
   insertPosition,
   countPositionsByUser,
@@ -584,6 +585,7 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   const { position, accountCurrency, accountTimezone } = row;
   const fillRows = await findFillsByPosition(db, position.id);
   const tags = await findTagsByPosition(db, position.id);
+  const images = await findPositionImagesByPosition(db, position.id);
 
   const totals = aggregateFills(
     fillRows.map((f) => ({
@@ -641,6 +643,8 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     fills: fillRows,
     // Category-then-name ordered tag set; `[]` when the position carries none.
     tags,
+    // Screenshots in creation order; `[]` when the position carries none.
+    images,
     classification,
     ...pnl,
     brokerageName,
