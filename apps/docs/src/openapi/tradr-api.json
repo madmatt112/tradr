@@ -3438,6 +3438,193 @@
         ]
       }
     },
+    "/api/positions/{id}/images": {
+      "post": {
+        "description": "Authed. Stores one screenshot (PNG, JPEG or WebP) on a position the user owns. `dataBase64` is the base64-encoded image bytes; container metadata (EXIF/XMP) is stripped server-side before storage with no re-encode. A position holds at most 10 screenshots. When object storage is configured the bytes are written to the bucket and only a pointer is persisted; a self-hosted instance keeps the bytes inline. The object-storage key is never returned. Existing-data management is never tier-gated.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "dataBase64": {
+                    "description": "Base64-encoded image bytes, at most 4,500,000 encoded bytes.\n",
+                    "type": "string"
+                  },
+                  "format": {
+                    "enum": [
+                      "png",
+                      "jpeg",
+                      "webp"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "format",
+                  "dataBase64"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "enum": [
+                        "png",
+                        "jpeg",
+                        "webp"
+                      ],
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The stored screenshot record."
+          },
+          "400": {
+            "description": "Validation error, an image over the size cap (IMAGE_TOO_LARGE), or bytes that do not match the declared format (IMAGE_FORMAT_MISMATCH)."
+          },
+          "404": {
+            "description": "Position not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "The position already holds the maximum of 10 screenshots (POSITION_IMAGE_LIMIT)."
+          },
+          "413": {
+            "description": "Request body exceeds the upload limit (PAYLOAD_TOO_LARGE)."
+          },
+          "503": {
+            "description": "Object storage temporarily unreachable (OBJECT_UNREACHABLE)."
+          }
+        },
+        "summary": "Upload a screenshot to a position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/images/{imageId}": {
+      "delete": {
+        "description": "Authed. Removes one screenshot from a position the user owns. When the screenshot was stored as an object, its bucket object is deleted best-effort after the row is removed; a failed object delete is logged and the request still returns 204.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "imageId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Screenshot deleted."
+          },
+          "404": {
+            "description": "Screenshot not found (or not owned by the user)."
+          }
+        },
+        "summary": "Delete a position screenshot.",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "get": {
+        "description": "Streams the bytes of one screenshot on a position the authenticated user owns. Object access is proxy-through-API — there are no presigned URLs and the object-storage key is resolved server-side, never appearing in the URL or any response. A missing/not-owned position, an unknown image id, an unrecoverable record, and a genuinely-absent object all return the identical 404 (no existence oracle). The bytes carry their stored `Content-Type` and `Cache-Control: private, max-age=300`. A transient object-store outage returns 503 (OBJECT_UNREACHABLE).\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "imageId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The image bytes."
+          },
+          "404": {
+            "description": "Not found, not owned, unrecoverable, or object gone."
+          },
+          "503": {
+            "description": "Object storage temporarily unreachable (OBJECT_UNREACHABLE)."
+          }
+        },
+        "summary": "Serve a position screenshot (ownership-scoped).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
     "/api/positions/{id}/reopen": {
       "post": {
         "description": "Authed. Transitions a `closed` position back to `open` for intraday re-entries, clearing `closedAt` while preserving `openedAt` (the position's identity day). Allowed only when `openedAt` and the reopen timestamp fall on the same calendar day **in the account's timezone** — a position opened on a previous day must be re-entered as a new position. A supplied `reopenedAt` may not precede `closedAt` nor lie in the future. Reopening posts a compensating reversing ledger row for the prior close so a subsequent re-close does not double-count realized P&L.\n",
