@@ -10,6 +10,11 @@ import { queryClient as singletonQueryClient } from '@/lib/queryClient';
 import { DRAWER_STORAGE_KEY, useDrawerStore, writeDrawerState } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
+import {
+  __resetTzProvenanceState,
+  readTzProvenance,
+  writeTzProvenance,
+} from './reportingTzProvenance';
 import { clearClientSessionState } from './sessionTeardown';
 
 function aClient() {
@@ -29,12 +34,16 @@ function seedPreviousSession(client: QueryClient) {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
+  __resetTzProvenanceState();
   useDrawerStore.getState().reset();
 });
 
 afterEach(() => {
   eventBus.__resetForTests();
   localStorage.clear();
+  sessionStorage.clear();
+  __resetTzProvenanceState();
   useDrawerStore.getState().reset();
   singletonQueryClient.clear();
   vi.restoreAllMocks();
@@ -114,6 +123,18 @@ describe('clearClientSessionState', () => {
     }
 
     expect(localStorage.getItem(DRAWER_STORAGE_KEY)).toBeNull();
+  });
+
+  // The reporting-timezone provenance record is per-tab, so a second user on
+  // the same tab must not inherit the first user's recorded zone.
+  it('clears the reporting-timezone provenance record', () => {
+    const client = aClient();
+    seedPreviousSession(client);
+    writeTzProvenance('Europe/London');
+
+    clearClientSessionState(client);
+
+    expect(readTzProvenance()).toBeNull();
   });
 
   it('tears the rest down even when storage is unavailable', () => {

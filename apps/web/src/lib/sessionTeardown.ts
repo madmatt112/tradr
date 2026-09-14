@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 import { queryClient as singletonQueryClient } from '@/lib/queryClient';
+import { clearTzProvenance } from '@/lib/reportingTzProvenance';
 import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
@@ -51,6 +52,9 @@ export function clearClientSessionState(client: QueryClient = singletonQueryClie
   } catch {
     /* swallow — storage may be unavailable (private mode, no DOM) */
   }
+  // The reporting-timezone provenance record is per-tab (sessionStorage), so a
+  // second user on the same tab must start with an empty store.
+  clearTzProvenance();
   client.clear();
   eventBus.publish('auth:logout', {});
 }
