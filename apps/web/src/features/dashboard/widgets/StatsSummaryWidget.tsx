@@ -129,9 +129,10 @@ function StatsSummaryWidget() {
   return (
     <div className="flex flex-col gap-3">
       {/* The desk stat-tile grammar: mono uppercase labels over larger
-          semibold figures. Five tiles — everything the stats payload carries;
-          the mock's extra tiles (expectancy, max DD, open risk) need data the
-          API does not serve yet and are backlog, not this re-skin. */}
+          semibold figures. Five tiles. The API now serves expectancy, but
+          whether to surface it as a tile here is a dashboard-spec decision, not
+          this re-skin; the mock's max DD and open risk tiles still need data the
+          API does not serve yet. All remain backlog. */}
       <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
         {tiles.map((tile) => (
           <div key={tile.label} className="flex flex-col gap-1">

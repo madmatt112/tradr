@@ -6,6 +6,7 @@ import {
   computeBucketCount,
   PerformanceQuerySchema,
   PerformanceResponseSchema,
+  PerformanceStatsSchema,
   resolveTimezone,
 } from './performance';
 
@@ -469,6 +470,7 @@ describe('PerformanceResponseSchema', () => {
             profitFactor: null,
             largestWin: '75.00',
             largestLoss: null,
+            expectancy: '50.25',
             hasWins: true,
             hasLosses: false,
           },
@@ -544,6 +546,7 @@ describe('PerformanceResponseSchema', () => {
             profitFactor: null,
             largestWin: null,
             largestLoss: null,
+            expectancy: null,
             hasWins: false,
             hasLosses: false,
           },
@@ -666,6 +669,7 @@ describe('BreakdownResponseSchema', () => {
     profitFactor: 2,
     largestWin: '100.00',
     largestLoss: '-50.00',
+    expectancy: '50.00',
     hasWins: true,
     hasLosses: true,
   };
@@ -713,6 +717,44 @@ describe('BreakdownResponseSchema', () => {
   });
 });
 
+describe('PerformanceStatsSchema — expectancy', () => {
+  const baseStats = {
+    totalPositions: 2,
+    totalNetPnl: '100.00',
+    winRate: 50,
+    breakevenRate: 0,
+    avgWin: '100.00',
+    avgLoss: '-50.00',
+    profitFactor: 2,
+    largestWin: '100.00',
+    largestLoss: '-50.00',
+    expectancy: '50.00',
+    hasWins: true,
+    hasLosses: true,
+  };
+
+  it('is required — parse fails when the field is absent', () => {
+    const { expectancy: _omit, ...withoutExpectancy } = baseStats;
+    void _omit;
+    const result = PerformanceStatsSchema.safeParse(withoutExpectancy);
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a decimal string', () => {
+    expect(PerformanceStatsSchema.safeParse(baseStats).success).toBe(true);
+  });
+
+  it('accepts null (the empty-population case)', () => {
+    const result = PerformanceStatsSchema.safeParse({ ...baseStats, expectancy: null });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a non-decimal string', () => {
+    const result = PerformanceStatsSchema.safeParse({ ...baseStats, expectancy: '  10  ' });
+    expect(result.success).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -749,6 +791,7 @@ function buildMinimalCurrency(statsOverrides: Record<string, unknown>) {
           profitFactor: null,
           largestWin: null,
           largestLoss: null,
+          expectancy: null,
           hasWins: true,
           hasLosses: false,
           ...statsOverrides,

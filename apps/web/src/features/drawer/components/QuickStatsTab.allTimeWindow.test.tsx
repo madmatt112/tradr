@@ -127,6 +127,7 @@ function serverResponse(params: PerformanceQueryInput): PerformanceResponse {
           profitFactor: losses.length ? 3.67 : null,
           largestWin: wins.length ? '440.00' : null,
           largestLoss: losses.length ? '-120.00' : null,
+          expectancy: covered.length ? (total / covered.length).toFixed(2) : null,
           hasWins: wins.length > 0,
           hasLosses: losses.length > 0,
         },

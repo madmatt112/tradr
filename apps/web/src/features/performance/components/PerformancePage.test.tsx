@@ -169,6 +169,7 @@ function buildResponse(overrides: Partial<PerformanceResponse> = {}): Performanc
           profitFactor: 6.0,
           largestWin: '60.00',
           largestLoss: '-25.00',
+          expectancy: '31.38',
           hasWins: true,
           hasLosses: true,
         },

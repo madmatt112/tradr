@@ -96,6 +96,7 @@ const POPULATED_DASHBOARD_RESPONSE = {
         profitFactor: 2.8,
         largestWin: '600.00',
         largestLoss: '-300.00',
+        expectancy: '108.54',
         hasWins: true,
         hasLosses: true,
       },

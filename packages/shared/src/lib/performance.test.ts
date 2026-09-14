@@ -426,6 +426,7 @@ describe('computePositionSetStatistics', () => {
       profitFactor: null,
       largestWin: null,
       largestLoss: null,
+      expectancy: null,
       hasWins: false,
       hasLosses: false,
     });
@@ -522,6 +523,31 @@ describe('computePositionSetStatistics', () => {
   it('uses exact decimal arithmetic for totalNetPnl (no float drift)', () => {
     const stats = computePositionSetStatistics([pos('winning', '0.1'), pos('winning', '0.2')]);
     expect(stats.totalNetPnl).toBe('0.3');
+  });
+
+  it('computes expectancy as the flat mean, satisfying the breakeven-included identity', () => {
+    // 2 wins, 1 loss, 1 breakeven — breakevens are exactly zero, so they enter
+    // the mean without changing it and the win/loss identity still holds.
+    const positions = [
+      pos('winning', '100'),
+      pos('winning', '50'),
+      pos('losing', '-30'),
+      pos('breakeven', '0'),
+    ];
+    const stats = computePositionSetStatistics(positions);
+    // (100 + 50 - 30 + 0) / 4 = 30
+    expect(stats.expectancy).toBe('30');
+    // Identity: (wins ÷ total) × avgWin + (losses ÷ total) × avgLoss.
+    const total = positions.length;
+    const identity = new Decimal(2)
+      .div(total)
+      .times(new Decimal(stats.avgWin!))
+      .plus(new Decimal(1).div(total).times(new Decimal(stats.avgLoss!)));
+    expect(stats.expectancy).toBe(identity.toString());
+  });
+
+  it('returns null expectancy for the empty set', () => {
+    expect(computePositionSetStatistics([]).expectancy).toBeNull();
   });
 });
 

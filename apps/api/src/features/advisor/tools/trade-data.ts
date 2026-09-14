@@ -123,7 +123,7 @@ export const accountSummaryTool: ToolDefinition = {
 export const pnlSummaryTool: ToolDefinition = {
   name: 'trade_data_pnl_summary',
   description:
-    "Get the user's own profit-and-loss summary over a date range (per-currency stats: net P&L, win rate, profit factor). granularity is one of day/week/month/year; start and end are ISO dates.",
+    "Get the user's own profit-and-loss summary over a date range (per-currency stats: net P&L, win rate, profit factor, expectancy). granularity is one of day/week/month/year; start and end are ISO dates.",
   category: 'trade-data',
   requires: 'trade-data-consent',
   maxEstTokens: PNL_SUMMARY_MAX_EST_TOKENS,

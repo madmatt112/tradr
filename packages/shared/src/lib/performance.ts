@@ -161,6 +161,13 @@ export function computePositionSetStatistics(
   const sumWins = decimalSum(winsPnl);
   const sumLosses = decimalSum(lossesPnl);
 
+  // Expectancy (D1): the mean net P&L per position over THIS function's own
+  // population, unrounded like avgWin/avgLoss. Computed here, never from the
+  // response's `totalNetPnl` — a partial exit makes the service override that
+  // field with the realization-summed total (buildCurrencyEntry), which is a
+  // different population.
+  const expectancy = total === 0 ? null : totalNetPnl.div(total).toString();
+
   const winRate = decided === 0 ? null : percent(winsCount, decided);
   const breakevenRate = total === 0 ? null : percent(breakevens, total);
 
@@ -185,6 +192,7 @@ export function computePositionSetStatistics(
     profitFactor,
     largestWin,
     largestLoss,
+    expectancy,
     hasWins: winsCount > 0,
     hasLosses: lossesCount > 0,
   };

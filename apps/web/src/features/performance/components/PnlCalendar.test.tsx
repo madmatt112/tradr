@@ -59,6 +59,7 @@ const STATS = {
   profitFactor: null,
   largestWin: null,
   largestLoss: null,
+  expectancy: null,
   hasWins: false,
   hasLosses: false,
 };

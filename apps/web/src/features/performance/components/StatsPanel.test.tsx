@@ -16,6 +16,7 @@ const BASE_STATS: PerformanceStats = {
   profitFactor: 2.0,
   largestWin: '300.00',
   largestLoss: '-150.00',
+  expectancy: '25.00',
   hasWins: true,
   hasLosses: true,
 };
@@ -32,8 +33,19 @@ describe('StatsPanel', () => {
     expect(html).toContain('Profit Factor');
     expect(html).toContain('Largest Win');
     expect(html).toContain('Largest Loss');
+    expect(html).toContain('Expectancy');
     expect(html).toContain('60.0%'); // winRate 1 decimal
     expect(html).toContain('2.00'); // profit factor 2 decimals
+  });
+
+  it('renders the Expectancy row as signed money (stat-Expectancy)', () => {
+    const html = renderToStaticMarkup(
+      <StatsPanel stats={{ ...BASE_STATS, expectancy: '172.80' }} currency="USD" />,
+    );
+    expect(html).toContain('stat-Expectancy');
+    expect(html).toContain('172.80');
+    // money(…, 'auto') → leading gain sign on a positive figure.
+    expect(html).toContain('+');
   });
 
   it('shows em-dash (U+2014) for null winRate / breakevenRate / money fields', () => {

@@ -140,6 +140,27 @@ describe('trade-data handlers scope every query to ctx.userId (REQ-9.4)', () => 
     }
   });
 
+  it('projects stats.expectancy through the compact per-currency projection unchanged', async () => {
+    vi.mocked(getPerformance).mockResolvedValueOnce({
+      resolvedTimezone: 'UTC',
+      defaultCurrency: 'USD',
+      hasAnyClosedPositions: true,
+      currencies: [{ code: 'USD', stats: { totalNetPnl: '1728.00', expectancy: '172.80' } }],
+    } as unknown as Awaited<ReturnType<typeof getPerformance>>);
+
+    const result = await pnlSummaryTool.handler(
+      { granularity: 'month', start: '2026-01-01', end: '2026-02-01' },
+      ctx('owner-exp'),
+    );
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      const { currencies } = result.content as {
+        currencies: Array<{ code: string; stats: { expectancy: string | null } }>;
+      };
+      expect(currencies[0]!.stats.expectancy).toBe('172.80');
+    }
+  });
+
   it('rejects an over-cap window with TOOL_INPUT_INVALID before calling getPerformance (F2)', async () => {
     // ~1826 daily buckets exceeds the route's BUCKET_COUNT_CAP (1095). The tool
     // must apply the same bound the HTTP route enforces so the unbounded

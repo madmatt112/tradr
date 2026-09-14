@@ -198,6 +198,7 @@ export const PerformanceStatsSchema = z.object({
   }),
   largestWin: decimalString.nullable(),
   largestLoss: decimalString.nullable(),
+  expectancy: decimalString.nullable(),
   hasWins: z.boolean(),
   hasLosses: z.boolean(),
 });
