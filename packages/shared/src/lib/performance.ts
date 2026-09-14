@@ -105,7 +105,7 @@ export function classifyPosition(netPnl: Decimal, currency: string): Classificat
   return rounded.isPositive() ? 'winning' : 'losing';
 }
 
-function decimalSum(values: readonly Decimal[]): Decimal {
+export function decimalSum(values: readonly Decimal[]): Decimal {
   let acc = new Decimal(0);
   for (const v of values) acc = acc.plus(v);
   return acc;
