@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
-import { positionImages, users } from '@/db/schema';
+import { positionImages, positions, users } from '@/db/schema';
 import { ObjectUnreachableError, type ObjectStorage } from '@/lib/object-storage';
 
 // Hold the fake bucket in a hoisted ref so the vi.mock factory (below) reads the
@@ -231,6 +231,23 @@ describe('position images route (object storage configured)', () => {
       expect(fake.deleted).toContain(key);
       expect(fake.objects.has(key)).toBe(false);
     }
+  });
+
+  it('returns 204 and removes the position when an object delete fails', async () => {
+    const { cookie, positionId } = await newPosition();
+    await (await uploadImage(cookie, positionId)).json();
+    expect(fake.objects.size).toBe(1);
+
+    // The best-effort reclamation delete throws, causelessly, the way the
+    // transport-503 path does. REQ-5.6: a failed object delete NEVER fails the
+    // request — it still 204s and the position row is gone.
+    fake.delete = vi.fn().mockRejectedValue(new ObjectUnreachableError('store down'));
+
+    const del = await authedRequest('DELETE', `/api/positions/${positionId}`, cookie);
+    expect(del.status).toBe(204);
+
+    const rows = await db.select().from(positions).where(eq(positions.id, positionId));
+    expect(rows).toHaveLength(0);
   });
 
   it('serves 404 when the pointer object is genuinely gone (NoSuchKey cause)', async () => {
