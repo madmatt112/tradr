@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits } from '../constants/currencies';
 import {
+  CLASSIFICATIONS,
   computeBucketCount,
   type EquityCurvePoint,
   type Granularity,
@@ -14,7 +15,7 @@ import {
 // The `lib → schemas` direction is allowed; dependency-cruiser blocks the reverse.
 export { computeBucketCount };
 
-export type Classification = 'winning' | 'losing' | 'breakeven';
+export type Classification = (typeof CLASSIFICATIONS)[number];
 
 export interface ClassifiedPosition {
   id: string;

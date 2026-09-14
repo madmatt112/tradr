@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BreakdownQuerySchema,
+  BreakdownResponseSchema,
   computeBucketCount,
   PerformanceQuerySchema,
   PerformanceResponseSchema,
@@ -553,6 +555,161 @@ describe('PerformanceResponseSchema', () => {
     expect(
       (parsed.data.currencies[0]?.historyRange as Record<string, unknown>).totalAbsNetPnl,
     ).toBeUndefined();
+  });
+});
+
+describe('BreakdownQuerySchema', () => {
+  const validBase = {
+    by: 'symbol' as const,
+    start: '2024-01-01',
+    end: '2024-01-31',
+    tz: 'UTC',
+  };
+
+  const codesOf = (issues: readonly unknown[]) =>
+    issues.map((i) => (i as { params?: { code?: string } }).params?.code);
+
+  it('accepts each of the four dimensions', () => {
+    for (const by of ['symbol', 'weekday', 'hour', 'tag'] as const) {
+      const result = BreakdownQuerySchema.safeParse({ ...validBase, by });
+      expect(result.success, by).toBe(true);
+    }
+  });
+
+  it('rejects a fifth dimension', () => {
+    const result = BreakdownQuerySchema.safeParse({ ...validBase, by: 'compliance' });
+    expect(result.success).toBe(false);
+  });
+
+  it('fires INVALID_TIMEZONE for a bad tz', () => {
+    const result = BreakdownQuerySchema.safeParse({ ...validBase, tz: 'InvalidZone' });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(codesOf(result.error.issues)).toContain('INVALID_TIMEZONE');
+  });
+
+  it('fires INVALID_DATE for an unparseable date', () => {
+    const result = BreakdownQuerySchema.safeParse({ ...validBase, start: 'not-a-date' });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(codesOf(result.error.issues)).toContain('INVALID_DATE');
+  });
+
+  it('fires START_NOT_BEFORE_END when start >= end', () => {
+    const result = BreakdownQuerySchema.safeParse({
+      ...validBase,
+      start: '2024-02-01',
+      end: '2024-01-01',
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(codesOf(result.error.issues)).toContain('START_NOT_BEFORE_END');
+  });
+
+  it('fires START_BEFORE_MIN when start < 2000-01-01', () => {
+    const result = BreakdownQuerySchema.safeParse({
+      ...validBase,
+      start: '1999-12-31',
+      end: '2000-06-01',
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(codesOf(result.error.issues)).toContain('START_BEFORE_MIN');
+  });
+
+  it('fires END_BEYOND_TODAY_PLUS_ONE when end is past today + 1 day', () => {
+    const nowUtcMs = Date.now();
+    const dayAfterTomorrowUtcMs = Math.floor(nowUtcMs / 86_400_000) * 86_400_000 + 2 * 86_400_000;
+    const end = new Date(dayAfterTomorrowUtcMs).toISOString().slice(0, 10);
+    const result = BreakdownQuerySchema.safeParse({ ...validBase, end });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(codesOf(result.error.issues)).toContain('END_BEYOND_TODAY_PLUS_ONE');
+  });
+
+  it('fires UNSUPPORTED_CURRENCY for a currency outside the whitelist', () => {
+    const result = BreakdownQuerySchema.safeParse({ ...validBase, currency: 'XYZ' });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(codesOf(result.error.issues)).toContain('UNSUPPORTED_CURRENCY');
+  });
+
+  it('never emits BUCKET_COUNT_EXCEEDED — a breakdown has no buckets to cap', () => {
+    // A ~3,000-day span would blow the 1,095 day-bucket cap on the performance
+    // query, but the breakdown query carries no granularity, so step 4 is skipped.
+    const start = '2016-01-01';
+    const end = new Date(new Date(start).getTime() + 3000 * 86_400_000).toISOString().slice(0, 10);
+    const result = BreakdownQuerySchema.safeParse({ by: 'symbol', start, end, tz: 'UTC' });
+    expect(result.success).toBe(true);
+  });
+
+  it('defaults tz to UTC when omitted', () => {
+    const result = BreakdownQuerySchema.safeParse({
+      by: 'symbol',
+      start: '2024-01-01',
+      end: '2024-01-31',
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.tz).toBe('UTC');
+  });
+});
+
+describe('BreakdownResponseSchema', () => {
+  const stats = {
+    totalPositions: 3,
+    totalNetPnl: '150.00',
+    winRate: 66.7,
+    breakevenRate: 0,
+    avgWin: '100.00',
+    avgLoss: '-50.00',
+    profitFactor: 2,
+    largestWin: '100.00',
+    largestLoss: '-50.00',
+    hasWins: true,
+    hasLosses: true,
+  };
+
+  it('round-trips a populated breakdown response', () => {
+    const body = {
+      by: 'tag' as const,
+      multiValued: true,
+      resolvedTimezone: 'UTC',
+      resolvedWeekStartDay: 0,
+      dataQuality: { timeframeExcluded: { total: 1, unsupported: 0, mismatch: 1 } },
+      currencies: [
+        {
+          code: 'USD',
+          total: stats,
+          rows: [
+            {
+              key: '11111111-1111-1111-1111-111111111111',
+              label: 'Breakout',
+              tag: {
+                id: '11111111-1111-1111-1111-111111111111',
+                name: 'Breakout',
+                category: 'setup',
+                color: 'tag-1',
+              },
+              stats,
+            },
+            {
+              key: '__untagged__',
+              label: 'Untagged',
+              tag: null,
+              stats,
+            },
+          ],
+        },
+      ],
+    };
+    const result = BreakdownResponseSchema.safeParse(body);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const currency = result.data.currencies[0];
+    expect(currency?.rows[0]?.tag?.name).toBe('Breakout');
+    expect(currency?.rows[1]?.tag).toBeNull();
+    expect(currency?.total.totalNetPnl).toBe('150.00');
   });
 });
 
