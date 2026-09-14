@@ -3056,7 +3056,7 @@
     },
     "/api/positions/{id}": {
       "delete": {
-        "description": "Authed. Hard-deletes a position in any status (`draft`, `open`, or `closed`) and cascades to its fills. When the position had written a ledger entry via its close, a compensating `position_pnl_reversal` row is posted in the same transaction so the account balance is not left inflated; the ledger stays append-only (`positionId` is set NULL on the affected rows, which net to zero in the balance).\n",
+        "description": "Authed. Hard-deletes a position in any status (`draft`, `open`, or `closed`) and cascades to its fills and its screenshots. When the position had written a ledger entry via its close, a compensating `position_pnl_reversal` row is posted in the same transaction so the account balance is not left inflated; the ledger stays append-only (`positionId` is set NULL on the affected rows, which net to zero in the balance).\n",
         "parameters": [
           {
             "in": "path",

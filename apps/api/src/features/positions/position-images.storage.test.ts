@@ -217,6 +217,22 @@ describe('position images route (object storage configured)', () => {
     expect(fake.objects.has(key)).toBe(false);
   });
 
+  it('deleting the position deletes its collected keys from the bucket after commit', async () => {
+    const { cookie, positionId } = await newPosition();
+    await (await uploadImage(cookie, positionId)).json();
+    await (await uploadImage(cookie, positionId)).json();
+    const keys = [...fake.objects.keys()];
+    expect(keys).toHaveLength(2);
+
+    const del = await authedRequest('DELETE', `/api/positions/${positionId}`, cookie);
+    expect(del.status).toBe(204);
+
+    for (const key of keys) {
+      expect(fake.deleted).toContain(key);
+      expect(fake.objects.has(key)).toBe(false);
+    }
+  });
+
   it('serves 404 when the pointer object is genuinely gone (NoSuchKey cause)', async () => {
     const { cookie, positionId } = await newPosition();
     const { id } = await (await uploadImage(cookie, positionId)).json();

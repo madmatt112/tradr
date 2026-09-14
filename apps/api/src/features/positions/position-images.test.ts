@@ -5,7 +5,7 @@ import { POSITION_IMAGE_MAX_BYTES, POSITION_IMAGE_MAX_COUNT } from '@tradr/share
 
 import app from '@/app';
 import { db } from '@/db';
-import { users } from '@/db/schema';
+import { positionImages, users } from '@/db/schema';
 import { stripImageMetadata } from '@/lib/image-metadata';
 
 // --- Harness (own copies of positions.tags.test.ts:20-92) -------------------
@@ -267,5 +267,26 @@ describe('position images route (storage unconfigured)', () => {
 
     const get = await authedRequest('GET', `/api/positions/${positionId}/images/${id}`, cookie);
     expect(get.status).toBe(404);
+  });
+
+  it('deleting the position removes its image rows (cascade)', async () => {
+    const { cookie, positionId } = await newPosition();
+    for (let i = 0; i < 3; i++) {
+      expect((await uploadImage(cookie, positionId, 'png', buildPng())).status).toBe(201);
+    }
+    const before = await db
+      .select()
+      .from(positionImages)
+      .where(eq(positionImages.positionId, positionId));
+    expect(before).toHaveLength(3);
+
+    const del = await authedRequest('DELETE', `/api/positions/${positionId}`, cookie);
+    expect(del.status).toBe(204);
+
+    const after = await db
+      .select()
+      .from(positionImages)
+      .where(eq(positionImages.positionId, positionId));
+    expect(after).toHaveLength(0);
   });
 });

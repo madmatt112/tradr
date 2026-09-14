@@ -11,9 +11,12 @@ import { TagIdListParamSchema, SetPositionTagsSchema } from '@tradr/shared/schem
 
 import { db } from '@/db';
 import { setPositionTags } from '@/features/tags/tags.service';
+import { logger } from '@/lib/logger';
+import { getObjectStorage } from '@/lib/object-storage';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 
+import { collectPositionImageKeys } from './position-images.service';
 import {
   createPosition,
   listPositions,
@@ -224,7 +227,7 @@ positions.get('/:id', validate('param', ParamSchema), async (c) => {
  *     summary: Delete a position (any status).
  *     description: >
  *       Authed. Hard-deletes a position in any status (`draft`, `open`, or
- *       `closed`) and cascades to its fills. When the position had written a
+ *       `closed`) and cascades to its fills and its screenshots. When the position had written a
  *       ledger entry via its close, a compensating `position_pnl_reversal` row
  *       is posted in the same transaction so the account balance is not left
  *       inflated; the ledger stays append-only (`positionId` is set NULL on the
@@ -255,7 +258,37 @@ positions.put(
 positions.delete('/:id', validate('param', ParamSchema), async (c) => {
   const userId = c.get('userId');
   const { id } = c.req.valid('param');
+
+  // REQ-5.4 reclamation: when object storage is on, collect the position's image
+  // pointer keys BEFORE the delete. The FK cascade destroys the position_images
+  // rows and removePosition returns void, so the keys are unrecoverable
+  // afterwards. The scan is an ownership-scoped plain read, taken before the
+  // transaction so the lock order (REQ-5.5) is untouched. Inert when storage is
+  // off — no scan, no deletes.
+  const storage = getObjectStorage();
+  const keys = storage ? await collectPositionImageKeys(db, { positionId: id, userId }) : [];
+
   await removePosition(db, id, userId);
+
+  // After the delete transaction commits, best-effort delete each object. A
+  // failure is warn-logged and NEVER fatal — the request still 204s (the
+  // age-guarded storage gc is the backstop).
+  if (storage) {
+    for (const key of keys) {
+      try {
+        await storage.delete(key);
+      } catch (err) {
+        logger.warn('position image reclamation delete failed', {
+          event: 'object-store-unreachable',
+          userId,
+          positionId: id,
+          key,
+          error: (err as Error).message,
+        });
+      }
+    }
+  }
+
   return c.body(null, 204);
 });
 
