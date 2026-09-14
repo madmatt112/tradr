@@ -60,7 +60,7 @@ function granularityToPreset(granularity: Granularity): PerformancePreset {
 }
 
 /** Pick the currency object for the active query, falling back to the first. */
-function pickActiveCurrency(
+export function pickActiveCurrency(
   data: PerformanceResponse,
   requested: string | undefined,
 ): PerformanceResponse['currencies'][number] | null {
