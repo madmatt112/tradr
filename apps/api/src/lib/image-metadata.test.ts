@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { stripImageMetadata } from './image-metadata';
+import { matchesContainerSignature, stripImageMetadata } from './image-metadata';
 
 // ---------------------------------------------------------------------------
 // Fixture helpers — minimal valid containers with embedded EXIF carrying a
@@ -234,5 +234,36 @@ describe('stripImageMetadata', () => {
       expect(() => stripImageMetadata('png', png)).not.toThrow();
       expect(() => stripImageMetadata('webp', webp)).not.toThrow();
     });
+  });
+});
+
+describe('matchesContainerSignature', () => {
+  const formats = ['jpeg', 'png', 'webp'] as const;
+  const builders = {
+    jpeg: buildJpegWithGps,
+    png: buildPngWithGps,
+    webp: buildWebpWithGps,
+  } as const;
+
+  it('is true for each builder under its own declared format', () => {
+    for (const format of formats) {
+      expect(matchesContainerSignature(format, builders[format]())).toBe(true);
+    }
+  });
+
+  it('is false for every cross-labelled format/bytes pair', () => {
+    for (const bytesFormat of formats) {
+      for (const declared of formats) {
+        if (declared === bytesFormat) continue;
+        expect(matchesContainerSignature(declared, builders[bytesFormat]())).toBe(false);
+      }
+    }
+  });
+
+  it('is false for an empty buffer in every format', () => {
+    const empty = Buffer.alloc(0);
+    for (const format of formats) {
+      expect(matchesContainerSignature(format, empty)).toBe(false);
+    }
   });
 });

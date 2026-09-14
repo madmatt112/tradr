@@ -46,6 +46,36 @@ export function stripImageMetadata(format: SupportedImageFormat, bytes: Buffer):
   }
 }
 
+/**
+ * Do `bytes` carry the container signature of the declared `format`?
+ *
+ * Runs the same entry tests the strippers apply before they touch a byte
+ * (JPEG `FF D8`, PNG `PNG_SIGNATURE`, WebP `RIFF` at 0-4 and `WEBP` at 8-12).
+ * `stripImageMetadata` returns non-matching bytes unchanged by contract, so a
+ * mislabelled file would keep its metadata: callers use this to refuse a
+ * declared format whose bytes carry another container's signature (REQ-2.3).
+ *
+ * @returns false for an empty or too-short buffer.
+ */
+export function matchesContainerSignature(format: SupportedImageFormat, bytes: Buffer): boolean {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) return false;
+
+  switch (format) {
+    case 'jpeg':
+      return bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === JPEG_SOI;
+    case 'png':
+      return bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_SIGNATURE);
+    case 'webp':
+      return (
+        bytes.length >= 12 &&
+        bytes.toString('latin1', 0, 4) === 'RIFF' &&
+        bytes.toString('latin1', 8, 12) === 'WEBP'
+      );
+    default:
+      return false;
+  }
+}
+
 // --- JPEG -------------------------------------------------------------------
 // Structure: 0xFFD8 (SOI), then a sequence of markers. APPn markers
 // (0xFFE0..0xFFEF) and the COM marker (0xFFFE) carry metadata (EXIF in APP1,
