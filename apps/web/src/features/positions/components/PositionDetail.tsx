@@ -38,6 +38,7 @@ import { BreakevenBadge } from './BreakevenBadge';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
 import { PositionEditDialog } from './PositionEditDialog';
+import { PositionScreenshots } from './PositionScreenshots';
 
 interface Props {
   positionId: string;
@@ -360,6 +361,13 @@ export function PositionDetailView({ positionId }: Props) {
           </CardContent>
         </Card>
       )}
+
+      {/* Screenshots — shown on every status, between Notes and Fills. */}
+      <PositionScreenshots
+        positionId={positionId}
+        symbol={position.symbol}
+        images={position.images ?? []}
+      />
 
       {/* Fills */}
       <div>

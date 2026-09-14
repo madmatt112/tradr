@@ -46,6 +46,7 @@ vi.mock('@/hooks/useAuth', () => ({
 
 vi.mock('./FillDialog', () => ({ FillDialog: () => null }));
 vi.mock('./FillTable', () => ({ FillTable: () => null }));
+vi.mock('./PositionScreenshots', () => ({ PositionScreenshots: () => null }));
 vi.mock('./PositionEditDialog', () => ({ PositionEditDialog: () => null }));
 
 // The mark's reads, and nothing else. `useOnboarding.test.ts` owns the round
