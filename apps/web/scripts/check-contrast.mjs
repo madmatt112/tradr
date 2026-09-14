@@ -359,6 +359,20 @@ function checkContrast(theme, map) {
     }
   }
 
+  // gain/loss/flat as a role-coloured ACCENT BORDER over background and card —
+  // non-text 3:1, mirroring the focus (`:348-353`) and border (`:419-421`)
+  // pairs (design Component 19). This is the calendar's only new colour
+  // channel: the day figure is already gated as text at 4.5 by the loop above,
+  // so no new figure pair is needed. The rejected v1 encoding put the figure
+  // over a `bg-{role}/10` tint, which fails 4.5 in the light theme (loss/card
+  // 3.98); the tint composite is deliberately NOT re-added here. If an accent
+  // ever drops below 3:1 the accent is dropped, never the figure.
+  for (const role of ['--color-gain', '--color-loss', '--color-flat']) {
+    for (const s of ['--color-background', '--color-card']) {
+      checkPair(theme, `${role}-accent/${s}`, role, s, 3, map);
+    }
+  }
+
   // warning/info/success as text on background/card/popover [≥4.5] ...
   for (const role of STATUS_ROLES) {
     for (const s of STATUS_SURFACES) {
