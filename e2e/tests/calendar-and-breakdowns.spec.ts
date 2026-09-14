@@ -189,7 +189,7 @@ function signedToCents(text: string): number {
 
 /** A rendered percent string ("70.0%", "9.1%") to a number. */
 function percentToNumber(text: string | null): number {
-  return Number.parseFloat((text ?? '').replace('%', '').replace('−', '-'));
+  return Number.parseFloat((text ?? '').replace(/%/g, '').replace('−', '-'));
 }
 
 // ---------------------------------------------------------------------------
