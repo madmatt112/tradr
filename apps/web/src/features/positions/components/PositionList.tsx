@@ -30,6 +30,8 @@ import { decodeOptionContract } from '../utils/optionContract';
 import { positionAgeDays } from '../utils/positionAge';
 import { shouldNavigateFromRowClick } from '../utils/rowNavigation';
 
+import { BreakevenBadge } from './BreakevenBadge';
+import { ClassificationFilter } from './ClassificationFilter';
 import { CreatePositionDialog } from './CreatePositionDialog';
 import { PositionRowActions } from './PositionRowActions';
 import { PositionSideChip, PositionStatusChip } from './PositionStatusChip';
@@ -138,6 +140,7 @@ export function PositionList() {
             })
           }
         />
+        <ClassificationFilter value={search.classification ?? 'all'} />
       </div>
 
       {isLoading ? (
@@ -162,7 +165,7 @@ export function PositionList() {
                 onClick={() =>
                   navigate({
                     to: '/positions',
-                    search: { status: undefined, tag: undefined },
+                    search: { status: undefined, tag: undefined, classification: undefined },
                   })
                 }
               >
@@ -236,7 +239,10 @@ export function PositionList() {
                     <PositionSideChip side={pos.side} />
                   </TableCell>
                   <TableCell className="py-0">
-                    <PositionStatusChip status={pos.status} />
+                    <div className="flex items-center gap-2">
+                      <PositionStatusChip status={pos.status} />
+                      {pos.classification === 'breakeven' && <BreakevenBadge />}
+                    </div>
                   </TableCell>
                   {!drawerOpen && (
                     <TableCell className="hidden py-0 md:table-cell">

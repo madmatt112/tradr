@@ -55,6 +55,7 @@ export function positionsListQuery(filters?: {
   status?: string;
   accountId?: string;
   tag?: string[];
+  classification?: string;
 }) {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
@@ -62,6 +63,7 @@ export function positionsListQuery(filters?: {
   // The array reaches here already sorted (buildListFilters), so `a,b` and `b,a`
   // share one cache entry keyed on `filters` (REQ-3.6).
   if (filters?.tag?.length) params.set('tag', filters.tag.join(','));
+  if (filters?.classification) params.set('classification', filters.classification);
   const query = params.toString();
 
   return queryOptions({
@@ -77,7 +79,7 @@ export function positionsListQuery(filters?: {
  * A disabled query reports `data: undefined`, `isLoading: false`, `isError: false`.
  */
 export function usePositions(
-  filters?: { status?: string; accountId?: string; tag?: string[] },
+  filters?: { status?: string; accountId?: string; tag?: string[]; classification?: string },
   options?: { enabled?: boolean },
 ) {
   return useQuery({

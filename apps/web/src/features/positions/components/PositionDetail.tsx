@@ -34,6 +34,7 @@ import {
 import { decodeOptionContract } from '../utils/optionContract';
 import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
+import { BreakevenBadge } from './BreakevenBadge';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
 import { PositionEditDialog } from './PositionEditDialog';
@@ -128,6 +129,7 @@ export function PositionDetailView({ positionId }: Props) {
             </Badge>
             <Badge variant="outline">{position.assetType}</Badge>
             <Badge variant="outline">{position.status}</Badge>
+            {position.classification === 'breakeven' && <BreakevenBadge />}
           </div>
           {optionContract && (
             <p className="text-sm text-muted-foreground">
