@@ -2840,7 +2840,7 @@
     },
     "/api/positions": {
       "get": {
-        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name. Optional filters may be combined.\n",
+        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name and its `classification` (`winning`, `losing` or `breakeven` for a closed position, `null` for a draft or open one). Optional filters may be combined.\n",
         "parameters": [
           {
             "in": "query",
@@ -2870,6 +2870,20 @@
             "name": "tag",
             "required": false,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Keep only positions with this outcome (AND-combined with the other filters). Only closed positions carry a classification, so combining it with `status=draft` or `status=open` returns an empty list.\n",
+            "in": "query",
+            "name": "classification",
+            "required": false,
+            "schema": {
+              "enum": [
+                "winning",
+                "losing",
+                "breakeven"
+              ],
               "type": "string"
             }
           }
