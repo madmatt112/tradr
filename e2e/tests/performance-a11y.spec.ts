@@ -2,6 +2,7 @@ import { expect, type Page } from '@playwright/test';
 
 import {
   mockAppShell,
+  mockBreakdown,
   PERF_URL,
   POPULATED_RESPONSE,
   SESSION_RESPONSE,
@@ -52,6 +53,7 @@ test.describe('Performance page — keyboard accessibility', () => {
 
   test('Tab flow reaches the timeframe presets and currency selector', async ({ page }) => {
     await mockPerformance(page, POPULATED_RESPONSE);
+    await mockBreakdown(page);
     await page.goto(PERF_URL);
     await expect(page.getByTestId('performance-page')).toBeVisible();
 
@@ -105,6 +107,7 @@ test.describe('Performance page — keyboard accessibility', () => {
       resolvedTimezone: 'UTC',
     };
     await mockPerformance(page, populatedWithTzMismatch);
+    await mockBreakdown(page);
 
     await page.addInitScript(() => {
       try {
@@ -149,6 +152,7 @@ test.describe('Performance page — keyboard accessibility', () => {
       resolvedTimezone: 'UTC',
     };
     await mockPerformance(page, populatedWithTzMismatch);
+    await mockBreakdown(page);
 
     await page.addInitScript(() => {
       try {

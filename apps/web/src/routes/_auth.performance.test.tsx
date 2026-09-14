@@ -13,7 +13,7 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PerformanceQueryInput, PerformanceResponse } from '@tradr/shared';
@@ -28,8 +28,18 @@ vi.mock('@/lib/api', () => ({
 
 // The route module pulls in the whole performance page (charts, lazy chunks).
 // The loader is what is under test, so a stub component keeps the import cheap.
+// It records the `month`/`by` props the route resolves so the invalid-tz case
+// below can assert the UTC-fallback month rather than a crash.
+const perfPageProps = vi.hoisted(() => ({
+  month: null as string | null,
+  by: null as string | null,
+}));
 vi.mock('@/features/performance/components/PerformancePage', () => ({
-  PerformancePage: () => null,
+  PerformancePage: (props: { month: string; by: string }) => {
+    perfPageProps.month = props.month;
+    perfPageProps.by = props.by;
+    return <div data-testid="performance-page-stub" />;
+  },
 }));
 
 // The stored reporting zone `useUserTimezone` resolves to — mutated per test to
@@ -99,6 +109,8 @@ beforeEach(() => {
   __resetInvalidTimezoneState();
   __resetTzProvenanceState();
   tzState.zone = undefined;
+  perfPageProps.month = null;
+  perfPageProps.by = null;
   getMock.mockReset();
   queryClient.clear();
   // Keep the real retry COUNT (that is what is under test) but drop the
@@ -268,6 +280,25 @@ describe('performance route — defaults redirect carries month and by (R4-2)', 
     });
     expect(locationSearch(router).by).toBe('tag');
     expect(locationSearch(router).month).toBe('2026-05');
+  });
+});
+
+// R2-2: a complete URL carrying an unvalidated `?tz=Foo` must render the page,
+// not crash to the root error boundary. The route derives the calendar month
+// from `params.tz` through the throw-proof `currentMonthInTz`, which falls back
+// to UTC on a bad zone, so the page mounts with the current UTC month.
+describe('performance route — invalid tz on a complete URL renders (R2-2)', () => {
+  it('renders the page with the UTC-fallback month for a bad ?tz', async () => {
+    tzState.zone = 'UTC';
+
+    renderAt(`/performance?${COMPLETE}&tz=Foo`);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('performance-page-stub')).toBeTruthy();
+    });
+    // Bad zone → UTC fallback → the current UTC calendar month.
+    expect(perfPageProps.month).toBe(new Date().toISOString().slice(0, 7));
+    expect(perfPageProps.by).toBe('symbol');
   });
 });
 

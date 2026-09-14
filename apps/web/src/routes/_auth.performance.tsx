@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PerformancePage } from '@/features/performance/components/PerformancePage';
 import { buildPerformanceDefaults } from '@/features/performance/utils/buildPerformanceDefaults';
+import { currentMonthInTz } from '@/features/performance/utils/deriveCalendarWindow';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 import { api } from '@/lib/api';
 import { isTimezoneRejected } from '@/lib/invalidTimezone';
@@ -206,7 +207,14 @@ function PerformanceRouteComponent() {
     <>
       <PageHeader page="Performance" />
       {params !== null ? (
-        <PerformancePage params={params} />
+        <PerformancePage
+          params={params}
+          // `params.tz` is a defined string on any complete render (`toParams`)
+          // but is not validated as an IANA zone, so the month helper guards it
+          // with a UTC fallback rather than throwing.
+          month={search.month ?? currentMonthInTz(new Date(), params.tz)}
+          by={search.by ?? 'symbol'}
+        />
       ) : (
         // The one-render window while defaults derive (or the zone loads).
         <div data-testid="performance-page" className="space-y-4">

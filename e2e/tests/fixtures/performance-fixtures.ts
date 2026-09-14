@@ -113,6 +113,54 @@ export const POPULATED_RESPONSE = {
   ],
 };
 
+/**
+ * A minimal single-valued `/performance/breakdown` response. The populated page
+ * mounts `DimensionBreakdownTable`, whose `useBreakdown` request goes to
+ * `/api/performance/breakdown?…` — a path that matches neither the per-test
+ * `/performance` mock nor the app-shell default, so it reaches the fail-closed
+ * backstop unless a spec registers `mockBreakdown` after `mockAppShell`.
+ *
+ * Per-currency codes `USD` and `EUR` mirror `POPULATED_RESPONSE`, so the page's
+ * active currency always has a matching entry.
+ */
+const BREAKDOWN_STATS = {
+  totalPositions: 4,
+  totalNetPnl: '120.00',
+  winRate: 75.0,
+  breakevenRate: 0.0,
+  avgWin: '60.00',
+  avgLoss: '-30.00',
+  profitFactor: 4.0,
+  largestWin: '80.00',
+  largestLoss: '-30.00',
+  expectancy: '30.00',
+  hasWins: true,
+  hasLosses: true,
+};
+
+export const BREAKDOWN_RESPONSE = {
+  by: 'symbol' as const,
+  multiValued: false,
+  resolvedTimezone: 'UTC',
+  resolvedWeekStartDay: 0 as const,
+  dataQuality: { timeframeExcluded: { total: 0, unsupported: 0, mismatch: 0 } },
+  currencies: [
+    {
+      code: 'USD',
+      total: BREAKDOWN_STATS,
+      rows: [
+        { key: 'AAPL', label: 'AAPL', tag: null, stats: BREAKDOWN_STATS },
+        { key: 'MSFT', label: 'MSFT', tag: null, stats: BREAKDOWN_STATS },
+      ],
+    },
+    {
+      code: 'EUR',
+      total: BREAKDOWN_STATS,
+      rows: [{ key: 'SAP', label: 'SAP', tag: null, stats: BREAKDOWN_STATS }],
+    },
+  ],
+};
+
 export const NO_ACCOUNTS_RESPONSE = {
   resolvedTimezone: 'UTC',
   resolvedWeekStartDay: 0 as const,
@@ -585,4 +633,23 @@ export async function mockAppShell(page: Page): Promise<void> {
     route.fulfill(json({ displayCurrency: 'USD', total: '0.00' })),
   );
   await page.route(/\/api\/brokerages(\?.*)?$/, (route) => route.fulfill(json([])));
+}
+
+/**
+ * Stub `GET /api/performance/breakdown`, the request the populated page's
+ * `DimensionBreakdownTable` fires. Register it AFTER `mockAppShell` in every test
+ * that reaches the populated path; the day-window request the calendar issues
+ * matches `/api/performance` and is served by the per-test `/performance` mock.
+ *
+ * Anchored on `/performance/breakdown`, so it does not overlap the plain
+ * `/performance` matcher (which stops at `performance` with an optional query).
+ */
+export async function mockBreakdown(page: Page, body: unknown = BREAKDOWN_RESPONSE, status = 200) {
+  await page.route(/\/api\/performance\/breakdown(\?.*)?$/, (route) =>
+    route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify(body),
+    }),
+  );
 }

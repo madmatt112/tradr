@@ -97,7 +97,9 @@ vi.mock('@/components/ui/select', () => ({
   ),
 }));
 
-// Mock the hook so each test can dictate the `usePerformance` return shape.
+// Mock the hook so each test can dictate the `usePerformance` return shape. Both
+// the page's own request and the calendar's day-granularity request read through
+// this single mock (the calendar mounts on the populated path).
 const useQueryMock = vi.fn();
 vi.mock('../hooks/usePerformance', async () => {
   const actual =
@@ -107,6 +109,15 @@ vi.mock('../hooks/usePerformance', async () => {
     usePerformance: () => useQueryMock(),
   };
 });
+
+// The populated path mounts `DimensionBreakdownTable`, which calls `useBreakdown`
+// (React Query → `api.get`). This file renders with no `QueryClientProvider`, so
+// the hook is mocked with a FACTORY that returns a query result (R4-1); a bare
+// `vi.mock(path)` would automock it to `undefined` and throw on destructuring.
+const useBreakdownMock = vi.fn();
+vi.mock('../hooks/useBreakdown', () => ({
+  useBreakdown: () => useBreakdownMock(),
+}));
 
 import { __resetInvalidTimezoneState, recordRejectedTimezone } from '@/lib/invalidTimezone';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
@@ -179,6 +190,40 @@ function buildResponse(overrides: Partial<PerformanceResponse> = {}): Performanc
   };
 }
 
+// A successful `useBreakdown` result — a single-valued symbol breakdown with one
+// row — so the populated path's `DimensionBreakdownTable` renders its table
+// rather than throwing. The mock returns it as `any`, so no strict typing here.
+function buildBreakdownResult() {
+  const stats = {
+    totalPositions: 4,
+    totalNetPnl: '125.50',
+    winRate: 75.0,
+    breakevenRate: 0.0,
+    avgWin: '50.00',
+    avgLoss: '-25.00',
+    profitFactor: 6.0,
+    largestWin: '60.00',
+    largestLoss: '-25.00',
+    expectancy: '31.38',
+    hasWins: true,
+    hasLosses: true,
+  };
+  return {
+    status: 'success' as const,
+    data: {
+      by: 'symbol',
+      multiValued: false,
+      resolvedTimezone: 'UTC',
+      resolvedWeekStartDay: 0,
+      dataQuality: { timeframeExcluded: { total: 0, unsupported: 0, mismatch: 0 } },
+      currencies: [
+        { code: 'USD', total: stats, rows: [{ key: 'AAPL', label: 'AAPL', tag: null, stats }] },
+      ],
+    },
+    refetch: vi.fn(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -203,6 +248,8 @@ function unmount(container: HTMLElement, root: Root): void {
 beforeEach(() => {
   navigateMock.mockReset();
   useQueryMock.mockReset();
+  useBreakdownMock.mockReset();
+  useBreakdownMock.mockReturnValue(buildBreakdownResult());
   vi.mocked(captureClientEvent).mockClear();
   sessionStorage.clear();
   __resetInvalidTimezoneState();
@@ -225,7 +272,9 @@ describe('PerformancePage — loading state', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     expect(container.querySelector('[data-testid="performance-page"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="equity-curve-chart-skeleton"]')).not.toBeNull();
     // Selectors are NOT rendered while loading — banners and selectors require
@@ -243,7 +292,9 @@ describe('PerformancePage — happy path', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
 
     // Wait a microtask so React.lazy / Suspense can resolve the stub.
     await act(async () => {
@@ -278,7 +329,9 @@ describe('PerformancePage — empty-state branches', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     expect(
       container.querySelector('[data-testid="performance-empty-state-no-accounts"]'),
     ).not.toBeNull();
@@ -299,7 +352,9 @@ describe('PerformancePage — empty-state branches', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     expect(
       container.querySelector('[data-testid="performance-empty-state-no-closed-positions"]'),
     ).not.toBeNull();
@@ -319,7 +374,9 @@ describe('PerformancePage — empty-state branches', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     expect(
       container.querySelector('[data-testid="performance-empty-state-unsupported-currency"]'),
     ).not.toBeNull();
@@ -337,7 +394,9 @@ describe('PerformancePage — empty-state branches', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     expect(
       container.querySelector('[data-testid="performance-empty-state-in-timeframe-empty"]'),
     ).not.toBeNull();
@@ -356,7 +415,9 @@ describe('PerformancePage — INVALID_TIMEZONE error path', () => {
       isError: true,
       error: { error: { code: 'INVALID_TIMEZONE' } },
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     expect(container.querySelector('[data-testid="invalid-timezone-banner"]')).not.toBeNull();
     unmount(container, root);
   });
@@ -371,7 +432,9 @@ describe('PerformancePage — INVALID_TIMEZONE error path', () => {
       isError: true,
       error: { error: { code: 'INVALID_TIMEZONE' } },
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     const banner = container.querySelector('[data-testid="invalid-timezone-banner"]');
     expect(banner).not.toBeNull();
     expect(banner?.getAttribute('data-second-failure')).toBe('true');
@@ -390,7 +453,7 @@ describe('PerformancePage — INVALID_TIMEZONE error path', () => {
       error: { error: { code: 'INVALID_TIMEZONE' } },
     });
     const { container, root } = mountWith(
-      <PerformancePage params={{ ...PARAMS, tz: 'Europe/London' }} />,
+      <PerformancePage params={{ ...PARAMS, tz: 'Europe/London' }} month="2026-03" by="symbol" />,
     );
     const banner = container.querySelector('[data-testid="invalid-timezone-banner"]');
     expect(banner?.getAttribute('data-second-failure')).toBeNull();
@@ -417,7 +480,9 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
       error: null,
     });
 
-    const { container, root } = mountWith(<PerformancePage params={params} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={params} month="2026-03" by="symbol" />,
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -452,7 +517,9 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
       error: null,
     });
 
-    const { container, root } = mountWith(<PerformancePage params={params} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={params} month="2026-03" by="symbol" />,
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -473,7 +540,9 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -493,7 +562,7 @@ describe('PerformancePage — UTC fallback success path (REQ-5.6)', () => {
       error: null,
     });
     const { container, root } = mountWith(
-      <PerformancePage params={{ ...PARAMS, tz: 'Europe/London' }} />,
+      <PerformancePage params={{ ...PARAMS, tz: 'Europe/London' }} month="2026-03" by="symbol" />,
     );
     await act(async () => {
       await Promise.resolve();
@@ -517,7 +586,9 @@ describe('PerformancePage — chart chunk failure (shared boundary)', () => {
       isError: false,
       error: null,
     });
-    const { container, root } = mountWith(<PerformancePage params={PARAMS} />);
+    const { container, root } = mountWith(
+      <PerformancePage params={PARAMS} month="2026-03" by="symbol" />,
+    );
     // Let React.lazy / Suspense resolve the stub, which then throws on render.
     await act(async () => {
       await Promise.resolve();
