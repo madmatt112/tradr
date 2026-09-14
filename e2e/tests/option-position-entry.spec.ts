@@ -125,7 +125,7 @@ async function loginViaUi(page: Page): Promise<void> {
 /** Open the Positions page and the New Position dialog; returns the dialog. */
 async function openNewPositionDialog(page: Page): Promise<Locator> {
   await page.goto('/positions');
-  await expect(page.getByRole('heading', { name: 'Positions' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Positions', exact: true })).toBeVisible();
   const newBtn = page.getByRole('button', { name: 'New Position' });
   await expect(newBtn).toBeEnabled();
   await newBtn.click();
