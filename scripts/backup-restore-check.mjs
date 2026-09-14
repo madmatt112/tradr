@@ -117,9 +117,28 @@ export function pointerKeysSqlFor(table) {
   );
 }
 
-/** The pointer-key scan over the real `advisor_messages` table. */
+/**
+ * Distinct object-pointer keys from `position_images.part` (design Component 10). Each
+ * row holds ONE image part directly (not an array), so there is no `jsonb_array_elements`;
+ * the pointer marker is the same `{ storage: { kind: 'object', key } }` shape.
+ */
+export function positionImagePointerKeysSql() {
+  return (
+    `SELECT DISTINCT part->'storage'->>'key' AS key ` +
+    `FROM position_images ` +
+    `WHERE part->'storage'->>'kind' = 'object' AND part->'storage'->>'key' IS NOT NULL`
+  );
+}
+
+/**
+ * The pointer-key scan over BOTH pointer homes — `advisor_messages` and
+ * `position_images` (design D27). Each leaf is parenthesized around its own `ORDER BY`
+ * and joined by `UNION`, with one trailing `ORDER BY key` governing the union's result
+ * order: a bare `UNION` would be a syntax error because the advisor leaf already ends in
+ * `ORDER BY key`.
+ */
 export function pointerKeysSql() {
-  return pointerKeysSqlFor('advisor_messages');
+  return `(${pointerKeysSqlFor('advisor_messages')}) UNION (${positionImagePointerKeysSql()}) ORDER BY key`;
 }
 
 // --- Pure logic (tested with injected fakes) --------------------------------
