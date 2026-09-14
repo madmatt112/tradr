@@ -29,6 +29,7 @@ import type { Persona, ProviderId } from '@tradr/shared/schemas/advisor';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { ACCEPTED_IMAGE_FORMATS, fileToBase64, type ImageFormat } from '@/lib/image-file';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 
 import { approachingRemaining, hasAllowanceHeadroom } from '../../billing/tier-usage';
@@ -36,14 +37,6 @@ import { approachingRemaining, hasAllowanceHeadroom } from '../../billing/tier-u
 // Client-side caps mirror the server-authoritative limits (REQ-8.1 / shared
 // StreamRequestSchema: attachments.max(4)). The composer never exceeds them.
 const MAX_ATTACHMENTS = 4;
-
-type ImageFormat = 'png' | 'jpeg' | 'webp';
-
-const ACCEPTED_IMAGE_FORMATS: Record<string, ImageFormat> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpeg',
-  'image/webp': 'webp',
-};
 
 export interface ComposerDraft {
   text: string;
@@ -149,19 +142,6 @@ type RefusalAction =
 interface BillingRefusalView {
   message: string;
   actions: RefusalAction[];
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // strip the `data:<mime>;base64,` prefix — only the payload is persisted.
-      resolve(result.slice(result.indexOf(',') + 1));
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
 }
 
 export function Composer({
