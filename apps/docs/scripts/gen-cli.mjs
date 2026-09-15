@@ -240,8 +240,12 @@ for (const command of commands) {
 out.push('## Next steps');
 out.push('');
 out.push('- [Upgrade an instance](/self-hosting/upgrades/) — where `migrate --status` fits.');
-out.push('- [Database & migrations](/self-hosting/explanation/migrations/) — what the two tracks are.');
-out.push('- [Environment variables](/self-hosting/reference/env-vars/) — the configuration surface.');
+out.push(
+  '- [Database & migrations](/self-hosting/explanation/migrations/) — what the two tracks are.',
+);
+out.push(
+  '- [Environment variables](/self-hosting/reference/env-vars/) — the configuration surface.',
+);
 out.push('');
 
 writeFileSync(OUT, out.join('\n'));
