@@ -15,6 +15,7 @@ import {
   orphanSql,
   countSql,
   pointerKeysSqlFor,
+  pointerKeysSql,
   parseScalar,
   parseKeys,
   selectPointerKeys,
@@ -118,6 +119,36 @@ describe('backup-restore checker — SQL against a real Postgres', () => {
       const rows = await tx.unsafe(pointerKeysSqlFor('_drill_cp'));
       const keys = rows.map((r) => (r as unknown as { key: string }).key);
       expect(keys).toEqual(['advisor/u/aaa', 'advisor/u/bbb']);
+    });
+  });
+
+  it('pointerKeysSql unions both homes — a seeded position_images pointer is returned', async () => {
+    // Component 10 / D27: the drill scan must read the position_images pointer home too,
+    // else the restore passes while a position screenshot pointer dangles. Seed a
+    // user → account → position → position_images pointer row and prove pointerKeysSql()
+    // (the parenthesized advisor ∪ position union) returns the seeded key.
+    await inRollback(async (tx) => {
+      const userId = '33333333-3333-3333-3333-333333333333';
+      const accountId = '44444444-4444-4444-4444-444444444444';
+      const positionId = '55555555-5555-5555-5555-555555555555';
+      const key = 'positions/drill/backup-restore-check';
+      await tx.unsafe(
+        `INSERT INTO users (id, email, password_hash) VALUES ('${userId}', 'drill-backup@example.test', 'x')`,
+      );
+      await tx.unsafe(
+        `INSERT INTO accounts (id, user_id, name, currency) VALUES ('${accountId}', '${userId}', 'Drill', 'USD')`,
+      );
+      await tx.unsafe(
+        `INSERT INTO positions (id, user_id, account_id, symbol, side, asset_type) ` +
+          `VALUES ('${positionId}', '${userId}', '${accountId}', 'AAA', 'long', 'stock')`,
+      );
+      await tx.unsafe(
+        `INSERT INTO position_images (position_id, part) VALUES ('${positionId}', ` +
+          `'{"type":"image","format":"png","storage":{"kind":"object","key":"${key}"}}'::jsonb)`,
+      );
+      const rows = await tx.unsafe(pointerKeysSql());
+      const keys = rows.map((r) => (r as unknown as { key: string }).key);
+      expect(keys).toContain(key);
     });
   });
 

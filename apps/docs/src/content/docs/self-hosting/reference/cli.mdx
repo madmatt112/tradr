@@ -20,7 +20,7 @@ docker compose exec api tradr --help
 | --- | --- |
 | `tradr migrate --status` | Report whether the database schema is current. |
 | `tradr storage migrate-to-inline` | Pull stored images out of object storage and back into the database. |
-| `tradr storage gc` | Delete bucket objects no conversation references any more. |
+| `tradr storage gc` | Delete bucket objects no position or conversation references any more. |
 | `tradr create-user <email> [--password <value>]` | Create an account from the server, without opening registration. |
 | `tradr reset-password <email> [--password <value>]` | Set a user's password from the server. |
 

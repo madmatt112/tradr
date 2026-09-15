@@ -33,6 +33,7 @@ import health from '@/features/health/health.route';
 import optionsRouter from '@/features/options/options.route';
 import performance from '@/features/performance/performance.route';
 import fillsRouter from '@/features/positions/fills.route';
+import positionImagesRouter from '@/features/positions/position-images.route';
 import positions from '@/features/positions/positions.route';
 import {
   assertLedgerHooksCoRegistered,
@@ -131,6 +132,7 @@ app.route('/api/dashboard', dashboardRoute);
 app.route('/api/options', optionsRouter);
 app.route('/api/positions', positions);
 app.route('/api/positions', fillsRouter);
+app.route('/api/positions', positionImagesRouter);
 app.route('/api/performance', performance);
 app.route('/api/symbols', symbolsRouter);
 app.route('/api/tags', tagsRouter);

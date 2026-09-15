@@ -30,7 +30,7 @@ const GROUPS = [
     'Accounts and users',
     ['users', 'sessions', 'email_tokens', 'accounts', 'brokerages', 'fee_schedules'],
   ],
-  ['Trading', ['positions', 'fills']],
+  ['Trading', ['positions', 'fills', 'position_images', 'tags', 'position_tags']],
   ['Money', ['ledger_entries', 'expenses', 'exchange_rates', 'wallets', 'wallet_transactions']],
   ['Import', ['csv_import_staging', 'csv_import_counters']],
   ['Billing', ['billing_customers', 'subscriptions', 'usage_records', 'webhook_events']],
@@ -74,11 +74,7 @@ function latestSnapshot() {
  * to a space.
  */
 function cell(value) {
-  return String(value)
-    .replace(/\\/g, '\\\\')
-    .replace(/\|/g, '\\|')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 }
 
 /** Render one column's type with its nullability and default. */
@@ -107,7 +103,9 @@ const snapshot = JSON.parse(readFileSync(file, 'utf8'));
 const tables = Object.values(snapshot.tables);
 
 if (tables.length < 20) {
-  throw new Error(`gen-db-schema: only ${tables.length} tables in the snapshot — generator is stale`);
+  throw new Error(
+    `gen-db-schema: only ${tables.length} tables in the snapshot — generator is stale`,
+  );
 }
 
 const byName = new Map(tables.map((t) => [t.name, t]));
@@ -132,11 +130,17 @@ out.push(
 out.push('---');
 out.push('');
 out.push('{/* GENERATED FILE — do not edit.');
-out.push(`    Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}`);
+out.push(
+  `    Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}`,
+);
 out.push('');
-out.push(`Tradr's schema is **${tables.length} tables**, created by **${count} migrations** that run`);
+out.push(
+  `Tradr's schema is **${tables.length} tables**, created by **${count} migrations** that run`,
+);
 out.push('automatically when the api boots. This page is generated from the Drizzle snapshot');
-out.push(`for the latest schema-changing migration (\`${tag}\`), so it describes the schema the migrations`);
+out.push(
+  `for the latest schema-changing migration (\`${tag}\`), so it describes the schema the migrations`,
+);
 out.push('actually produce.');
 out.push('');
 out.push('You do not need any of this to run Tradr. It is here for writing queries against');
@@ -188,9 +192,15 @@ for (const [groupName, names] of groups) {
 
 out.push('## Next steps');
 out.push('');
-out.push('- [Database & migrations](/self-hosting/explanation/migrations/) — how the schema changes.');
-out.push('- [Back up and restore](/self-hosting/backup-restore/) — a `pg_dump` captures all of this.');
-out.push('- [Architecture overview](/self-hosting/explanation/architecture/) — where the database sits.');
+out.push(
+  '- [Database & migrations](/self-hosting/explanation/migrations/) — how the schema changes.',
+);
+out.push(
+  '- [Back up and restore](/self-hosting/backup-restore/) — a `pg_dump` captures all of this.',
+);
+out.push(
+  '- [Architecture overview](/self-hosting/explanation/architecture/) — where the database sits.',
+);
 out.push('');
 
 writeFileSync(OUT, out.join('\n'));

@@ -10,12 +10,14 @@
 // object-storage.test.ts, cookie-policy.test.ts, pooler-correctness.test.ts,
 // rate-limit MapStore parity in rate-limit.middleware.test.ts).
 
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_REPORTING_TIMEZONE } from '@tradr/shared';
 
 import app from '@/app';
-import { poolerDriverOptions } from '@/db';
+import { db, poolerDriverOptions } from '@/db';
+import { positionImages } from '@/db/schema';
 import {
   config,
   isAdvisorEnabled,
@@ -159,6 +161,25 @@ describe('onboarding surface parity — every optional integration off', () => {
     });
   }
 
+  // Clean PNG fixture, reproduced from image-metadata.test.ts:73-78 (its builders
+  // are not exported). It carries no metadata chunks, so stripImageMetadata is a
+  // no-op and the stored inline bytes equal the uploaded bytes — the round-trip is
+  // byte-identical.
+  const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const PIXELS = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04, 0xfa, 0xce]);
+  function pngChunk(type: string, data: Buffer): Buffer {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    // CRC value is irrelevant to the strip logic; use a fixed placeholder.
+    return Buffer.concat([len, Buffer.from(type, 'latin1'), data, Buffer.from([0, 0, 0, 0])]);
+  }
+  function buildCleanPng(): Buffer {
+    const ihdr = pngChunk('IHDR', Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
+    const idat = pngChunk('IDAT', PIXELS);
+    const iend = pngChunk('IEND', Buffer.alloc(0));
+    return Buffer.concat([PNG_SIG, ihdr, idat, iend]);
+  }
+
   it('nothing optional is configured', () => {
     // The four hosted-platform predicates are covered by the first block above;
     // these are the rest of what "no optional integration" means — no email, no
@@ -259,5 +280,58 @@ describe('onboarding surface parity — every optional integration off', () => {
     });
     expect(res.status).toBe(409);
     expect((await res.json()).error.code).toBe('DEMO_ACCOUNT_EXISTS');
+  });
+
+  it('a position screenshot uploads and reads back inline (base64-in-JSONB, no pointer)', async () => {
+    // Object storage is absent under the empty OBJECT_STORAGE_* pin, so a
+    // self-hoster's screenshot must live inline in the row exactly as the advisor's
+    // image does. A predicate would keep passing if a route learned to 503 with no
+    // bucket; only driving the upload and read over HTTP, then looking at the row,
+    // proves the inline home (REQ-3.6).
+    const cookie = await registerAndGetCookie();
+
+    const account = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Screenshot Account',
+      currency: 'USD',
+      timezone: 'UTC',
+    });
+    expect(account.status).toBe(201);
+    const { id: accountId } = (await account.json()) as { id: string };
+
+    const position = await authedRequest('POST', '/api/positions', cookie, {
+      accountId,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+    });
+    expect(position.status).toBe(201);
+    const { id: positionId } = (await position.json()) as { id: string };
+
+    const png = buildCleanPng();
+    const upload = await authedRequest('POST', `/api/positions/${positionId}/images`, cookie, {
+      format: 'png',
+      dataBase64: png.toString('base64'),
+    });
+    expect(upload.status).toBe(201);
+    const { id: imageId } = (await upload.json()) as { id: string };
+
+    const read = await authedRequest(
+      'GET',
+      `/api/positions/${positionId}/images/${imageId}`,
+      cookie,
+    );
+    expect(read.status).toBe(200);
+    expect(read.headers.get('Content-Type')).toBe('image/png');
+    expect(Buffer.from(await read.arrayBuffer()).equals(png)).toBe(true);
+
+    // The inline home is proven at the row, not inferred from the wire: the part is
+    // base64-in-JSONB, with no object-storage pointer.
+    const [row] = await db
+      .select({ part: positionImages.part })
+      .from(positionImages)
+      .where(eq(positionImages.id, imageId));
+    const part = row.part as Record<string, unknown>;
+    expect(typeof part.dataBase64).toBe('string');
+    expect('storage' in part).toBe(false);
   });
 });

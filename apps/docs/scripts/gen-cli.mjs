@@ -132,7 +132,7 @@ const DETAILS = {
   },
   'storage gc': {
     title: 'storage gc',
-    summary: 'Delete bucket objects no conversation references any more.',
+    summary: 'Delete bucket objects no position or conversation references any more.',
     body: [
       'Reclaims objects orphaned by deleted records and retried uploads. Like',
       '`migrate-to-inline`, it applies only to an instance with object storage',
@@ -240,8 +240,12 @@ for (const command of commands) {
 out.push('## Next steps');
 out.push('');
 out.push('- [Upgrade an instance](/self-hosting/upgrades/) — where `migrate --status` fits.');
-out.push('- [Database & migrations](/self-hosting/explanation/migrations/) — what the two tracks are.');
-out.push('- [Environment variables](/self-hosting/reference/env-vars/) — the configuration surface.');
+out.push(
+  '- [Database & migrations](/self-hosting/explanation/migrations/) — what the two tracks are.',
+);
+out.push(
+  '- [Environment variables](/self-hosting/reference/env-vars/) — the configuration surface.',
+);
 out.push('');
 
 writeFileSync(OUT, out.join('\n'));

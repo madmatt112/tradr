@@ -22,6 +22,7 @@ vi.mock('../hooks/usePosition', () => ({
 
 vi.mock('./FillDialog', () => ({ FillDialog: () => null }));
 vi.mock('./FillTable', () => ({ FillTable: () => null }));
+vi.mock('./PositionScreenshots', () => ({ PositionScreenshots: () => null }));
 vi.mock('./PositionEditDialog', () => ({ PositionEditDialog: () => null }));
 vi.mock('@/features/onboarding/components/CoachMark', () => ({ CoachMark: () => null }));
 

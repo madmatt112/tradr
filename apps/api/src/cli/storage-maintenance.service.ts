@@ -25,6 +25,12 @@ import { getObjectStorage, type ObjectStorage } from '@/lib/object-storage';
 /** Bucket prefix every advisor image lives under (`advisor/{userId}/{uuid}`, D9). */
 const ADVISOR_OBJECT_PREFIX = 'advisor/';
 
+/** Bucket prefix every position image lives under (`positions/{userId}/{uuid}`). */
+const POSITION_OBJECT_PREFIX = 'positions/';
+
+/** Every prefix gc lists and sweeps (advisor + position images). */
+const OBJECT_PREFIXES = [ADVISOR_OBJECT_PREFIX, POSITION_OBJECT_PREFIX];
+
 /**
  * Fixed safety buffer added on top of the config-derived in-flight-turn bound when
  * deriving the gc age floor (REQ-3.2). Small relative to the derived term — the
@@ -48,13 +54,19 @@ export interface MigrateToInlineResult {
   unrecoverableParts: number;
   /** Rows updated (each in its own transaction). */
   updatedRows: number;
+  /** Position-image pointers fetched from the bucket and re-inlined as base64. */
+  positionImagesMigrated: number;
+  /** Position-image pointers whose object was gone, marked unrecoverable (REQ-3.3). */
+  positionImagesUnrecoverable: number;
 }
 
 export interface GcResult {
   /** Distinct live pointer keys referenced by `content_parts` (the protected set). */
   liveKeys: number;
-  /** Objects returned by `storage.list`. */
+  /** Objects returned by `storage.list`, across every prefix. */
   listed: number;
+  /** Objects returned by `storage.list`, broken down per prefix. */
+  listedByPrefix: Record<string, number>;
   /** Aged unreferenced objects deleted. */
   deleted: number;
   /** Objects kept because their key is still referenced (live). */
@@ -106,6 +118,8 @@ export async function migrateToInline(
     migratedParts: 0,
     unrecoverableParts: 0,
     updatedRows: 0,
+    positionImagesMigrated: 0,
+    positionImagesUnrecoverable: 0,
   };
 
   for (const row of rows) {
@@ -153,6 +167,46 @@ export async function migrateToInline(
     result.updatedRows += 1;
   }
 
+  // Position images (D10): one `part` object per row (not an array). `@>` object
+  // containment matches only rows still carrying an object pointer, so re-running
+  // is a no-op over already-inline / already-unrecoverable rows (idempotent).
+  const positionRows = await sql<{ id: string; part: StoredContentPart }[]>`
+    SELECT id, part
+    FROM position_images
+    WHERE part @> '{"storage":{"kind":"object"}}'::jsonb
+    ORDER BY id
+  `;
+
+  for (const row of positionRows) {
+    if (!isObjectPointer(row.part)) continue; // filter guarantees a pointer
+    const { key } = row.part.storage;
+    let next: StoredContentPart;
+    try {
+      const { bytes } = await storage.get(key);
+      next = {
+        type: 'image',
+        format: row.part.format,
+        dataBase64: Buffer.from(bytes).toString('base64'),
+      };
+      result.positionImagesMigrated += 1;
+    } catch (err) {
+      // Gone out-of-band: mark unrecoverable and continue — never abort (REQ-3.3).
+      logger.warn('storage migrate-to-inline: unrecoverable position-image pointer', {
+        positionImageId: row.id,
+        key,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      next = { type: 'image', format: row.part.format, storage: { kind: 'unrecoverable' } };
+      result.positionImagesUnrecoverable += 1;
+    }
+    // Per-row transaction (a single UPDATE is atomic) — resumable (REQ-3.3).
+    await sql`
+      UPDATE position_images
+      SET part = ${sql.json(next as never)}
+      WHERE id = ${row.id}
+    `;
+  }
+
   return result;
 }
 
@@ -171,11 +225,19 @@ export function deriveGcAgeFloorMs(): number {
   );
 }
 
-/** The set of live (referenced) object-pointer keys, from a `content_parts` jsonb scan. */
+/**
+ * The set of live (referenced) object-pointer keys, unioned across both homes:
+ * the advisor's `content_parts` array (a jsonb scan) and the position-image
+ * `part` object (D10). Either home keeps its own key from a gc sweep.
+ */
 export async function collectLiveKeys(sql: postgres.Sql): Promise<Set<string>> {
   const rows = await sql<{ key: string | null }[]>`
     SELECT DISTINCT part->'storage'->>'key' AS key
     FROM advisor_messages, jsonb_array_elements(content_parts) AS part
+    WHERE part->'storage'->>'kind' = 'object'
+    UNION
+    SELECT DISTINCT part->'storage'->>'key' AS key
+    FROM position_images
     WHERE part->'storage'->>'kind' = 'object'
   `;
   const keys = new Set<string>();
@@ -201,11 +263,20 @@ export async function runGc(
   const ageFloorMs = opts.ageFloorMs ?? deriveGcAgeFloorMs();
 
   const liveKeys = await collectLiveKeys(sql);
-  const objects = await storage.list(ADVISOR_OBJECT_PREFIX);
+
+  // List every home's prefix and concatenate; one loop then sweeps them all.
+  const listedByPrefix: Record<string, number> = {};
+  const objects: Array<{ key: string; lastModified: Date }> = [];
+  for (const prefix of OBJECT_PREFIXES) {
+    const listed = await storage.list(prefix);
+    listedByPrefix[prefix] = listed.length;
+    objects.push(...listed);
+  }
 
   const result: GcResult = {
     liveKeys: liveKeys.size,
     listed: objects.length,
+    listedByPrefix,
     deleted: 0,
     keptReferenced: 0,
     keptTooYoung: 0,
@@ -260,7 +331,8 @@ export async function runStorageMigrateToInline(): Promise<number> {
     console.log(
       `storage migrate-to-inline complete: scanned ${r.scannedRows} pointer row(s); ` +
         `re-inlined ${r.migratedParts} image part(s); marked ${r.unrecoverableParts} ` +
-        `unrecoverable; updated ${r.updatedRows} row(s).`,
+        `unrecoverable; updated ${r.updatedRows} row(s). Position images: re-inlined ` +
+        `${r.positionImagesMigrated}; marked ${r.positionImagesUnrecoverable} unrecoverable.`,
     );
     return 0;
   } catch (err) {
@@ -284,10 +356,13 @@ export async function runStorageGc(): Promise<number> {
   const sql = openMaintenanceConnection();
   try {
     const r = await runGc(sql, storage);
+    const byPrefix = Object.entries(r.listedByPrefix)
+      .map(([prefix, count]) => `${prefix} ${count}`)
+      .join(', ');
     console.log(
-      `storage gc complete: ${r.liveKeys} live key(s); listed ${r.listed} object(s); ` +
-        `deleted ${r.deleted} aged-unreferenced; kept ${r.keptReferenced} referenced + ` +
-        `${r.keptTooYoung} too-young.`,
+      `storage gc complete: ${r.liveKeys} live key(s); listed ${r.listed} object(s) ` +
+        `(${byPrefix}); deleted ${r.deleted} aged-unreferenced; kept ${r.keptReferenced} ` +
+        `referenced + ${r.keptTooYoung} too-young.`,
     );
     return 0;
   } catch (err) {
