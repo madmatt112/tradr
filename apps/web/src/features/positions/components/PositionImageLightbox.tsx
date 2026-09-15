@@ -1,7 +1,7 @@
 import type { PositionImage } from '@tradr/shared';
 
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { isApiCrossOrigin } from '@/lib/api';
 
 import { positionImageUrl } from '../hooks/usePositionImages';
@@ -72,6 +72,9 @@ export function PositionImageLightbox({
     >
       <DialogContent onKeyDown={handleKeyDown} className="max-w-[95vw] p-2 sm:max-w-[95vw]">
         <DialogTitle className="sr-only">{`Screenshot ${position} of ${total}`}</DialogTitle>
+        <DialogDescription className="sr-only">
+          Use the arrow keys or the Previous and Next buttons to move between screenshots.
+        </DialogDescription>
         {current ? (
           current.unavailable ? (
             <div
