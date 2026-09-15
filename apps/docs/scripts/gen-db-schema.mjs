@@ -30,7 +30,7 @@ const GROUPS = [
     'Accounts and users',
     ['users', 'sessions', 'email_tokens', 'accounts', 'brokerages', 'fee_schedules'],
   ],
-  ['Trading', ['positions', 'fills', 'position_images']],
+  ['Trading', ['positions', 'fills', 'position_images', 'tags', 'position_tags']],
   ['Money', ['ledger_entries', 'expenses', 'exchange_rates', 'wallets', 'wallet_transactions']],
   ['Import', ['csv_import_staging', 'csv_import_counters']],
   ['Billing', ['billing_customers', 'subscriptions', 'usage_records', 'webhook_events']],

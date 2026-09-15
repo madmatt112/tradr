@@ -190,6 +190,34 @@ a query you write against these tables may need updating on any release.
 
 - `position_id` → `positions.id` on delete cascade
 
+### `tags`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `name` | `varchar(40)` | not null |
+| `category` | `varchar(8)` | not null |
+| `color` | `varchar(16)` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+| `updated_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `position_tags`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `position_id` | `uuid` | not null |
+| `tag_id` | `uuid` | not null |
+
+**References**
+
+- `position_id` → `positions.id` on delete cascade
+- `tag_id` → `tags.id` on delete cascade
+
 ## Money
 
 ### `ledger_entries`
@@ -468,36 +496,6 @@ a query you write against these tables may need updating on any release.
 | --- | --- | --- |
 | `filename` | `text` | primary key |
 | `applied_at` | `timestamp with time zone` | not null, default `now()` |
-
-## Other
-
-### `position_tags`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `position_id` | `uuid` | not null |
-| `tag_id` | `uuid` | not null |
-
-**References**
-
-- `position_id` → `positions.id` on delete cascade
-- `tag_id` → `tags.id` on delete cascade
-
-### `tags`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid` | primary key, default `gen_random_uuid()` |
-| `user_id` | `uuid` | not null |
-| `name` | `varchar(40)` | not null |
-| `category` | `varchar(8)` | not null |
-| `color` | `varchar(16)` | — |
-| `created_at` | `timestamp with time zone` | not null, default `now()` |
-| `updated_at` | `timestamp with time zone` | not null, default `now()` |
-
-**References**
-
-- `user_id` → `users.id` on delete cascade
 
 ## Next steps
 
