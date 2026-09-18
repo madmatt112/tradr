@@ -120,7 +120,7 @@ export function RecordCashMovementDialog({ account, open, onOpenChange }: Props)
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Deposit or withdrawal</DialogTitle>
+          <DialogTitle>Record a deposit or withdrawal</DialogTitle>
           <DialogDescription>
             Record money you moved into or out of this brokerage account. Tradr adds one ledger
             entry in the account&apos;s currency and moves the balance by the amount.

@@ -202,6 +202,22 @@ describe('RecordCashMovementDialog — balance preview', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Title (design D19)
+// ---------------------------------------------------------------------------
+
+describe('RecordCashMovementDialog — title', () => {
+  it('renders the design title literal', () => {
+    const { container, root } = mountWith(
+      <RecordCashMovementDialog account={makeAccount()} open onOpenChange={() => {}} />,
+    );
+
+    expect(container.querySelector('h2')?.textContent).toBe('Record a deposit or withdrawal');
+
+    unmount(container, root);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Overdraw warning (Req 6.4) — shown, but never blocks submission
 // ---------------------------------------------------------------------------
 
