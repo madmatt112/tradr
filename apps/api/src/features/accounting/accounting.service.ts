@@ -6,6 +6,9 @@ import type {
   PreviewRateChangeResponse,
 } from '@tradr/shared';
 import { getCurrencyMinorUnits } from '@tradr/shared';
+// Imported by subpath — the cash-movement schemas stay out of the shared
+// barrel (design D25), matching how the reconcile schemas are consumed today.
+import type { CreateCashMovementInput } from '@tradr/shared/schemas/accounting';
 
 import type { Database } from '@/db';
 import { findAccountById, findAccountsByUser } from '@/features/accounts/accounts.query';
@@ -15,9 +18,11 @@ import { withTransaction } from '@/lib/transaction';
 import {
   aggregateBalancesForAccounts,
   deleteExchangeRate as deleteExchangeRateQuery,
+  findCashMovementById,
   findExchangeRateById,
   findSpotRate,
   findUserDisplayCurrency,
+  hasReversalForGroup,
   insertLedgerEntries,
   listExchangeRatesForUser,
   lockAccountForUpdate,
@@ -495,6 +500,150 @@ export async function reconcileAccountBalance(
       entry,
       previousBalance: previous.toFixed(4),
       newBalance: target.toFixed(4),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Manual cash movements (Req 1, 2, 3; design.md §Component 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Record a manual deposit or withdrawal by INSERTing one ledger row.
+ *
+ * The user supplies a positive magnitude and a direction (`type`); the sign
+ * lives in `direction` (`deposit → credit`, `withdrawal → debit`), never in
+ * `amount` — exactly as position P&L and balance adjustments do.
+ *
+ * There is NO balance guard (Req 2.6): a withdrawal may overdraw the account
+ * into a negative balance. Tradr models cash as `starting_balance + ledger
+ * aggregate` and holds no mark-to-market, so it has no notion of "available
+ * funds" to enforce here; the resulting negative balance is surfaced in the UI,
+ * not blocked at this layer.
+ *
+ * Append-only, single locked transaction: `accounts` FOR UPDATE, then one
+ * `ledger_entries` INSERT. The flow never reads or locks positions, fills or
+ * wallets, so it takes a strict suffix of the close-flow lock order
+ * (`positions → fills → accounts → ledger_entries`) and cannot deadlock against
+ * it.
+ */
+export async function recordCashMovement(
+  db: Database,
+  userId: string,
+  accountId: string,
+  input: CreateCashMovementInput,
+): Promise<{ entry: LedgerEntryRow; previousBalance: string; newBalance: string }> {
+  return withTransaction(db, async (tx) => {
+    const locked = await lockAccountForUpdate(tx, userId, accountId);
+    if (!locked) throw new NotFoundError('Account', accountId);
+
+    const amount = new Decimal(input.amount);
+
+    // The amount must be expressible in the account currency's minor units
+    // (Req 2.5), mirroring the reconcile guard. The input is user-supplied, so
+    // a 400 is the correct shape rather than a 500.
+    const minorUnits = getCurrencyMinorUnits(locked.currency);
+    if (amount.decimalPlaces() > minorUnits) {
+      throw new ValidationError(
+        `Amount ${input.amount} has more decimal places than ${locked.currency} allows (${minorUnits})`,
+      );
+    }
+
+    const [account] = await findAccountById(tx, accountId, userId);
+    // `balance` is a numeric(18,4) rendered to text — hand it straight to
+    // Decimal. NEVER parseFloat a numeric column.
+    const previous = new Decimal(account.balance);
+
+    const direction = input.type === 'deposit' ? 'credit' : 'debit';
+    const [entry] = await insertLedgerEntries(tx, [
+      {
+        userId,
+        accountId,
+        positionId: null,
+        entryType: input.type,
+        direction,
+        amount: amount.toFixed(4),
+        currency: locked.currency,
+        symbol: null,
+        occurredAt: input.occurredAt ? new Date(input.occurredAt) : new Date(),
+        groupId: crypto.randomUUID(),
+        reversesGroupId: null,
+      },
+    ]);
+
+    const next = direction === 'credit' ? previous.plus(amount) : previous.minus(amount);
+
+    return {
+      entry,
+      previousBalance: previous.toFixed(4),
+      newBalance: next.toFixed(4),
+    };
+  });
+}
+
+/**
+ * Reverse a manual cash movement by INSERTing one flipped-direction reversal
+ * row (Req 3). Append-only — the original row is never edited or deleted;
+ * neutralization is by insertion, exactly as `reverseCloseForPosition` does for
+ * position P&L.
+ *
+ * Order inside the lock: (1) lock the account; (2) find the target — it must be
+ * one of the user's own `deposit`/`withdrawal` rows on this account, else 404;
+ * (3) reject a second reversal of the same group with 409. Both checks run
+ * AFTER the lock so two concurrent deletes of the same movement cannot both see
+ * "not yet reversed".
+ *
+ * The reversal copies the original's `amount` VERBATIM (already minor-unit
+ * aligned — never `parseFloat`/re-round it) and `currency`; flips `direction`;
+ * derives `entryType` (`deposit → deposit_reversal`, `withdrawal →
+ * withdrawal_reversal`); gets a fresh `groupId`; and sets `reversesGroupId` to
+ * the original's `groupId` so `hasReversalForGroup` can find it.
+ */
+export async function reverseCashMovement(
+  db: Database,
+  userId: string,
+  accountId: string,
+  entryId: string,
+): Promise<{ reversal: LedgerEntryRow; previousBalance: string; newBalance: string }> {
+  return withTransaction(db, async (tx) => {
+    const locked = await lockAccountForUpdate(tx, userId, accountId);
+    if (!locked) throw new NotFoundError('Account', accountId);
+
+    const original = await findCashMovementById(tx, { userId, accountId, entryId });
+    if (!original) throw new NotFoundError('Cash movement', entryId);
+
+    if (await hasReversalForGroup(tx, userId, original.groupId)) {
+      throw new ConflictError('Cash movement already reversed');
+    }
+
+    const [account] = await findAccountById(tx, accountId, userId);
+    const previous = new Decimal(account.balance);
+
+    const direction = original.direction === 'credit' ? 'debit' : 'credit';
+    const [reversal] = await insertLedgerEntries(tx, [
+      {
+        userId,
+        accountId,
+        positionId: null,
+        entryType: original.entryType === 'deposit' ? 'deposit_reversal' : 'withdrawal_reversal',
+        direction,
+        // Verbatim string copy — already aligned to the currency's minor units.
+        amount: original.amount,
+        currency: original.currency,
+        symbol: null,
+        occurredAt: new Date(),
+        groupId: crypto.randomUUID(),
+        reversesGroupId: original.groupId,
+      },
+    ]);
+
+    const next =
+      direction === 'credit' ? previous.plus(original.amount) : previous.minus(original.amount);
+
+    return {
+      reversal,
+      previousBalance: previous.toFixed(4),
+      newBalance: next.toFixed(4),
     };
   });
 }

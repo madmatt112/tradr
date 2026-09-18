@@ -233,6 +233,55 @@ export async function lockAccountForUpdate(
 }
 
 /**
+ * Fetch a single manual cash-movement row (`deposit` or `withdrawal`) by id,
+ * scoped to the owning user and account (Req 3.2). Returns `null` when no such
+ * row exists — the caller turns that into a `NotFoundError`, so a reversal can
+ * only ever target the user's own deposit/withdrawal, never a
+ * `balance_adjustment`, a `position_pnl` row, or another user's entry.
+ *
+ * Transaction-only: the reverse flow's find-check-insert must run behind the
+ * same account row lock as the INSERT, exactly like `lockAccountForUpdate`.
+ */
+export async function findCashMovementById(
+  tx: Transaction,
+  { userId, accountId, entryId }: { userId: string; accountId: string; entryId: string },
+): Promise<LedgerEntryRow | null> {
+  const rows = await tx
+    .select()
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.id, entryId),
+        eq(ledgerEntries.userId, userId),
+        eq(ledgerEntries.accountId, accountId),
+        inArray(ledgerEntries.entryType, ['deposit', 'withdrawal']),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * True when any of the user's ledger rows already reverses `groupId` — i.e. the
+ * cash movement in that group has been reversed (Req 3.3). Served by the
+ * `ledger_reverses_group_id_idx` partial index (accounting.schema.ts). The
+ * caller turns `true` into a `ConflictError`, so a movement cannot be reversed
+ * twice. Transaction-only for the same reason as `findCashMovementById`.
+ */
+export async function hasReversalForGroup(
+  tx: Transaction,
+  userId: string,
+  groupId: string,
+): Promise<boolean> {
+  const rows = await tx
+    .select({ id: ledgerEntries.id })
+    .from(ledgerEntries)
+    .where(and(eq(ledgerEntries.userId, userId), eq(ledgerEntries.reversesGroupId, groupId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
  * Plain insert of an exchange rate. Throws on `(userId, base, quote, effectiveDate)`
  * uniqueness violation — callers that want upsert semantics use
  * `upsertExchangeRate` instead.
