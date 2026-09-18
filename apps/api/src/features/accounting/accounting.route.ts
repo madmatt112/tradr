@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import {
+  CreateCashMovementInputSchema,
   CreateExchangeRateInputSchema,
   PreviewRateChangeInputSchema,
   ReconcileBalanceInputSchema,
@@ -20,6 +21,8 @@ import {
   listExchangeRates,
   previewRateChangeImpact,
   reconcileAccountBalance,
+  recordCashMovement,
+  reverseCashMovement,
   setUserDisplayCurrency,
 } from './accounting.service';
 
@@ -39,6 +42,10 @@ accountingRouter.use(authMiddleware);
 // ---------------------------------------------------------------------------
 
 const AccountIdParamSchema = z.object({ accountId: z.string().uuid() });
+const CashMovementParamSchema = z.object({
+  accountId: z.string().uuid(),
+  entryId: z.string().uuid(),
+});
 const IdParamSchema = z.object({ id: z.string().uuid() });
 
 const LedgerQuerySchema = z.object({
@@ -196,6 +203,130 @@ accountingRouter.post(
 
     const result = await reconcileAccountBalance(db, userId, accountId, targetBalance);
     return c.json(result, 201);
+  },
+);
+
+/**
+ * @swagger
+ * /api/ledger/{accountId}/cash-movements:
+ *   post:
+ *     summary: Record a deposit or withdrawal.
+ *     description: >
+ *       Posts a single ledger entry, in the account's currency, for money moved
+ *       into or out of this brokerage account, and moves the balance by the
+ *       amount — a `deposit` credits it, a `withdrawal` debits it.
+ *
+ *       `occurredAt` defaults to now and may be in the past. Tradr's balance is
+ *       cash only and holds no mark-to-market, so a withdrawal larger than the
+ *       balance is accepted and the balance goes negative rather than being
+ *       blocked.
+ *
+ *       Append-only: to correct a mistake, delete the movement — which appends a
+ *       reversal — and record it again; every entry persists.
+ *     tags: [Accounting]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: accountId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [type, amount]
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [deposit, withdrawal]
+ *               amount:
+ *                 type: string
+ *                 description: >
+ *                   Positive decimal string, greater than zero, with at most 4
+ *                   fractional digits and no more than the account currency's
+ *                   minor units.
+ *                 example: '1000.00'
+ *               occurredAt:
+ *                 type: string
+ *                 format: date-time
+ *                 description: RFC-3339 timestamp with offset. Omitted means now.
+ *     responses:
+ *       201:
+ *         description: The recorded entry, plus the balance either side of it.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 entry: { type: object }
+ *                 previousBalance: { type: string, example: '1000.0000' }
+ *                 newBalance: { type: string, example: '2000.0000' }
+ *       400: { description: type or amount is malformed, or amount is too precise for the currency. }
+ *       401: { description: Not authenticated. }
+ *       404: { description: No such account for this user. }
+ */
+accountingRouter.post(
+  '/ledger/:accountId/cash-movements',
+  validate('param', AccountIdParamSchema),
+  validate('json', CreateCashMovementInputSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { accountId } = c.req.valid('param');
+    const input = c.req.valid('json');
+
+    const result = await recordCashMovement(db, userId, accountId, input);
+    return c.json(result, 201);
+  },
+);
+
+/**
+ * @swagger
+ * /api/ledger/{accountId}/cash-movements/{entryId}:
+ *   delete:
+ *     summary: Reverse a deposit or withdrawal.
+ *     description: >
+ *       Appends a flipped-direction reversal entry that returns the balance to
+ *       what it was before the movement. The original row is never removed —
+ *       both persist. A second call against the same movement answers 409.
+ *     tags: [Accounting]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: accountId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: entryId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: The reversal entry, plus the balance either side of it.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 reversal: { type: object }
+ *                 previousBalance: { type: string, example: '2000.0000' }
+ *                 newBalance: { type: string, example: '1000.0000' }
+ *       401: { description: Not authenticated. }
+ *       404: { description: No such account for this user, or the id is not a deposit or withdrawal on it. }
+ *       409: { description: The movement has already been reversed. }
+ */
+accountingRouter.delete(
+  '/ledger/:accountId/cash-movements/:entryId',
+  validate('param', CashMovementParamSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { accountId, entryId } = c.req.valid('param');
+
+    const result = await reverseCashMovement(db, userId, accountId, entryId);
+    return c.json(result, 200);
   },
 );
 
