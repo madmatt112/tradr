@@ -47,10 +47,12 @@ export const ledgerEntries = pgTable(
     // Widened with 'balance_adjustment' by the reconciliation amendment
     // (Req 8.1, 2026-07-31) — a partial predicate cannot be ALTERed, so
     // migration 0022 rebuilds this index rather than patching it.
+    // Widened again with the four cash-movement types by the ledger-cash-movements
+    // spec — migration 0035 rebuilds both partial indexes for the same reason.
     index('ledger_user_account_occurred_pnl_idx')
       .on(table.userId, table.accountId, sql`${table.occurredAt} DESC`)
       .where(
-        sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')`,
+        sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment', 'deposit', 'withdrawal', 'deposit_reversal', 'withdrawal_reversal')`,
       ),
     // Partial covering index for accounts-list balance aggregation (Req 3.3).
     // INCLUDE (amount) is hand-added to the migration SQL — see Task 5 +
@@ -59,7 +61,7 @@ export const ledgerEntries = pgTable(
     index('ledger_user_account_direction_amount_pnl_idx')
       .on(table.userId, table.accountId, table.direction)
       .where(
-        sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')`,
+        sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment', 'deposit', 'withdrawal', 'deposit_reversal', 'withdrawal_reversal')`,
       ),
     // Partial index on reverses_group_id (forward-compat for d-536e8750).
     index('ledger_reverses_group_id_idx')
@@ -77,9 +79,11 @@ export const ledgerEntries = pgTable(
     // 'balance_adjustment' (ledger-balances Req 8, 2026-07-31) is the ledger's
     // second writer: a user-initiated cash-balance reconciliation. It carries a
     // NULL positionId and symbol, and is INSERT-only like every other row here.
+    // The ledger-cash-movements spec adds four more: manual 'deposit' /
+    // 'withdrawal' cash movements and their '*_reversal' undos.
     check(
       'ledger_entry_type_chk',
-      sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')`,
+      sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment', 'deposit', 'withdrawal', 'deposit_reversal', 'withdrawal_reversal')`,
     ),
   ],
 );

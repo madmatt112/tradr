@@ -21,7 +21,7 @@ const balanceLateral = sql`LATERAL (
   )::numeric(18,4) AS balance
   FROM ledger_entries le
   WHERE le.account_id = ${accounts.id}
-    AND le.entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')
+    AND le.entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment', 'deposit', 'withdrawal', 'deposit_reversal', 'withdrawal_reversal')
 ) bal`;
 
 // LATERAL aggregate over the account's OPEN positions computing the capital

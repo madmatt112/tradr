@@ -16,10 +16,17 @@ import { accounts, exchangeRates, ledgerEntries, users } from '@/db/schema';
 // A SIXTH copy in expenses.query.ts is deliberately NOT widened — see §C13:
 // `balance_adjustment` rows carry a NULL positionId and are excluded from the
 // tax realized-P&L summary by its INNER JOIN, which is the correct outcome.
+// The ledger-cash-movements spec widens this list to seven: the four manual
+// cash-movement types ('deposit', 'withdrawal', 'deposit_reversal',
+// 'withdrawal_reversal') join the three below.
 const BALANCE_ENTRY_TYPES = [
   'position_pnl',
   'position_pnl_reversal',
   'balance_adjustment',
+  'deposit',
+  'withdrawal',
+  'deposit_reversal',
+  'withdrawal_reversal',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -377,7 +384,7 @@ export async function listLedgerEntriesForAccount(
     FROM ledger_entries
     WHERE user_id = ${userId}
       AND account_id = ${accountId}
-      AND entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')
+      AND entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment', 'deposit', 'withdrawal', 'deposit_reversal', 'withdrawal_reversal')
       AND (
         occurred_at < ${pageFirstOccurredAt}
         OR (occurred_at = ${pageFirstOccurredAt} AND created_at < ${pageFirstCreatedAt})
