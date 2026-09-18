@@ -61,7 +61,19 @@ export const LedgerEntryType = z.enum([
   // User-initiated cash balance reconciliation (Req 8). Carries a null
   // positionId and symbol — it is not tied to a trade.
   'balance_adjustment',
+  // Manual cash movements and their reversals (ledger-cash-movements spec).
+  // deposit/withdrawal carry a null positionId and symbol; the two *_reversal
+  // types undo a prior movement, mirroring position_pnl_reversal.
+  'deposit',
+  'withdrawal',
+  'deposit_reversal',
+  'withdrawal_reversal',
 ]);
+
+// Cash movement kind — the user-facing direction of a manual balance change
+// (ledger-cash-movements spec). The ledger row's `direction` and `entryType`
+// are derived from this server-side.
+export const CashMovementType = z.enum(['deposit', 'withdrawal']);
 
 // PUBLIC projection — `userId` and `reversesGroupId` are internal columns
 // and MUST NOT appear on the wire. Use `.strict()` so a payload carrying
@@ -103,6 +115,38 @@ export const ReconcileBalanceInputSchema = z
 
 export const ReconcileBalanceResponseSchema = z.object({
   entry: LedgerEntrySchema,
+  previousBalance: z.string(),
+  newBalance: z.string(),
+});
+
+// Manual cash movement (ledger-cash-movements spec). The client sends the
+// movement kind and a positive magnitude; the server derives `direction`,
+// `entryType` and the resulting balance. `ledgerAmount` already rejects
+// whitespace, signs and more than 4 fractional digits — the refine additionally
+// rejects '0' and '0.0000'. `occurredAt` is an optional RFC-3339 timestamp with
+// offset; omitted means "now".
+export const CreateCashMovementInputSchema = z
+  .object({
+    type: CashMovementType,
+    amount: ledgerAmount.refine((v) => Number(v) > 0, {
+      message: 'Must be greater than zero',
+    }),
+    occurredAt: z.string().datetime({ offset: true }).optional(),
+  })
+  .strict();
+
+// Client-side response types only — never parsed on either side, exactly as
+// ReconcileBalanceResponseSchema is used by useReconcileBalance.ts. The wire row
+// is the raw LedgerEntryRow and carries the internal `userId` and
+// `reversesGroupId` columns (Req 2.4, 3.1).
+export const CashMovementResponseSchema = z.object({
+  entry: LedgerEntrySchema,
+  previousBalance: z.string(),
+  newBalance: z.string(),
+});
+
+export const ReverseCashMovementResponseSchema = z.object({
+  reversal: LedgerEntrySchema,
   previousBalance: z.string(),
   newBalance: z.string(),
 });
@@ -151,6 +195,10 @@ export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 export type LedgerEntryListResponse = z.infer<typeof LedgerEntryListResponseSchema>;
 export type ReconcileBalanceInput = z.infer<typeof ReconcileBalanceInputSchema>;
 export type ReconcileBalanceResponse = z.infer<typeof ReconcileBalanceResponseSchema>;
+export type CashMovementType = z.infer<typeof CashMovementType>;
+export type CreateCashMovementInput = z.infer<typeof CreateCashMovementInputSchema>;
+export type CashMovementResponse = z.infer<typeof CashMovementResponseSchema>;
+export type ReverseCashMovementResponse = z.infer<typeof ReverseCashMovementResponseSchema>;
 export type ExchangeRate = z.infer<typeof ExchangeRateSchema>;
 export type CreateExchangeRateInput = z.infer<typeof CreateExchangeRateInputSchema>;
 export type PreviewRateChangeInput = z.infer<typeof PreviewRateChangeInputSchema>;
