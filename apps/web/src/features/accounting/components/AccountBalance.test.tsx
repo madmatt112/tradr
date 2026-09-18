@@ -13,6 +13,12 @@ vi.mock('./ReconcileBalanceDialog', () => ({
   ReconcileBalanceDialog: () => null,
 }));
 
+// Same treatment for the cash-movement dialog: it pulls in Radix + a mutation
+// hook, and this file only cares about the card's own header actions.
+vi.mock('./RecordCashMovementDialog', () => ({
+  RecordCashMovementDialog: () => null,
+}));
+
 import { AccountBalance } from './AccountBalance';
 
 function mountWith(ui: React.ReactElement): { container: HTMLElement; root: Root } {
@@ -121,5 +127,14 @@ describe('AccountBalance — cash / position split', () => {
     expect(
       container.querySelector('[data-testid="account-position-value"]')?.textContent,
     ).toContain('0.00');
+  });
+
+  it('renders a Deposit / withdrawal action beside Reconcile', () => {
+    const container = render(makeAccount());
+    const button = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Deposit / withdrawal',
+    );
+    expect(button).toBeDefined();
+    expect(button?.className).toContain('cursor-pointer');
   });
 });
