@@ -1,9 +1,20 @@
 import { Link } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
 import type { LedgerEntry } from '@tradr/shared/schemas/accounting';
 
 import { EmptyState } from '@/components/EmptyState';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -15,10 +26,29 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useReverseCashMovement } from '@/features/accounting/hooks/useCashMovements';
 import { useLedgerQuery } from '@/features/accounting/hooks/useLedger';
 import { formatMoney } from '@/lib/format';
 
 const PAGE_SIZE = 50;
+
+// The three reversal entry types share the "(reversal)" badge; a Set keeps the
+// membership test open to new reversal kinds without touching the row markup
+// (replaces the former `entryType === 'position_pnl_reversal'` check).
+const REVERSAL_TYPES = new Set<LedgerEntry['entryType']>([
+  'position_pnl_reversal',
+  'deposit_reversal',
+  'withdrawal_reversal',
+]);
+
+// Map a cash-movement entry type to its user-facing noun. A deposit and its
+// reversal both read "Deposit"; a withdrawal and its reversal "Withdrawal".
+// Everything else (trades, balance adjustments) returns null.
+function cashMovementLabel(t: LedgerEntry['entryType']): 'Deposit' | 'Withdrawal' | null {
+  if (t === 'deposit' || t === 'deposit_reversal') return 'Deposit';
+  if (t === 'withdrawal' || t === 'withdrawal_reversal') return 'Withdrawal';
+  return null;
+}
 
 interface Props {
   accountId: string;
@@ -59,7 +89,9 @@ function formatNumber(n: number, currency: string): string {
 
 export function LedgerView({ accountId, currency }: Props) {
   const [page, setPage] = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<LedgerEntry | null>(null);
   const { data, isLoading } = useLedgerQuery({ accountId, page });
+  const reverse = useReverseCashMovement(accountId);
 
   if (isLoading) {
     return (
@@ -75,7 +107,7 @@ export function LedgerView({ accountId, currency }: Props) {
     return (
       <EmptyState
         title="No activity yet"
-        description="No activity yet — close a position to see ledger entries here"
+        description="No activity yet — record a deposit or close a position to see ledger entries here"
       />
     );
   }
@@ -92,22 +124,32 @@ export function LedgerView({ accountId, currency }: Props) {
             <TableHead className="text-right">Debit</TableHead>
             <TableHead className="text-right">Credit</TableHead>
             <TableHead className="text-right">Balance</TableHead>
+            <TableHead>
+              <span className="sr-only">Actions</span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {data.entries.map((entry, i) => {
-            const isReversal = entry.entryType === 'position_pnl_reversal';
+            const isReversal = REVERSAL_TYPES.has(entry.entryType);
             // Branch on entryType BEFORE positionId. A balance adjustment has no
             // position by design (Req 8.12), so falling through to the
             // positionId-null branch below would label it "(deleted)" and read
-            // as an orphaned trade row.
+            // as an orphaned trade row. The same holds for cash movements.
             const isAdjustment = entry.entryType === 'balance_adjustment';
+            const cashLabel = cashMovementLabel(entry.entryType);
+            // Only originating movements are reversible; a reversal row is not
+            // itself deletable (Req 7.2).
+            const isCashMovement =
+              entry.entryType === 'deposit' || entry.entryType === 'withdrawal';
             return (
               <TableRow key={entry.id}>
                 <TableCell>{new Date(entry.occurredAt).toLocaleString()}</TableCell>
                 <TableCell>
                   {isAdjustment ? (
                     <Badge variant="secondary">Balance adjustment</Badge>
+                  ) : cashLabel !== null ? (
+                    <Badge variant="secondary">{cashLabel}</Badge>
                   ) : entry.positionId ? (
                     <Link
                       to="/positions/$positionId"
@@ -135,6 +177,20 @@ export function LedgerView({ accountId, currency }: Props) {
                 </TableCell>
                 <TableCell className="text-right font-medium">
                   {formatNumber(runningBalances[i], currency)}
+                </TableCell>
+                <TableCell className="text-right">
+                  {isCashMovement ? (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="cursor-pointer text-muted-foreground"
+                      aria-label={`Delete ${cashLabel?.toLowerCase()}`}
+                      data-testid="ledger-delete-cash-movement"
+                      onClick={() => setDeleteTarget(entry)}
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  ) : null}
                 </TableCell>
               </TableRow>
             );
@@ -165,6 +221,41 @@ export function LedgerView({ accountId, currency }: Props) {
           </Button>
         </div>
       )}
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {deleteTarget ? cashMovementLabel(deleteTarget.entryType) : ''}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget && (
+                <>
+                  Tradr adds a reversal entry for{' '}
+                  {formatMoney(deleteTarget.amount, deleteTarget.currency)} and keeps the original.
+                  The balance returns to what it was before this{' '}
+                  {cashMovementLabel(deleteTarget.entryType)}.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="cursor-pointer">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="cursor-pointer"
+              onClick={() => {
+                if (deleteTarget) reverse.mutate(deleteTarget.id);
+                setDeleteTarget(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
