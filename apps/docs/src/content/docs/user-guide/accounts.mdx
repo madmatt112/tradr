@@ -1,18 +1,154 @@
 ---
 title: 'Accounts & the multi-currency ledger'
 description: 'Create brokerage accounts, set starting balances and currency, record deposits and withdrawals, reconcile balances, and read the consolidated view.'
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
 ---
 
-Create brokerage accounts, set starting balances and currency, record deposits and withdrawals, reconcile balances, and read the consolidated view.
+This page explains brokerage accounts (an **account** in Tradr), their cash
+balance, and the ledger behind it. It covers deposits, withdrawals,
+reconciliation, and the multi-currency total on the dashboard.
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+An account mirrors a real brokerage account: one currency, one starting balance,
+and the positions you trade in it. Tradr never connects to your broker. You
+record what you have already done.
+
+## Create an account
+
+Every position, fill and ledger entry books against an account. You need one
+before anything else works.
+
+Open **Accounts**, then choose **New Account**. The form has six fields:
+**Name**, **Currency**, **Trading-day timezone**, **Starting balance**,
+**Default risk %**, and **Brokerage**. [Getting started, step
+2](/user-guide/getting-started/#step-2--create-a-brokerage-account) describes
+each one.
+
+Each account holds one currency. It fixes the currency for this account's
+balance, fees and P&L. To track a second currency, add another account.
+
+## The starting balance
+
+The starting balance is the account's opening cash. It is the baseline every
+later figure measures against.
+
+Set it once, in the account form. The balance Tradr shows is this figure plus
+every ledger entry. Leave it empty and the account starts at zero.
+
+You cannot change the starting balance after the account exists. Changing it
+would move every past balance with it. To correct the cash instead, record a
+deposit or withdrawal, or reconcile the balance.
+
+## Record a deposit or withdrawal
+
+Record a deposit or withdrawal for cash you moved into or out of the account.
+Tradr adds one ledger entry in the account's currency and moves the balance by
+the amount.
+
+1. Open the account from **Accounts**.
+2. On the **Balance** card, choose **Deposit / withdrawal**.
+3. Set **Type** to **Deposit** or **Withdrawal**.
+4. Enter the **Amount** in the account's currency.
+5. Set the **Date and time**.
+6. Choose **Record deposit** or **Record withdrawal**.
+
+The dialog previews the **Current balance** and the **Resulting balance** as you
+type.
+
+**Expected result:** the balance moves by the amount. A new **Deposit** or
+**Withdrawal** row appears in the ledger.
+
+A withdrawal larger than the balance is accepted. Tradr shows a warning that the
+balance will go below zero, then records the movement anyway. The balance is
+cash only. It does not include the market value of open positions.
+
+## Delete a deposit or withdrawal
+
+Delete a deposit or withdrawal you recorded by mistake. Tradr reverses it and
+keeps a record.
+
+1. Find the **Deposit** or **Withdrawal** row in the ledger.
+2. Choose the delete button at the end of that row.
+3. Confirm in the dialog.
+
+Tradr does not erase the row. It adds a reversal entry for the same amount and
+keeps the original. Both rows stay in the ledger. The reversal carries a
+**(reversal)** badge, and the balance returns to what it was before.
+
+Only a deposit or withdrawal row has a delete button. A reversal row has none. To
+change an amount, delete the movement, then record it again with the right
+figure.
+
+## Reconcile the cash balance
+
+Reconcile the balance when Tradr's figure and your broker's cash figure
+disagree. Tradr posts one adjusting entry for the difference.
+
+1. Open the account from **Accounts**.
+2. On the **Balance** card, choose **Reconcile**.
+3. Enter the **Actual cash balance** the account should show.
+4. Choose **Post adjustment**.
+
+**Expected result:** a **Balance adjustment** row appears in the ledger for the
+difference. The balance now matches the figure you entered.
+
+Reconcile against cash only. Tradr's balance is the starting balance plus
+realized P&L from closed positions. It does not include the market value of open
+positions.
+
+The **Balance** card shows two more lines when you hold open positions: **Cash**
+and **Positions**. The **Positions** figure is the cost basis of those
+positions, not their market value. Tradr has no quote source, so it shows cost
+basis only.
+
+## Read the ledger
+
+Below the **Balance** card, the account page shows its **Ledger**. The ledger
+lists every entry that moved the balance, newest first.
+
+The ledger has these columns:
+
+| Column          | Meaning                                           |
+| --------------- | ------------------------------------------------- |
+| **Occurred at** | The date and time the entry happened.             |
+| **Position**    | A label, or a link to the position it belongs to. |
+| **Debit**       | Money out of the account.                         |
+| **Credit**      | Money into the account.                           |
+| **Balance**     | The running balance after this entry.             |
+
+Every entry is one of five kinds:
+
+| Row                | Meaning                                                          |
+| ------------------ | ---------------------------------------------------------------- |
+| Trade P&L          | Realized P&L from a position. The **Position** cell links to it. |
+| Reversal           | Reverses an earlier entry. It carries a **(reversal)** badge.    |
+| Balance adjustment | The entry a reconcile posts.                                     |
+| Deposit            | Cash you added to the account.                                   |
+| Withdrawal         | Cash you removed from the account.                               |
+
+The **Balance** column is a running total. It shows the account balance after
+each entry, down the page.
+
+The ledger shows 50 rows per page. Use **Previous** and **Next** to move between
+pages. The running balance stays correct on every page. Tradr anchors each page
+to the balance at its top row.
+
+## Display currency and exchange rates
+
+Each account holds one currency. Tradr supports accounts in different currencies
+and consolidates them on the dashboard.
+
+Set your **display currency** under **Settings → Profile**. This is the currency
+the dashboard uses for its cross-currency total. Per-account balances stay in
+their own currency.
+
+Tradr does not fetch exchange rates. You enter them by hand. On **Settings →
+Profile**, use **Exchange Rates** to add a rate for a currency pair. Give the
+**Base currency**, the **Quote currency**, the **Rate**, and an **Effective
+date**. Choose **Save rate**.
+
+The dashboard's **Total (all accounts)** widget sums every account into your
+display currency. It appears only when you hold accounts in more than one
+currency.
+
+The total shows a dash when a rate is missing. Point at the dash to see which
+currency pairs need a rate. Choose **Enter rate** to add the missing rate on the
+settings page.
