@@ -7,6 +7,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/componen
 import { formatMoney } from '@/lib/format';
 
 import { ReconcileBalanceDialog } from './ReconcileBalanceDialog';
+import { RecordCashMovementDialog } from './RecordCashMovementDialog';
 
 interface Props {
   account: Account;
@@ -14,6 +15,7 @@ interface Props {
 
 export function AccountBalance({ account }: Props) {
   const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [cashOpen, setCashOpen] = useState(false);
 
   // NOTE: nothing on this card is denominated in display currency — `balance`
   // is in the account's native currency. If a display-currency-denominated
@@ -26,14 +28,24 @@ export function AccountBalance({ account }: Props) {
       <CardHeader>
         <CardTitle>Balance</CardTitle>
         <CardAction>
-          <Button
-            variant="outline"
-            size="sm"
-            className="cursor-pointer"
-            onClick={() => setReconcileOpen(true)}
-          >
-            Reconcile
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
+              onClick={() => setCashOpen(true)}
+            >
+              Deposit / withdrawal
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
+              onClick={() => setReconcileOpen(true)}
+            >
+              Reconcile
+            </Button>
+          </div>
         </CardAction>
       </CardHeader>
       <CardContent>
@@ -72,6 +84,7 @@ export function AccountBalance({ account }: Props) {
           </div>
         )}
       </CardContent>
+      <RecordCashMovementDialog account={account} open={cashOpen} onOpenChange={setCashOpen} />
       <ReconcileBalanceDialog
         account={account}
         open={reconcileOpen}

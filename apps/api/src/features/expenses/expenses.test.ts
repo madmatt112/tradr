@@ -1526,6 +1526,90 @@ describe('boundary-year transition + invariants', () => {
     // The position's 100, and NOT the 50,000 adjustment.
     expect(usd?.amount).toBe('100.00');
   });
+
+  it('cash-movement rows are excluded from realised P&L and fees (ledger-cash-movements Req 5.1-5.4)', async () => {
+    vi.useRealTimers();
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    const me = await getMe(cookie);
+
+    // Baseline: a closed position with a real +100 realised P&L row, so the
+    // summary has a non-zero figure the cash rows must not be able to move.
+    // eslint-disable-next-line no-restricted-syntax
+    const [pos] = await db
+      .insert(positions)
+      .values({
+        userId: me.id,
+        accountId: acct.id,
+        symbol: 'CASH',
+        side: 'long',
+        assetType: 'stock',
+        status: 'closed',
+        openedAt: new Date('2026-05-15T12:00:00Z'),
+        closedAt: new Date('2026-06-15T12:00:00Z'),
+      })
+      .returning();
+
+    await db.insert(ledgerEntries).values({
+      userId: me.id,
+      accountId: acct.id,
+      positionId: pos!.id,
+      entryType: 'position_pnl',
+      direction: 'credit',
+      amount: '100.0000',
+      currency: 'USD',
+      occurredAt: new Date('2026-06-15T12:00:00Z'),
+      groupId: crypto.randomUUID(),
+      reversesGroupId: null,
+    });
+
+    // Every manual cash-movement class in the same year and account: a deposit,
+    // a withdrawal, and each of their reversals. Each carries a NULL positionId
+    // by design, so `listRealisedPositionsForYear`'s INNER JOIN on positions
+    // drops all four before its entry-type filter is even consulted. That is
+    // why the filter in expenses.query.ts:269 is deliberately NOT widened with
+    // these types (d-57868245): cash funding is not realised trading P&L. It
+    // also carries no fills, so it can never enter the fills-sourced fee rollup.
+    for (const [entryType, direction, amount, occurredAt] of [
+      ['deposit', 'credit', '5000.0000', '2026-07-01T12:00:00Z'],
+      ['withdrawal', 'debit', '2000.0000', '2026-08-01T12:00:00Z'],
+      ['deposit_reversal', 'debit', '5000.0000', '2026-09-01T12:00:00Z'],
+      ['withdrawal_reversal', 'credit', '2000.0000', '2026-10-01T12:00:00Z'],
+    ] as const) {
+      await db.insert(ledgerEntries).values({
+        userId: me.id,
+        accountId: acct.id,
+        positionId: null,
+        entryType,
+        direction,
+        amount,
+        currency: 'USD',
+        occurredAt: new Date(occurredAt),
+        groupId: crypto.randomUUID(),
+        reversesGroupId: null,
+      });
+    }
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-15T12:00:00Z'));
+    await extendSessions(new Date('2026-12-15T11:45:00Z'));
+
+    // (a) Realised P&L: the position's 100 only — none of the cash rows.
+    const taxRes = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(taxRes.status).toBe(200);
+    const taxBody = await taxRes.json();
+    const usd = taxBody.realisedPnl.perCurrency.find(
+      (r: { currency: string }) => r.currency === 'USD',
+    );
+    expect(usd?.amount).toBe('100.00');
+
+    // (b) Fees: cash movements post no fills, so the fee rollup — sourced from
+    // fills.fees — surfaces no row for them (this account trades nothing else).
+    const feeRes = await authedRequest('GET', '/api/expenses/fee-rollup?year=2026', cookie);
+    expect(feeRes.status).toBe(200);
+    const feeBody = await feeRes.json();
+    expect(feeBody.totalsByAccount).toEqual([]);
+  });
 });
 
 // DO NOT add describe() blocks below this line — see Task 17.4 (boundary-year vi.useFakeTimers scoping).

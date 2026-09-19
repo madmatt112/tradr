@@ -1069,6 +1069,358 @@ describe('POST /api/ledger/:accountId/reconcile', () => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/ledger/:accountId/cash-movements — record a deposit/withdrawal (Req 2, 4)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/ledger/:accountId/cash-movements', () => {
+  // Copied from the reconcile block (:842-865) — sibling describe scopes, so no
+  // shadowing, and the existing block is left untouched.
+  async function createAccountWithBalance(
+    cookie: string,
+    name: string,
+    startingBalance: string,
+    currency = 'USD',
+  ) {
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name,
+      currency,
+      startingBalance,
+    });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  async function getBalance(cookie: string, accountId: string): Promise<string> {
+    const res = await authedRequest('GET', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(200);
+    return (await res.json()).balance;
+  }
+
+  async function recordMovement(cookie: string, accountId: string, body: unknown) {
+    return authedRequest('POST', `/api/ledger/${accountId}/cash-movements`, cookie, body);
+  }
+
+  async function reconcile(cookie: string, accountId: string, targetBalance: string) {
+    return authedRequest('POST', `/api/ledger/${accountId}/reconcile`, cookie, { targetBalance });
+  }
+
+  it('records a deposit as one credit row of the Req 1.5 shape and returns both balances', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Deposit', '1000');
+
+    const res = await recordMovement(cookie, account.id, { type: 'deposit', amount: '1000.00' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    expect(body.previousBalance).toBe('1000.0000');
+    expect(body.newBalance).toBe('2000.0000');
+    expect(body.entry.entryType).toBe('deposit');
+    expect(body.entry.direction).toBe('credit');
+    expect(body.entry.amount).toBe('1000.0000');
+    expect(body.entry.currency).toBe('USD');
+    expect(body.entry.positionId).toBeNull();
+    expect(body.entry.symbol).toBeNull();
+    expect(body.entry.reversesGroupId).toBeNull();
+    expect(typeof body.entry.groupId).toBe('string');
+
+    expect(await getBalance(cookie, account.id)).toBe('2000.0000');
+  });
+
+  it('records a withdrawal as one debit row', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Withdraw', '1000');
+
+    const res = await recordMovement(cookie, account.id, { type: 'withdrawal', amount: '250.50' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    expect(body.entry.entryType).toBe('withdrawal');
+    expect(body.entry.direction).toBe('debit');
+    expect(body.entry.amount).toBe('250.5000');
+    expect(body.newBalance).toBe('749.5000');
+    expect(await getBalance(cookie, account.id)).toBe('749.5000');
+  });
+
+  it('stores a supplied occurredAt and defaults an omitted one to near now', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Occurred', '1000');
+
+    const supplied = '2025-06-15T12:00:00.000Z';
+    const withDate = await recordMovement(cookie, account.id, {
+      type: 'deposit',
+      amount: '100',
+      occurredAt: supplied,
+    });
+    expect(withDate.status).toBe(201);
+    const storedSupplied = (await withDate.json()).entry.occurredAt;
+    expect(new Date(storedSupplied).toISOString()).toBe(supplied);
+
+    const withoutDate = await recordMovement(cookie, account.id, {
+      type: 'deposit',
+      amount: '100',
+    });
+    expect(withoutDate.status).toBe(201);
+    const storedDefault = new Date((await withoutDate.json()).entry.occurredAt).getTime();
+    expect(Math.abs(storedDefault - Date.now())).toBeLessThan(60_000);
+  });
+
+  // Mirrors the reconcile three-sites test (:906-943): a deposit must agree
+  // across balanceLateral, the dashboard total and the running-balance anchor.
+  it('a deposit agrees across all three derivation sites', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Dep Sites', '1000');
+    expect(
+      (await recordMovement(cookie, account.id, { type: 'deposit', amount: '400' })).status,
+    ).toBe(201);
+
+    // Site 1 — `balanceLateral` (account detail + list).
+    expect(await getBalance(cookie, account.id)).toBe('1400.0000');
+    const listRes = await authedRequest('GET', '/api/accounts', cookie);
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()).find((a: { id: string }) => a.id === account.id);
+    expect(listed.balance).toBe('1400.0000');
+    expect(listed.cash).toBe('1400.0000');
+
+    // Site 2 — dashboard totals. Single USD account, so total is the balance.
+    const totalsRes = await authedRequest('GET', '/api/dashboard/totals', cookie);
+    expect(totalsRes.status).toBe(200);
+    const totals = await totalsRes.json();
+    expect(totals.displayCurrency).toBe('USD');
+    expect(totals.total).toBe('1400.0000');
+
+    // Site 3 — running-balance anchor. A second deposit gives an OLDER row for
+    // the anchor to sum over; pageSize=1 excludes the newest deposit's own page.
+    expect(
+      (await recordMovement(cookie, account.id, { type: 'deposit', amount: '350' })).status,
+    ).toBe(201);
+    const ledgerRes = await authedRequest(
+      'GET',
+      `/api/ledger/${account.id}?page=1&pageSize=1`,
+      cookie,
+    );
+    expect(ledgerRes.status).toBe(200);
+    const ledger = await ledgerRes.json();
+    expect(ledger.entries).toHaveLength(1);
+    expect(ledger.entries[0].amount).toBe('350.0000');
+    // 1000 starting + the first 400 deposit.
+    expect(ledger.runningBalanceAtFirstRow).toBe('1400.00');
+  });
+
+  it('rejects zero, negative, malformed, too-precise, extra-key and bad-date bodies with 400 and writes nothing', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Invalid', '1000');
+
+    const bad: unknown[] = [
+      { type: 'deposit', amount: '0' },
+      { type: 'deposit', amount: '-5' },
+      { type: 'deposit', amount: 'abc' },
+      { type: 'deposit', amount: '1000.123' }, // 3 dp > USD's 2 minor units
+      { type: 'deposit', amount: '100', currency: 'USD' }, // strict schema rejects
+      { type: 'deposit', amount: '100', occurredAt: '2026-09-18T14:30' }, // no seconds/offset
+    ];
+    for (const body of bad) {
+      const res = await recordMovement(cookie, account.id, body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(rows).toHaveLength(0);
+    expect(await getBalance(cookie, account.id)).toBe('1000.0000');
+  });
+
+  it('404s for an unknown account and for another user’s account, writing nothing', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const { cookie: otherCookie } = await registerAndGetCookie();
+    const victim = await createAccountWithBalance(otherCookie, 'Victim Acct', '1000');
+
+    const unknown = await recordMovement(cookie, '00000000-0000-4000-8000-000000000000', {
+      type: 'deposit',
+      amount: '50',
+    });
+    expect(unknown.status).toBe(404);
+
+    const crossUser = await recordMovement(cookie, victim.id, { type: 'deposit', amount: '50' });
+    expect(crossUser.status).toBe(404);
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, victim.id));
+    expect(rows).toHaveLength(0);
+    expect(await getBalance(otherCookie, victim.id)).toBe('1000.0000');
+  });
+
+  // Req 2.6 / D2 — cash-only balance, no overdraw guard.
+  it('accepts a withdrawal past the balance and lets it go negative', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Overdraw', '500');
+
+    const res = await recordMovement(cookie, account.id, { type: 'withdrawal', amount: '1000' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.entry.direction).toBe('debit');
+    expect(body.newBalance).toBe('-500.0000');
+    expect(await getBalance(cookie, account.id)).toBe('-500.0000');
+  });
+
+  // Req 4.5 — reconciliation nets the deposit off the live balance.
+  it('a deposit then reconcile to starting+1000 is 409, to starting+1250 writes one 250 credit', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Dep Recon', '1000');
+
+    expect(
+      (await recordMovement(cookie, account.id, { type: 'deposit', amount: '1000' })).status,
+    ).toBe(201);
+    expect(await getBalance(cookie, account.id)).toBe('2000.0000');
+
+    // target == live balance (starting + 1000) → zero delta.
+    expect((await reconcile(cookie, account.id, '2000')).status).toBe(409);
+
+    // starting + 1250 → one balance_adjustment credit of 250.
+    const res = await reconcile(cookie, account.id, '2250');
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.entry.entryType).toBe('balance_adjustment');
+    expect(body.entry.direction).toBe('credit');
+    expect(body.entry.amount).toBe('250.0000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/ledger/:accountId/cash-movements/:entryId — reversal (Req 3)
+// ---------------------------------------------------------------------------
+
+describe('DELETE /api/ledger/:accountId/cash-movements/:entryId', () => {
+  async function createAccountWithBalance(
+    cookie: string,
+    name: string,
+    startingBalance: string,
+    currency = 'USD',
+  ) {
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name,
+      currency,
+      startingBalance,
+    });
+    expect(res.status).toBe(201);
+    return res.json();
+  }
+
+  async function getBalance(cookie: string, accountId: string): Promise<string> {
+    const res = await authedRequest('GET', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(200);
+    return (await res.json()).balance;
+  }
+
+  async function recordMovement(cookie: string, accountId: string, body: unknown) {
+    return authedRequest('POST', `/api/ledger/${accountId}/cash-movements`, cookie, body);
+  }
+
+  async function deleteMovement(cookie: string, accountId: string, entryId: string) {
+    return authedRequest('DELETE', `/api/ledger/${accountId}/cash-movements/${entryId}`, cookie);
+  }
+
+  async function reconcile(cookie: string, accountId: string, targetBalance: string) {
+    return authedRequest('POST', `/api/ledger/${accountId}/reconcile`, cookie, { targetBalance });
+  }
+
+  it('deletes a deposit by appending a flipped-direction reversal and restores the balance', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Del Deposit', '1000');
+
+    const recorded = await recordMovement(cookie, account.id, { type: 'deposit', amount: '400' });
+    expect(recorded.status).toBe(201);
+    const entry = (await recorded.json()).entry;
+    expect(await getBalance(cookie, account.id)).toBe('1400.0000');
+
+    const res = await deleteMovement(cookie, account.id, entry.id);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.reversal.reversesGroupId).toBe(entry.groupId);
+    expect(body.reversal.entryType).toBe('deposit_reversal');
+    expect(body.reversal.direction).toBe('debit'); // flipped from the deposit's credit
+    expect(body.reversal.amount).toBe(entry.amount); // verbatim copy
+    expect(body.previousBalance).toBe('1400.0000');
+    expect(body.newBalance).toBe('1000.0000');
+    expect(await getBalance(cookie, account.id)).toBe('1000.0000');
+  });
+
+  it('answers a second delete with 409 and leaves exactly two rows', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Del Twice', '1000');
+
+    const recorded = await recordMovement(cookie, account.id, {
+      type: 'withdrawal',
+      amount: '100',
+    });
+    const entry = (await recorded.json()).entry;
+
+    expect((await deleteMovement(cookie, account.id, entry.id)).status).toBe(200);
+    expect((await deleteMovement(cookie, account.id, entry.id)).status).toBe(409);
+
+    const rows = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(rows).toHaveLength(2); // original withdrawal + its one reversal
+  });
+
+  it('404s deleting a balance_adjustment or a position_pnl id and writes no new row', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Del Wrong', '1000');
+
+    expect((await reconcile(cookie, account.id, '1500')).status).toBe(201); // balance_adjustment
+    await openAndClosePosition(cookie, account.id, {
+      entryPrice: '100',
+      exitPrice: '110',
+      quantity: '1',
+    }); // position_pnl
+
+    const rowsBefore = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    const adjustment = rowsBefore.find((r) => r.entryType === 'balance_adjustment');
+    const pnl = rowsBefore.find((r) => r.entryType === 'position_pnl');
+    expect(adjustment).toBeDefined();
+    expect(pnl).toBeDefined();
+
+    expect((await deleteMovement(cookie, account.id, adjustment!.id)).status).toBe(404);
+    expect((await deleteMovement(cookie, account.id, pnl!.id)).status).toBe(404);
+
+    const rowsAfter = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.accountId, account.id));
+    expect(rowsAfter).toHaveLength(rowsBefore.length);
+  });
+
+  it('the ledger list surfaces all four cash-movement entry types', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createAccountWithBalance(cookie, 'Del List', '1000');
+
+    const depRes = await recordMovement(cookie, account.id, { type: 'deposit', amount: '100' });
+    const deposit = (await depRes.json()).entry;
+    const wdRes = await recordMovement(cookie, account.id, { type: 'withdrawal', amount: '50' });
+    const withdrawal = (await wdRes.json()).entry;
+
+    expect((await deleteMovement(cookie, account.id, deposit.id)).status).toBe(200);
+    expect((await deleteMovement(cookie, account.id, withdrawal.id)).status).toBe(200);
+
+    const res = await authedRequest('GET', `/api/ledger/${account.id}`, cookie);
+    expect(res.status).toBe(200);
+    const types = (await res.json()).entries.map((e: { entryType: string }) => e.entryType).sort();
+    expect(types).toEqual(
+      ['deposit', 'deposit_reversal', 'withdrawal', 'withdrawal_reversal'].sort(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Per-fill realized P&L posting (Req 9, design §C15–C18)
 // ---------------------------------------------------------------------------
 

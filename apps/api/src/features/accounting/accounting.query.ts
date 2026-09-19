@@ -16,10 +16,17 @@ import { accounts, exchangeRates, ledgerEntries, users } from '@/db/schema';
 // A SIXTH copy in expenses.query.ts is deliberately NOT widened — see §C13:
 // `balance_adjustment` rows carry a NULL positionId and are excluded from the
 // tax realized-P&L summary by its INNER JOIN, which is the correct outcome.
+// The ledger-cash-movements spec widens this list to seven: the four manual
+// cash-movement types ('deposit', 'withdrawal', 'deposit_reversal',
+// 'withdrawal_reversal') join the three below.
 const BALANCE_ENTRY_TYPES = [
   'position_pnl',
   'position_pnl_reversal',
   'balance_adjustment',
+  'deposit',
+  'withdrawal',
+  'deposit_reversal',
+  'withdrawal_reversal',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -226,6 +233,55 @@ export async function lockAccountForUpdate(
 }
 
 /**
+ * Fetch a single manual cash-movement row (`deposit` or `withdrawal`) by id,
+ * scoped to the owning user and account (Req 3.2). Returns `null` when no such
+ * row exists — the caller turns that into a `NotFoundError`, so a reversal can
+ * only ever target the user's own deposit/withdrawal, never a
+ * `balance_adjustment`, a `position_pnl` row, or another user's entry.
+ *
+ * Transaction-only: the reverse flow's find-check-insert must run behind the
+ * same account row lock as the INSERT, exactly like `lockAccountForUpdate`.
+ */
+export async function findCashMovementById(
+  tx: Transaction,
+  { userId, accountId, entryId }: { userId: string; accountId: string; entryId: string },
+): Promise<LedgerEntryRow | null> {
+  const rows = await tx
+    .select()
+    .from(ledgerEntries)
+    .where(
+      and(
+        eq(ledgerEntries.id, entryId),
+        eq(ledgerEntries.userId, userId),
+        eq(ledgerEntries.accountId, accountId),
+        inArray(ledgerEntries.entryType, ['deposit', 'withdrawal']),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * True when any of the user's ledger rows already reverses `groupId` — i.e. the
+ * cash movement in that group has been reversed (Req 3.3). Served by the
+ * `ledger_reverses_group_id_idx` partial index (accounting.schema.ts). The
+ * caller turns `true` into a `ConflictError`, so a movement cannot be reversed
+ * twice. Transaction-only for the same reason as `findCashMovementById`.
+ */
+export async function hasReversalForGroup(
+  tx: Transaction,
+  userId: string,
+  groupId: string,
+): Promise<boolean> {
+  const rows = await tx
+    .select({ id: ledgerEntries.id })
+    .from(ledgerEntries)
+    .where(and(eq(ledgerEntries.userId, userId), eq(ledgerEntries.reversesGroupId, groupId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
  * Plain insert of an exchange rate. Throws on `(userId, base, quote, effectiveDate)`
  * uniqueness violation — callers that want upsert semantics use
  * `upsertExchangeRate` instead.
@@ -377,7 +433,7 @@ export async function listLedgerEntriesForAccount(
     FROM ledger_entries
     WHERE user_id = ${userId}
       AND account_id = ${accountId}
-      AND entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment')
+      AND entry_type IN ('position_pnl', 'position_pnl_reversal', 'balance_adjustment', 'deposit', 'withdrawal', 'deposit_reversal', 'withdrawal_reversal')
       AND (
         occurred_at < ${pageFirstOccurredAt}
         OR (occurred_at = ${pageFirstOccurredAt} AND created_at < ${pageFirstCreatedAt})
