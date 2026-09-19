@@ -256,6 +256,110 @@ async function installAccountingMocks(page: Page, getState: () => MockState) {
     );
   });
 
+  // POST /ledger/:accountId/cash-movements — record a manual deposit or
+  // withdrawal (Req 6). Mirrors the server: derive the row's direction from
+  // `type` (credit for a deposit, debit for a withdrawal), prepend one ledger
+  // row, move the account balance by the magnitude and anchor the page at the
+  // pre-movement balance. Registered BEFORE the ledger GET route so the more
+  // specific path is not shadowed (see the reconcile note above).
+  await page.route(/\/api\/ledger\/[0-9a-f-]{36}\/cash-movements$/i, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const url = new URL(route.request().url());
+    const accountId = url.pathname.split('/').slice(-2)[0];
+    const state = getState();
+    const acct = state.accounts.find((a) => a.id === accountId);
+    if (!acct) {
+      await jsonResponse(route, { error: { code: 'NOT_FOUND', message: 'not found' } }, 404);
+      return;
+    }
+
+    const body = route.request().postDataJSON() as {
+      type: 'deposit' | 'withdrawal';
+      amount: string;
+      occurredAt?: string;
+    };
+    const previous = Number(acct.balance);
+    const magnitude = Number(body.amount);
+    const isDeposit = body.type === 'deposit';
+    const newBalance = isDeposit ? previous + magnitude : previous - magnitude;
+
+    const entry: MockLedgerEntry = {
+      id: `cash-${state.ledger.length + 1}`,
+      accountId,
+      positionId: null,
+      entryType: body.type,
+      direction: isDeposit ? 'credit' : 'debit',
+      amount: magnitude.toFixed(4),
+      currency: acct.currency,
+      symbol: null,
+      occurredAt: body.occurredAt ?? NOW_ISO,
+      createdAt: NOW_ISO,
+      groupId: `grp-${state.ledger.length + 1}`,
+    };
+    state.ledgerAnchor = previous.toFixed(2);
+    state.ledger = [entry, ...state.ledger];
+    acct.balance = newBalance.toFixed(2);
+
+    await jsonResponse(
+      route,
+      { entry, previousBalance: previous.toFixed(4), newBalance: newBalance.toFixed(4) },
+      201,
+    );
+  });
+
+  // DELETE /ledger/:accountId/cash-movements/:entryId — reverse a manual cash
+  // movement (Req 7). Prepend a reversal row with the flipped direction (so
+  // LedgerView labels it with the "(reversal)" badge), restore the balance to
+  // its pre-movement value and answer 200.
+  await page.route(/\/api\/ledger\/[0-9a-f-]{36}\/cash-movements\/[^/]+$/i, async (route) => {
+    if (route.request().method() !== 'DELETE') {
+      await route.fallback();
+      return;
+    }
+    const url = new URL(route.request().url());
+    const segments = url.pathname.split('/');
+    const entryId = segments.pop() as string;
+    const accountId = segments[segments.length - 2];
+    const state = getState();
+    const acct = state.accounts.find((a) => a.id === accountId);
+    const original = state.ledger.find((e) => e.id === entryId);
+    if (!acct || !original) {
+      await jsonResponse(route, { error: { code: 'NOT_FOUND', message: 'not found' } }, 404);
+      return;
+    }
+
+    const previous = Number(acct.balance);
+    const flipped: 'credit' | 'debit' = original.direction === 'credit' ? 'debit' : 'credit';
+    const magnitude = Number(original.amount);
+    const newBalance = flipped === 'credit' ? previous + magnitude : previous - magnitude;
+
+    const reversal: MockLedgerEntry = {
+      id: `rev-${state.ledger.length + 1}`,
+      accountId,
+      positionId: null,
+      entryType: original.entryType === 'deposit' ? 'deposit_reversal' : 'withdrawal_reversal',
+      direction: flipped,
+      amount: original.amount,
+      currency: acct.currency,
+      symbol: null,
+      occurredAt: NOW_ISO,
+      createdAt: NOW_ISO,
+      groupId: original.groupId,
+    };
+    state.ledgerAnchor = previous.toFixed(2);
+    state.ledger = [reversal, ...state.ledger];
+    acct.balance = newBalance.toFixed(2);
+
+    await jsonResponse(
+      route,
+      { reversal, previousBalance: previous.toFixed(4), newBalance: newBalance.toFixed(4) },
+      200,
+    );
+  });
+
   // GET /ledger/:accountId — serves the mutable ledger state. Defaults to an
   // empty page so detail pages mount without erroring; the reconcile scenario
   // populates it.
@@ -499,6 +603,41 @@ test.describe('Ledger balances — single currency user', () => {
     // Credit column carries the delta; the running balance ties out to the card.
     await expect(page.getByRole('cell', { name: '$250.50' })).toBeVisible();
     await expect(page.getByRole('cell', { name: '$1,250.50' })).toBeVisible();
+  });
+
+  // Requirement 9.3 — the record → ledger → reverse composition proven end to
+  // end at the API boundary: a deposit moves the balance and lands a labelled
+  // credit row; deleting it appends a reversal that restores the balance.
+  test('recording a deposit then deleting it moves and restores the balance', async ({ page }) => {
+    await page.goto(`/accounts/${USD_ACCOUNT_ID}`);
+    const balanceCard = page.getByTestId('account-balance');
+    await expect(balanceCard).toHaveText('$1,000.00');
+
+    // Open the record dialog from the balance card's header action (Task 9).
+    await page.getByRole('button', { name: 'Deposit / withdrawal' }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Record a deposit or withdrawal' }),
+    ).toBeVisible();
+
+    // Enter a $1,000 deposit; the live preview projects the resulting balance.
+    await page.getByLabel('Amount (USD)').fill('1000');
+    await expect(page.getByTestId('cash-movement-resulting-balance')).toContainText('2,000.00');
+
+    await page.getByRole('button', { name: 'Record deposit' }).click();
+
+    // The mutation's invalidation set refetches the account and the ledger, so
+    // the card and the new row land without a reload.
+    await expect(balanceCard).toHaveText('$2,000.00');
+    await expect(page.getByText('Deposit', { exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '$1,000.00' })).toBeVisible();
+
+    // Reverse the deposit via the row's delete action and confirm the dialog.
+    await page.getByTestId('ledger-delete-cash-movement').click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
+
+    // A reversal row appears and the balance returns to its pre-deposit value.
+    await expect(page.getByText('(reversal)')).toBeVisible();
+    await expect(balanceCard).toHaveText('$1,000.00');
   });
 });
 
