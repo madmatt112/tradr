@@ -1,0 +1,40 @@
+{
+  "generator": "apps/docs/scripts/gen-how-its-built.mjs",
+  "vitestProjects": [
+    {
+      "name": "shared",
+      "testFiles": 24
+    },
+    {
+      "name": "api",
+      "testFiles": 149
+    },
+    {
+      "name": "migrations",
+      "testFiles": 3
+    },
+    {
+      "name": "web",
+      "testFiles": 193
+    },
+    {
+      "name": "web-scripts",
+      "testFiles": 5
+    },
+    {
+      "name": "docs-scripts",
+      "testFiles": 1
+    }
+  ],
+  "testFilesTotal": 375,
+  "e2eSpecFiles": 30,
+  "migrations": 36,
+  "ciJobs": [
+    "checks",
+    "test-api",
+    "test-web",
+    "e2e",
+    "docker-smoke"
+  ],
+  "dockerSmokeAssertions": 13
+}

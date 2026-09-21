@@ -195,4 +195,12 @@ export default defineWorkspace([
       },
     },
   },
+  {
+    test: {
+      name: 'docs-scripts',
+      root: './apps/docs',
+      environment: 'node',
+      include: ['scripts/**/*.test.mjs'],
+    },
+  },
 ]);
