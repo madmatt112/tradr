@@ -23,10 +23,10 @@
     },
     {
       "name": "docs-scripts",
-      "testFiles": 1
+      "testFiles": 2
     }
   ],
-  "testFilesTotal": 375,
+  "testFilesTotal": 376,
   "e2eSpecFiles": 30,
   "migrations": 36,
   "ciJobs": [
