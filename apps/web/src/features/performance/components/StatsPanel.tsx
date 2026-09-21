@@ -6,6 +6,7 @@ import { Numeric } from '@/components/Numeric';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 import { formatProfitFactor } from '../utils/formatPerformance';
+import { statDocsUrl, type StatField } from '../utils/statAnchors';
 
 export interface StatsPanelProps {
   stats: PerformanceStats;
@@ -14,6 +15,7 @@ export interface StatsPanelProps {
 }
 
 interface StatRow {
+  field: StatField;
   label: string;
   render: () => ReactNode;
 }
@@ -39,21 +41,29 @@ export function StatsPanel({ stats, currency }: StatsPanelProps) {
 
   const rows: StatRow[] = [
     {
+      field: 'totalPositions',
       label: 'Total Positions',
       render: () => <Numeric value={stats.totalPositions} kind="integer" direction="none" />,
     },
-    { label: 'Total Net P&L', render: () => money(stats.totalNetPnl, 'auto') },
     {
+      field: 'totalNetPnl',
+      label: 'Total Net P&L',
+      render: () => money(stats.totalNetPnl, 'auto'),
+    },
+    {
+      field: 'winRate',
       label: 'Win Rate',
       render: () => <Numeric value={stats.winRate} kind="percent" direction="none" />,
     },
     {
+      field: 'breakevenRate',
       label: 'Breakeven Rate',
       render: () => <Numeric value={stats.breakevenRate} kind="percent" direction="none" />,
     },
-    { label: 'Avg Win', render: () => money(stats.avgWin, 'auto') },
-    { label: 'Avg Loss', render: () => money(stats.avgLoss, 'auto') },
+    { field: 'avgWin', label: 'Avg Win', render: () => money(stats.avgWin, 'auto') },
+    { field: 'avgLoss', label: 'Avg Loss', render: () => money(stats.avgLoss, 'auto') },
     {
+      field: 'profitFactor',
       label: 'Profit Factor',
       // Finite profit factor routes through the primitive (neutral decimal); the
       // ∞ / em-dash branches the primitive does not model stay on formatProfitFactor.
@@ -64,9 +74,9 @@ export function StatsPanel({ stats, currency }: StatsPanelProps) {
           <span>{formatProfitFactor(stats.profitFactor, stats.hasWins, stats.hasLosses)}</span>
         ),
     },
-    { label: 'Expectancy', render: () => money(stats.expectancy, 'auto') },
-    { label: 'Largest Win', render: () => money(stats.largestWin, 'auto') },
-    { label: 'Largest Loss', render: () => money(stats.largestLoss, 'auto') },
+    { field: 'expectancy', label: 'Expectancy', render: () => money(stats.expectancy, 'auto') },
+    { field: 'largestWin', label: 'Largest Win', render: () => money(stats.largestWin, 'auto') },
+    { field: 'largestLoss', label: 'Largest Loss', render: () => money(stats.largestLoss, 'auto') },
   ];
 
   return (
@@ -78,7 +88,18 @@ export function StatsPanel({ stats, currency }: StatsPanelProps) {
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
           {rows.map((row) => (
             <div key={row.label} className="flex flex-col">
-              <dt className="text-sm text-muted-foreground">{row.label}</dt>
+              <dt className="text-sm text-muted-foreground">
+                {/* The label links to its Methodology definition. New tab: the
+                    reader is mid-analysis on this page. Host lives in docsUrl(). */}
+                <a
+                  href={statDocsUrl(row.field)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="cursor-pointer underline decoration-dotted underline-offset-2 hover:text-foreground"
+                >
+                  {row.label}
+                </a>
+              </dt>
               <dd className="font-medium" data-testid={`stat-${row.label}`}>
                 {row.render()}
               </dd>
