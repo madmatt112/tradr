@@ -1,5 +1,5 @@
 ---
-title: Metrics glossary
+title: Methodology
 description: Exact definitions of every figure Tradr computes — gross and net P&L, return percentage, both risk/reward ratios, win rate, profit factor, expectancy, and how the breakdowns and calendar group your closed positions.
 ---
 
@@ -82,8 +82,26 @@ the trade went against you, so a −1.0 means you lost exactly the risk you plan
 
 ## Across positions
 
-These appear on the performance page. They count **closed positions only**, in a
-single currency at a time.
+These appear on the performance page, one currency at a time. Every figure below
+counts **closed positions only**. The exception is Total net P&L: it follows your
+fills, so a partial exit counts before its position is flat. The dashboard's
+Statistics summary widget shows several of these same figures.
+
+### Total positions
+
+Every flat position the range brings into view, counted once, one currency at a
+time. A position comes into view once it has gone flat, meaning it reached zero
+open quantity. That includes a position that went flat inside the range, and one
+that had a fill inside the range but went flat outside it. When none are in range
+the count reads 0, never blank.
+
+### Total net P&L
+
+The sum of the realised net P&L of every fill in the range, one currency at a
+time. It comes straight from the fills, so a partial exit counts before its
+position is flat. That makes it equal the last point of the equity curve. Its
+population is every fill in range, wider than the count above: a position can add
+to this total before it is counted. With no fills in range it reads 0, never blank.
 
 ### Win, loss, breakeven
 

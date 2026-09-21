@@ -176,7 +176,7 @@ export default defineConfig({
             { label: 'Options tools', slug: 'user-guide/options-tools' },
             { label: 'Import your history', slug: 'user-guide/import-history' },
             { label: 'Accounting & tax', slug: 'user-guide/accounting-tax' },
-            { label: 'Metrics glossary', slug: 'user-guide/reference/metrics-glossary' },
+            { label: 'Methodology', slug: 'user-guide/reference/metrics-glossary' },
             { label: 'Plan limits', slug: 'user-guide/reference/plan-limits' },
           ],
         },
