@@ -15,7 +15,7 @@ The release-notes gate decides when a notes file is required. A minor tag
 (vX.Y.0) needs one, and neither `make release` nor the release workflow
 publishes without it. A patch tag needs no file. A patch tag must carry no `!`
 or `BREAKING CHANGE:` marker since the previous tag. Such a marker fails the
-gate as a mis-classified minor. scripts/check-release-notes.mjs runs the same
+gate as a mis-classified patch. scripts/check-release-notes.mjs runs the same
 check in `make release` and in release.yml.
 -->
 
