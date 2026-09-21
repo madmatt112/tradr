@@ -137,12 +137,11 @@ interface CoachMarkCopy {
   title: string;
   body: string;
   /**
-   * The "read more" target. OPTIONAL, and the omission is a statement rather
-   * than an oversight: `apps/docs` still ships `user-guide/options-tools` as a
-   * placeholder that says "this page is not written yet", and the same rule the
-   * walkthrough's step data is held to (a read-more that lands on a placeholder
-   * is worse than no link at all — `steps.test.ts` fails on one) applies here.
-   * The link comes back with the page.
+   * The "read more" target. OPTIONAL: a mark may point at no page, but a mark
+   * that does must point at a written one. The rule the walkthrough's step data
+   * is held to — a read-more that lands on "this page is not written yet" is
+   * worse than no link at all, and `steps.test.ts` fails on one — applies here,
+   * and `CoachMark.test.tsx` enforces it against `DOCS`.
    */
   docs?: DocsPage;
 }
@@ -178,6 +177,7 @@ const COACH_MARKS: Record<CoachMarkSurface, CoachMarkCopy> = {
       'The Black-Scholes pricer values a call or put from spot, strike, time to expiry, ' +
       'volatility and the risk-free rate. The OCC card decodes an option symbol or builds ' +
       'one from its parts.',
+    docs: 'optionsTools',
   },
   'dashboard-widgets': {
     title: 'Arrange the dashboard your way',

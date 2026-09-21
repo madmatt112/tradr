@@ -1,18 +1,64 @@
 ---
 title: 'Options tools'
 description: 'Options chain lookup, OCC symbol parsing, and the Black-Scholes calculator with full Greeks.'
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
 ---
 
-Options chain lookup, OCC symbol parsing, and the Black-Scholes calculator with full Greeks.
+The **Options** link in the sidebar opens the **Options Tools** page. It holds
+three tools: a Black-Scholes pricer, an OCC symbol decoder and encoder, and a
+live options chain.
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+## Options chain
+
+The chain viewer shows live option chains. The data comes from Unusual Whales.
+Each reader connects their own Unusual Whales API key.
+
+Add the key on the settings card **Unusual Whales (market data)**, under
+**Settings → Advisor**.
+
+The Unusual Whales key is a paid subscription. Buy it from Unusual Whales. See
+[Unusual Whales' pricing](https://unusualwhales.com/pricing) for the current
+plans. Tradr does not include the key.
+
+Without a key, the viewer shows **Connect an Unusual Whales key to view live
+options chains.**
+
+**Self-hosted:** the chain viewer appears only when the advisor is enabled. The
+advisor ships off. Set `DISABLE_ADVISOR=false` on your instance. Restart the api.
+
+## OCC symbol decoder / encoder
+
+The **OCC Symbol Decoder / Encoder** card converts between an OCC option symbol
+and its parts. It has two tabs, **Decode** and **Encode**.
+
+**Decode** reads one OCC symbol. It splits the symbol into four fields:
+
+- **Underlying**
+- **Expiration**
+- **Type**
+- **Strike**
+
+**Encode** takes those same four fields. It builds the OCC symbol from them.
+
+Each tab shows a **Copy** button. **Copy** puts the result on your clipboard.
+
+## Black-Scholes pricer
+
+The **Black-Scholes** card prices a call or a put. It takes six inputs:
+
+- **Spot price (S)**
+- **Strike price (K)**
+- **Time to expiry (T, years)**
+- **Volatility (σ)**
+- **Risk-free rate (r)**
+- **Dividend yield (q)**
+
+The card returns the option **Price** and five Greeks:
+
+- **Delta (Δ)**
+- **Gamma (Γ)**
+- **Theta / day (Θ)**
+- **Vega / 1% (ν)**
+- **Rho / 1% (ρ)**
+
+For the model, its inputs and each Greek, see [the Black-Scholes
+methodology](/user-guide/reference/metrics-glossary/#black-scholes).
