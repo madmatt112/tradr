@@ -39,6 +39,15 @@ make release VERSION=1.2.3   # bumps package.json versions, commits, tags v1.2.3
 git push origin HEAD v1.2.3  # push commit and tag TOGETHER
 ```
 
+`make release` runs the release-notes gate before it creates the tag. A minor
+tag (vX.Y.0) needs hand-written notes at `docs/release-notes/vX.Y.Z.md`. Without
+them, `make release` stops and names the missing file. A patch tag needs no
+notes file. A `!` or `BREAKING CHANGE:` marker in any commit since the previous
+tag fails the gate as a mis-classified patch. Re-cut such a change as a minor
+tag with notes. The same `scripts/check-release-notes.mjs` runs here and in
+`release.yml`. A tag push therefore cannot publish a minor release without its
+notes.
+
 The push starts two workflows at once:
 
 1. **CI** on the `main` push — the bump commit has never been tested, so this

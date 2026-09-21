@@ -10,6 +10,13 @@ well on its own.
 To use: copy this file to docs/release-notes/vX.Y.Z.md, fill it in, delete
 this comment block and any section you don't need, then `make release`.
 This file itself is never picked up by the workflow (it doesn't match a tag).
+
+The release-notes gate decides when a notes file is required. A minor tag
+(vX.Y.0) needs one, and neither `make release` nor the release workflow
+publishes without it. A patch tag needs no file. A patch tag must carry no `!`
+or `BREAKING CHANGE:` marker since the previous tag. Such a marker fails the
+gate as a mis-classified minor. scripts/check-release-notes.mjs runs the same
+check in `make release` and in release.yml.
 -->
 
 <one-sentence tagline for the release>

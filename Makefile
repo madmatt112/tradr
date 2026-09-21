@@ -78,6 +78,7 @@ release:
 	@test -n "$(VERSION)" || { echo "usage: make release VERSION=1.2.3"; exit 1; }
 	@echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be bare semver (1.2.3, no leading v)"; exit 1; }
 	@git diff --quiet HEAD || { echo "working tree not clean — commit or stash first"; exit 1; }
+	@node scripts/check-release-notes.mjs v$(VERSION) --pre-flight
 	@for p in $(VERSIONED_PKGS); do (cd $$p && npm pkg set version=$(VERSION)); done
 	pnpm --filter @tradr/docs openapi:generate
 	git add $(addsuffix /package.json,$(VERSIONED_PKGS)) $(OPENAPI_ARTIFACT)
