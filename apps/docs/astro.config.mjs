@@ -87,7 +87,6 @@ const APP_VERSION = JSON.parse(
   readFileSync(fileURLToPath(new URL('../api/package.json', import.meta.url)), 'utf8'),
 ).version;
 
-
 export default defineConfig({
   site: 'https://docs.tradr.cloud',
   output: 'static',
@@ -176,7 +175,7 @@ export default defineConfig({
             { label: 'Options tools', slug: 'user-guide/options-tools' },
             { label: 'Import your history', slug: 'user-guide/import-history' },
             { label: 'Accounting & tax', slug: 'user-guide/accounting-tax' },
-            { label: 'Metrics glossary', slug: 'user-guide/reference/metrics-glossary' },
+            { label: 'Methodology', slug: 'user-guide/reference/metrics-glossary' },
             { label: 'Plan limits', slug: 'user-guide/reference/plan-limits' },
           ],
         },
@@ -212,6 +211,7 @@ export default defineConfig({
             { label: 'Database & migrations', slug: 'self-hosting/explanation/migrations' },
             { label: 'Database schema', slug: 'self-hosting/reference/db-schema' },
             { label: 'Security model', slug: 'self-hosting/explanation/security' },
+            { label: "How it's built", slug: 'self-hosting/explanation/how-its-built' },
             {
               label: 'Contributing',
               link: 'https://github.com/madmatt112/tradr/blob/main/CONTRIBUTING.md',

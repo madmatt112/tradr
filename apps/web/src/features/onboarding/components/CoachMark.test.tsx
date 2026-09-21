@@ -253,6 +253,14 @@ describe('CoachMark', () => {
     // The host is written down in docs.ts and nowhere else.
     expect(read('features/onboarding/components/CoachMark.tsx')).not.toContain(DOCS_BASE_URL);
   });
+
+  it('carries the options-tools docs deep link through docsUrl(), in a new tab', () => {
+    render(<CoachMark surface="options-tools" />);
+    const link = screen.getByRole('link', { name: 'Read more' });
+    expect(link.getAttribute('href')).toBe(docsUrl('optionsTools'));
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noreferrer');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -356,16 +364,5 @@ describe('CoachMark copy is accurate against the shipped UI', () => {
       }
       cleanup();
     }
-  });
-
-  it('omits the options-tools link ONLY because its docs page is still a stub', () => {
-    // The one mark with no "read more". When apps/docs grows a real
-    // user-guide/options-tools page this test fails — that is the reminder to
-    // add `docs: 'optionsTools'` to the catalog and the entry to DOCS.
-    render(<CoachMark surface="options-tools" />);
-    expect(screen.queryByRole('link', { name: 'Read more' })).toBeNull();
-
-    const source = readFileSync(path.join(DOCS_CONTENT, 'user-guide/options-tools.mdx'), 'utf8');
-    expect(source).toContain('This page is not written yet');
   });
 });

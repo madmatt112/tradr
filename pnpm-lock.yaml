@@ -278,6 +278,9 @@ importers:
       culori:
         specifier: ^4.0.2
         version: 4.0.2
+      github-slugger:
+        specifier: 2.0.0
+        version: 2.0.0
       jsdom:
         specifier: ^29.1.1
         version: 29.1.1

@@ -13,7 +13,8 @@
     "cli:generate": "node scripts/gen-cli.mjs",
     "plan-limits:generate": "node scripts/gen-plan-limits.mjs",
     "db-schema:generate": "node scripts/gen-db-schema.mjs",
-    "reference:generate": "pnpm env-vars:generate && pnpm cli:generate && pnpm plan-limits:generate && pnpm db-schema:generate"
+    "how-its-built:generate": "node scripts/gen-how-its-built.mjs",
+    "reference:generate": "pnpm env-vars:generate && pnpm cli:generate && pnpm plan-limits:generate && pnpm db-schema:generate && pnpm how-its-built:generate"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "^0.3.4",

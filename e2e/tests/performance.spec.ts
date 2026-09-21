@@ -104,6 +104,13 @@ test.describe('Performance page', () => {
     await expect(page.getByTestId('timeframe-selector')).toBeVisible();
     await expect(page.getByTestId('currency-selector')).toBeVisible();
     await expect(page.getByTestId('stats-panel')).toBeVisible();
+    // Each stat label deep-links to its Methodology definition (Task 4).
+    await expect(
+      page.getByTestId('stats-panel').getByRole('link', { name: 'Win Rate' }),
+    ).toHaveAttribute(
+      'href',
+      'https://docs.tradr.cloud/user-guide/reference/metrics-glossary/#win-rate',
+    );
     await expect(page.getByTestId('breakdown-table')).toBeVisible();
   });
 

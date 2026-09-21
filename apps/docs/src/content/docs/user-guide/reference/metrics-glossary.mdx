@@ -1,5 +1,5 @@
 ---
-title: Metrics glossary
+title: Methodology
 description: Exact definitions of every figure Tradr computes — gross and net P&L, return percentage, both risk/reward ratios, win rate, profit factor, expectancy, and how the breakdowns and calendar group your closed positions.
 ---
 
@@ -82,8 +82,26 @@ the trade went against you, so a −1.0 means you lost exactly the risk you plan
 
 ## Across positions
 
-These appear on the performance page. They count **closed positions only**, in a
-single currency at a time.
+These appear on the performance page, one currency at a time. Every figure below
+counts **closed positions only**. The exception is Total net P&L: it follows your
+fills, so a partial exit counts before its position is flat. The dashboard's
+Statistics summary widget shows several of these same figures.
+
+### Total positions
+
+Every flat position the range brings into view, counted once, one currency at a
+time. A position comes into view once it has gone flat, meaning it reached zero
+open quantity. That includes a position that went flat inside the range, and one
+that had a fill inside the range but went flat outside it. When none are in range
+the count reads 0, never blank.
+
+### Total net P&L
+
+The sum of the realised net P&L of every fill in the range, one currency at a
+time. It comes straight from the fills, so a partial exit counts before its
+position is flat. That makes it equal the last point of the equity curve. Its
+population is every fill in range, wider than the count above: a position can add
+to this total before it is counted. With no fills in range it reads 0, never blank.
 
 ### Win, loss, breakeven
 
@@ -236,6 +254,98 @@ A **week row's total covers only the days of the shown month** — the trailing 
 leading days that belong to a neighbouring month are not added in. The **month
 total** equals that month's bucket on the performance chart: the same daily P&L,
 summed a different way.
+
+## Elsewhere in the app
+
+These figures appear away from the performance and position views, on the
+account, calculator, fee, tax and options screens.
+
+### Account balance
+
+An account's balance is its **starting balance plus every ledger credit, minus
+every ledger debit**. Only seven ledger entry types move it. They are realised
+position P&L and its reversal, balance adjustments, deposits and withdrawals,
+and the reversals of those deposits and withdrawals.
+
+Nothing here reads a market quote, so the balance is a cash figure valued at
+cost. It divides into two halves. **Cash** is the free part. **Position value**
+is the capital tied up in open positions, at what you paid — or, for a short,
+what you received. Cash is the balance minus that position value, so the halves
+always sum back to the balance.
+
+Position value counts open positions only; a closed one has returned its capital
+to cash. Both halves are in one currency, the account's own.
+
+### Trade calculator
+
+The calculator turns a risk budget into a position size. **Per-unit risk** is
+the distance from entry to stop, `|entry − stop|`. **Contract size** is 100 for
+an options trade and 1 for a stock.
+
+The **risk-derived size** is the risk budget divided by
+`per-unit risk × contract size`, floored to whole units. The budget is a dollar
+amount, or a percentage of your account balance. A **buying-power cap** can
+lower it: buying power divided by `entry × contract size`, floored. The smaller
+size wins.
+
+From the final size come the **dollar risk**, `per-unit risk × size × contract
+size`, and the **total position value**, `entry × size × contract size`.
+**Risk/reward** is `|target − entry| ÷ |entry − stop|`, shown only when you set
+a target. **Estimated fees and the breakeven price** come from the journal's own
+fee rules, through `calculateFees`.
+
+Every figure stays in the currency of the prices you type; there is no
+conversion. When the calculator cannot size a trade it returns a status instead:
+
+- **nothing-to-size-against** — the balance is zero or negative, so a percentage
+  of it risks nothing.
+- **exceeds-maximum** — the derived dollar risk is past the built-in ceiling.
+- **buying-power-zero** — the buying power will not fund a single unit.
+
+### Fee rollup
+
+The fee rollup totals the fees you paid over a year. Each account gets a
+**stock-fee total and an options-fee total**. The two add to that account's
+overall total, in the account's own currency.
+
+Above the accounts, the totals are summed **per currency**. Those per-currency
+sums then convert once, at the year-end spot rate, into a single **grand total
+in your display currency**. A year with no fills reports empty totals and no
+grand total, never a zero.
+
+### Tax summary
+
+The tax summary reports your **realised P&L for the year, one figure per
+currency**. What else it shows depends on the tax jurisdiction set in your
+profile.
+
+**Only a US jurisdiction splits that P&L into short-term and long-term.** A
+position held 365 days or fewer is short-term; a longer hold is long-term.
+Canada and every other jurisdiction leave the split empty.
+
+Losses can raise a flag. A **US wash sale** or a **Canadian superficial loss**
+is flagged when a matching trade sits within 30 days either side of the loss.
+The flag is a note only — **Tradr never adjusts your cost basis** — and
+jurisdiction "other" raises no flags.
+
+### Black-Scholes
+
+The options tools include a Black-Scholes pricer. It takes six inputs: the spot
+price `S`, strike `K`, time to expiry in years `T`, and volatility `σ`. It also
+takes the risk-free rate `r` and an optional dividend yield `q`, for a call or a
+put.
+
+It returns the option **price** and five Greeks. These are **delta**, **gamma**,
+**theta per day**, **vega per 1%**, and **rho per 1%**. Theta is scaled to one
+day, and vega and rho to a one-point move — a 1% change in volatility or in the
+rate.
+
+The four inputs `S`, `K`, `T` and `σ` must each be positive. A zero or negative
+one stops the model, so no number comes back. When volatility and time are so
+small that `σ × √T` drops below a set threshold, the pricer returns the limit
+value: the discounted intrinsic payoff. There the standard formula would divide
+by that near-zero quantity, so the analytic limit is used instead. The price is
+in the currency of the spot and strike you enter.
 
 ## Things worth knowing
 

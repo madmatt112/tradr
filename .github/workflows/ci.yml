@@ -214,7 +214,7 @@ jobs:
       - run: pnpm install
 
       - name: Run web + shared + scripts tests
-        run: pnpm exec vitest run --project web --project shared --project web-scripts
+        run: pnpm exec vitest run --project web --project shared --project web-scripts --project docs-scripts
 
   e2e:
     runs-on: ubuntu-latest

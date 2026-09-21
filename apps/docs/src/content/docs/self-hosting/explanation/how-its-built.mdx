@@ -1,0 +1,128 @@
+---
+title: "How it's built"
+description: 'How Tradr is developed and checked before it ships: spec-driven development, the test suites, migrations on real Postgres, a backup drill, and the gates that block a bad merge.'
+---
+
+import figures from './_how-its-built.json';
+
+Here is how Tradr is planned, tested and gated, with every count pulled from the
+repository so it stays honest.
+
+## Specified before it is built
+
+Every part of Tradr is written down before it is built. A change starts as a
+requirements document, then a design, then a task list. Each of those is
+reviewed by an adversarial pass that tries to break the reasoning before any
+code exists.
+
+The implementation then happens task by task, by coding agents working against
+that design, with a review step on the output. The plan is the contract, and
+the code is checked against it.
+
+You can read the output of that process on the pages it produced. See the
+[architecture overview](/self-hosting/explanation/architecture/), the
+[database and migrations](/self-hosting/explanation/migrations/) guide, and the
+[security model](/self-hosting/explanation/security/).
+
+## What the tests cover
+
+Tradr ships {figures.testFilesTotal} unit and integration test files, split
+across {figures.vitestProjects.length} Vitest projects:
+
+<ul>
+  {figures.vitestProjects.map((project) => (
+    <li>
+      <code>{project.name}</code>: {project.testFiles} test files
+    </li>
+  ))}
+</ul>
+
+A Playwright suite of {figures.e2eSpecFiles} end-to-end specs also drives the
+real app in a browser against a running stack. Every one of these runs on every
+pull request.
+
+## Migrations run on real Postgres
+
+Tradr has {figures.migrations} database migrations, and each one is tested
+against a real PostgreSQL server.
+
+The `migrations` Vitest project runs inside the `test-api` job against a
+throwaway `tradr_test_migrate` database. It applies the migrations under a
+restricted role (`tradr_test_user`) that has no superuser rights.
+
+The container smoke test goes further. It boots the published images with an
+empty database and asserts that the compiled migrations bring the schema up from
+nothing. A Dockerfile that forgets to bundle a migration fails there, before any
+image is released.
+
+## The backup is restored, not assumed
+
+You only know a backup works after you restore it. Tradr ships a drill that does
+exactly that.
+
+The [Prove the backup restores](/self-hosting/backup-restore/#prove-the-backup-restores)
+section walks you through running it. The drill itself is
+`scripts/backup-restore-drill.sh`. Its checks live in
+`scripts/backup-restore-check.mjs`. And
+`apps/api/src/db/backup-restore-check.test.ts` runs those checks on every pull
+request, so the checker cannot rot.
+
+## Self-hosting is the default, and a test says so
+
+Tradr is a self-hosted journal first. The hosted extras are opt-in: object
+storage, Redis rate limiting, Stripe billing, plan gating. Each one stays off
+until you configure it.
+
+A test enforces that boundary. `apps/api/src/app.self-host-parity.test.ts` boots
+the app with nothing configured. It fails if any gated capability leaks into
+that unconfigured path. So the default install stays a plain journal, enforced
+on every pull request.
+
+## What blocks a merge
+
+Before a pull request can merge, {figures.ciJobs.length} CI jobs must pass:
+
+<ul>
+  {figures.ciJobs.map((job) => (
+    <li>
+      <code>{job}</code>
+    </li>
+  ))}
+</ul>
+
+Two of them are drift gates. One regenerates the OpenAPI reference and fails if
+the committed copy differs. The other regenerates every generated reference page
+and fails on any difference, so a stale artifact that matches itself still
+cannot slip through.
+
+The `docker-smoke` job builds the real images and runs
+{figures.dockerSmokeAssertions} assertions against the running stack.
+
+Cutting a release adds two more gates. A version tag waits for green CI on that
+exact commit before it publishes anything. A minor version tag also needs its
+release notes committed first, or the release stops and nothing ships.
+
+## What only warns
+
+Not every check can be a gate. Some depend on servers we do not control, or on
+judgement calls a linter should not make. These run and report, but they never
+block a merge:
+
+- **CodeQL, OSV-Scanner and zizmor** look for known problems in the code, its
+  dependencies and its GitHub Actions workflows.
+- **Vale** checks the docs prose against the house style.
+- **lychee** follows the links in the docs and flags the dead ones.
+
+Each of these is advisory today. Read the findings; they do not turn CI red.
+
+## Decisions that were put off are written down
+
+Not every decision gets made at the moment it comes up. Some are deferred on
+purpose, because the right answer needs information the team does not have yet.
+
+When that happens, the decision is written down as a dated record. Each record
+captures what was deferred and why. It also names the trigger that should bring
+the decision back up. When a later change resolves one, it marks the record
+resolved and notes what discharged it.
+
+So a deferral is a tracked debt with a condition for revisiting it.

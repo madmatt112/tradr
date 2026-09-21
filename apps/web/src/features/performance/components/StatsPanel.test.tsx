@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { PerformanceStats } from '@tradr/shared';
 
+import { docsUrl } from '@/lib/docs';
+
+import { STAT_ANCHORS } from '../utils/statAnchors';
+
 import { StatsPanel } from './StatsPanel';
 
 const BASE_STATS: PerformanceStats = {
@@ -36,6 +40,19 @@ describe('StatsPanel', () => {
     expect(html).toContain('Expectancy');
     expect(html).toContain('60.0%'); // winRate 1 decimal
     expect(html).toContain('2.00'); // profit factor 2 decimals
+  });
+
+  it('links every stat label to its Methodology definition (new tab, dotted, pointer)', () => {
+    const html = renderToStaticMarkup(<StatsPanel stats={BASE_STATS} currency="USD" />);
+    const base = docsUrl('metricsGlossary');
+    // Every row's label is an anchor into the glossary heading for that field.
+    for (const anchor of Object.values(STAT_ANCHORS)) {
+      expect(html).toContain(`href="${base}#${anchor}"`);
+    }
+    // Shared link affordances: new tab, no referrer leak, pointer cursor.
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noreferrer"');
+    expect(html).toContain('cursor-pointer');
   });
 
   it('renders the Expectancy row as signed money (stat-Expectancy)', () => {
