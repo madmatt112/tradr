@@ -11,19 +11,27 @@ import {
   BODY_LIMIT_BYTES,
   DEFAULT_LAYOUT_MAX_ROWS,
   DEFAULT_WIDGETS,
+  type DefaultWidgetSpec,
+  PRIOR_DEFAULT_LAYOUTS,
   WidgetDefaultSize,
 } from './dashboard-defaults';
 
 describe('dashboard-defaults', () => {
-  it('DEFAULT_WIDGETS has exactly six entries', () => {
-    expect(DEFAULT_WIDGETS.length).toBe(6);
-  });
-
-  it('every WidgetType value appears exactly once', () => {
-    const got = new Set(DEFAULT_WIDGETS.map((d) => d.type));
-    const want = new Set(WidgetTypeSchema.options);
-    expect(got).toEqual(want);
-    expect(got.size).toBe(DEFAULT_WIDGETS.length);
+  it('is exactly the five default types, each appearing once (Req 1.8)', () => {
+    // The roster is these five; Position Sizing is no longer a default and is
+    // added from the picker.
+    const types = DEFAULT_WIDGETS.map((d) => d.type);
+    expect(new Set(types)).toEqual(
+      new Set([
+        'stats-summary',
+        'performance-chart',
+        'equity-curve',
+        'open-positions',
+        'account-balances',
+      ]),
+    );
+    expect(types).toHaveLength(new Set(types).size);
+    expect(types).not.toContain('position-sizing');
   });
 
   it('every entry satisfies PerWidgetMinSize', () => {
@@ -88,6 +96,31 @@ describe('dashboard-defaults', () => {
       expect(size.w).toBeGreaterThanOrEqual(min.w);
       expect(size.h).toBeGreaterThanOrEqual(min.h);
       expect(size.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
+    }
+  });
+
+  it("every entry's w and h come from WidgetDefaultSize[type]", () => {
+    // One source of truth for a widget's size: the registry, picker and repair
+    // all read WidgetDefaultSize, so the default must spread the same values.
+    for (const entry of DEFAULT_WIDGETS) {
+      const size = WidgetDefaultSize[entry.type];
+      expect(entry.w).toBe(size.w);
+      expect(entry.h).toBe(size.h);
+    }
+  });
+
+  it('every PRIOR_DEFAULT_LAYOUTS entry is a distinct geometry from DEFAULT_WIDGETS', () => {
+    // The order-independent {type,x,y,w,h} signature isDefaultGeometry compares.
+    // A retired default must differ from the current one, or recording it would
+    // be redundant and a stored copy would never be seen to need the upgrade.
+    const signature = (list: readonly DefaultWidgetSpec[]): string =>
+      list
+        .map((w) => `${w.type}:${w.x},${w.y},${w.w},${w.h}`)
+        .sort()
+        .join('|');
+    const current = signature(DEFAULT_WIDGETS);
+    for (const prior of PRIOR_DEFAULT_LAYOUTS) {
+      expect(signature(prior)).not.toBe(current);
     }
   });
 
