@@ -161,6 +161,76 @@ export const BREAKDOWN_RESPONSE = {
   ],
 };
 
+/**
+ * One populated USD currency — enough for both dashboard chart widgets to draw
+ * a series. Shared by `dashboard-chart-height.spec.ts` (which measures the two
+ * chart widgets' rendered height) and `dashboard-widget-fit.spec.ts` (which
+ * measures every default widget's scroll overflow), so the two specs agree on
+ * the P&L that seeds Stats Summary, the performance bars and the equity curve.
+ */
+export const POPULATED_DASHBOARD_RESPONSE = {
+  resolvedTimezone: 'UTC',
+  resolvedWeekStartDay: 0 as const,
+  dataQuality: {
+    timeframeExcluded: { total: 0, unsupported: 0, mismatch: 0 },
+    historyExcluded: { total: 0, closed_at_null: 0 },
+  },
+  hasAnyAccounts: true,
+  hasAnyClosedPositions: true,
+  hasAnyClosedPositionsInSupportedCurrency: true,
+  defaultCurrency: 'USD',
+  currencies: [
+    {
+      code: 'USD',
+      historyRange: {
+        earliestClosedAt: '2026-01-01T00:00:00.000Z',
+        mostRecentClosedAt: '2026-06-01T00:00:00.000Z',
+        totalClosedPositions: 12,
+      },
+      series: [
+        {
+          bucketStart: '2026-04-01T00:00:00.000Z',
+          netPnl: '1180.25',
+          grossPnl: '1210.25',
+          fees: '30.00',
+          totalPositions: 4,
+          wins: 3,
+          losses: 1,
+          breakevens: 0,
+        },
+        {
+          bucketStart: '2026-05-01T00:00:00.000Z',
+          netPnl: '-420.50',
+          grossPnl: '-400.50',
+          fees: '20.00',
+          totalPositions: 3,
+          wins: 1,
+          losses: 2,
+          breakevens: 0,
+        },
+      ],
+      equityCurve: [
+        { bucketStart: '2026-04-01T00:00:00.000Z', cumulativeNetPnl: '1180.25' },
+        { bucketStart: '2026-05-01T00:00:00.000Z', cumulativeNetPnl: '759.75' },
+      ],
+      stats: {
+        totalPositions: 7,
+        totalNetPnl: '759.75',
+        winRate: 57.14,
+        breakevenRate: 0,
+        avgWin: '393.42',
+        avgLoss: '-210.25',
+        profitFactor: 2.8,
+        largestWin: '600.00',
+        largestLoss: '-300.00',
+        expectancy: '108.54',
+        hasWins: true,
+        hasLosses: true,
+      },
+    },
+  ],
+};
+
 export const NO_ACCOUNTS_RESPONSE = {
   resolvedTimezone: 'UTC',
   resolvedWeekStartDay: 0 as const,
@@ -262,7 +332,7 @@ export const SESSION_RESPONSE = {
  * six-column charts), so every spec leaning on the app shell rendered a layout
  * no user has ever been served.
  */
-const DEFAULT_DASHBOARD_LAYOUT = {
+export const DEFAULT_DASHBOARD_LAYOUT = {
   widgets: [
     { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 12, h: 6 },
     {

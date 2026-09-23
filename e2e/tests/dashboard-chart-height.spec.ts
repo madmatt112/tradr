@@ -1,6 +1,11 @@
 import { expect, type Page } from '@playwright/test';
 
-import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
+import {
+  mockAppShell,
+  POPULATED_DASHBOARD_RESPONSE,
+  SESSION_RESPONSE,
+  test,
+} from './fixtures/performance-fixtures';
 
 /**
  * Rendered height of the two dashboard chart widgets, on BOTH grid paths.
@@ -39,70 +44,6 @@ import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fix
  * card has no height to divide, it IS the height.
  */
 const MIN_CHART_PX = 240;
-
-/** One populated USD currency — enough for both charts to have a series. */
-const POPULATED_DASHBOARD_RESPONSE = {
-  resolvedTimezone: 'UTC',
-  resolvedWeekStartDay: 0 as const,
-  dataQuality: {
-    timeframeExcluded: { total: 0, unsupported: 0, mismatch: 0 },
-    historyExcluded: { total: 0, closed_at_null: 0 },
-  },
-  hasAnyAccounts: true,
-  hasAnyClosedPositions: true,
-  hasAnyClosedPositionsInSupportedCurrency: true,
-  defaultCurrency: 'USD',
-  currencies: [
-    {
-      code: 'USD',
-      historyRange: {
-        earliestClosedAt: '2026-01-01T00:00:00.000Z',
-        mostRecentClosedAt: '2026-06-01T00:00:00.000Z',
-        totalClosedPositions: 12,
-      },
-      series: [
-        {
-          bucketStart: '2026-04-01T00:00:00.000Z',
-          netPnl: '1180.25',
-          grossPnl: '1210.25',
-          fees: '30.00',
-          totalPositions: 4,
-          wins: 3,
-          losses: 1,
-          breakevens: 0,
-        },
-        {
-          bucketStart: '2026-05-01T00:00:00.000Z',
-          netPnl: '-420.50',
-          grossPnl: '-400.50',
-          fees: '20.00',
-          totalPositions: 3,
-          wins: 1,
-          losses: 2,
-          breakevens: 0,
-        },
-      ],
-      equityCurve: [
-        { bucketStart: '2026-04-01T00:00:00.000Z', cumulativeNetPnl: '1180.25' },
-        { bucketStart: '2026-05-01T00:00:00.000Z', cumulativeNetPnl: '759.75' },
-      ],
-      stats: {
-        totalPositions: 7,
-        totalNetPnl: '759.75',
-        winRate: 57.14,
-        breakevenRate: 0,
-        avgWin: '393.42',
-        avgLoss: '-210.25',
-        profitFactor: 2.8,
-        largestWin: '600.00',
-        largestLoss: '-300.00',
-        expectancy: '108.54',
-        hasWins: true,
-        hasLosses: true,
-      },
-    },
-  ],
-};
 
 interface ChartMetrics {
   /** `clientHeight` of the chart's outer box. */
