@@ -270,6 +270,15 @@ const DEFAULT_DASHBOARD_LAYOUT = {
       type: 'performance-chart',
       x: 0,
       y: 6,
+      w: 6,
+      h: 12,
+    },
+    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 6, y: 6, w: 6, h: 12 },
+    {
+      id: '00000000-0000-4000-8000-000000000006',
+      type: 'open-positions',
+      x: 0,
+      y: 18,
       w: 8,
       h: 12,
     },
@@ -277,26 +286,9 @@ const DEFAULT_DASHBOARD_LAYOUT = {
       id: '00000000-0000-4000-8000-000000000003',
       type: 'account-balances',
       x: 8,
-      y: 6,
-      w: 4,
-      h: 12,
-    },
-    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 0, y: 18, w: 8, h: 12 },
-    {
-      id: '00000000-0000-4000-8000-000000000005',
-      type: 'position-sizing',
-      x: 8,
       y: 18,
       w: 4,
       h: 12,
-    },
-    {
-      id: '00000000-0000-4000-8000-000000000006',
-      type: 'open-positions',
-      x: 0,
-      y: 30,
-      w: 12,
-      h: 6,
     },
   ],
   theme: 'light',
@@ -619,12 +611,12 @@ export async function mockAppShell(page: Page): Promise<void> {
   // Anchored on the collection so it does not swallow `/accounts/:id`,
   // `/accounts/demo` or `/accounts/writable`, which are separate handlers.
   await page.route(/\/api\/accounts(\?.*)?$/, (route) => route.fulfill(json([])));
-  // The remaining two reads behind the DEFAULT DASHBOARD's six widgets:
+  // The remaining two reads behind the DEFAULT DASHBOARD's five widgets:
   // `/dashboard/totals` for Account Balances (CrossCurrencyTotal) and
   // `/brokerages` for Open Positions (PositionList).
   //
   // They are shell surface for the same reason the rest of this list is. Any
-  // spec that navigates to /dashboard mounts all six widgets whether or not it
+  // spec that navigates to /dashboard mounts all five widgets whether or not it
   // is testing them.
   //
   // Neutral answers: a zero total and no brokerages, so neither widget paints a

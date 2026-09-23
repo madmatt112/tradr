@@ -237,7 +237,6 @@ const PAINTED_WHEN: Record<Surface, readonly string[]> = {
     '[data-widget-type="performance-chart"] [data-testid="performance-bar-chart"]',
     '[data-widget-type="account-balances"] ul li',
     '[data-widget-type="equity-curve"] [data-testid="equity-curve-chart"]',
-    '[data-widget-type="position-sizing"] form',
     '[data-widget-type="open-positions"] table tbody tr',
   ],
   advisor: ['[data-testid="conversation-pane"]'],

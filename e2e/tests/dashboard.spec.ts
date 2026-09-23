@@ -5,7 +5,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  *
  * Per design "End-to-End Testing", this exercises six scenarios:
  *
- *   1. Login → /dashboard → all six default widgets render; UUIDs deterministic
+ *   1. Login → /dashboard → all five default widgets render; UUIDs deterministic
  *      across two consecutive logins.
  *   2. Add Widget popover: six entries when empty; entries disappear on add;
  *      "All widgets added." empty state when all six placed; remove makes
@@ -15,7 +15,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  *      pre-hydration prevents flash; assert `.dark` class on first paint).
  *   5. Logout → log back in → layout + theme persistence.
  *   6. Mobile (Mobile Chrome project): drag/resize handles NOT visible (or
- *      aria-disabled="true"); six widgets in single-column stack ordered by
+ *      aria-disabled="true"); five widgets in single-column stack ordered by
  *      (y, x); Add Widget button visible and functional.
  *
  * STACK REQUIREMENT: dev stack (web @ 5173 + api @ 3100 + db @ 5433) must be
@@ -75,7 +75,7 @@ async function registerUser(req: APIRequestContext, label: string): Promise<Seed
   // And past the checklist too. With an account and onboarding still pending
   // the dashboard mounts the "Get set up" checklist IN the grid — a seventh,
   // locked item in the top-right slot, with Stats Summary narrowed to eight
-  // columns beside it. Every case here characterises the six-widget default
+  // columns beside it. Every case here characterises the five-widget default
   // layout (item counts, the full-width band's drag behaviour), so the seeded
   // user is retired from onboarding the way a finished checklist retires
   // itself. The checklist's own e2e coverage is in user-onboarding.spec.ts.
@@ -128,7 +128,7 @@ async function ensureStackOrSkip(req: APIRequestContext): Promise<void> {
 }
 
 /**
- * The six default widget displayNames (from `widgetRegistry`). Used to assert
+ * The five default widget displayNames (from `widgetRegistry`). Used to assert
  * each widget's chrome appears on the page.
  */
 const DEFAULT_WIDGET_DISPLAY_NAMES = [
@@ -136,19 +136,17 @@ const DEFAULT_WIDGET_DISPLAY_NAMES = [
   'Open Positions',
   'Performance Chart',
   'Account Balances',
-  'Position Sizing',
   'Equity Curve',
 ] as const;
 
 /**
- * The six default widget types — used for data-widget-type selectors.
+ * The five default widget types — used for data-widget-type selectors.
  */
 const DEFAULT_WIDGET_TYPES = [
   'stats-summary',
   'open-positions',
   'performance-chart',
   'account-balances',
-  'position-sizing',
   'equity-curve',
 ] as const;
 
@@ -161,7 +159,7 @@ const DEFAULT_WIDGET_TYPES = [
 const WIDGET = 'section[data-widget-id]';
 
 /**
- * Wait for the six default widgets to render (or for the empty-state "Use the
+ * Wait for the five default widgets to render (or for the empty-state "Use the
  * default layout" button — in which case click it once and wait again).
  * Returns the list of widget IDs in DOM order.
  */
@@ -199,9 +197,9 @@ test.describe('Dashboard — desktop', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Case 1 — six default widgets render; UUIDs deterministic across logins.
+  // Case 1 — five default widgets render; UUIDs deterministic across logins.
   // -------------------------------------------------------------------------
-  test('renders six default widgets with deterministic UUIDs across two logins', async ({
+  test('renders five default widgets with deterministic UUIDs across two logins', async ({
     page,
     context,
     request,
@@ -211,7 +209,7 @@ test.describe('Dashboard — desktop', () => {
     // First login → /dashboard.
     await loginViaUi(page, user.email);
     const firstIds = await ensureDefaultLayoutPopulated(page);
-    expect(firstIds.length).toBe(6);
+    expect(firstIds.length).toBe(5);
 
     // Assert each widget's chrome by displayName.
     for (const name of DEFAULT_WIDGET_DISPLAY_NAMES) {
@@ -386,8 +384,8 @@ test.describe('Dashboard — desktop', () => {
     await page.reload();
     await ensureDefaultLayoutPopulated(page);
 
-    // Still six widgets, one grid item each.
-    await expect(page.locator('.grid-stack-item')).toHaveCount(6);
+    // Still five widgets, one grid item each.
+    await expect(page.locator('.grid-stack-item')).toHaveCount(5);
 
     const after = await placementOf('stats-summary');
     const neighbourAfter = await placementOf('performance-chart');
@@ -542,13 +540,13 @@ test.describe('Dashboard — desktop', () => {
     await page.getByRole('menuitemradio', { name: 'Dark' }).click();
     await expect(page.locator('html')).toHaveClass(/dark/);
 
-    // Capture the six widget IDs.
+    // Capture the five widget IDs.
     const idsBefore = await page
       .locator(WIDGET)
       .evaluateAll((nodes) =>
         nodes.map((n) => (n as HTMLElement).getAttribute('data-widget-id') ?? ''),
       );
-    expect(idsBefore.length).toBe(6);
+    expect(idsBefore.length).toBe(5);
 
     // Wait for the 300ms debounced theme PUT to commit.
     await page.waitForTimeout(500);
@@ -557,7 +555,7 @@ test.describe('Dashboard — desktop', () => {
     await logoutViaUi(page);
     await loginViaUi(page, user.email);
 
-    // Layout persistence — six widgets, same IDs.
+    // Layout persistence — five widgets, same IDs.
     const idsAfter = await page
       .locator(WIDGET)
       .evaluateAll((nodes) =>
@@ -599,7 +597,7 @@ test.describe('Dashboard — mobile', () => {
     const widgetContainers = page.locator(
       '[data-grid-mode="mobile"] > [aria-disabled="true"][data-widget-id]',
     );
-    await expect(widgetContainers).toHaveCount(6);
+    await expect(widgetContainers).toHaveCount(5);
 
     // Mobile does not mount gridstack at all, so there is no grid item and no
     // resize handle anywhere on the page, and no header drag zone.
@@ -618,7 +616,7 @@ test.describe('Dashboard — mobile', () => {
         (n) => n.querySelector('[data-widget-type]')?.getAttribute('data-widget-type') ?? '',
       ),
     );
-    expect(renderedOrder.length).toBe(6);
+    expect(renderedOrder.length).toBe(5);
     // Assert the DOM order is the same as a (y, x) sort by querying bounding
     // boxes — y must be monotonically non-decreasing.
     const yPositions: number[] = [];
