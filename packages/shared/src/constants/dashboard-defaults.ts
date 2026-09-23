@@ -8,6 +8,25 @@ export type DefaultWidgetSpec = {
   h: number;
 };
 
+// The default layout's height ceiling in 40px rows (Req 1.3): every
+// DEFAULT_WIDGETS entry keeps `y + h <= DEFAULT_LAYOUT_MAX_ROWS`. It bounds the
+// default alone — WidgetPlacementSchema leaves `y` unbounded and DashboardGrid
+// leaves gridstack's whole-canvas `maxRow` unset (design D2), so a stored user
+// layout may sit past it.
+export const DEFAULT_LAYOUT_MAX_ROWS = 36;
+
+// The per-type default size the registry, picker and repair all read from, so a
+// widget gets one size wherever it is created (Req 5.2, design D5). Every `w`/`h`
+// is at least PerWidgetMinSize[type] and `h` is at most GRID_MAX_ROWS.
+export const WidgetDefaultSize: Record<WidgetType, { w: number; h: number }> = {
+  'stats-summary': { w: 12, h: 6 },
+  'performance-chart': { w: 6, h: 12 },
+  'equity-curve': { w: 6, h: 12 },
+  'open-positions': { w: 8, h: 12 },
+  'account-balances': { w: 4, h: 12 },
+  'position-sizing': { w: 4, h: 24 },
+};
+
 // 12-column grid. Geometry only — IDs are computed per-user via uuidv5 in the
 // service layer, and config defaults come from the frontend widget registry.
 //
@@ -68,6 +87,22 @@ export const DEFAULT_WIDGETS: readonly DefaultWidgetSpec[] = [
   { type: 'equity-curve', x: 0, y: 18, w: 8, h: 12 },
   { type: 'position-sizing', x: 8, y: 18, w: 4, h: 12 },
   { type: 'open-positions', x: 0, y: 30, w: 12, h: 6 },
+] as const;
+
+// Every default layout the product has shipped, oldest first. A stored layout is
+// compared against these so a user who never rearranged their dashboard is
+// answered with the current default on read (design D). Append a new entry when
+// the default changes; never edit an existing one. Today's one entry is the
+// six-widget default this spec replaces.
+export const PRIOR_DEFAULT_LAYOUTS: readonly (readonly DefaultWidgetSpec[])[] = [
+  [
+    { type: 'stats-summary', x: 0, y: 0, w: 12, h: 6 },
+    { type: 'performance-chart', x: 0, y: 6, w: 8, h: 12 },
+    { type: 'account-balances', x: 8, y: 6, w: 4, h: 12 },
+    { type: 'equity-curve', x: 0, y: 18, w: 8, h: 12 },
+    { type: 'position-sizing', x: 8, y: 18, w: 4, h: 12 },
+    { type: 'open-positions', x: 0, y: 30, w: 12, h: 6 },
+  ],
 ] as const;
 
 // Maximum size of a PUT /dashboard/layout request body. Enforced by the

@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { GRID_MAX_ROWS, PerWidgetMinSize, WidgetTypeSchema } from '../schemas/dashboard';
+import {
+  GRID_MAX_ROWS,
+  PerWidgetMinSize,
+  PutDashboardLayoutRequestSchema,
+  WidgetTypeSchema,
+} from '../schemas/dashboard';
 
-import { DEFAULT_WIDGETS } from './dashboard-defaults';
+import {
+  BODY_LIMIT_BYTES,
+  DEFAULT_LAYOUT_MAX_ROWS,
+  DEFAULT_WIDGETS,
+  WidgetDefaultSize,
+} from './dashboard-defaults';
 
 describe('dashboard-defaults', () => {
   it('DEFAULT_WIDGETS has exactly six entries', () => {
@@ -62,6 +72,57 @@ describe('dashboard-defaults', () => {
       }
     }
     expect(covered.size).toBe(lastRow * 12);
+  });
+
+  it('every entry ends at or before the layout ceiling', () => {
+    // Req 1.3: the default is the one layout guaranteed a scroll-free ceiling.
+    for (const entry of DEFAULT_WIDGETS) {
+      expect(entry.y + entry.h).toBeLessThanOrEqual(DEFAULT_LAYOUT_MAX_ROWS);
+    }
+  });
+
+  it('every WidgetDefaultSize entry is at least its minimum and within the height bound', () => {
+    for (const type of WidgetTypeSchema.options) {
+      const size = WidgetDefaultSize[type];
+      const min = PerWidgetMinSize[type];
+      expect(size.w).toBeGreaterThanOrEqual(min.w);
+      expect(size.h).toBeGreaterThanOrEqual(min.h);
+      expect(size.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
+    }
+  });
+
+  it('a six-widget PUT body with 2,048-byte configs serialises under BODY_LIMIT_BYTES', () => {
+    // Req 9.2: the worst legal body — one widget per type at maximum config —
+    // must still fit the request-body cap.
+    const config = { s: 'x'.repeat(2040) };
+    expect(JSON.stringify(config).length).toBe(2048);
+    const widgets = DEFAULT_WIDGETS.map((d) => ({
+      id: globalThis.crypto.randomUUID(),
+      type: d.type,
+      x: d.x,
+      y: d.y,
+      w: d.w,
+      h: d.h,
+      config,
+    }));
+    expect(PutDashboardLayoutRequestSchema.safeParse({ widgets }).success).toBe(true);
+    const bytes = new TextEncoder().encode(JSON.stringify({ widgets })).length;
+    expect(bytes).toBeLessThan(BODY_LIMIT_BYTES);
+  });
+
+  it('the default layout with the performance-chart config serialises under 4 KiB', () => {
+    // Req 9.3: the default with every defaultConfig attached leaves headroom.
+    const widgets = DEFAULT_WIDGETS.map((d) => ({
+      id: globalThis.crypto.randomUUID(),
+      type: d.type,
+      x: d.x,
+      y: d.y,
+      w: d.w,
+      h: d.h,
+      ...(d.type === 'performance-chart' ? { config: { timeframe: 'monthly' } } : {}),
+    }));
+    const bytes = new TextEncoder().encode(JSON.stringify({ widgets })).length;
+    expect(bytes).toBeLessThan(4096);
   });
 });
 
