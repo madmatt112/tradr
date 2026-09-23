@@ -319,4 +319,4 @@ export {
   PRIOR_DEFAULT_LAYOUTS,
 } from './constants/dashboard-defaults';
 export type { DefaultWidgetSpec } from './constants/dashboard-defaults';
-export { reconcileStoredLayout } from './utils/dashboard-layout';
+export { reconcileStoredLayout, isDefaultGeometry, carryConfig } from './utils/dashboard-layout';

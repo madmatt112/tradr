@@ -1,10 +1,17 @@
-import { DEFAULT_WIDGETS } from '../constants/dashboard-defaults';
-import { GRID_MAX_ROWS, PerWidgetMinSize, type WidgetPlacement } from '../schemas/dashboard';
+import {
+  DEFAULT_WIDGETS,
+  PRIOR_DEFAULT_LAYOUTS,
+  WidgetDefaultSize,
+} from '../constants/dashboard-defaults';
+import {
+  GRID_MAX_ROWS,
+  PerWidgetMinSize,
+  type WidgetPlacement,
+  type WidgetType,
+} from '../schemas/dashboard';
 
 /** The grid the schema validates against: `x <= 11`, `w <= 12`, `x + w <= 12`. */
 const GRID_COLUMNS = 12;
-
-const PinnedHeight = new Map(DEFAULT_WIDGETS.map((widget) => [widget.type, widget.h]));
 
 function overlaps(a: WidgetPlacement, b: WidgetPlacement): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -16,7 +23,7 @@ function overlaps(a: WidgetPlacement, b: WidgetPlacement): boolean {
  * A saved row is written once and read forever; nothing revisits it. So a
  * widget-geometry fix — the row unit moving from 80px to 40px, the two chart
  * minimums being derived from the height their chart needs, the Stats Summary
- * tile grid being measured — lands in `DEFAULT_WIDGETS` and `PerWidgetMinSize`
+ * tile grid being measured — lands in `WidgetDefaultSize` and `PerWidgetMinSize`
  * and reaches only the users who have never arranged their dashboard. Everyone
  * else keeps geometry that was legal when they saved it and is not legal now:
  * the layout still READS (nothing parses the GET response, and gridstack clamps
@@ -37,12 +44,10 @@ function overlaps(a: WidgetPlacement, b: WidgetPlacement): boolean {
  * and gridstack now carries the raised minimum as `minH`, so the user cannot
  * resize back to one either. Between preserving a height that is no longer
  * usable and handing the widget the size it would be given if it were placed
- * today, this prefers the usable widget. The cost is bounded and small: the
- * pinned default is one row above the minimum for `stats-summary` and
- * `performance-chart` and three above it for `equity-curve`, so a repaired
- * widget is at most three rows taller than the bound alone would demand.
- * Clamping to the minimum instead would leave a Stats Summary saved at h=2
- * clipping its figures for as long as the user never resized it, which is the
+ * today, this prefers the usable widget. The pinned default is `WidgetDefaultSize`
+ * for the type, clamped to `GRID_MAX_ROWS`; every type has one, so there is no
+ * fallback. Clamping to the minimum instead would leave a Stats Summary saved at
+ * h=2 clipping its figures for as long as the user never resized it, which is the
  * half of this defect that a write-path fix alone does not reach.
  *
  * Widths are clamped rather than replaced, because the horizontal axis has
@@ -52,25 +57,23 @@ function overlaps(a: WidgetPlacement, b: WidgetPlacement): boolean {
  *
  * GROWING A WIDGET CAN PUSH IT INTO ITS NEIGHBOUR, and an overlapping layout
  * fails `checkNoOverlap` — swapping one 400 for another. So the second pass
- * re-flows `y` in reading order, moving a widget DOWN past anything it now
- * collides with and never up. Columns and widths come through untouched, and no
- * widget ends up higher than it was stored.
+ * re-flows `y`, moving a widget DOWN past anything it now collides with and
+ * never up. Columns and widths come through untouched, and no widget ends up
+ * higher than it was stored.
  *
- * RELATIVE STACKING ORDER IS NOT ONE OF THE GUARANTEES. A widget moves only
- * when it actually collides, so a displaced widget can end up below one it used
- * to sit above whenever that pair does not collide: grow a `performance-chart`
- * at (x0,w8) from h=2 to h=12 and the `open-positions` beneath it at y=2 is
- * pushed to y=12, while a `stats-summary` over at (x8,y6) is touched by neither
- * and keeps y=6 — the two swap places. Sharing columns does not save it either;
- * a widget that is pushed down carries nobody with it. Holding order in general
- * would mean cascading a push onto widgets that do not collide, moving layouts
- * that need no repair and opening gaps in them — more disruption than the
- * reordering it prevents, which is cosmetic: the result still never overlaps and
- * the write schema still accepts it. The tests pin the reordering as behaviour,
- * across more than one layout, so nobody mistakes it for an invariant.
+ * RELATIVE STACKING ORDER IS PRESERVED. If one widget sat entirely above
+ * another in the stored layout (`a.y + a.h <= b.y`), it still does in the
+ * repaired one — for every such pair, whether or not they share columns. The
+ * pass visits widgets in stored `(y, x, index)` order and floors each one below
+ * every already-placed widget whose stored rectangle ended at or above its own
+ * stored `y`; a later collision push only raises `y` further, so the order can
+ * never invert. A pair that was side by side (neither entirely above the other)
+ * carries no floor between them and stays free to keep its own rows.
  *
- * A layout that is already current is returned unchanged: nothing is below a
- * minimum, so nothing grows, so no widget collides with one already placed.
+ * A layout that already satisfies all of this — nothing below a minimum, no
+ * overlap, every above-pair still above — is returned unchanged: each widget
+ * keeps its `y`, so the object comes back by reference and the function is
+ * idempotent. Input types are unique, enforced by the PUT schema.
  */
 export function reconcileStoredLayout(widgets: WidgetPlacement[]): WidgetPlacement[] {
   const repaired = widgets.map((widget) => {
@@ -79,7 +82,7 @@ export function reconcileStoredLayout(widgets: WidgetPlacement[]): WidgetPlaceme
 
     let { x, w, h } = widget;
     if (h < min.h) {
-      h = Math.min(PinnedHeight.get(widget.type) ?? min.h, GRID_MAX_ROWS);
+      h = Math.min(WidgetDefaultSize[widget.type].h, GRID_MAX_ROWS);
     }
     if (w < min.w) {
       w = Math.min(min.w, GRID_COLUMNS);
@@ -89,25 +92,77 @@ export function reconcileStoredLayout(widgets: WidgetPlacement[]): WidgetPlaceme
     return { ...widget, x, w, h };
   });
 
-  // Reading order, with the original index carried so the output keeps the
-  // order the caller gave — a read must not reshuffle the response.
+  // Visit widgets in stored reading order, carrying the original index so the
+  // output keeps the order the caller gave — a read must not reshuffle the
+  // response. `widgets` is the stored input; `out` is the result.
   const order = repaired
-    .map((widget, index) => ({ widget, index }))
-    .sort((a, b) => a.widget.y - b.widget.y || a.widget.x - b.widget.x || a.index - b.index);
+    .map((_widget, index) => index)
+    .sort((a, b) => widgets[a].y - widgets[b].y || widgets[a].x - widgets[b].x || a - b);
 
-  const out: WidgetPlacement[] = new Array<WidgetPlacement>(repaired.length);
-  const placed: WidgetPlacement[] = [];
-  for (const { widget, index } of order) {
-    let candidate = widget;
-    // Each hit sits at or above `candidate`, so `hit.y + hit.h` is strictly
-    // below where it started: `y` only ever increases and the loop terminates.
-    for (;;) {
-      const hit = placed.find((other) => overlaps(other, candidate));
-      if (!hit) break;
-      candidate = { ...candidate, y: hit.y + hit.h };
+  const out = new Array<WidgetPlacement>(repaired.length);
+  const placed: number[] = [];
+  for (const i of order) {
+    const c = repaired[i];
+    // Floor this widget below every placed widget that ended at or above its
+    // stored top — the pairs that were entirely above it and must stay so.
+    let floor = 0;
+    for (const j of placed) {
+      if (widgets[j].y + widgets[j].h <= widgets[i].y) {
+        floor = Math.max(floor, out[j].y + out[j].h);
+      }
     }
-    placed.push(candidate);
-    out[index] = candidate;
+    let y = Math.max(c.y, floor);
+    // Then push down past anything the repaired rectangle now collides with.
+    // `y` only ever increases, so the loop terminates.
+    for (;;) {
+      const hit = placed.find((j) => overlaps(out[j], { ...c, y }));
+      if (hit === undefined) break;
+      y = out[hit].y + out[hit].h;
+    }
+    out[i] = y === c.y ? c : { ...c, y };
+    placed.push(i);
   }
   return out;
+}
+
+type Geometry = { type: WidgetType; x: number; y: number; w: number; h: number };
+
+function geometrySignature(list: readonly Geometry[]): string {
+  return list
+    .map((w) => `${w.type}:${w.x},${w.y},${w.w},${w.h}`)
+    .sort()
+    .join('|');
+}
+
+/**
+ * True when a stored layout's geometry (its `{type, x, y, w, h}` set, ids and
+ * config ignored) equals the current default or any past default. Such a layout
+ * was never arranged, or was reset to a default, so it follows the default
+ * forward instead of being reconciled.
+ */
+export function isDefaultGeometry(widgets: readonly WidgetPlacement[]): boolean {
+  const target = geometrySignature(widgets);
+  if (target === geometrySignature(DEFAULT_WIDGETS)) return true;
+  return PRIOR_DEFAULT_LAYOUTS.some((layout) => target === geometrySignature(layout));
+}
+
+/**
+ * Carry each stored widget's `config` onto the target layout by type, returning
+ * new objects and never mutating `target` (the service caches it). Stored types
+ * absent from `target` are ignored; target types with no stored config keep
+ * whatever they had.
+ */
+export function carryConfig(
+  target: readonly WidgetPlacement[],
+  stored: readonly WidgetPlacement[],
+): WidgetPlacement[] {
+  const configByType = new Map<WidgetType, unknown>();
+  for (const widget of stored) {
+    if (widget.config !== undefined) configByType.set(widget.type, widget.config);
+  }
+  return target.map((widget) =>
+    configByType.has(widget.type)
+      ? { ...widget, config: configByType.get(widget.type) }
+      : { ...widget },
+  );
 }

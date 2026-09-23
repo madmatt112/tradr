@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_WIDGETS } from '../constants/dashboard-defaults';
+import { DEFAULT_WIDGETS, PRIOR_DEFAULT_LAYOUTS } from '../constants/dashboard-defaults';
 import {
   PerWidgetMinSize,
   PutDashboardLayoutRequestSchema,
@@ -8,7 +8,7 @@ import {
   type WidgetType,
 } from '../schemas/dashboard';
 
-import { reconcileStoredLayout } from './dashboard-layout';
+import { carryConfig, isDefaultGeometry, reconcileStoredLayout } from './dashboard-layout';
 
 const ID = (n: number): string => `00000000-0000-4000-8000-00000000000${n}`;
 
@@ -123,16 +123,13 @@ describe('reconcileStoredLayout', () => {
     expect(anyOverlap(stale)).toBe(false);
     const out = reconcileStoredLayout(stale);
     expect(anyOverlap(out)).toBe(false);
-    // On THIS layout stacking order survives, which is what makes the repaired
-    // default arrangement still recognisably theirs: not whole-page reading
-    // order — the two columns grow by different amounts (the charts on the
-    // left, the short rail widgets on the right), so rows that used to align no
-    // longer do — but the order of any two widgets that share columns.
-    //
-    // That is a property of this fixture, NOT an invariant of the function. See
-    // the two reordering tests below, where it does not hold, and the note in
-    // `reconcileStoredLayout` explaining why holding it in general costs more
-    // than the cosmetic reordering it would prevent.
+    // Stacking order survives, which is what keeps the repaired arrangement
+    // recognisably theirs: not whole-page reading order — the two columns grow
+    // by different amounts (the charts on the left, the short rail widgets on
+    // the right), so rows that used to align no longer do — but the order of
+    // any two widgets, held for every above-pair by the function itself. The
+    // it.each below asserts the general guarantee across every fixture; here we
+    // spot-check the column-sharing pairs of this one.
     for (const a of stale) {
       for (const b of stale) {
         if (a.id === b.id) continue;
@@ -161,6 +158,7 @@ describe('reconcileStoredLayout', () => {
     expect(PutDashboardLayoutRequestSchema.safeParse({ widgets: out }).success).toBe(true);
     expect(anyOverlap(out)).toBe(false);
     expect(out.map((w) => w.id)).toEqual(stale.map((w) => w.id));
+    const byId = (id: string): WidgetPlacement => out.find((w) => w.id === id)!;
     for (const widget of out) {
       const before = stale.find((w) => w.id === widget.id)!;
       // Columns never move (no fixture here is under a minimum width), heights
@@ -169,37 +167,55 @@ describe('reconcileStoredLayout', () => {
       expect(widget.h).toBeGreaterThanOrEqual(before.h);
       expect(widget.y).toBeGreaterThanOrEqual(before.y);
     }
+
+    // Criterion 6.3: a widget entirely above another in the stored layout stays
+    // entirely above it in the repaired one — every pair, columns or not.
+    for (const a of stale) {
+      for (const b of stale) {
+        if (a.id === b.id) continue;
+        if (a.y + a.h > b.y) continue;
+        const outA = byId(a.id);
+        const outB = byId(b.id);
+        expect(outA.y + outA.h).toBeLessThanOrEqual(outB.y);
+      }
+    }
+
+    // Reconciliation is idempotent: repairing an already-repaired layout is a
+    // no-op, so a read never rearranges a layout it already returned.
+    expect(reconcileStoredLayout(out)).toEqual(out);
   });
 
-  it('can reorder two widgets when only one of them is displaced', () => {
-    // The limitation, pinned as behaviour so nobody reads the re-flow as an
-    // order-preserving one: `open-positions` was above `stats-summary` and ends
-    // below it, because growing the chart displaces the first and not the
-    // second. Cosmetic — no overlap, and the guarantees above still hold — but
-    // it IS the user's arrangement being silently rearranged.
+  it('keeps open-positions above stats-summary when only one is displaced', () => {
+    // `open-positions` sits entirely above `stats-summary` in a layout whose
+    // chart the repair grows. Growing the chart displaces the first and not the
+    // second, but the re-flow floors the displaced widget below its stored
+    // neighbours, so the pair keeps its order rather than flipping.
     const stale = displacedPairLayout();
     const out = reconcileStoredLayout(stale);
-    const y = (type: WidgetType, widgets: WidgetPlacement[]): number =>
-      widgets.find((w) => w.type === type)!.y;
+    const rect = (type: WidgetType, widgets: WidgetPlacement[]): WidgetPlacement =>
+      widgets.find((w) => w.type === type)!;
 
-    expect(y('open-positions', stale)).toBeLessThan(y('stats-summary', stale));
-    expect(y('open-positions', out)).toBeGreaterThan(y('stats-summary', out));
+    const above = rect('open-positions', stale);
+    const below = rect('stats-summary', stale);
+    expect(above.y + above.h).toBeLessThanOrEqual(below.y);
+    const outAbove = rect('open-positions', out);
+    const outBelow = rect('stats-summary', out);
+    expect(outAbove.y + outAbove.h).toBeLessThanOrEqual(outBelow.y);
   });
 
-  it('can reorder two widgets that share columns', () => {
-    // And sharing columns does not save the pair: a widget pushed down carries
-    // nobody with it, so the same flip happens between two widgets that overlap
-    // horizontally — which is why the fixture above pins only its own order.
+  it('keeps open-positions above stats-summary when they share columns', () => {
+    // Sharing columns does not change the guarantee: a pair stacked in the
+    // stored layout stays stacked, whether or not it overlaps horizontally.
     const stale = sharedColumnLayout();
     const out = reconcileStoredLayout(stale);
     const above = stale.find((w) => w.type === 'open-positions')!;
     const below = stale.find((w) => w.type === 'stats-summary')!;
 
     expect(above.x < below.x + below.w && below.x < above.x + above.w).toBe(true);
-    expect(above.y).toBeLessThan(below.y);
-    expect(out.find((w) => w.id === above.id)!.y).toBeGreaterThan(
-      out.find((w) => w.id === below.id)!.y,
-    );
+    expect(above.y + above.h).toBeLessThanOrEqual(below.y);
+    const outAbove = out.find((w) => w.id === above.id)!;
+    const outBelow = out.find((w) => w.id === below.id)!;
+    expect(outAbove.y + outAbove.h).toBeLessThanOrEqual(outBelow.y);
   });
 
   it('returns the widgets in the order it was given', () => {
@@ -248,5 +264,84 @@ describe('reconcileStoredLayout', () => {
     ];
     const [out] = reconcileStoredLayout(widgets);
     expect(out).toMatchObject({ id: ID(2), config: { timeframe: 'ytd' } });
+  });
+});
+
+describe('isDefaultGeometry', () => {
+  it('recognises the current default, ids and config ignored', () => {
+    expect(isDefaultGeometry(currentLayout())).toBe(true);
+  });
+
+  it('recognises a past default this spec retires', () => {
+    const prior = PRIOR_DEFAULT_LAYOUTS[0].map((widget, i) => ({ id: ID(i + 1), ...widget }));
+    expect(isDefaultGeometry(prior)).toBe(true);
+  });
+
+  it('is order- and id-independent', () => {
+    const reordered = [...currentLayout()]
+      .reverse()
+      .map((widget, i) => ({ ...widget, id: ID(i + 1), config: { any: 'thing' } }));
+    expect(isDefaultGeometry(reordered)).toBe(true);
+  });
+
+  it('is false when one height differs from the default', () => {
+    const changed = currentLayout();
+    changed[0] = { ...changed[0], h: changed[0].h + 1 };
+    expect(isDefaultGeometry(changed)).toBe(false);
+  });
+});
+
+describe('carryConfig', () => {
+  function target(): WidgetPlacement[] {
+    return [
+      { id: ID(1), type: 'performance-chart', x: 0, y: 0, w: 8, h: 12 },
+      { id: ID(2), type: 'stats-summary', x: 0, y: 12, w: 12, h: 6 },
+    ];
+  }
+
+  it('copies stored config onto the target by type', () => {
+    const stored: WidgetPlacement[] = [
+      {
+        id: ID(9),
+        type: 'performance-chart',
+        x: 0,
+        y: 0,
+        w: 8,
+        h: 12,
+        config: { timeframe: 'ytd' },
+      },
+    ];
+    const out = carryConfig(target(), stored);
+    expect(out.find((w) => w.type === 'performance-chart')!.config).toEqual({ timeframe: 'ytd' });
+    // A target type the stored layout carries no config for keeps none.
+    expect(out.find((w) => w.type === 'stats-summary')!.config).toBeUndefined();
+  });
+
+  it('returns new objects and never mutates the target', () => {
+    const t = target();
+    const stored: WidgetPlacement[] = [
+      {
+        id: ID(9),
+        type: 'performance-chart',
+        x: 0,
+        y: 0,
+        w: 8,
+        h: 12,
+        config: { timeframe: 'ytd' },
+      },
+    ];
+    const out = carryConfig(t, stored);
+    expect(out[0]).not.toBe(t[0]);
+    expect(out[1]).not.toBe(t[1]);
+    expect(t[0].config).toBeUndefined();
+  });
+
+  it('ignores stored types absent from the target', () => {
+    const stored: WidgetPlacement[] = [
+      { id: ID(9), type: 'open-positions', x: 0, y: 0, w: 12, h: 6, config: { note: 'x' } },
+    ];
+    const out = carryConfig(target(), stored);
+    expect(out.map((w) => w.type)).toEqual(['performance-chart', 'stats-summary']);
+    expect(out.every((w) => w.config === undefined)).toBe(true);
   });
 });
