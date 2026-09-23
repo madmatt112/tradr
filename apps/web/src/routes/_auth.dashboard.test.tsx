@@ -476,7 +476,9 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     rerenderRoute();
 
     await waitFor(() => {
-      expect(container.querySelectorAll('[data-widget-id]').length).toBeGreaterThanOrEqual(6);
+      expect(container.querySelectorAll('[data-widget-id]').length).toBeGreaterThanOrEqual(
+        DEFAULT_WIDGETS.length,
+      );
     });
     expect(screen.queryByTestId('onboarding-zero-state')).toBeNull();
   });

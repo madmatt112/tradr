@@ -126,18 +126,29 @@ describe('dashboard-defaults', () => {
 
   it('a six-widget PUT body with 2,048-byte configs serialises under BODY_LIMIT_BYTES', () => {
     // Req 9.2: the worst legal body — one widget per type at maximum config —
-    // must still fit the request-body cap.
+    // must still fit the request-body cap. Built from every WidgetTypeSchema
+    // option (all six types), not the default roster, which no longer includes
+    // position-sizing: the six-type maximum is what the cap has to survive.
+    // Each widget sits at its per-type minimum, stacked in one column so the
+    // geometry is legal and nothing overlaps.
     const config = { s: 'x'.repeat(2040) };
     expect(JSON.stringify(config).length).toBe(2048);
-    const widgets = DEFAULT_WIDGETS.map((d) => ({
-      id: globalThis.crypto.randomUUID(),
-      type: d.type,
-      x: d.x,
-      y: d.y,
-      w: d.w,
-      h: d.h,
-      config,
-    }));
+    let y = 0;
+    const widgets = WidgetTypeSchema.options.map((type) => {
+      const min = PerWidgetMinSize[type];
+      const widget = {
+        id: globalThis.crypto.randomUUID(),
+        type,
+        x: 0,
+        y,
+        w: min.w,
+        h: min.h,
+        config,
+      };
+      y += min.h;
+      return widget;
+    });
+    expect(widgets).toHaveLength(WidgetTypeSchema.options.length);
     expect(PutDashboardLayoutRequestSchema.safeParse({ widgets }).success).toBe(true);
     const bytes = new TextEncoder().encode(JSON.stringify({ widgets })).length;
     expect(bytes).toBeLessThan(BODY_LIMIT_BYTES);
