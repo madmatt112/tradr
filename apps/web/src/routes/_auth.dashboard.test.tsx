@@ -351,6 +351,35 @@ describe('_auth.dashboard route', () => {
     expect(result.widgets.map((w) => w.type)).toContain('equity-curve');
   });
 
+  it('case 5c: a picker add of a type already pending returns the pending body untouched (D7)', async () => {
+    // A double click within the 300ms debounce would queue the same type twice
+    // and 400 the PUT. When the pending body already holds the picked type the
+    // merger drops the duplicate and returns the pending body by reference.
+    const scheduleLayoutWrite = vi.fn();
+    // One type missing so the Add Widget picker has an entry to click.
+    const placed = defaultWidgets.filter((w) => w.type !== 'equity-curve');
+    layoutMockValue = baseLayout({
+      data: { widgets: placed, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
+      scheduleLayoutWrite,
+    });
+    renderRoute();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Add Widget/i })[0]);
+    fireEvent.click(await screen.findByText('Equity Curve'));
+    expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
+
+    const merger = scheduleLayoutWrite.mock.calls[0][0] as (prev: {
+      widgets?: WidgetPlacement[];
+      theme?: string;
+    }) => { widgets: WidgetPlacement[]; theme?: string };
+
+    // `defaultWidgets` already includes an equity-curve widget, so the guard
+    // fires and hands the SAME object back.
+    const pending = { widgets: defaultWidgets, theme: 'dark' };
+    const result = merger(pending);
+    expect(result).toBe(pending);
+  });
+
   it('case 6: beforeunload listener fires flushPending on unload', () => {
     const flushPending = vi.fn();
     layoutMockValue = baseLayout({
