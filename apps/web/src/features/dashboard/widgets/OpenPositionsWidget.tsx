@@ -15,10 +15,10 @@ import { PositionRowActions } from '@/features/positions/components/PositionRowA
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { shouldNavigateFromRowClick } from '@/features/positions/utils/rowNavigation';
 
-const MAX_ROWS = 10;
+export const OPEN_POSITIONS_ROW_CAP = 5;
 
 /**
- * OpenPositionsWidget — dashboard widget showing up to 10 most recently
+ * OpenPositionsWidget — dashboard widget showing up to five most recently
  * updated open positions (Req 6.2).
  *
  * Columns: symbol, side, asset type, quantity, opened date.
@@ -54,7 +54,7 @@ function OpenPositionsWidget() {
 
   const rows = [...positions]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, MAX_ROWS);
+    .slice(0, OPEN_POSITIONS_ROW_CAP);
 
   return (
     <div className="space-y-3">
@@ -109,7 +109,7 @@ function OpenPositionsWidget() {
       </Table>
       <div className="text-right">
         <Link to="/positions" className="text-sm font-medium hover:underline">
-          View all →
+          View all {positions.length} open positions
         </Link>
       </div>
     </div>
