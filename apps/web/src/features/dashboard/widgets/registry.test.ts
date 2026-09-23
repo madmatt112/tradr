@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { PerWidgetMinSize, WidgetTypeSchema } from '@tradr/shared';
+import { PerWidgetMinSize, WidgetDefaultSize, WidgetTypeSchema } from '@tradr/shared';
 
 import { GRID_COLUMNS, GRID_MAX_ROWS } from '../grid.constants';
 
@@ -35,6 +35,12 @@ describe('widgetRegistry', () => {
   it('uses the canonical PerWidgetMinSize reference for every entry (§F)', () => {
     for (const type of WidgetTypeSchema.options) {
       expect(widgetRegistry[type].minSize).toBe(PerWidgetMinSize[type]);
+    }
+  });
+
+  it('uses the canonical WidgetDefaultSize reference for every entry (§F)', () => {
+    for (const type of WidgetTypeSchema.options) {
+      expect(widgetRegistry[type].defaultSize).toBe(WidgetDefaultSize[type]);
     }
   });
 });

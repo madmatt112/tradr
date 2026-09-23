@@ -1,11 +1,8 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 import { z, type ZodTypeAny } from 'zod';
 
-import { DEFAULT_WIDGETS } from '@tradr/shared/constants/dashboard-defaults';
-import {
-  PerWidgetMinSize,
-  type WidgetType,
-} from '@tradr/shared/schemas/dashboard';
+import { WidgetDefaultSize } from '@tradr/shared/constants/dashboard-defaults';
+import { PerWidgetMinSize, type WidgetType } from '@tradr/shared/schemas/dashboard';
 
 export interface WidgetDefinition {
   type: WidgetType;
@@ -21,46 +18,31 @@ export interface WidgetDefinition {
   configSchema?: ZodTypeAny;
 }
 
-function defaultSizeFor(type: WidgetType): { w: number; h: number } {
-  const entry = DEFAULT_WIDGETS.find((d) => d.type === type);
-  if (!entry) {
-    throw new Error(`DEFAULT_WIDGETS missing entry for type "${type}"`);
-  }
-  return { w: entry.w, h: entry.h };
-}
-
 export const widgetRegistry: Record<WidgetType, WidgetDefinition> = {
   'stats-summary': {
     type: 'stats-summary',
     displayName: 'Stats Summary',
     component: lazy(() => import('./StatsSummaryWidget')),
     minSize: PerWidgetMinSize['stats-summary'],
-    defaultSize: defaultSizeFor('stats-summary'),
+    defaultSize: WidgetDefaultSize['stats-summary'],
   },
   'open-positions': {
     type: 'open-positions',
     displayName: 'Open Positions',
     component: lazy(() => import('./OpenPositionsWidget')),
     minSize: PerWidgetMinSize['open-positions'],
-    defaultSize: defaultSizeFor('open-positions'),
+    defaultSize: WidgetDefaultSize['open-positions'],
   },
   'performance-chart': {
     type: 'performance-chart',
     displayName: 'Performance Chart',
     component: lazy(() => import('./PerformanceChartWidget')),
     minSize: PerWidgetMinSize['performance-chart'],
-    defaultSize: defaultSizeFor('performance-chart'),
+    defaultSize: WidgetDefaultSize['performance-chart'],
     defaultConfig: { timeframe: 'monthly' },
     configSchema: z
       .object({
-        timeframe: z.enum([
-          'daily',
-          'weekly',
-          'monthly',
-          'yearly',
-          'ytd',
-          'all-time',
-        ]),
+        timeframe: z.enum(['daily', 'weekly', 'monthly', 'yearly', 'ytd', 'all-time']),
       })
       .strict(),
   },
@@ -69,20 +51,20 @@ export const widgetRegistry: Record<WidgetType, WidgetDefinition> = {
     displayName: 'Account Balances',
     component: lazy(() => import('./AccountBalancesWidget')),
     minSize: PerWidgetMinSize['account-balances'],
-    defaultSize: defaultSizeFor('account-balances'),
+    defaultSize: WidgetDefaultSize['account-balances'],
   },
   'position-sizing': {
     type: 'position-sizing',
     displayName: 'Position Sizing',
     component: lazy(() => import('./PositionSizingWidget')),
     minSize: PerWidgetMinSize['position-sizing'],
-    defaultSize: defaultSizeFor('position-sizing'),
+    defaultSize: WidgetDefaultSize['position-sizing'],
   },
   'equity-curve': {
     type: 'equity-curve',
     displayName: 'Equity Curve',
     component: lazy(() => import('./EquityCurveWidget')),
     minSize: PerWidgetMinSize['equity-curve'],
-    defaultSize: defaultSizeFor('equity-curve'),
+    defaultSize: WidgetDefaultSize['equity-curve'],
   },
 };
