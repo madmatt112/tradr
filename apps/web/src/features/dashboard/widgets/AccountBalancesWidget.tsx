@@ -9,6 +9,8 @@ import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { CrossCurrencyTotal } from '@/features/dashboard/components/CrossCurrencyTotal';
 import { formatMoney } from '@/lib/format';
 
+export const ACCOUNT_BALANCES_ROW_CAP = 4;
+
 /**
  * Account Balances widget (Req 6.4).
  *
@@ -86,7 +88,7 @@ function AccountBalancesWidget() {
     <div className="space-y-3">
       {banner}
       <ul className="divide-y divide-border">
-        {accounts.map((account) => (
+        {accounts.slice(0, ACCOUNT_BALANCES_ROW_CAP).map((account) => (
           <li key={account.id} className="flex items-center justify-between py-2">
             <span className="font-medium">{account.name}</span>
             <div className="flex flex-col items-end">
@@ -127,6 +129,16 @@ function AccountBalancesWidget() {
           />
         </div>
       ) : null}
+      {accounts.length > ACCOUNT_BALANCES_ROW_CAP && (
+        <div className="text-right">
+          <Link
+            to="/accounts"
+            className="cursor-pointer text-sm text-primary underline-offset-4 hover:underline"
+          >
+            View all {accounts.length} accounts
+          </Link>
+        </div>
+      )}
       {displayCurrency === null && (
         <div className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-sm">
           <Link

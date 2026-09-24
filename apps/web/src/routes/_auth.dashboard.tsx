@@ -250,6 +250,11 @@ function DashboardPage(): ReactElement {
         // widget overlaps whatever is at the origin and the PUT fails
         // `checkNoOverlap`.
         const base = pending.widgets ?? widgetsRef.current;
+        // A double click within the 300ms debounce would queue the same type
+        // twice; the picker offers one entry per type, so a second add of a type
+        // already present is a mistake that 400s. Drop it and keep the pending
+        // body unchanged (design D7).
+        if (base.some((w) => w.type === placement.type)) return pending;
         const { x, y } = findFirstSlot(base, { w: placement.w, h: placement.h });
         return { ...pending, widgets: [...base, { ...placement, x, y }] };
       });

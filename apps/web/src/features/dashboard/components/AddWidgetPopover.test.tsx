@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WidgetPlacement, WidgetType } from '@tradr/shared';
 
@@ -50,7 +50,14 @@ describe('AddWidgetPopover', () => {
   it('findFirstSlot returns {x:0, y:2} for {w:4,h:2} given two pre-placed (0,0,6,2) and (6,0,6,2)', () => {
     const existing: WidgetPlacement[] = [
       { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 6, h: 2 },
-      { id: '00000000-0000-4000-8000-000000000002', type: 'open-positions', x: 6, y: 0, w: 6, h: 2 },
+      {
+        id: '00000000-0000-4000-8000-000000000002',
+        type: 'open-positions',
+        x: 6,
+        y: 0,
+        w: 6,
+        h: 2,
+      },
     ];
     const slot = findFirstSlot(existing, { w: 4, h: 2 });
     expect(slot).toEqual({ x: 0, y: 2 });
@@ -96,9 +103,7 @@ describe('AddWidgetPopover', () => {
     });
     try {
       const id = newWidgetId();
-      expect(id).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      );
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     } finally {
       Object.defineProperty(globalThis, 'crypto', {
         value: originalCrypto,
@@ -121,28 +126,50 @@ describe('AddWidgetPopover', () => {
     const { root } = mountIntoBody();
     // First render: 5 placed → "All widgets added." NOT visible AND ONE entry.
     act(() => {
-      root.render(
-        <AddWidgetPopover
-          placedTypes={fiveTypes}
-          onAdd={() => undefined}
-          defaultOpen
-        />,
-      );
+      root.render(<AddWidgetPopover placedTypes={fiveTypes} onAdd={() => undefined} defaultOpen />);
     });
     expect(emptyVisible()).toBe(false);
     expect(listedTypes()).toEqual(['equity-curve']);
 
     // Re-render SAME instance: 6 placed → "All widgets added." IS visible AND no entries.
     act(() => {
-      root.render(
-        <AddWidgetPopover
-          placedTypes={sixTypes}
-          onAdd={() => undefined}
-          defaultOpen
-        />,
-      );
+      root.render(<AddWidgetPopover placedTypes={sixTypes} onAdd={() => undefined} defaultOpen />);
     });
     expect(emptyVisible()).toBe(true);
     expect(listedTypes()).toEqual([]);
+  });
+
+  it('selecting Performance Chart emits a placement carrying config { timeframe: "monthly" }', () => {
+    const onAdd = vi.fn();
+    const { root } = mountIntoBody();
+    act(() => {
+      root.render(<AddWidgetPopover placedTypes={[]} onAdd={onAdd} defaultOpen />);
+    });
+    const btn = document.querySelector<HTMLElement>(
+      '[data-slot="add-widget-item"][data-widget-type="performance-chart"]',
+    );
+    act(() => {
+      btn!.click();
+    });
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    const placement = onAdd.mock.calls[0][0] as WidgetPlacement;
+    expect(placement.config).toEqual({ timeframe: 'monthly' });
+  });
+
+  it('selecting Stats Summary emits a placement with no config key', () => {
+    const onAdd = vi.fn();
+    const { root } = mountIntoBody();
+    act(() => {
+      root.render(<AddWidgetPopover placedTypes={[]} onAdd={onAdd} defaultOpen />);
+    });
+    const btn = document.querySelector<HTMLElement>(
+      '[data-slot="add-widget-item"][data-widget-type="stats-summary"]',
+    );
+    act(() => {
+      btn!.click();
+    });
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    const placement = onAdd.mock.calls[0][0] as WidgetPlacement;
+    expect('config' in placement).toBe(false);
   });
 });

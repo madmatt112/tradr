@@ -31,19 +31,18 @@ export function AddWidgetPopover({
 
   function handleSelect(type: WidgetType): void {
     const def = widgetRegistry[type];
-    // Build a placeholder `existing[]` from `placedTypes`. The route is
-    // responsible for the authoritative packing using the real placements;
-    // here we emit a placement with a reasonable position derived from the
-    // types alone (route may override). Use the registry default sizes.
-    const minSize = { w: def.defaultSize.w, h: def.defaultSize.h };
-    const { x, y } = findFirstSlot([], minSize);
+    // The route owns the authoritative packing against the real placements; the
+    // picker only knows the types, so it emits at the origin and lets `handleAdd`
+    // re-slot. Carry the registry's `defaultConfig` when the widget has one so
+    // the new tile opens configured (Req 7.3).
     const placement: WidgetPlacement = {
       id: newWidgetId(),
       type,
-      x,
-      y,
+      x: 0,
+      y: 0,
       w: def.defaultSize.w,
       h: def.defaultSize.h,
+      ...(def.defaultConfig !== undefined ? { config: def.defaultConfig } : {}),
     };
     onAdd(placement);
   }

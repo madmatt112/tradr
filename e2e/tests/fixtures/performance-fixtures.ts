@@ -161,6 +161,76 @@ export const BREAKDOWN_RESPONSE = {
   ],
 };
 
+/**
+ * One populated USD currency — enough for both dashboard chart widgets to draw
+ * a series. Shared by `dashboard-chart-height.spec.ts` (which measures the two
+ * chart widgets' rendered height) and `dashboard-widget-fit.spec.ts` (which
+ * measures every default widget's scroll overflow), so the two specs agree on
+ * the P&L that seeds Stats Summary, the performance bars and the equity curve.
+ */
+export const POPULATED_DASHBOARD_RESPONSE = {
+  resolvedTimezone: 'UTC',
+  resolvedWeekStartDay: 0 as const,
+  dataQuality: {
+    timeframeExcluded: { total: 0, unsupported: 0, mismatch: 0 },
+    historyExcluded: { total: 0, closed_at_null: 0 },
+  },
+  hasAnyAccounts: true,
+  hasAnyClosedPositions: true,
+  hasAnyClosedPositionsInSupportedCurrency: true,
+  defaultCurrency: 'USD',
+  currencies: [
+    {
+      code: 'USD',
+      historyRange: {
+        earliestClosedAt: '2026-01-01T00:00:00.000Z',
+        mostRecentClosedAt: '2026-06-01T00:00:00.000Z',
+        totalClosedPositions: 12,
+      },
+      series: [
+        {
+          bucketStart: '2026-04-01T00:00:00.000Z',
+          netPnl: '1180.25',
+          grossPnl: '1210.25',
+          fees: '30.00',
+          totalPositions: 4,
+          wins: 3,
+          losses: 1,
+          breakevens: 0,
+        },
+        {
+          bucketStart: '2026-05-01T00:00:00.000Z',
+          netPnl: '-420.50',
+          grossPnl: '-400.50',
+          fees: '20.00',
+          totalPositions: 3,
+          wins: 1,
+          losses: 2,
+          breakevens: 0,
+        },
+      ],
+      equityCurve: [
+        { bucketStart: '2026-04-01T00:00:00.000Z', cumulativeNetPnl: '1180.25' },
+        { bucketStart: '2026-05-01T00:00:00.000Z', cumulativeNetPnl: '759.75' },
+      ],
+      stats: {
+        totalPositions: 7,
+        totalNetPnl: '759.75',
+        winRate: 57.14,
+        breakevenRate: 0,
+        avgWin: '393.42',
+        avgLoss: '-210.25',
+        profitFactor: 2.8,
+        largestWin: '600.00',
+        largestLoss: '-300.00',
+        expectancy: '108.54',
+        hasWins: true,
+        hasLosses: true,
+      },
+    },
+  ],
+};
+
 export const NO_ACCOUNTS_RESPONSE = {
   resolvedTimezone: 'UTC',
   resolvedWeekStartDay: 0 as const,
@@ -262,7 +332,7 @@ export const SESSION_RESPONSE = {
  * six-column charts), so every spec leaning on the app shell rendered a layout
  * no user has ever been served.
  */
-const DEFAULT_DASHBOARD_LAYOUT = {
+export const DEFAULT_DASHBOARD_LAYOUT = {
   widgets: [
     { id: '00000000-0000-4000-8000-000000000001', type: 'stats-summary', x: 0, y: 0, w: 12, h: 6 },
     {
@@ -270,6 +340,15 @@ const DEFAULT_DASHBOARD_LAYOUT = {
       type: 'performance-chart',
       x: 0,
       y: 6,
+      w: 6,
+      h: 12,
+    },
+    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 6, y: 6, w: 6, h: 12 },
+    {
+      id: '00000000-0000-4000-8000-000000000006',
+      type: 'open-positions',
+      x: 0,
+      y: 18,
       w: 8,
       h: 12,
     },
@@ -277,26 +356,9 @@ const DEFAULT_DASHBOARD_LAYOUT = {
       id: '00000000-0000-4000-8000-000000000003',
       type: 'account-balances',
       x: 8,
-      y: 6,
-      w: 4,
-      h: 12,
-    },
-    { id: '00000000-0000-4000-8000-000000000004', type: 'equity-curve', x: 0, y: 18, w: 8, h: 12 },
-    {
-      id: '00000000-0000-4000-8000-000000000005',
-      type: 'position-sizing',
-      x: 8,
       y: 18,
       w: 4,
       h: 12,
-    },
-    {
-      id: '00000000-0000-4000-8000-000000000006',
-      type: 'open-positions',
-      x: 0,
-      y: 30,
-      w: 12,
-      h: 6,
     },
   ],
   theme: 'light',
@@ -619,12 +681,12 @@ export async function mockAppShell(page: Page): Promise<void> {
   // Anchored on the collection so it does not swallow `/accounts/:id`,
   // `/accounts/demo` or `/accounts/writable`, which are separate handlers.
   await page.route(/\/api\/accounts(\?.*)?$/, (route) => route.fulfill(json([])));
-  // The remaining two reads behind the DEFAULT DASHBOARD's six widgets:
+  // The remaining two reads behind the DEFAULT DASHBOARD's five widgets:
   // `/dashboard/totals` for Account Balances (CrossCurrencyTotal) and
   // `/brokerages` for Open Positions (PositionList).
   //
   // They are shell surface for the same reason the rest of this list is. Any
-  // spec that navigates to /dashboard mounts all six widgets whether or not it
+  // spec that navigates to /dashboard mounts all five widgets whether or not it
   // is testing them.
   //
   // Neutral answers: a zero total and no brokerages, so neither widget paints a

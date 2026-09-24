@@ -1,7 +1,14 @@
+import { randomUUID } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { DEFAULT_WIDGETS, type WidgetPlacement } from '@tradr/shared';
+import {
+  DEFAULT_WIDGETS,
+  PRIOR_DEFAULT_LAYOUTS,
+  type DefaultWidgetSpec,
+  type WidgetPlacement,
+} from '@tradr/shared';
 
 import { db } from '@/db';
 import { dashboardLayouts, users } from '@/db/schema';
@@ -43,6 +50,26 @@ async function seedLayoutRow(
 ): Promise<{ updatedAt: string }> {
   const [row] = await db.insert(dashboardLayouts).values({ userId, widgets }).returning();
   return { updatedAt: row!.updatedAt.toISOString() };
+}
+
+// Turn a geometry spec into a stored row: random (foreign) ids and optional
+// per-type config, so a response with the deterministic uuidv5 ids proves the
+// default-following branch and one with these ids proves the reconcile branch.
+function storedFrom(
+  specs: readonly DefaultWidgetSpec[],
+  configByType: Record<string, unknown> = {},
+): WidgetPlacement[] {
+  return specs.map((s) => {
+    const base: WidgetPlacement = {
+      id: randomUUID(),
+      type: s.type,
+      x: s.x,
+      y: s.y,
+      w: s.w,
+      h: s.h,
+    };
+    return s.type in configByType ? { ...base, config: configByType[s.type] } : base;
+  });
 }
 
 beforeEach(() => {
@@ -106,6 +133,72 @@ describe('dashboard.service', () => {
     const res = await getLayoutForUser(id);
     expect(res.widgets.map((w) => w.id).sort()).toEqual(stored.map((w) => w.id).sort());
     expect(res.updatedAt).toBe(updatedAt);
+  });
+
+  it('getLayoutForUser: a stored prior-default layout is answered with the current default, config carried by type', async () => {
+    const { id } = await seedUser();
+    const stored = storedFrom(PRIOR_DEFAULT_LAYOUTS[0], {
+      'performance-chart': { timeframe: 'ytd' },
+    });
+    const { updatedAt } = await seedLayoutRow(id, stored);
+
+    const res = await getLayoutForUser(id);
+    const defaults = await buildDefaultLayout(id);
+
+    expect(res.widgets.map((w) => w.type).sort()).toEqual(
+      DEFAULT_WIDGETS.map((w) => w.type).sort(),
+    );
+    expect(res.widgets.map((w) => w.id)).toEqual(defaults.map((w) => w.id));
+    expect(res.widgets.find((w) => w.type === 'performance-chart')?.config).toEqual({
+      timeframe: 'ytd',
+    });
+    expect(res.updatedAt).toBe(updatedAt);
+  });
+
+  it('putLayoutForUser: theme-only on a stored prior-default layout answers the current default, config carried', async () => {
+    const { id } = await seedUser();
+    const stored = storedFrom(PRIOR_DEFAULT_LAYOUTS[0], {
+      'performance-chart': { timeframe: 'ytd' },
+    });
+    const { updatedAt } = await seedLayoutRow(id, stored);
+
+    const res = await putLayoutForUser(id, { theme: 'dark' });
+    const defaults = await buildDefaultLayout(id);
+
+    expect(res.theme).toBe('dark');
+    expect(res.widgets.map((w) => w.id)).toEqual(defaults.map((w) => w.id));
+    expect(res.widgets.find((w) => w.type === 'performance-chart')?.config).toEqual({
+      timeframe: 'ytd',
+    });
+    expect(res.updatedAt).toBe(updatedAt);
+  });
+
+  it('getLayoutForUser: a stored current-default layout with foreign ids answers the uuidv5 ids', async () => {
+    const { id } = await seedUser();
+    const stored = storedFrom(DEFAULT_WIDGETS);
+    await seedLayoutRow(id, stored);
+
+    const res = await getLayoutForUser(id);
+    const defaults = await buildDefaultLayout(id);
+
+    expect(res.widgets.map((w) => w.id)).toEqual(defaults.map((w) => w.id));
+    const storedIds = new Set(stored.map((w) => w.id));
+    expect(res.widgets.every((w) => !storedIds.has(w.id))).toBe(true);
+  });
+
+  it('getLayoutForUser: a stored layout differing in one height keeps its ids and is reconciled', async () => {
+    const { id } = await seedUser();
+    const stored = storedFrom(
+      DEFAULT_WIDGETS.map((w) => (w.type === 'equity-curve' ? { ...w, h: w.h - 1 } : w)),
+    );
+    await seedLayoutRow(id, stored);
+
+    const res = await getLayoutForUser(id);
+    const defaults = await buildDefaultLayout(id);
+
+    // Reconcile branch: stored ids kept in input order, not the uuidv5 ids.
+    expect(res.widgets.map((w) => w.id)).toEqual(stored.map((w) => w.id));
+    expect(res.widgets.map((w) => w.id)).not.toEqual(defaults.map((w) => w.id));
   });
 
   it('putLayoutForUser: combined body updates both tables and returns both values', async () => {

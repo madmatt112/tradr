@@ -1,6 +1,8 @@
 import {
   DEFAULT_WIDGETS,
   WIDGET_DEFAULT_NAMESPACE,
+  carryConfig,
+  isDefaultGeometry,
   reconcileStoredLayout,
   uuidv5Batch,
   type DashboardLayoutResponse,
@@ -106,6 +108,22 @@ export async function buildDefaultLayout(userId: string): Promise<WidgetPlacemen
 }
 
 /**
+ * One answer for a stored layout: a layout whose geometry equals the current
+ * default or a past default follows the default forward — fresh-user ids from
+ * `buildDefaultLayout`, each widget's `config` carried over by type — while any
+ * other stored layout is reconciled to current geometry without reordering. Used
+ * by the GET and the theme-only write so the endpoint has one answer (Req 6.8).
+ */
+async function resolveStoredWidgets(
+  userId: string,
+  stored: WidgetPlacement[],
+): Promise<WidgetPlacement[]> {
+  return isDefaultGeometry(stored)
+    ? carryConfig(await buildDefaultLayout(userId), stored)
+    : reconcileStoredLayout(stored);
+}
+
+/**
  * EVERY stored layout leaves this service reconciled — see
  * `reconcileStoredLayout`. A row is written once and read forever, so raising a
  * pinned default or a per-type minimum reaches nobody who has ever arranged
@@ -123,7 +141,7 @@ export async function getLayoutForUser(userId: string): Promise<DashboardLayoutR
     const defaults = await buildDefaultLayout(userId);
     return { widgets: defaults, theme, updatedAt: null };
   }
-  return { widgets: reconcileStoredLayout(widgets), theme, updatedAt };
+  return { widgets: await resolveStoredWidgets(userId, widgets), theme, updatedAt };
 }
 
 export async function getThemeForUser(userId: string): Promise<Theme> {
@@ -167,7 +185,7 @@ export async function putLayoutForUser(
           // stored layout it did not touch, and the endpoint may only have ONE
           // answer to "what is this user's layout" — a caller that took this
           // one would be handed exactly the geometry the GET repairs.
-          widgetsOut = reconcileStoredLayout(existing.widgets);
+          widgetsOut = await resolveStoredWidgets(userId, existing.widgets);
           updatedAtOut = existing.updatedAt;
         } else {
           widgetsOut = await buildDefaultLayout(userId);

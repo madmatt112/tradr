@@ -58,7 +58,13 @@ export const PerWidgetMinSize: Record<WidgetType, { w: number; h: number }> = {
   // Pays for its timeframe strip and the gap under it out of the same body.
   'performance-chart': { w: 4, h: chartWidgetMinRows(TIMEFRAME_ROW_PX + STACK_GAP_PX) },
   'account-balances': { w: 3, h: 4 },
-  'position-sizing': { w: 3, h: 6 },
+  // Design Component C measured this: the two-column CalculatorForm renders
+  // 836px tall at w=4 and 866px at w=3 (equivalently, at a 1024px viewport) in
+  // chromium. ceil((866 + 24 + 67) / 40) = 24 — 24px of body padding and 67px
+  // of permanent chrome (49px header, 2px border, 16px gridstack), as above. At
+  // h=24 the body is 893px on paper and 897px rendered, 0px clipped. The fit is
+  // measured from 1024 to 1440px only.
+  'position-sizing': { w: 3, h: 24 },
   // No toolbar — the chart is the whole body.
   'equity-curve': { w: 4, h: chartWidgetMinRows(0) },
 };

@@ -1,19 +1,37 @@
 import { describe, expect, it } from 'vitest';
 
-import { GRID_MAX_ROWS, PerWidgetMinSize, WidgetTypeSchema } from '../schemas/dashboard';
+import {
+  GRID_MAX_ROWS,
+  PerWidgetMinSize,
+  PutDashboardLayoutRequestSchema,
+  WidgetTypeSchema,
+} from '../schemas/dashboard';
 
-import { DEFAULT_WIDGETS } from './dashboard-defaults';
+import {
+  BODY_LIMIT_BYTES,
+  DEFAULT_LAYOUT_MAX_ROWS,
+  DEFAULT_WIDGETS,
+  type DefaultWidgetSpec,
+  PRIOR_DEFAULT_LAYOUTS,
+  WidgetDefaultSize,
+} from './dashboard-defaults';
 
 describe('dashboard-defaults', () => {
-  it('DEFAULT_WIDGETS has exactly six entries', () => {
-    expect(DEFAULT_WIDGETS.length).toBe(6);
-  });
-
-  it('every WidgetType value appears exactly once', () => {
-    const got = new Set(DEFAULT_WIDGETS.map((d) => d.type));
-    const want = new Set(WidgetTypeSchema.options);
-    expect(got).toEqual(want);
-    expect(got.size).toBe(DEFAULT_WIDGETS.length);
+  it('is exactly the five default types, each appearing once (Req 1.8)', () => {
+    // The roster is these five; Position Sizing is no longer a default and is
+    // added from the picker.
+    const types = DEFAULT_WIDGETS.map((d) => d.type);
+    expect(new Set(types)).toEqual(
+      new Set([
+        'stats-summary',
+        'performance-chart',
+        'equity-curve',
+        'open-positions',
+        'account-balances',
+      ]),
+    );
+    expect(types).toHaveLength(new Set(types).size);
+    expect(types).not.toContain('position-sizing');
   });
 
   it('every entry satisfies PerWidgetMinSize', () => {
@@ -62,6 +80,93 @@ describe('dashboard-defaults', () => {
       }
     }
     expect(covered.size).toBe(lastRow * 12);
+  });
+
+  it('every entry ends at or before the layout ceiling', () => {
+    // Req 1.3: the default is the one layout guaranteed a scroll-free ceiling.
+    for (const entry of DEFAULT_WIDGETS) {
+      expect(entry.y + entry.h).toBeLessThanOrEqual(DEFAULT_LAYOUT_MAX_ROWS);
+    }
+  });
+
+  it('every WidgetDefaultSize entry is at least its minimum and within the height bound', () => {
+    for (const type of WidgetTypeSchema.options) {
+      const size = WidgetDefaultSize[type];
+      const min = PerWidgetMinSize[type];
+      expect(size.w).toBeGreaterThanOrEqual(min.w);
+      expect(size.h).toBeGreaterThanOrEqual(min.h);
+      expect(size.h).toBeLessThanOrEqual(GRID_MAX_ROWS);
+    }
+  });
+
+  it("every entry's w and h come from WidgetDefaultSize[type]", () => {
+    // One source of truth for a widget's size: the registry, picker and repair
+    // all read WidgetDefaultSize, so the default must spread the same values.
+    for (const entry of DEFAULT_WIDGETS) {
+      const size = WidgetDefaultSize[entry.type];
+      expect(entry.w).toBe(size.w);
+      expect(entry.h).toBe(size.h);
+    }
+  });
+
+  it('every PRIOR_DEFAULT_LAYOUTS entry is a distinct geometry from DEFAULT_WIDGETS', () => {
+    // The order-independent {type,x,y,w,h} signature isDefaultGeometry compares.
+    // A retired default must differ from the current one, or recording it would
+    // be redundant and a stored copy would never be seen to need the upgrade.
+    const signature = (list: readonly DefaultWidgetSpec[]): string =>
+      list
+        .map((w) => `${w.type}:${w.x},${w.y},${w.w},${w.h}`)
+        .sort()
+        .join('|');
+    const current = signature(DEFAULT_WIDGETS);
+    for (const prior of PRIOR_DEFAULT_LAYOUTS) {
+      expect(signature(prior)).not.toBe(current);
+    }
+  });
+
+  it('a six-widget PUT body with 2,048-byte configs serialises under BODY_LIMIT_BYTES', () => {
+    // Req 9.2: the worst legal body — one widget per type at maximum config —
+    // must still fit the request-body cap. Built from every WidgetTypeSchema
+    // option (all six types), not the default roster, which no longer includes
+    // position-sizing: the six-type maximum is what the cap has to survive.
+    // Each widget sits at its per-type minimum, stacked in one column so the
+    // geometry is legal and nothing overlaps.
+    const config = { s: 'x'.repeat(2040) };
+    expect(JSON.stringify(config).length).toBe(2048);
+    let y = 0;
+    const widgets = WidgetTypeSchema.options.map((type) => {
+      const min = PerWidgetMinSize[type];
+      const widget = {
+        id: globalThis.crypto.randomUUID(),
+        type,
+        x: 0,
+        y,
+        w: min.w,
+        h: min.h,
+        config,
+      };
+      y += min.h;
+      return widget;
+    });
+    expect(widgets).toHaveLength(WidgetTypeSchema.options.length);
+    expect(PutDashboardLayoutRequestSchema.safeParse({ widgets }).success).toBe(true);
+    const bytes = new TextEncoder().encode(JSON.stringify({ widgets })).length;
+    expect(bytes).toBeLessThan(BODY_LIMIT_BYTES);
+  });
+
+  it('the default layout with the performance-chart config serialises under 4 KiB', () => {
+    // Req 9.3: the default with every defaultConfig attached leaves headroom.
+    const widgets = DEFAULT_WIDGETS.map((d) => ({
+      id: globalThis.crypto.randomUUID(),
+      type: d.type,
+      x: d.x,
+      y: d.y,
+      w: d.w,
+      h: d.h,
+      ...(d.type === 'performance-chart' ? { config: { timeframe: 'monthly' } } : {}),
+    }));
+    const bytes = new TextEncoder().encode(JSON.stringify({ widgets })).length;
+    expect(bytes).toBeLessThan(4096);
   });
 });
 

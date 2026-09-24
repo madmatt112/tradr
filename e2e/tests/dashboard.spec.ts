@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 /**
@@ -5,17 +7,20 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  *
  * Per design "End-to-End Testing", this exercises six scenarios:
  *
- *   1. Login → /dashboard → all six default widgets render; UUIDs deterministic
+ *   1. Login → /dashboard → all five default widgets render; UUIDs deterministic
  *      across two consecutive logins.
- *   2. Add Widget popover: six entries when empty; entries disappear on add;
- *      "All widgets added." empty state when all six placed; remove makes
- *      entry reappear.
+ *   2. Add Widget popover: with the five defaults placed the picker lists only
+ *      position-sizing; on an empty grid it lists all six types. Two adds inside
+ *      the debounce both persist at non-overlapping slots with no failed PUT
+ *      (double add). And, separately, a stored performance-chart with an invalid
+ *      config heals to its default while a picker add in the same window also
+ *      persists (config heal).
  *   3. Drag a widget → reload → persistence.
  *   4. Theme toggle Light → Dark → System → reload → persistence (cookie
  *      pre-hydration prevents flash; assert `.dark` class on first paint).
  *   5. Logout → log back in → layout + theme persistence.
  *   6. Mobile (Mobile Chrome project): drag/resize handles NOT visible (or
- *      aria-disabled="true"); six widgets in single-column stack ordered by
+ *      aria-disabled="true"); five widgets in single-column stack ordered by
  *      (y, x); Add Widget button visible and functional.
  *
  * STACK REQUIREMENT: dev stack (web @ 5173 + api @ 3100 + db @ 5433) must be
@@ -75,7 +80,7 @@ async function registerUser(req: APIRequestContext, label: string): Promise<Seed
   // And past the checklist too. With an account and onboarding still pending
   // the dashboard mounts the "Get set up" checklist IN the grid — a seventh,
   // locked item in the top-right slot, with Stats Summary narrowed to eight
-  // columns beside it. Every case here characterises the six-widget default
+  // columns beside it. Every case here characterises the five-widget default
   // layout (item counts, the full-width band's drag behaviour), so the seeded
   // user is retired from onboarding the way a finished checklist retires
   // itself. The checklist's own e2e coverage is in user-onboarding.spec.ts.
@@ -128,7 +133,7 @@ async function ensureStackOrSkip(req: APIRequestContext): Promise<void> {
 }
 
 /**
- * The six default widget displayNames (from `widgetRegistry`). Used to assert
+ * The five default widget displayNames (from `widgetRegistry`). Used to assert
  * each widget's chrome appears on the page.
  */
 const DEFAULT_WIDGET_DISPLAY_NAMES = [
@@ -136,19 +141,17 @@ const DEFAULT_WIDGET_DISPLAY_NAMES = [
   'Open Positions',
   'Performance Chart',
   'Account Balances',
-  'Position Sizing',
   'Equity Curve',
 ] as const;
 
 /**
- * The six default widget types — used for data-widget-type selectors.
+ * The five default widget types — used for data-widget-type selectors.
  */
 const DEFAULT_WIDGET_TYPES = [
   'stats-summary',
   'open-positions',
   'performance-chart',
   'account-balances',
-  'position-sizing',
   'equity-curve',
 ] as const;
 
@@ -161,7 +164,7 @@ const DEFAULT_WIDGET_TYPES = [
 const WIDGET = 'section[data-widget-id]';
 
 /**
- * Wait for the six default widgets to render (or for the empty-state "Use the
+ * Wait for the five default widgets to render (or for the empty-state "Use the
  * default layout" button — in which case click it once and wait again).
  * Returns the list of widget IDs in DOM order.
  */
@@ -199,9 +202,9 @@ test.describe('Dashboard — desktop', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Case 1 — six default widgets render; UUIDs deterministic across logins.
+  // Case 1 — five default widgets render; UUIDs deterministic across logins.
   // -------------------------------------------------------------------------
-  test('renders six default widgets with deterministic UUIDs across two logins', async ({
+  test('renders five default widgets with deterministic UUIDs across two logins', async ({
     page,
     context,
     request,
@@ -211,7 +214,7 @@ test.describe('Dashboard — desktop', () => {
     // First login → /dashboard.
     await loginViaUi(page, user.email);
     const firstIds = await ensureDefaultLayoutPopulated(page);
-    expect(firstIds.length).toBe(6);
+    expect(firstIds.length).toBe(5);
 
     // Assert each widget's chrome by displayName.
     for (const name of DEFAULT_WIDGET_DISPLAY_NAMES) {
@@ -238,20 +241,26 @@ test.describe('Dashboard — desktop', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Case 2 — Add Widget popover lifecycle.
+  // Case 2 — Add Widget popover: the picker roster, and two adds inside the
+  // debounce both persist at non-overlapping slots (Req 7.1, 7.6, 10.2).
   // -------------------------------------------------------------------------
-  test('Add Widget popover: empty-state copy when full, entry disappears on add, returns on remove', async ({
+  test('Add Widget popover: picker roster, and a double add inside the debounce persists both widgets', async ({
     page,
     request,
   }) => {
     const user = await registerUser(request, 'addpopover');
     await loginViaUi(page, user.email);
 
-    // Fresh users receive the six default widgets (Req 2.2: no row → default
-    // layout), so all six are placed → the picker shows the empty-state copy.
+    // The five defaults are placed, so the picker lists exactly the one type
+    // that is NOT in the default roster: position-sizing (Req 10.2).
     await ensureDefaultLayoutPopulated(page);
     await page.locator('[data-slot="add-widget-trigger"]').first().click();
-    await expect(page.locator('[data-slot="add-widget-empty"]')).toHaveText('All widgets added.');
+    const defaultsList = page.locator('[data-slot="add-widget-list"]');
+    await expect(defaultsList.locator('[data-slot="add-widget-item"]')).toHaveCount(1);
+    await expect(defaultsList.locator('[data-slot="add-widget-item"]')).toHaveAttribute(
+      'data-widget-type',
+      'position-sizing',
+    );
     await page.keyboard.press('Escape');
 
     // Wait for the on-mount widget config fix-up (PerformanceChartWidget seeds
@@ -275,7 +284,7 @@ test.describe('Dashboard — desktop', () => {
     // Persist an EMPTY layout via the authenticated request fixture (register
     // logged it in) and reload → the genuine empty-grid state. (The "Your
     // dashboard is empty" state only renders once a zero-widget layout is
-    // saved.) Now the picker lists all six available widgets.
+    // saved.) Now the picker lists all six available widget types.
     const seedRes = await request.put('/api/dashboard/layout', { data: { widgets: [] } });
     expect(seedRes.status(), 'PUT empty layout').toBe(200);
     await page.reload();
@@ -288,32 +297,134 @@ test.describe('Dashboard — desktop', () => {
     await expect(list).toBeVisible();
     await expect(list.locator('[data-slot="add-widget-item"]')).toHaveCount(6);
 
-    // Add one widget — its entry disappears from the picker (5 remain). Use a
-    // configless widget (stats-summary) added to the EMPTY grid: a single add
-    // to an empty grid packs at the origin with no overlap.
-    const addedType = 'stats-summary';
-    await list.locator(`[data-slot="add-widget-item"][data-widget-type="${addedType}"]`).click();
-    await expect(page.locator(WIDGET)).toHaveCount(1);
-    await page.waitForLoadState('networkidle');
+    // Two adds inside the 300ms debounce (Req 7.1). scheduleLayoutWrite merges
+    // both onto one pending body and does not touch the query cache until the
+    // timer fires, so the empty-grid picker stays mounted across both clicks and
+    // the two adds go out as one PUT. A response listener registered BEFORE the
+    // clicks records every PUT status (Req 7.6) — the guarantee is observed on
+    // the wire, not inferred from the absence of a toast.
+    const putStatuses: number[] = [];
+    page.on('response', (res) => {
+      if (res.url().endsWith('/api/dashboard/layout') && res.request().method() === 'PUT') {
+        putStatuses.push(res.status());
+      }
+    });
+    await list.locator('[data-slot="add-widget-item"][data-widget-type="stats-summary"]').click();
+    await list
+      .locator('[data-slot="add-widget-item"][data-widget-type="account-balances"]')
+      .click();
 
+    await expect(page.locator(WIDGET)).toHaveCount(2);
+    await expect.poll(() => putStatuses.length).toBeGreaterThan(0);
+    expect(putStatuses.every((s) => s === 200)).toBe(true);
+
+    // Reload → both widgets are still there, at non-overlapping rectangles.
+    await page.reload();
+    const afterRes = await request.get('/api/dashboard/layout');
+    expect(afterRes.status(), 'GET layout').toBe(200);
+    const after = (await afterRes.json()) as {
+      widgets: Array<{ type: string; x: number; y: number; w: number; h: number }>;
+    };
+    const stats = after.widgets.find((w) => w.type === 'stats-summary');
+    const balances = after.widgets.find((w) => w.type === 'account-balances');
+    expect(stats, 'stats-summary persisted').toBeDefined();
+    expect(balances, 'account-balances persisted').toBeDefined();
+    // Disjoint rectangles: one sits entirely to a side of, or above/below, the
+    // other.
+    const disjoint =
+      stats!.x + stats!.w <= balances!.x ||
+      balances!.x + balances!.w <= stats!.x ||
+      stats!.y + stats!.h <= balances!.y ||
+      balances!.y + balances!.h <= stats!.y;
+    expect(disjoint, 'the two added widgets do not overlap').toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Case 2b — the config heal and a picker add merge (Req 7.4, design D8).
+  //
+  // A stored performance-chart whose config fails its schema heals to the
+  // registry default on mount (PerformanceChartWidget §K); adding a widget in
+  // the same debounce window must persist BOTH the healed config and the new
+  // widget with no failed PUT. D8: assert the persisted end state, not a forced
+  // timer overlap — whether the heal and the add land as one merged PUT or two
+  // sequential ones, none is a 400 and the final layout holds both.
+  // -------------------------------------------------------------------------
+  test('a stored invalid performance-chart config heals while a picker add in the same window persists', async ({
+    page,
+    request,
+  }) => {
+    const user = await registerUser(request, 'heal');
+    await loginViaUi(page, user.email);
+    await ensureDefaultLayoutPopulated(page);
+
+    // Let the default's own on-mount fix-up commit first (updatedAt: null →
+    // set), so the bogus layout we PUT next is not clobbered by a write still
+    // buffered from this first mount.
+    await expect
+      .poll(
+        async () => {
+          const res = await page.request.get('/api/dashboard/layout');
+          return ((await res.json()) as { updatedAt: string | null }).updatedAt;
+        },
+        { timeout: 15_000 },
+      )
+      .not.toBeNull();
+
+    // Seed a two-widget layout at legal, non-overlapping geometry whose
+    // performance-chart carries an invalid config. The PUT schema does not
+    // validate `config` beyond its byte size, so this stores as given.
+    const seed = await request.put('/api/dashboard/layout', {
+      data: {
+        widgets: [
+          { id: randomUUID(), type: 'stats-summary', x: 0, y: 0, w: 12, h: 6 },
+          {
+            id: randomUUID(),
+            type: 'performance-chart',
+            x: 0,
+            y: 6,
+            w: 6,
+            h: 12,
+            config: { timeframe: 'bogus' },
+          },
+        ],
+      },
+    });
+    expect(seed.status(), 'PUT bogus layout').toBe(200);
+
+    // Collect every PUT status from the reloaded page, then reload so the app
+    // mounts the bogus layout.
+    const putStatuses: number[] = [];
+    page.on('response', (res) => {
+      if (res.url().endsWith('/api/dashboard/layout') && res.request().method() === 'PUT') {
+        putStatuses.push(res.status());
+      }
+    });
+    await page.reload();
+
+    // As soon as the performance-chart card is attached (its §K fix-up is now in
+    // flight), add Equity Curve from the picker.
+    await expect(page.locator('section[data-widget-type="performance-chart"]')).toBeAttached();
     await page.locator('[data-slot="add-widget-trigger"]').first().click();
-    await expect(page.locator('[data-slot="add-widget-item"]')).toHaveCount(5);
-    await expect(
-      page.locator(`[data-slot="add-widget-item"][data-widget-type="${addedType}"]`),
-    ).toHaveCount(0);
-    await page.keyboard.press('Escape');
+    await page.locator('[data-slot="add-widget-item"][data-widget-type="equity-curve"]').click();
 
-    // Remove it via its dropdown menu → grid empties → its entry reappears.
-    const widget = page.locator(WIDGET).first();
-    await widget.locator('[aria-label$="menu"]').click();
-    await page.getByRole('menuitem', { name: 'Remove' }).click();
-    await expect(page.getByRole('heading', { name: 'Your dashboard is empty' })).toBeVisible();
+    await expect(page.locator(WIDGET)).toHaveCount(3);
+    await expect.poll(() => putStatuses.length).toBeGreaterThan(0);
+    expect(putStatuses.every((s) => s === 200)).toBe(true);
 
-    await page.locator('[data-slot="add-widget-trigger"]').first().click();
-    await expect(page.locator('[data-slot="add-widget-item"]')).toHaveCount(6);
-    await expect(
-      page.locator(`[data-slot="add-widget-item"][data-widget-type="${addedType}"]`),
-    ).toBeVisible();
+    // The persisted end state holds both the healed config and the added widget.
+    await page.reload();
+    const finalRes = await request.get('/api/dashboard/layout');
+    expect(finalRes.status(), 'GET layout').toBe(200);
+    const final = (await finalRes.json()) as {
+      widgets: Array<{ type: string; config?: unknown }>;
+    };
+    const perf = final.widgets.find((w) => w.type === 'performance-chart');
+    expect(perf, 'performance-chart persisted').toBeDefined();
+    expect(perf!.config).toEqual({ timeframe: 'monthly' });
+    expect(
+      final.widgets.some((w) => w.type === 'equity-curve'),
+      'equity-curve added',
+    ).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -386,8 +497,8 @@ test.describe('Dashboard — desktop', () => {
     await page.reload();
     await ensureDefaultLayoutPopulated(page);
 
-    // Still six widgets, one grid item each.
-    await expect(page.locator('.grid-stack-item')).toHaveCount(6);
+    // Still five widgets, one grid item each.
+    await expect(page.locator('.grid-stack-item')).toHaveCount(5);
 
     const after = await placementOf('stats-summary');
     const neighbourAfter = await placementOf('performance-chart');
@@ -542,13 +653,13 @@ test.describe('Dashboard — desktop', () => {
     await page.getByRole('menuitemradio', { name: 'Dark' }).click();
     await expect(page.locator('html')).toHaveClass(/dark/);
 
-    // Capture the six widget IDs.
+    // Capture the five widget IDs.
     const idsBefore = await page
       .locator(WIDGET)
       .evaluateAll((nodes) =>
         nodes.map((n) => (n as HTMLElement).getAttribute('data-widget-id') ?? ''),
       );
-    expect(idsBefore.length).toBe(6);
+    expect(idsBefore.length).toBe(5);
 
     // Wait for the 300ms debounced theme PUT to commit.
     await page.waitForTimeout(500);
@@ -557,7 +668,7 @@ test.describe('Dashboard — desktop', () => {
     await logoutViaUi(page);
     await loginViaUi(page, user.email);
 
-    // Layout persistence — six widgets, same IDs.
+    // Layout persistence — five widgets, same IDs.
     const idsAfter = await page
       .locator(WIDGET)
       .evaluateAll((nodes) =>
@@ -599,7 +710,7 @@ test.describe('Dashboard — mobile', () => {
     const widgetContainers = page.locator(
       '[data-grid-mode="mobile"] > [aria-disabled="true"][data-widget-id]',
     );
-    await expect(widgetContainers).toHaveCount(6);
+    await expect(widgetContainers).toHaveCount(5);
 
     // Mobile does not mount gridstack at all, so there is no grid item and no
     // resize handle anywhere on the page, and no header drag zone.
@@ -618,7 +729,7 @@ test.describe('Dashboard — mobile', () => {
         (n) => n.querySelector('[data-widget-type]')?.getAttribute('data-widget-type') ?? '',
       ),
     );
-    expect(renderedOrder.length).toBe(6);
+    expect(renderedOrder.length).toBe(5);
     // Assert the DOM order is the same as a (y, x) sort by querying bounding
     // boxes — y must be monotonically non-decreasing.
     const yPositions: number[] = [];

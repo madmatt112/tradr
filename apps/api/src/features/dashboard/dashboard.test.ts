@@ -120,7 +120,7 @@ describe('dashboard routes', () => {
       theme: string;
     };
     expect(body1.updatedAt).toBeNull();
-    expect(body1.widgets.length).toBe(6);
+    expect(body1.widgets.length).toBe(DEFAULT_WIDGETS.length);
 
     // Clear cache to ensure determinism does not depend on cached array.
     clearDashboardCache();
@@ -224,7 +224,7 @@ describe('dashboard routes', () => {
     };
     expect(body.theme).toBe('dark');
     expect(body.updatedAt).toBeNull();
-    expect(body.widgets.length).toBe(6);
+    expect(body.widgets.length).toBe(DEFAULT_WIDGETS.length);
 
     // No dashboard_layouts row written
     const countRows = await db

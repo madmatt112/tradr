@@ -129,7 +129,7 @@ function renderRoute() {
   return { ...result, rerenderRoute: () => result.rerender(tree()) };
 }
 
-const sixDefaultWidgets: WidgetPlacement[] = DEFAULT_WIDGETS.map((d, i) => ({
+const defaultWidgets: WidgetPlacement[] = DEFAULT_WIDGETS.map((d, i) => ({
   id: `00000000-0000-4000-8000-aaaaaaaaaaa${i}`,
   type: d.type,
   x: d.x,
@@ -244,20 +244,20 @@ describe('_auth.dashboard route', () => {
     const skeleton = container.querySelector('[data-slot="dashboard-skeleton"]');
     expect(skeleton).not.toBeNull();
     expect(skeleton!.getAttribute('aria-busy')).toBe('true');
-    // 6 default placements → 6 skeleton cells.
-    expect(skeleton!.children.length).toBe(6);
+    // One skeleton cell per default placement.
+    expect(skeleton!.children.length).toBe(DEFAULT_WIDGETS.length);
   });
 
-  it('case 2: populated grid renders all six default widget chrome cards', async () => {
+  it('case 2: populated grid renders all default widget chrome cards', async () => {
     layoutMockValue = baseLayout({
-      data: { widgets: sixDefaultWidgets, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
+      data: { widgets: defaultWidgets, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
     });
     const { container } = renderRoute();
     await waitFor(() => {
       const cards = container.querySelectorAll('[data-widget-id]');
-      expect(cards.length).toBeGreaterThanOrEqual(6);
+      expect(cards.length).toBeGreaterThanOrEqual(DEFAULT_WIDGETS.length);
     });
-    for (const w of sixDefaultWidgets) {
+    for (const w of defaultWidgets) {
       const card = container.querySelector(
         `[data-widget-id="${w.id}"][data-widget-type="${w.type}"]`,
       );
@@ -298,13 +298,13 @@ describe('_auth.dashboard route', () => {
       expect(uuidv5Batch).toHaveBeenCalledTimes(1);
       expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
     });
-    // Verify the merger function passed to scheduleLayoutWrite yields six placements
+    // Verify the merger function passed to scheduleLayoutWrite yields five placements
     // whose types match DEFAULT_WIDGETS in order.
     const merger = scheduleLayoutWrite.mock.calls[0][0] as (prev: {
       widgets?: WidgetPlacement[];
     }) => { widgets: WidgetPlacement[] };
     const result = merger({});
-    expect(result.widgets).toHaveLength(6);
+    expect(result.widgets).toHaveLength(5);
     expect(result.widgets.map((w) => w.type)).toEqual(DEFAULT_WIDGETS.map((d) => d.type));
     // Names passed to uuidv5Batch are `${userId}:${type}`.
     const names = vi.mocked(uuidv5Batch).mock.calls[0][0] as string[];
@@ -319,7 +319,7 @@ describe('_auth.dashboard route', () => {
     // drag within ~1.5s of page load. It also dropped a queued `theme` write.
     const scheduleLayoutWrite = vi.fn();
     // One type missing so the Add Widget picker has an entry to click.
-    const placed = sixDefaultWidgets.filter((w) => w.type !== 'equity-curve');
+    const placed = defaultWidgets.filter((w) => w.type !== 'equity-curve');
     layoutMockValue = baseLayout({
       data: { widgets: placed, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
       scheduleLayoutWrite,
@@ -351,10 +351,39 @@ describe('_auth.dashboard route', () => {
     expect(result.widgets.map((w) => w.type)).toContain('equity-curve');
   });
 
+  it('case 5c: a picker add of a type already pending returns the pending body untouched (D7)', async () => {
+    // A double click within the 300ms debounce would queue the same type twice
+    // and 400 the PUT. When the pending body already holds the picked type the
+    // merger drops the duplicate and returns the pending body by reference.
+    const scheduleLayoutWrite = vi.fn();
+    // One type missing so the Add Widget picker has an entry to click.
+    const placed = defaultWidgets.filter((w) => w.type !== 'equity-curve');
+    layoutMockValue = baseLayout({
+      data: { widgets: placed, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
+      scheduleLayoutWrite,
+    });
+    renderRoute();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Add Widget/i })[0]);
+    fireEvent.click(await screen.findByText('Equity Curve'));
+    expect(scheduleLayoutWrite).toHaveBeenCalledTimes(1);
+
+    const merger = scheduleLayoutWrite.mock.calls[0][0] as (prev: {
+      widgets?: WidgetPlacement[];
+      theme?: string;
+    }) => { widgets: WidgetPlacement[]; theme?: string };
+
+    // `defaultWidgets` already includes an equity-curve widget, so the guard
+    // fires and hands the SAME object back.
+    const pending = { widgets: defaultWidgets, theme: 'dark' };
+    const result = merger(pending);
+    expect(result).toBe(pending);
+  });
+
   it('case 6: beforeunload listener fires flushPending on unload', () => {
     const flushPending = vi.fn();
     layoutMockValue = baseLayout({
-      data: { widgets: sixDefaultWidgets, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
+      data: { widgets: defaultWidgets, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
       flushPending,
     });
     renderRoute();
@@ -371,7 +400,7 @@ describe('_auth.dashboard route', () => {
       // Intentionally do NOT call fetch.
     });
     layoutMockValue = baseLayout({
-      data: { widgets: sixDefaultWidgets, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
+      data: { widgets: defaultWidgets, theme: 'light', updatedAt: '2026-05-01T00:00:00.000Z' },
       flushPending,
     });
     renderRoute();
@@ -395,7 +424,7 @@ describe('_auth.dashboard route', () => {
 
 describe('_auth.dashboard route — the zero-state gate', () => {
   const populated = {
-    widgets: sixDefaultWidgets,
+    widgets: defaultWidgets,
     theme: 'light',
     updatedAt: '2026-05-01T00:00:00.000Z',
   };
@@ -476,7 +505,9 @@ describe('_auth.dashboard route — the zero-state gate', () => {
     rerenderRoute();
 
     await waitFor(() => {
-      expect(container.querySelectorAll('[data-widget-id]').length).toBeGreaterThanOrEqual(6);
+      expect(container.querySelectorAll('[data-widget-id]').length).toBeGreaterThanOrEqual(
+        DEFAULT_WIDGETS.length,
+      );
     });
     expect(screen.queryByTestId('onboarding-zero-state')).toBeNull();
   });
@@ -592,7 +623,7 @@ describe('_auth.dashboard route — the zero-state gate', () => {
 
 describe('_auth.dashboard route — the activation checklist beyond the zero-state', () => {
   const populated = {
-    widgets: sixDefaultWidgets,
+    widgets: defaultWidgets,
     theme: 'light',
     updatedAt: '2026-05-01T00:00:00.000Z',
   };
@@ -653,7 +684,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
     });
     expect(gridItemOf(container, 'account-balances').gridstackNode).toMatchObject({
       x: 8,
-      y: 6,
+      y: 18,
       w: 4,
       h: 12,
     });
@@ -799,7 +830,7 @@ describe('_auth.dashboard route — the activation checklist beyond the zero-sta
 
 describe('_auth.dashboard route — the widget coach mark', () => {
   const populated = {
-    widgets: sixDefaultWidgets,
+    widgets: defaultWidgets,
     theme: 'light',
     updatedAt: '2026-05-01T00:00:00.000Z',
   };

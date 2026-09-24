@@ -39,7 +39,14 @@ function canonicalWidgets() {
     { id: UUID_B, type: 'performance-chart' as const, x: 0, y: STATS_H, w: 6, h: PERF_H },
     { id: UUID_C, type: 'equity-curve' as const, x: 0, y: STATS_H + PERF_H, w: 6, h: EQUITY_H },
     { id: UUID_D, type: 'account-balances' as const, x: 6, y: STATS_H, w: 6, h: 4 },
-    { id: UUID_E, type: 'position-sizing' as const, x: 6, y: STATS_H + 4, w: 6, h: 6 },
+    {
+      id: UUID_E,
+      type: 'position-sizing' as const,
+      x: 6,
+      y: STATS_H + PERF_H + EQUITY_H + 4,
+      w: 6,
+      h: 24,
+    },
     {
       id: UUID_F,
       type: 'open-positions' as const,
@@ -136,8 +143,8 @@ describe('PutDashboardLayoutRequestSchema refinements', () => {
     expect(result.success).toBe(false);
   });
 
-  // 7. per-widget min h (position-sizing h:2)
-  it('rejects position-sizing at h:2 (per-widget min h is 3)', () => {
+  // 7. per-widget min h (position-sizing h:2, min 24)
+  it('rejects position-sizing at h:2 (per-widget min h is 24)', () => {
     const result = WidgetPlacementSchema.safeParse({
       id: UUID_A,
       type: 'position-sizing',
