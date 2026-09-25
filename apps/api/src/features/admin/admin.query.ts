@@ -359,6 +359,24 @@ export async function selectUserFlagForUpdate(
 }
 
 /**
+ * Lock a single user row for a factory reset and return its email — the
+ * `FOR UPDATE` counterpart of `selectUserEmailById`. Reading the reset target
+ * under lock closes the race where a concurrent account deletion removes the
+ * row between the read and the reset writes (Req 6.5): a target that vanishes
+ * is a 404, never a reset that describes rows it never touched. Raw
+ * `FOR UPDATE` idiom per `selectUserFlagForUpdate`. `null` = no such user row.
+ */
+export async function selectUserEmailForUpdate(
+  tx: Transaction,
+  id: string,
+): Promise<string | null> {
+  const result = await tx.execute(sql`SELECT email FROM users WHERE id = ${id} FOR UPDATE`);
+  const row = (result as unknown as Array<Record<string, unknown>>)[0];
+  if (!row) return null;
+  return row.email as string;
+}
+
+/**
  * Lock the current admin set for a demotion (REQ-3.4). `FOR UPDATE`
  * re-evaluates `is_admin = true` on lock-wait (EvalPlanQual), so a row
  * demoted by a concurrent committed transaction drops out of the returned
@@ -396,7 +414,9 @@ export async function updateUserIsAdmin(
  * A discriminated union, not one shape with optional fields, so the DB's own
  * `admin_audit_log_toggle_values_chk` cannot be violated from TypeScript: a
  * toggle entry without both boolean ends does not typecheck, and a reset entry
- * cannot claim ones it does not have.
+ * cannot claim ones it does not have. The `account_deletion` member has no
+ * target user id — the row it audits is gone — so `targetUserId` is `null` and
+ * `targetEmail` carries the tombstone's hash marker (design C2, Req 6.3).
  */
 export type AdminAuditEntryInsert =
   | {
@@ -415,6 +435,13 @@ export type AdminAuditEntryInsert =
       targetUserId: string;
       targetEmail: string;
       detail: AdminAuditDetail;
+    }
+  | {
+      action: 'account_deletion';
+      actorUserId: string;
+      actorEmail: string;
+      targetUserId: null;
+      targetEmail: string;
     };
 
 /**

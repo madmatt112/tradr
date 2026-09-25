@@ -41,7 +41,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AdminStatsSchema, AdminUsageSchema, AdminUserListResponseSchema } from '@tradr/shared';
 
@@ -68,6 +68,7 @@ import {
 } from '@/db/schema';
 import { config } from '@/lib/config';
 
+import * as adminQuery from './admin.query';
 import { bootstrapFirstAdmin, getPlatformStats } from './admin.service';
 import { currentPeriodKeyUtc } from './gating.query';
 
@@ -84,9 +85,11 @@ const DAY = 24 * HOUR;
 // rows that escaped their transactions). The admin surface aggregates
 // platform-wide, so every test first wipes user-rooted state INSIDE its own
 // rolled-back transaction (never committed) to make absolute count
-// assertions deterministic. Explicit child-first order sidesteps the
-// RESTRICT FKs (ledger_entries/positions → accounts) that can trip a bare
-// cascading `DELETE FROM users`.
+// assertions deterministic. The deletes run child-first for readability, not
+// out of necessity: the account-deletion cascade test
+// (account-deletion.service.test.ts) proves a bare `DELETE FROM users`
+// succeeds with every RESTRICT (ledger_entries/positions → accounts) and NO
+// ACTION edge populated.
 beforeEach(async () => {
   await db.delete(ledgerEntries);
   await db.delete(positions);
@@ -240,6 +243,17 @@ function patchAdminFlag(targetId: string, isAdmin: unknown, token?: string) {
 
 function postReset(targetId: string, body: Record<string, unknown>, token?: string) {
   return app.request(`/api/admin/users/${targetId}/reset`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Cookie: `session=${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function postDelete(targetId: string, body: Record<string, unknown>, token?: string) {
+  return app.request(`/api/admin/users/${targetId}/delete`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1482,6 +1496,62 @@ describe('POST /api/admin/users/:id/reset', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Req 6.5 — an admin toggle or reset racing an account deletion answers 404,
+// never a 500 or a dangling audit row. The target is read unlocked, then again
+// under the row/set lock; a row that vanishes between the two reads is the
+// deletion race. Spying the locked read to null (the billing.concurrency
+// vi.spyOn-on-a-query-namespace precedent) forces that vanished-target path.
+// ---------------------------------------------------------------------------
+
+describe('admin action racing an account deletion (Req 6.5)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('promotion: target vanishes under the row lock => 404/NOT_FOUND, no audit row', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+
+    // The unlocked 404-feeder read finds the row; the FOR UPDATE lock read
+    // returns null, standing in for a concurrent deletion between the reads.
+    vi.spyOn(adminQuery, 'selectUserFlagForUpdate').mockResolvedValueOnce(null);
+
+    const res = await patchAdminFlag(target.id, true, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+    expect(await auditRows()).toHaveLength(0);
+  });
+
+  it('demotion: target absent from the locked set AND gone under lock => 404/NOT_FOUND', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser(); // non-admin ⇒ absent from the locked admin set
+
+    // Absent from the admin set triggers the locked re-read; that read returns
+    // null (deleted), so today's no-op becomes a 404.
+    vi.spyOn(adminQuery, 'selectUserFlagForUpdate').mockResolvedValueOnce(null);
+
+    const res = await patchAdminFlag(target.id, false, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+    expect(await auditRows()).toHaveLength(0);
+  });
+
+  it('reset: target vanishes under the FOR UPDATE read => 404/NOT_FOUND, no audit row', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+
+    // The locked target read returns null: a deletion racing the reset (Req
+    // 6.5) — 404 before any delete or audit write.
+    vi.spyOn(adminQuery, 'selectUserEmailForUpdate').mockResolvedValueOnce(null);
+
+    const res = await postReset(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+    expect(await auditRows()).toHaveLength(0);
+  });
+});
+
 describe('GET /api/admin/users/:id/reset-preview', () => {
   it('counts both halves without deleting anything', async () => {
     const admin = await seedAdmin();
@@ -1516,5 +1586,79 @@ describe('GET /api/admin/users/:id/reset-preview', () => {
     const admin = await seedAdmin();
     const res = await get(`/api/admin/users/${randomUUID()}/reset-preview`, admin.token);
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin account deletion — POST /api/admin/users/:id/delete (Req 6).
+//
+// The admin surface's second destructive endpoint: it removes the user
+// outright, not to a post-registration state. The guards that refuse it are
+// what make it safe to expose, and the proof that matters is that the target's
+// session dies with the row — the deleted user can no longer log in.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/admin/users/:id/delete', () => {
+  it('a non-admin is refused 403/ADMIN_REQUIRED and deletes nothing', async () => {
+    const target = await seedUser();
+    const plain = await seedUser();
+    const plainToken = await seedSession(plain.id);
+
+    const res = await postDelete(target.id, { confirmEmail: target.email }, plainToken);
+    expect(res.status).toBe(403);
+    expect((await errorBody(res)).code).toBe('ADMIN_REQUIRED');
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(1);
+  });
+
+  it('refuses a mismatched confirmEmail with 400 and deletes nothing', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+
+    const res = await postDelete(
+      target.id,
+      { confirmEmail: 'someone-else@example.com' },
+      admin.token,
+    );
+    expect(res.status).toBe(400);
+    expect((await errorBody(res)).code).toBe('VALIDATION_ERROR');
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(1);
+  });
+
+  it("refuses the caller's own id with 400 — self-deletion goes through Settings — and deletes nothing", async () => {
+    const admin = await seedAdmin();
+
+    const res = await postDelete(admin.id, { confirmEmail: admin.email }, admin.token);
+    expect(res.status).toBe(400);
+    expect((await errorBody(res)).code).toBe('VALIDATION_ERROR');
+    expect(await db.select().from(users).where(eq(users.id, admin.id))).toHaveLength(1);
+  });
+
+  it('404s an unknown id', async () => {
+    const admin = await seedAdmin();
+
+    const res = await postDelete(randomUUID(), { confirmEmail: 'nobody@example.com' }, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+  });
+
+  it('deletes the target and ends its session, so it can no longer log in', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+    const targetToken = await seedSession(target.id);
+
+    // Authenticated right up to the deletion.
+    expect((await get('/api/auth/me', targetToken)).status).toBe(200);
+
+    const res = await postDelete(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { userId: string; outcome: string }).toMatchObject({
+      userId: target.id,
+      outcome: 'deleted',
+    });
+
+    // The row is gone and its session died with it (FK cascade): the token no
+    // longer authenticates.
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(0);
+    expect((await get('/api/auth/me', targetToken)).status).toBe(401);
   });
 });

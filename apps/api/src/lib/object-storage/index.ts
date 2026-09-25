@@ -80,3 +80,13 @@ export function advisorImageKey(userId: string): string {
 export function positionImageKey(userId: string): string {
   return `positions/${userId}/${randomUUID()}`;
 }
+
+/**
+ * The per-user bucket prefixes every user-scoped object lives under, in order:
+ * advisor images (`advisor/{userId}/…`) then position screenshots
+ * (`positions/{userId}/…`). Shared by the age-guarded gc sweep (Component 9,
+ * `apps/api/src/cli/storage-maintenance.service.ts`) and the per-user account
+ * deletion purge (§39, `purgeUserObjects`), so both scan the same list in the
+ * same order.
+ */
+export const USER_OBJECT_PREFIXES = ['advisor/', 'positions/'] as const;

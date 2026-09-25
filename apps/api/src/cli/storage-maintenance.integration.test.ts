@@ -464,3 +464,100 @@ describe('runGc — position images (REQ-6.1, D10)', () => {
     }
   });
 });
+
+// A fake whose `delete` is a no-op: the key stays in the bucket, so the purge's
+// re-list still returns it → `incomplete` (models a backend that acked a delete
+// but did not remove the object).
+class SwallowingDeleteStorage extends FakeStorage {
+  override delete(key: string): Promise<void> {
+    this.deleted.push(key); // acked, but the object is NOT removed
+    return Promise.resolve();
+  }
+}
+
+async function insertTombstone(
+  sql: postgres.Sql,
+  userId: string,
+  purgeOutcome: 'pending' | 'incomplete',
+): Promise<void> {
+  await sql`
+    INSERT INTO account_deletions (user_id, email_hash, tier, initiator, purge_outcome)
+    VALUES (${userId}, ${'a'.repeat(64)}, 'free', 'self', ${purgeOutcome})
+  `;
+}
+
+async function tombstoneOutcome(sql: postgres.Sql, userId: string): Promise<string> {
+  const [row] = await sql<{ purge_outcome: string }[]>`
+    SELECT purge_outcome FROM account_deletions WHERE user_id = ${userId}
+  `;
+  return row!.purge_outcome;
+}
+
+describe('runGc — completes unfinished tombstones (design C9, D13; Req 5.3)', () => {
+  const DB = `tradr_test_storage_tombstone_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  it('purges an incomplete tombstone across both prefixes, marks it complete, counts 1 and 0', async () => {
+    const sql = client(url);
+    const storage = new FakeStorage();
+    try {
+      const userId = randomUUID();
+      await insertTombstone(sql, userId, 'incomplete');
+
+      const now = Date.now();
+      const ageFloorMs = 600_000;
+      // Objects under BOTH of this user's prefixes, seeded young so the age-guarded
+      // sweep keeps them — only the tombstone purge (no age guard) removes them.
+      const advisorKey = `advisor/${userId}/${randomUUID()}`;
+      const positionKey = `positions/${userId}/${randomUUID()}`;
+      storage.seed(advisorKey, Buffer.from([1]), new Date(now));
+      storage.seed(positionKey, Buffer.from([2]), new Date(now));
+
+      const result = await runGc(sql, storage, { now, ageFloorMs });
+
+      expect(result.tombstonesCompleted).toBe(1);
+      expect(result.tombstonesIncomplete).toBe(0);
+      expect(result.deleted).toBe(0); // both were too young for the sweep
+      // Both prefixes end empty (the purge deleted them).
+      expect(await storage.list(`advisor/${userId}/`)).toEqual([]);
+      expect(await storage.list(`positions/${userId}/`)).toEqual([]);
+      // Tombstone marked complete in the DB.
+      expect(await tombstoneOutcome(sql, userId)).toBe('complete');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('leaves a tombstone incomplete when a key survives the purge, counts 0 and 1', async () => {
+    const sql = client(url);
+    const storage = new SwallowingDeleteStorage();
+    try {
+      const userId = randomUUID();
+      await insertTombstone(sql, userId, 'incomplete');
+
+      const now = Date.now();
+      const ageFloorMs = 600_000;
+      // Young so the sweep skips it; the swallowing delete leaves it after the purge.
+      storage.seed(`advisor/${userId}/${randomUUID()}`, Buffer.from([3]), new Date(now));
+
+      const result = await runGc(sql, storage, { now, ageFloorMs });
+
+      expect(result.tombstonesCompleted).toBe(0);
+      expect(result.tombstonesIncomplete).toBe(1);
+      // The key survived the no-op delete → re-list non-empty → still incomplete.
+      expect((await storage.list(`advisor/${userId}/`)).length).toBe(1);
+      expect(await tombstoneOutcome(sql, userId)).toBe('incomplete');
+    } finally {
+      await sql.end();
+    }
+  });
+});

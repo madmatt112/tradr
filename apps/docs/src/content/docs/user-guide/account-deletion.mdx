@@ -1,0 +1,79 @@
+---
+title: 'Delete your account'
+description: 'What account deletion removes, what it keeps, and why: when deletion runs, and what happens to your money, backups, analytics, and email.'
+---
+
+This page tells you what happens when you delete your Tradr account. It lists
+what Tradr removes, what stays, and why. Read it before you delete your account.
+
+The account control is in **Settings**, on the **Account** tab, below the log-out
+control.
+
+## What deletion removes and what it keeps
+
+### When deletion runs
+
+Deletion is permanent. Tradr keeps no soft copy, and you cannot restore the
+account after deletion runs.
+
+If you have no paid period to finish, deletion runs immediately. If you have a
+paid subscription, Tradr schedules the deletion for the end of the current paid
+period. You keep the account until then. You can cancel a scheduled deletion at
+any time before it runs.
+
+Once deletion runs, it is immediate and permanent.
+
+### What stays
+
+Some records stay after deletion. They do not hold your journal data, but you
+must know that they exist:
+
+- Stripe keeps your customer record and your invoices. Stripe is the payment
+  processor.
+- `webhook_events` rows stay. They hold no user id.
+- `admin_audit_log` rows stay. Tradr sets the user reference to null and puts a
+  hash marker in place of the email address.
+- One tombstone row stays, in the `account_deletions` table. It holds the user
+  id, a random id, an email hash, the plan tier, the date, who started the
+  deletion, and the result of the data purge. This row lets Tradr refuse a
+  second deletion of the same account.
+- [Backups](/self-hosting/backup-restore/) keep a copy of the account until each
+  backup expires.
+
+Tradr computes the email hash on the server, and the hash never leaves the
+server in a response. The hash has no salt. Thus a person who knows the email
+address can match that address to the tombstone.
+
+### Your money
+
+Tradr gives no refund for a deletion.
+
+If Tradr schedules the deletion, you keep the account and the paid
+[tier](/user-guide/reference/plan-limits/) until the period ends. Tradr does not
+refund the unused time.
+
+Unused wallet credits are deleted with the account. Tradr does not refund them.
+
+### Analytics and email
+
+After the deletion commits, Tradr deletes the matching person record in PostHog,
+the analytics service. This step is best-effort: it runs after the account is
+already gone. If the step fails, Tradr writes a log entry and the deletion still
+stands. A failure never blocks or reverses the deletion.
+
+Tradr does not send a confirmation email for a deletion. Emails that Tradr sent
+before the deletion can stay in the email provider's delivery logs. The
+provider's own retention rule controls how long they stay.
+
+### Self-hosted instances
+
+Tradr is self-hostable. On a self-hosted instance, the operator holds all of
+this data.
+
+The Stripe, object storage, PostHog, and email lines above apply only where the
+operator [configures](/self-hosting/optional-integrations/) that service. Where a
+service is not configured, its records do not exist.
+
+A restored backup that is older than the deletion brings the account back. The
+restored account does not carry its tombstone, so Tradr treats it as a normal
+account again.

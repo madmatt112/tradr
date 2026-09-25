@@ -474,7 +474,7 @@ function stripeErrorCode(err: unknown): string | null {
 }
 
 /** `subscriptions.cancel` on an already-canceled (or vanished) subscription is DONE (D7). */
-function isAlreadyCanceledError(err: unknown): boolean {
+export function isAlreadyCanceledError(err: unknown): boolean {
   if (stripeErrorCode(err) === 'resource_missing') return true;
   return err instanceof Error && /canceled/i.test(err.message);
 }
@@ -588,5 +588,73 @@ export async function reconcileDuplicateSubscriptions(userId: string): Promise<v
       refundedInvoices,
       canceled,
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// C4 — fail-closed Stripe helpers for account deletion (§ account-deletion).
+// The only Stripe calls the deletion service makes; each re-throws every error
+// except an already-canceled subscription.
+// ---------------------------------------------------------------------------
+
+/**
+ * List the user's live subscriptions (Req 3.1, D8): every Stripe subscription
+ * for the customer whose status is NOT terminal (`TERMINAL_SUBSCRIPTION_STATUSES`).
+ * `periodEnd` and `cancelAtPeriodEnd` come from the shared
+ * `extractSubscriptionMirror` (D6), so the deletion path reads the same signals
+ * the webhook mirror does. The list-status union includes `'all'` on stripe
+ * 19.3.1.
+ */
+export async function listLiveSubscriptions(
+  stripe: Stripe,
+  stripeCustomerId: string,
+): Promise<Array<{ id: string; periodEnd: Date; cancelAtPeriodEnd: boolean }>> {
+  const list = await stripe.subscriptions.list({
+    customer: stripeCustomerId,
+    status: 'all',
+    limit: 100,
+  });
+  return list.data
+    .filter((sub) => !TERMINAL_SUBSCRIPTION_STATUSES.has(sub.status))
+    .map((sub) => {
+      const extracted = extractSubscriptionMirror(sub);
+      return {
+        id: sub.id,
+        periodEnd: extracted.currentPeriodEnd,
+        cancelAtPeriodEnd: extracted.cancelAtPeriodEnd,
+      };
+    });
+}
+
+/**
+ * Flip a subscription's period-end renewal (D6). Returns `'already_canceled'`
+ * when the subscription is already gone (nothing to flip); every other error
+ * re-throws so the caller fails closed.
+ */
+export async function setRenewal(
+  stripe: Stripe,
+  subscriptionId: string,
+  renew: boolean,
+): Promise<'ok' | 'already_canceled'> {
+  try {
+    await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: !renew });
+    return 'ok';
+  } catch (err) {
+    if (isAlreadyCanceledError(err)) return 'already_canceled';
+    throw err;
+  }
+}
+
+/**
+ * Cancel a subscription immediately (Req 6.1, D17) — the fail-closed form of the
+ * log-and-continue reconciliation loop above: an already-canceled subscription
+ * is done, every other error re-throws.
+ */
+export async function cancelNow(stripe: Stripe, subscriptionId: string): Promise<void> {
+  try {
+    await stripe.subscriptions.cancel(subscriptionId);
+  } catch (err) {
+    if (isAlreadyCanceledError(err)) return;
+    throw err;
   }
 }

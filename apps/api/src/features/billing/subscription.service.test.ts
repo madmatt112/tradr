@@ -226,11 +226,14 @@ vi.mock('@/db', () => ({ db: {} }));
 
 import {
   applySubscriptionEvent,
+  cancelNow,
   createPortalSession,
   createSubscriptionCheckout,
   ensureBillingCustomer,
   extractSubscriptionMirror,
+  listLiveSubscriptions,
   reconcileDuplicateSubscriptions,
+  setRenewal,
   type PostCommitEffect,
 } from './subscription.service';
 import { subscriptionQualifies } from './tier.query';
@@ -369,6 +372,8 @@ function stripeStub() {
     subscriptions: {
       retrieve: vi.fn().mockResolvedValue(fakeSub()),
       cancel: vi.fn().mockResolvedValue({ status: 'canceled' }),
+      list: vi.fn().mockResolvedValue({ data: [] }),
+      update: vi.fn().mockResolvedValue(fakeSub()),
     },
     invoices: { list: vi.fn().mockResolvedValue({ data: [] }) },
     refunds: { create: vi.fn().mockResolvedValue({ id: 're_1' }) },
@@ -1336,5 +1341,104 @@ describe('reconcileDuplicateSubscriptions — refund-first, then cancel', () => 
         userId: 'u1',
       },
     );
+  });
+});
+
+// --- C4 fail-closed Stripe helpers (account-deletion) --------------------------
+
+describe('listLiveSubscriptions — live filter and mirror-derived flags (C4/D8)', () => {
+  it('lists status:all and drops every terminal-status subscription', async () => {
+    stripe.subscriptions.list.mockResolvedValue({
+      data: [
+        fakeSub({ id: 'sub_active', status: 'active' }),
+        fakeSub({ id: 'sub_past_due', status: 'past_due' }),
+        fakeSub({ id: 'sub_canceled', status: 'canceled' }),
+        fakeSub({ id: 'sub_expired', status: 'incomplete_expired' }),
+      ],
+    });
+
+    const live = await listLiveSubscriptions(stripe as unknown as Stripe, 'cus_1');
+
+    expect(stripe.subscriptions.list).toHaveBeenCalledWith({
+      customer: 'cus_1',
+      status: 'all',
+      limit: 100,
+    });
+    expect(live.map((sub) => sub.id)).toEqual(['sub_active', 'sub_past_due']);
+  });
+
+  it('reads periodEnd and cancelAtPeriodEnd from extractSubscriptionMirror — both flag sources', async () => {
+    stripe.subscriptions.list.mockResolvedValue({
+      data: [
+        fakeSub({ id: 'sub_flag', cancelAtPeriodEnd: true }),
+        fakeSub({ id: 'sub_at', cancelAtSec: NOW_SEC + 10 }),
+        fakeSub({ id: 'sub_renew' }),
+      ],
+    });
+
+    const live = await listLiveSubscriptions(stripe as unknown as Stripe, 'cus_1');
+
+    expect(live).toEqual([
+      { id: 'sub_flag', periodEnd: FUTURE, cancelAtPeriodEnd: true },
+      { id: 'sub_at', periodEnd: FUTURE, cancelAtPeriodEnd: true },
+      { id: 'sub_renew', periodEnd: FUTURE, cancelAtPeriodEnd: false },
+    ]);
+  });
+});
+
+describe('setRenewal — flips renewal, already-canceled is benign, else re-throws (C4)', () => {
+  it('renew=false schedules cancel-at-period-end and returns ok', async () => {
+    const result = await setRenewal(stripe as unknown as Stripe, 'sub_1', false);
+    expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_1', {
+      cancel_at_period_end: true,
+    });
+    expect(result).toBe('ok');
+  });
+
+  it('renew=true clears cancel-at-period-end and returns ok', async () => {
+    const result = await setRenewal(stripe as unknown as Stripe, 'sub_1', true);
+    expect(stripe.subscriptions.update).toHaveBeenCalledWith('sub_1', {
+      cancel_at_period_end: false,
+    });
+    expect(result).toBe('ok');
+  });
+
+  it('returns already_canceled when the subscription is already gone', async () => {
+    stripe.subscriptions.update.mockRejectedValue(
+      Object.assign(new Error('No such subscription: sub_1'), { code: 'resource_missing' }),
+    );
+    await expect(setRenewal(stripe as unknown as Stripe, 'sub_1', false)).resolves.toBe(
+      'already_canceled',
+    );
+  });
+
+  it('re-throws any other error', async () => {
+    stripe.subscriptions.update.mockRejectedValue(
+      Object.assign(new Error('rate limited'), { code: 'rate_limit' }),
+    );
+    await expect(setRenewal(stripe as unknown as Stripe, 'sub_1', false)).rejects.toThrow(
+      'rate limited',
+    );
+  });
+});
+
+describe('cancelNow — fail-closed immediate cancel (C4)', () => {
+  it('cancels the subscription immediately', async () => {
+    await cancelNow(stripe as unknown as Stripe, 'sub_1');
+    expect(stripe.subscriptions.cancel).toHaveBeenCalledWith('sub_1');
+  });
+
+  it('treats an already-canceled subscription as done', async () => {
+    stripe.subscriptions.cancel.mockRejectedValue(
+      new Error('This subscription has been canceled and cannot be modified.'),
+    );
+    await expect(cancelNow(stripe as unknown as Stripe, 'sub_1')).resolves.toBeUndefined();
+  });
+
+  it('re-throws any other error', async () => {
+    stripe.subscriptions.cancel.mockRejectedValue(
+      Object.assign(new Error('service down'), { code: 'api_error' }),
+    );
+    await expect(cancelNow(stripe as unknown as Stripe, 'sub_1')).rejects.toThrow('service down');
   });
 });

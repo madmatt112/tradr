@@ -7,7 +7,8 @@
 
 import { PostHog } from 'posthog-node';
 
-import { config, isPostHogConfigured } from './config';
+import { config, isPostHogConfigured, isPostHogPersonDeletionConfigured } from './config';
+import { logger } from './logger';
 import { logTelemetryFailureOnce } from './telemetry-failure';
 import { scrubDeep, scrubString } from './telemetry-redact';
 
@@ -130,6 +131,57 @@ export function identifyServerUser(
     client.identify({ distinctId, properties: { $set: withEnvironment(properties) } });
   } catch (err) {
     logTelemetryFailureOnce('posthog', err);
+  }
+}
+
+/**
+ * Best-effort delete of the PostHog person keyed by `distinctId` (the user id)
+ * after an account deletion (Req 5.4, design C10). Opt-in: a clean no-op unless
+ * isPostHogPersonDeletionConfigured() — the project key, a personal API key and
+ * the project id must all be set. It NEVER rejects; a non-2xx response, a network
+ * error, or a timeout is one warn log with the user id, so a post-commit person
+ * delete can never block or reverse the deletion.
+ *
+ * One POST to PostHog's REST persons/bulk_delete endpoint, bounded by `timeoutMs`
+ * via an AbortSignal. Pinned by a probe of PostHog's persons API reference
+ * (recorded in the task 5 implementation log): the endpoint is
+ * `POST {app-host}/api/projects/{project_id}/persons/bulk_delete/`, authenticated
+ * with `Authorization: Bearer {personal API key}`, body `{ distinct_ids: [...] }`.
+ * It lives on the APP host, NOT the ingestion `POSTHOG_HOST`
+ * (`us.i.posthog.com` → `us.posthog.com`); a self-hosted host, which serves both
+ * from one origin, is left unchanged.
+ */
+export async function deletePostHogPerson(distinctId: string, timeoutMs = 5000): Promise<void> {
+  if (!isPostHogPersonDeletionConfigured()) return;
+
+  const appHost = config.POSTHOG_HOST.replace('.i.posthog.com', '.posthog.com').replace(/\/$/, '');
+  const url = `${appHost}/api/projects/${config.POSTHOG_PROJECT_ID}/persons/bulk_delete/`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.POSTHOG_PERSONAL_API_KEY}`,
+      },
+      body: JSON.stringify({ distinct_ids: [distinctId] }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      logger.warn('posthog person deletion failed', {
+        userId: distinctId,
+        status: response.status,
+      });
+    }
+  } catch (err) {
+    logger.warn('posthog person deletion failed', {
+      userId: distinctId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }
 

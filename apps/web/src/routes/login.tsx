@@ -25,6 +25,7 @@ function LoginPage() {
   const { registrationEnabled } = useRegistrationEnabled();
   const [apiError, setApiError] = useState('');
   const expired = new URLSearchParams(window.location.search).get('expired');
+  const deleted = new URLSearchParams(window.location.search).get('deleted');
 
   const {
     register,
@@ -54,6 +55,12 @@ function LoginPage() {
         <CardContent>
           {expired === 'true' && (
             <p className="mb-4 text-sm text-destructive">Session expired. Please log in again.</p>
+          )}
+
+          {/* Deletion is not an error — muted, never text-destructive. The
+              account-deletion hook navigates here after a `deleted` outcome. */}
+          {deleted === 'true' && (
+            <p className="mb-4 text-sm text-muted-foreground">Your account was deleted.</p>
           )}
 
           {apiError && <p className="mb-4 text-sm text-destructive">{apiError}</p>}
@@ -124,6 +131,20 @@ function LoginPage() {
   );
 }
 
+interface LoginSearch {
+  expired?: boolean;
+  deleted?: boolean;
+}
+
 export const Route = createFileRoute('/login')({
+  // Both notices are still read from the raw query in the component above; this
+  // only ROUND-TRIPS the two flags through the typed search. A typed navigate
+  // here — the account-deletion hook's `deleted`, lib/api's `expired` — must
+  // find its key declared, and validateSearch must return it so it is not
+  // stripped from the URL the component then reads.
+  validateSearch: (search: Record<string, unknown>): LoginSearch => ({
+    expired: search.expired === true || search.expired === 'true' ? true : undefined,
+    deleted: search.deleted === true || search.deleted === 'true' ? true : undefined,
+  }),
   component: LoginPage,
 });

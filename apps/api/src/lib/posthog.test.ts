@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoisted mock state shared between the vi.mock factories and the tests. Kept
 // stable across vi.resetModules() so re-importing posthog.ts (to get a fresh
@@ -29,10 +29,18 @@ const h = vi.hoisted(() => {
   const shutdown = vi.fn(() => Promise.resolve());
   const PostHogCtor = vi.fn(() => ({ capture, identify, captureException, shutdown }));
   const isPostHogConfigured = vi.fn();
+  const isPostHogPersonDeletionConfigured = vi.fn();
   const logTelemetryFailureOnce = vi.fn();
+  // Stable across vi.resetModules(): the re-imported posthog.ts picks up this
+  // same object, so logger.warn spying works despite the module reset.
+  const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const config = {
     POSTHOG_API_KEY: 'phc_test123',
     POSTHOG_HOST: 'https://us.i.posthog.com',
+    // Person-deletion credentials (design C10). Set by default; the predicate
+    // mock gates whether deletePostHogPerson actually runs per test.
+    POSTHOG_PERSONAL_API_KEY: 'phx_personal_test',
+    POSTHOG_PROJECT_ID: 'proj-42',
     // Unset by default — the self-host shape every other test asserts against.
     POSTHOG_ENVIRONMENT: undefined as string | undefined,
   };
@@ -45,13 +53,20 @@ const h = vi.hoisted(() => {
     shutdown,
     PostHogCtor,
     isPostHogConfigured,
+    isPostHogPersonDeletionConfigured,
     logTelemetryFailureOnce,
+    logger,
     config,
   };
 });
 
 vi.mock('posthog-node', () => ({ PostHog: h.PostHogCtor }));
-vi.mock('./config', () => ({ config: h.config, isPostHogConfigured: h.isPostHogConfigured }));
+vi.mock('./config', () => ({
+  config: h.config,
+  isPostHogConfigured: h.isPostHogConfigured,
+  isPostHogPersonDeletionConfigured: h.isPostHogPersonDeletionConfigured,
+}));
+vi.mock('./logger', () => ({ logger: h.logger }));
 vi.mock('./telemetry-failure', () => ({ logTelemetryFailureOnce: h.logTelemetryFailureOnce }));
 // telemetry-redact is intentionally NOT mocked — the REAL scrubDeep runs so the
 // capture-boundary value-scrub (REQ-8.5) is exercised end to end.
@@ -70,6 +85,11 @@ beforeEach(() => {
   // installed — the throw-path test would otherwise leave identify throwing for
   // the rest of the file, silently emptying identifySent.
   h.identify.mockImplementation(h.identifyImpl);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('initPostHog', () => {
@@ -392,6 +412,80 @@ describe('$geoip_disable (server-side geo suppression)', () => {
     expect(set.environment).toBe('staging');
     // The event itself carries no label. Filter $identify by PERSON property.
     expect(sent.properties).not.toHaveProperty('environment');
+  });
+});
+
+describe('deletePostHogPerson', () => {
+  const distinctId = 'user-uuid-9';
+
+  it('unconfigured (opt-in absent): makes no fetch call and resolves', async () => {
+    h.isPostHogPersonDeletionConfigured.mockReturnValue(false);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const { deletePostHogPerson } = await load();
+
+    await expect(deletePostHogPerson(distinctId)).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('configured: POSTs bulk_delete on the APP host, bearer key, distinct id in the body', async () => {
+    h.isPostHogPersonDeletionConfigured.mockReturnValue(true);
+    const fetchMock = vi.fn(() => Promise.resolve({ ok: true, status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { deletePostHogPerson } = await load();
+
+    await deletePostHogPerson(distinctId);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    // The ingestion POSTHOG_HOST (us.i.posthog.com) is rewritten to the app host.
+    expect(url).toBe('https://us.posthog.com/api/projects/proj-42/persons/bulk_delete/');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer phx_personal_test');
+    expect(JSON.parse(init.body as string)).toEqual({ distinct_ids: [distinctId] });
+  });
+
+  it('non-2xx: warns with the user id and resolves without throwing', async () => {
+    h.isPostHogPersonDeletionConfigured.mockReturnValue(true);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve({ ok: false, status: 403 })),
+    );
+    const { deletePostHogPerson } = await load();
+
+    await expect(deletePostHogPerson(distinctId)).resolves.toBeUndefined();
+    expect(h.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('person deletion'),
+      expect.objectContaining({ userId: distinctId, status: 403 }),
+    );
+  });
+
+  it('a hung call resolves after the timeout with a warn (never hangs)', async () => {
+    h.isPostHogPersonDeletionConfigured.mockReturnValue(true);
+    // A faithful fetch stub: it hangs until its AbortSignal fires, then rejects
+    // as the real fetch does on abort.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      ),
+    );
+    const { deletePostHogPerson } = await load();
+
+    vi.useFakeTimers();
+    const pending = deletePostHogPerson(distinctId, 5000);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('person deletion'),
+      expect.objectContaining({ userId: distinctId }),
+    );
   });
 });
 

@@ -2,11 +2,13 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import {
+  AdminDeleteUserRequestSchema,
   AdminResetRequestSchema,
   AdminUsageQuerySchema,
   ToggleAdminRequestSchema,
 } from '@tradr/shared';
 
+import { adminDeleteUser } from '@/features/account-deletion/account-deletion.service';
 import { validate } from '@/lib/validation';
 import { adminMiddleware } from '@/middleware/admin.middleware';
 import { authMiddleware } from '@/middleware/auth.middleware';
@@ -351,5 +353,68 @@ adminRouter.post(
     const { id } = c.req.valid('param');
     const { confirmEmail, removeSettings } = c.req.valid('json');
     return c.json(await factoryResetUser(c.get('userId'), id, confirmEmail, removeSettings), 200);
+  },
+);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}/delete:
+ *   post:
+ *     summary: Delete a user and all their data (admin only).
+ *     description: >
+ *       Admin-gated (403 `ADMIN_REQUIRED`). DESTRUCTIVE AND IRREVERSIBLE — the user
+ *       row and every user-keyed row (accounts, positions, ledger, wallet, Stripe
+ *       mirror, sessions, settings) are removed by the FK cascade in one
+ *       transaction; there is no undo. POST (never GET) per the SameSite=Lax CSRF
+ *       posture.
+ *
+ *       `confirmEmail` must equal the target user's email (case-insensitive) or the
+ *       request is a 400 `VALIDATION_ERROR` and nothing is changed; the check is
+ *       enforced here, not only in the UI that collects it. An admin cannot delete
+ *       their OWN account this way (400 `VALIDATION_ERROR`) — self-deletion goes
+ *       through Settings.
+ *
+ *       Before the delete, every live subscription is cancelled immediately at
+ *       Stripe (fail-closed): a cancel error is a 502 `STRIPE_CANCEL_FAILED` and
+ *       nothing is deleted. Deleting the last remaining admin is refused with 409
+ *       `LAST_ADMIN`. With Stripe unconfigured but a non-terminal subscription
+ *       mirror still present the deletion is refused with 409
+ *       `SUBSCRIPTION_UNRESOLVED`.
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [confirmEmail]
+ *             properties:
+ *               confirmEmail:
+ *                 type: string
+ *                 format: email
+ *                 description: Must match the target user's email, case-insensitively.
+ *     responses:
+ *       200: { description: 'AdminDeleteUserResult — { userId, outcome: "deleted", purgeOutcome }.' }
+ *       400: { description: 'VALIDATION_ERROR — id is not a UUID, body malformed, confirmEmail does not match, or the caller targeted their own account.' }
+ *       401: { description: Not authenticated. }
+ *       403: { description: ADMIN_REQUIRED — authenticated but not an admin. }
+ *       404: { description: NOT_FOUND — no such user. }
+ *       409: { description: 'LAST_ADMIN — cannot delete the last admin; or SUBSCRIPTION_UNRESOLVED — resolve billing first.' }
+ *       429: { description: Admin rate limit reached (60 / 60 s per user). }
+ *       502: { description: STRIPE_CANCEL_FAILED — a live subscription could not be cancelled; nothing deleted. }
+ */
+adminRouter.post(
+  '/users/:id/delete',
+  validate('param', IdParamSchema),
+  validate('json', AdminDeleteUserRequestSchema),
+  async (c) => {
+    const { id } = c.req.valid('param');
+    const { confirmEmail } = c.req.valid('json');
+    return c.json(await adminDeleteUser(c.get('userId'), id, confirmEmail), 200);
   },
 );

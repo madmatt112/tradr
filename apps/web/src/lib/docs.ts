@@ -17,6 +17,7 @@ export const DOCS = {
   home: '/',
   gettingStarted: '/user-guide/getting-started/',
   positions: '/user-guide/positions/',
+  accountDeletion: '/user-guide/account-deletion/',
   importHistory: '/user-guide/import-history/',
   metricsGlossary: '/user-guide/reference/metrics-glossary/',
   accounts: '/user-guide/accounts/',

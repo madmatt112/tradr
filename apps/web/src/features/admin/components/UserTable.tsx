@@ -54,6 +54,7 @@ import { useAdminUsers } from '../hooks/useAdminUsers';
 import { useToggleAdmin } from '../hooks/useToggleAdmin';
 import { formatMicroUsd } from '../lib/format';
 
+import { AdminDeleteUserDialog } from './AdminDeleteUserDialog';
 import { FactoryResetDialog } from './FactoryResetDialog';
 
 const LAST_SEEN_CAVEAT = 'Last recorded session activity — may be arbitrarily old';
@@ -73,11 +74,21 @@ interface RowActions {
   onToggle: (user: AdminUserListItem) => void;
   onDetails: (user: AdminUserListItem) => void;
   onReset: (user: AdminUserListItem) => void;
+  onDelete: (user: AdminUserListItem) => void;
 }
 
 // One mounted component per loaded page so every page refetches on
 // invalidation (the cache is shared with the parent's nextCursor query).
-function UserTableRows({ cursor, onToggle, onDetails, onReset }: RowActions & { cursor?: string }) {
+// `currentUserId` hides the Delete on the caller's own row — self-deletion goes
+// through Settings, and the server refuses it here anyway.
+function UserTableRows({
+  cursor,
+  currentUserId,
+  onToggle,
+  onDetails,
+  onReset,
+  onDelete,
+}: RowActions & { cursor?: string; currentUserId?: string }) {
   const { data, isLoading, isError } = useAdminUsers(cursor);
 
   if (isLoading) {
@@ -153,7 +164,7 @@ function UserTableRows({ cursor, onToggle, onDetails, onReset }: RowActions & { 
                 Details
               </Button>
               {/* Destructive, so it is styled as such and sits last — the
-                  rightmost control in a row is the one a mis-aimed click is
+                  rightmost controls in a row are the ones a mis-aimed click is
                   least likely to land on. */}
               <Button
                 variant="ghost"
@@ -163,6 +174,18 @@ function UserTableRows({ cursor, onToggle, onDetails, onReset }: RowActions & { 
               >
                 Reset
               </Button>
+              {/* Delete is absent on the caller's own row — self-deletion goes
+                  through Settings, not this table. */}
+              {u.id !== currentUserId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive cursor-pointer"
+                  onClick={() => onDelete(u)}
+                >
+                  Delete
+                </Button>
+              )}
             </div>
           </TableCell>
         </TableRow>
@@ -229,6 +252,7 @@ export function UserTable() {
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [detailUser, setDetailUser] = useState<AdminUserListItem | null>(null);
   const [resetUser, setResetUser] = useState<AdminUserListItem | null>(null);
+  const [deleteUser, setDeleteUser] = useState<AdminUserListItem | null>(null);
 
   // Same query key as the last mounted page — shared cache, no extra fetch.
   const lastPage = useAdminUsers(cursors[cursors.length - 1]);
@@ -290,9 +314,11 @@ export function UserTable() {
             <UserTableRows
               key={cursor ?? 'first'}
               cursor={cursor}
+              currentUserId={currentUser?.id}
               onToggle={openConfirm}
               onDetails={setDetailUser}
               onReset={setResetUser}
+              onDelete={setDeleteUser}
             />
           ))}
         </TableBody>
@@ -311,6 +337,8 @@ export function UserTable() {
       )}
 
       <FactoryResetDialog user={resetUser} onClose={() => setResetUser(null)} />
+
+      <AdminDeleteUserDialog user={deleteUser} onClose={() => setDeleteUser(null)} />
 
       <Dialog
         open={pendingToggle !== null}
