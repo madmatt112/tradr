@@ -44,6 +44,7 @@ import {
 } from '@/db/schema';
 import { logger } from '@/lib/logger';
 
+import * as accountDeletionQuery from './account-deletion.query';
 import { claimDueSchedules, claimForCancel } from './account-deletion.query';
 import {
   adminDeleteUser,
@@ -501,6 +502,38 @@ describe('executeDeletion — cascade', () => {
       .from(accountDeletions)
       .where(eq(accountDeletions.userId, user.id));
     expect(tombstones).toHaveLength(1);
+  });
+});
+
+describe('executeDeletion — post-commit tombstone purge failure', () => {
+  it('logs and still resolves when the post-commit purge-outcome UPDATE rejects', async () => {
+    const user = await seedUser();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    // The purge-outcome UPDATE runs after the deletion transaction commits.
+    const purgeSpy = vi
+      .spyOn(accountDeletionQuery, 'updateTombstonePurge')
+      .mockRejectedValueOnce(new Error('tombstone boom'));
+
+    // The deletion resolves — the post-commit throw is caught, not propagated.
+    const result = await executeDeletion({ userId: user.id, initiator: 'self' });
+    expect(result.purgeOutcome).toBe('not_applicable');
+
+    // The commit stands: the user (and its cascade) is gone.
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(0);
+    // The tombstone survives, still `pending` for the gc sweeper to recover.
+    const [tombstone] = await db
+      .select()
+      .from(accountDeletions)
+      .where(eq(accountDeletions.userId, user.id));
+    expect(tombstone.purgeOutcome).toBe('pending');
+
+    expect(purgeSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'account deletion tombstone purge update failed',
+      expect.objectContaining({ userId: user.id }),
+    );
+    warnSpy.mockRestore();
+    purgeSpy.mockRestore();
   });
 });
 
