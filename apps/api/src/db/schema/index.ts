@@ -14,3 +14,4 @@ export * from './email-tokens.schema';
 export * from './symbols.schema';
 export * from './tags.schema';
 export * from './position-images.schema';
+export * from './account-deletion.schema';

@@ -104,7 +104,10 @@ export const adminAuditLog = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    check('admin_audit_log_action_chk', sql`${t.action} IN ('admin_toggle', 'factory_reset')`),
+    check(
+      'admin_audit_log_action_chk',
+      sql`${t.action} IN ('admin_toggle', 'factory_reset', 'account_deletion')`,
+    ),
     // The transition columns stay mandatory for the action that IS a transition.
     check(
       'admin_audit_log_toggle_values_chk',

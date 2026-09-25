@@ -396,7 +396,9 @@ export async function updateUserIsAdmin(
  * A discriminated union, not one shape with optional fields, so the DB's own
  * `admin_audit_log_toggle_values_chk` cannot be violated from TypeScript: a
  * toggle entry without both boolean ends does not typecheck, and a reset entry
- * cannot claim ones it does not have.
+ * cannot claim ones it does not have. The `account_deletion` member has no
+ * target user id — the row it audits is gone — so `targetUserId` is `null` and
+ * `targetEmail` carries the tombstone's hash marker (design C2, Req 6.3).
  */
 export type AdminAuditEntryInsert =
   | {
@@ -415,6 +417,13 @@ export type AdminAuditEntryInsert =
       targetUserId: string;
       targetEmail: string;
       detail: AdminAuditDetail;
+    }
+  | {
+      action: 'account_deletion';
+      actorUserId: string;
+      actorEmail: string;
+      targetUserId: null;
+      targetEmail: string;
     };
 
 /**

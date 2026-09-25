@@ -253,6 +253,13 @@
       "when": 1789769473870,
       "tag": "0035_ledger_cash_movements",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790296202136,
+      "tag": "0036_account_deletion_tables",
+      "breakpoints": true
     }
   ]
 }
