@@ -21,6 +21,7 @@ import type { StoredContentPart } from '@tradr/shared';
 import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
 import { getObjectStorage, USER_OBJECT_PREFIXES, type ObjectStorage } from '@/lib/object-storage';
+import { purgeUserObjects } from '@/lib/object-storage/purge';
 
 /**
  * Fixed safety buffer added on top of the config-derived in-flight-turn bound when
@@ -64,6 +65,10 @@ export interface GcResult {
   keptReferenced: number;
   /** Objects kept because they are younger than the age floor (put-before-commit guard). */
   keptTooYoung: number;
+  /** Unfinished tombstones whose object purge completed on this run (→ `complete`). */
+  tombstonesCompleted: number;
+  /** Unfinished tombstones whose object purge still did not complete (left as-is). */
+  tombstonesIncomplete: number;
 }
 
 /**
@@ -271,6 +276,8 @@ export async function runGc(
     deleted: 0,
     keptReferenced: 0,
     keptTooYoung: 0,
+    tombstonesCompleted: 0,
+    tombstonesIncomplete: 0,
   };
 
   for (const obj of objects) {
@@ -285,6 +292,31 @@ export async function runGc(
     }
     await storage.delete(obj.key);
     result.deleted += 1;
+  }
+
+  // Last step (design C9, D13; Req 5.3): complete any unfinished tombstone purge.
+  // A deletion whose post-commit purge was `pending` (never ran) or `incomplete`
+  // (a key remained) is retried here through the same per-user helper — the
+  // operator backstop. Raw SQL over the injected connection, the `collectLiveKeys`
+  // idiom. `purgeUserObjects` never throws; the tombstone is marked `complete` only
+  // on an honest `complete`, otherwise it is left for the next sweep.
+  const unfinished = await sql<{ user_id: string }[]>`
+    SELECT user_id
+    FROM account_deletions
+    WHERE purge_outcome IN ('pending', 'incomplete')
+  `;
+  for (const { user_id } of unfinished) {
+    const outcome = await purgeUserObjects(storage, user_id);
+    if (outcome === 'complete') {
+      await sql`
+        UPDATE account_deletions
+        SET purge_outcome = 'complete'
+        WHERE user_id = ${user_id}
+      `;
+      result.tombstonesCompleted += 1;
+    } else {
+      result.tombstonesIncomplete += 1;
+    }
   }
 
   return result;
@@ -353,7 +385,8 @@ export async function runStorageGc(): Promise<number> {
     console.log(
       `storage gc complete: ${r.liveKeys} live key(s); listed ${r.listed} object(s) ` +
         `(${byPrefix}); deleted ${r.deleted} aged-unreferenced; kept ${r.keptReferenced} ` +
-        `referenced + ${r.keptTooYoung} too-young.`,
+        `referenced + ${r.keptTooYoung} too-young. Tombstones: completed ` +
+        `${r.tombstonesCompleted}, still incomplete ${r.tombstonesIncomplete}.`,
     );
     return 0;
   } catch (err) {
