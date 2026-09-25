@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 
 import bcrypt from 'bcrypt';
 
-import type { AccountDeletionResult, AccountDeletionStatus, PurgeOutcome } from '@tradr/shared';
+import type {
+  AccountDeletionResult,
+  AccountDeletionStatus,
+  AdminDeleteUserResult,
+  PurgeOutcome,
+} from '@tradr/shared';
 
 import { db } from '@/db';
 import {
@@ -17,9 +22,13 @@ import {
   selectBillingCustomerByUser,
   selectSubscriptionsByUser,
 } from '@/features/billing/subscription.query';
-import { listLiveSubscriptions, setRenewal } from '@/features/billing/subscription.service';
+import {
+  cancelNow,
+  listLiveSubscriptions,
+  setRenewal,
+} from '@/features/billing/subscription.service';
 import { resolveTier, TERMINAL_SUBSCRIPTION_STATUSES } from '@/features/billing/tier.query';
-import { AppError, NotFoundError } from '@/lib/errors';
+import { AppError, NotFoundError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { getObjectStorage } from '@/lib/object-storage';
 import { purgeUserObjects } from '@/lib/object-storage/purge';
@@ -49,9 +58,9 @@ import {
 // shared by the self-service, admin and fire flows — plus the self-service
 // entry points that wrap it: `requestSelfDeletion` (password gate, guard
 // pre-checks, Stripe not-renew and the schedule state machine),
-// `cancelScheduledDeletion` and `getDeletionStatus`. The admin
-// (`adminDeleteUser`) and fire (`fireScheduledDeletion`) entry points are added
-// in later tasks.
+// `cancelScheduledDeletion`, `getDeletionStatus` and the admin
+// (`adminDeleteUser`) entry point. The fire (`fireScheduledDeletion`) entry
+// point is added in a later task.
 // ---------------------------------------------------------------------------
 
 /** `deleted:` + the email hash is the audit-log marker (72 chars, design C5). */
@@ -314,6 +323,78 @@ export async function cancelScheduledDeletion(userId: string): Promise<void> {
   }
 
   await deleteSchedule(db, userId, { state: 'cancelling', claimedAt: claimToken });
+}
+
+/**
+ * Admin-initiated deletion of another user (design C5, Req 6). The actor and the
+ * target differ, so the guards differ from the self path: a self-target is
+ * refused (an admin deletes their own account from Settings), the typed email is
+ * confirmed against the target, then the same guard pre-checks run — against the
+ * target — before a fail-closed immediate Stripe cancel and the shared delete
+ * transaction. Every pre-commit refusal deletes nothing.
+ */
+export async function adminDeleteUser(
+  actorId: string,
+  targetId: string,
+  confirmEmail: string,
+): Promise<AdminDeleteUserResult> {
+  // An admin's own account goes through the self-service flow (password gate,
+  // subscription scheduling); the destructive admin table never self-deletes.
+  if (targetId === actorId) {
+    throw new ValidationError('Delete your own account from Settings, not the admin table.');
+  }
+
+  // Unlocked target read (the factory-reset pattern, admin.service.ts:343-350): a
+  // missing row is `404`, a typed-email mismatch is `400`, both before any Stripe
+  // or delete work. `executeDeletion`'s locked re-read is the authority; this is
+  // the fast, friendly refusal. `selectUserById` also carries the admin flag the
+  // last-admin pre-check needs, so one read serves both.
+  const target = await selectUserById(db, targetId);
+  if (!target) throw new NotFoundError('User', targetId);
+  if (confirmEmail.trim().toLowerCase() !== target.email.toLowerCase()) {
+    throw new ValidationError(
+      'The typed email does not match the account being deleted. Nothing was changed.',
+    );
+  }
+
+  // Guard pre-checks against the TARGET (Req 2), before any Stripe cancel so a
+  // refusal never leaves a subscription canceled: deleting the last admin is
+  // `409 LAST_ADMIN` (the locked re-check in `executeDeletion` decides); Stripe
+  // unconfigured with a live mirror row is `409 SUBSCRIPTION_UNRESOLVED`.
+  if (target.isAdmin && (await countAdmins(db)) <= 1) {
+    throw new AppError(409, 'LAST_ADMIN', 'Cannot delete the last admin');
+  }
+  const stripe = getStripeClient();
+  if (stripe === null) {
+    const mirrors = await selectSubscriptionsByUser(db, targetId);
+    if (mirrors.some((m) => !TERMINAL_SUBSCRIPTION_STATUSES.has(m.status))) {
+      logger.warn('admin account deletion refused: subscription unresolved', { targetId });
+      throw new AppError(
+        409,
+        'SUBSCRIPTION_UNRESOLVED',
+        'Resolve the subscription before deleting this account',
+      );
+    }
+  } else {
+    // Fail-closed immediate cancel of every live subscription before the delete
+    // (Req 6.1, D17): the admin path cancels now rather than scheduling. Any
+    // non-already-canceled error is `502 STRIPE_CANCEL_FAILED` with nothing
+    // deleted — the transaction below never runs.
+    const link = await selectBillingCustomerByUser(db, targetId);
+    const live = link === null ? [] : await listLiveSubscriptions(stripe, link.stripeCustomerId);
+    try {
+      for (const sub of live) {
+        await cancelNow(stripe, sub.id);
+      }
+    } catch {
+      throw new AppError(502, 'STRIPE_CANCEL_FAILED', 'Could not cancel the subscription');
+    }
+  }
+
+  // Guards passed and billing is resolved: the shared delete transaction, audited
+  // to the acting admin (initiator `admin`).
+  const { purgeOutcome } = await executeDeletion({ userId: targetId, initiator: 'admin', actorId });
+  return { userId: targetId, outcome: 'deleted', purgeOutcome };
 }
 
 /**

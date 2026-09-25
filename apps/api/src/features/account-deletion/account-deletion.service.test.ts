@@ -46,6 +46,7 @@ import { logger } from '@/lib/logger';
 
 import { claimDueSchedules, claimForCancel } from './account-deletion.query';
 import {
+  adminDeleteUser,
   cancelScheduledDeletion,
   emailHash,
   executeDeletion,
@@ -87,15 +88,17 @@ type FakeSub = { id: string; cancelAtPeriodEnd: boolean; periodEnd?: Date };
 
 /**
  * A minimal Stripe stub for the C4 helpers: `subscriptions.list` yields the
- * live rows `extractSubscriptionMirror` parses, and `subscriptions.update`
- * records `(id, cancel_at_period_end)` and may throw to drive the flip/restore
- * failure branches. A thrown plain Error is a non-already-canceled failure; an
- * error whose `code` is `resource_missing` makes `setRenewal` report
- * `already_canceled`.
+ * live rows `extractSubscriptionMirror` parses, `subscriptions.update` records
+ * `(id, cancel_at_period_end)` and may throw to drive the flip/restore failure
+ * branches, and `subscriptions.cancel` records the admin path's immediate
+ * cancels and may throw to drive its `502`. A thrown plain Error is a
+ * non-already-canceled failure; an error whose `code` is `resource_missing`
+ * makes `setRenewal`/`cancelNow` report `already_canceled`.
  */
 function makeStripe(opts: {
   live?: FakeSub[];
   onUpdate?: (id: string, cancelAtPeriodEnd: boolean) => void;
+  onCancel?: (id: string) => void;
 }): unknown {
   const live = opts.live ?? [];
   return {
@@ -120,6 +123,10 @@ function makeStripe(opts: {
       }),
       update: async (id: string, params: { cancel_at_period_end: boolean }) => {
         opts.onUpdate?.(id, params.cancel_at_period_end);
+        return {};
+      },
+      cancel: async (id: string) => {
+        opts.onCancel?.(id);
         return {};
       },
     },
@@ -521,6 +528,118 @@ describe('executeDeletion — admin path', () => {
     // The acting admin's own row survives.
     const adminRow = await db.select().from(users).where(eq(users.id, admin.id));
     expect(adminRow).toHaveLength(1);
+  });
+});
+
+describe('adminDeleteUser', () => {
+  it('cancels every live subscription, then deletes the target with one account_deletion audit row', async () => {
+    const admin = await seedUser({ isAdmin: true });
+    const target = await seedBillingUser();
+    const marker = `deleted:${emailHash(target.email)}`;
+    const canceled: string[] = [];
+    stripeMock.client = makeStripe({
+      live: [{ id: 'sub_A', cancelAtPeriodEnd: false }],
+      onCancel: (id) => canceled.push(id),
+    });
+
+    const result = await adminDeleteUser(admin.id, target.id, target.email);
+
+    expect(result).toEqual({
+      userId: target.id,
+      outcome: 'deleted',
+      purgeOutcome: 'not_applicable',
+    });
+    // The live subscription was canceled immediately (not scheduled).
+    expect(canceled).toEqual(['sub_A']);
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(0);
+
+    // Exactly one account_deletion audit row: null target id, the marker email.
+    const rows = await db
+      .select()
+      .from(adminAuditLog)
+      .where(eq(adminAuditLog.action, 'account_deletion'));
+    const entry = rows.find((r) => r.actorUserId === admin.id);
+    expect(entry).toBeDefined();
+    expect(entry?.targetUserId).toBeNull();
+    expect(entry?.targetEmail).toBe(marker);
+  });
+
+  it('deletes nothing when a live-subscription cancel fails (502 STRIPE_CANCEL_FAILED)', async () => {
+    const admin = await seedUser({ isAdmin: true });
+    const target = await seedBillingUser();
+    stripeMock.client = makeStripe({
+      live: [{ id: 'sub_A', cancelAtPeriodEnd: false }],
+      onCancel: () => {
+        throw new Error('cancel boom');
+      },
+    });
+
+    await expect(adminDeleteUser(admin.id, target.id, target.email)).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'STRIPE_CANCEL_FAILED',
+    });
+    // Nothing deleted: the target row and no tombstone.
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(1);
+    expect(
+      await db.select().from(accountDeletions).where(eq(accountDeletions.userId, target.id)),
+    ).toHaveLength(0);
+  });
+
+  it('erases a self-scheduled target, dropping the schedule row so a later due claim finds nothing (R4-2)', async () => {
+    const admin = await seedUser({ isAdmin: true });
+    const target = await seedUser();
+    // The target had already self-scheduled a deletion.
+    await db.insert(accountDeletionSchedules).values({
+      userId: target.id,
+      state: 'scheduled',
+      dueAt: FUTURE,
+      stripeSubscriptionIds: [],
+    });
+
+    // Stripe unconfigured (stripeMock.client null) and no live mirror row → the
+    // admin path skips the cancel loop and deletes immediately.
+    await adminDeleteUser(admin.id, target.id, target.email);
+
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(0);
+    // The schedule row went with the user cascade.
+    expect(
+      await db
+        .select()
+        .from(accountDeletionSchedules)
+        .where(eq(accountDeletionSchedules.userId, target.id)),
+    ).toHaveLength(0);
+    // A later fire finds nothing to claim.
+    const due = await claimDueSchedules(
+      db,
+      new Date('2036-01-01T00:00:00.000Z'),
+      15 * 60 * 1000,
+      10,
+    );
+    expect(due.some((r) => r.userId === target.id)).toBe(false);
+  });
+
+  it('refuses a self-target, an unknown target and an email mismatch, changing nothing', async () => {
+    const admin = await seedUser({ isAdmin: true });
+
+    // An admin deleting themselves is pointed at the self-service path.
+    await expect(adminDeleteUser(admin.id, admin.id, admin.email)).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+    });
+
+    // An unknown target is a 404.
+    await expect(
+      adminDeleteUser(admin.id, randomUUID(), 'nobody@example.com'),
+    ).rejects.toMatchObject({ statusCode: 404 });
+
+    // A typed-email mismatch is a 400 and the target survives.
+    const target = await seedUser();
+    await expect(adminDeleteUser(admin.id, target.id, 'wrong@example.com')).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+    });
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(1);
+    expect(await db.select().from(users).where(eq(users.id, admin.id))).toHaveLength(1);
   });
 });
 
