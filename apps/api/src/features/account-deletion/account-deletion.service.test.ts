@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+import bcrypt from 'bcrypt';
 import { eq, sql } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { db } from '@/db';
 import {
@@ -41,30 +42,114 @@ import {
   walletTransactions,
   wallets,
 } from '@/db/schema';
+import { logger } from '@/lib/logger';
 
-import { emailHash, executeDeletion } from './account-deletion.service';
+import { claimDueSchedules, claimForCancel } from './account-deletion.query';
+import {
+  cancelScheduledDeletion,
+  emailHash,
+  executeDeletion,
+  getDeletionStatus,
+  requestSelfDeletion,
+} from './account-deletion.service';
 
 // executeDeletion + emailHash (design C5) against real tradr_test, each test
 // rolled back by the single-connection harness (test-setup.ts). Nothing optional
 // is configured, so the post-commit purge and PostHog steps take their
 // graceful-absence no-op path and the purge outcome is `not_applicable` (Req 9.1).
+//
+// The self-service flows (requestSelfDeletion / cancelScheduledDeletion) reach
+// Stripe through `getStripeClient()`; the C4 helpers they call take that client
+// as a parameter, so stubbing this one seam (the `./stripe-client` mock in
+// subscription.service.test.ts) drives every Stripe branch DB-side. The cascade,
+// admin and last-admin blocks below never call it, so the stub is inert there.
+
+const stripeMock = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/features/billing/stripe-client', () => ({
+  getStripeClient: () => stripeMock.client,
+}));
+
+beforeEach(() => {
+  stripeMock.client = null;
+});
 
 let seq = 0;
 const uniq = (tag: string): string => `${tag}-${Date.now()}-${++seq}`;
 const FUTURE = new Date('2035-01-01T00:00:00.000Z');
 
+// A real bcrypt hash so `requestSelfDeletion`'s password gate accepts PASSWORD;
+// cost 4 keeps the seed fast (bcrypt.compare reads the cost from the hash).
+const PASSWORD = 'correct-horse-battery';
+const PASSWORD_HASH = bcrypt.hashSync(PASSWORD, 4);
+
+/** A subscription the fake Stripe client returns from `subscriptions.list`. */
+type FakeSub = { id: string; cancelAtPeriodEnd: boolean; periodEnd?: Date };
+
+/**
+ * A minimal Stripe stub for the C4 helpers: `subscriptions.list` yields the
+ * live rows `extractSubscriptionMirror` parses, and `subscriptions.update`
+ * records `(id, cancel_at_period_end)` and may throw to drive the flip/restore
+ * failure branches. A thrown plain Error is a non-already-canceled failure; an
+ * error whose `code` is `resource_missing` makes `setRenewal` report
+ * `already_canceled`.
+ */
+function makeStripe(opts: {
+  live?: FakeSub[];
+  onUpdate?: (id: string, cancelAtPeriodEnd: boolean) => void;
+}): unknown {
+  const live = opts.live ?? [];
+  return {
+    subscriptions: {
+      list: async () => ({
+        data: live.map((s) => ({
+          id: s.id,
+          status: 'active',
+          customer: 'cus_fake',
+          cancel_at_period_end: s.cancelAtPeriodEnd,
+          cancel_at: null,
+          created: 1_600_000_000,
+          items: {
+            data: [
+              {
+                current_period_end: Math.floor((s.periodEnd ?? FUTURE).getTime() / 1000),
+                price: { id: 'price_x', unit_amount: 1000, currency: 'usd' },
+              },
+            ],
+          },
+        })),
+      }),
+      update: async (id: string, params: { cancel_at_period_end: boolean }) => {
+        opts.onUpdate?.(id, params.cancel_at_period_end);
+        return {};
+      },
+    },
+  };
+}
+
+/** A `resource_missing` Stripe error — `isAlreadyCanceledError` treats it as done. */
+function alreadyCanceledError(): Error {
+  return Object.assign(new Error('No such subscription'), { code: 'resource_missing' });
+}
+
 async function seedUser(
-  overrides: Partial<{ email: string; isAdmin: boolean }> = {},
+  overrides: Partial<{ email: string; isAdmin: boolean; passwordHash: string }> = {},
 ): Promise<{ id: string; email: string }> {
   const [row] = await db
     .insert(users)
     .values({
       email: overrides.email ?? `${uniq('acct-del-svc')}@example.com`,
-      passwordHash: 'x'.repeat(60),
+      passwordHash: overrides.passwordHash ?? 'x'.repeat(60),
       isAdmin: overrides.isAdmin ?? false,
     })
     .returning({ id: users.id, email: users.email });
   return row;
+}
+
+/** A user with the real password hash and a Stripe billing-customer link. */
+async function seedBillingUser(): Promise<{ id: string; email: string }> {
+  const user = await seedUser({ passwordHash: PASSWORD_HASH });
+  await db.insert(billingCustomers).values({ userId: user.id, stripeCustomerId: uniq('cus') });
+  return user;
 }
 
 type SeededGraph = {
@@ -456,5 +541,326 @@ describe('executeDeletion — last-admin guard (D2)', () => {
     });
     const stillThere = await db.select().from(users).where(eq(users.id, second.id));
     expect(stillThere).toHaveLength(1);
+  });
+});
+
+describe('requestSelfDeletion — password gate and guards', () => {
+  it('rejects a wrong password with 403 INVALID_PASSWORD and deletes nothing', async () => {
+    const user = await seedUser({ passwordHash: PASSWORD_HASH });
+    await expect(requestSelfDeletion(user.id, 'wrong-password')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'INVALID_PASSWORD',
+    });
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(1);
+  });
+
+  it('refuses with 409 SUBSCRIPTION_UNRESOLVED when Stripe is down but a live mirror remains', async () => {
+    const user = await seedUser({ passwordHash: PASSWORD_HASH });
+    await db.insert(subscriptions).values({
+      userId: user.id,
+      stripeCustomerId: 'cus_seed',
+      stripeSubscriptionId: uniq('sub'),
+      status: 'active',
+      currentPeriodEnd: FUTURE,
+      stripeCreatedAt: new Date(),
+      lastEventCreated: new Date(),
+    });
+    // stripeMock.client stays null → getStripeClient() is null (Req 2.3).
+    await expect(requestSelfDeletion(user.id, PASSWORD)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'SUBSCRIPTION_UNRESOLVED',
+    });
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(1);
+  });
+
+  it('refuses with 409 DELETION_IN_PROGRESS when a firing row exists', async () => {
+    const user = await seedUser({ passwordHash: PASSWORD_HASH });
+    await db
+      .insert(accountDeletionSchedules)
+      .values({ userId: user.id, state: 'firing', dueAt: FUTURE, claimedAt: new Date() });
+    await expect(requestSelfDeletion(user.id, PASSWORD)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DELETION_IN_PROGRESS',
+    });
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(1);
+  });
+});
+
+describe('requestSelfDeletion — immediate vs scheduled', () => {
+  it('deletes immediately when no live subscription exists', async () => {
+    const user = await seedBillingUser();
+    stripeMock.client = makeStripe({ live: [] });
+
+    const result = await requestSelfDeletion(user.id, PASSWORD);
+
+    expect(result).toEqual({ outcome: 'deleted' });
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(0);
+    expect(
+      await db.select().from(accountDeletions).where(eq(accountDeletions.userId, user.id)),
+    ).toHaveLength(1);
+  });
+
+  it('schedules to the latest period end and flips the renewing subscription (none → pending → scheduled)', async () => {
+    const user = await seedBillingUser();
+    const calls: Array<{ id: string; cancel: boolean }> = [];
+    stripeMock.client = makeStripe({
+      live: [{ id: 'sub_A', cancelAtPeriodEnd: false }],
+      onUpdate: (id, cancel) => calls.push({ id, cancel }),
+    });
+
+    const result = await requestSelfDeletion(user.id, PASSWORD);
+
+    expect(result).toEqual({ outcome: 'scheduled', scheduledFor: FUTURE.toISOString() });
+    // setRenewal(id, false) → cancel_at_period_end true.
+    expect(calls).toEqual([{ id: 'sub_A', cancel: true }]);
+    const [row] = await db
+      .select()
+      .from(accountDeletionSchedules)
+      .where(eq(accountDeletionSchedules.userId, user.id));
+    expect(row.state).toBe('scheduled');
+    expect(row.dueAt.toISOString()).toBe(FUTURE.toISOString());
+    expect(row.stripeSubscriptionIds).toEqual(['sub_A']);
+    // The user survives — the fire runs at the period end.
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(1);
+  });
+
+  it('deletes immediately when every renewing subscription is already canceled (R4-3)', async () => {
+    const user = await seedBillingUser();
+    stripeMock.client = makeStripe({
+      live: [{ id: 'sub_A', cancelAtPeriodEnd: false }],
+      onUpdate: () => {
+        throw alreadyCanceledError();
+      },
+    });
+
+    const result = await requestSelfDeletion(user.id, PASSWORD);
+
+    expect(result).toEqual({ outcome: 'deleted' });
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(0);
+    // The pending row it persisted is gone (deleted before the immediate delete).
+    expect(
+      await db
+        .select()
+        .from(accountDeletionSchedules)
+        .where(eq(accountDeletionSchedules.userId, user.id)),
+    ).toHaveLength(0);
+  });
+});
+
+describe('requestSelfDeletion — compensation (Error Handling 6)', () => {
+  it('restores only the flipped ids, deletes the row it inserted, and throws 502', async () => {
+    const user = await seedBillingUser();
+    const calls: Array<{ id: string; cancel: boolean }> = [];
+    stripeMock.client = makeStripe({
+      live: [
+        { id: 'sub_A', cancelAtPeriodEnd: false },
+        { id: 'sub_B', cancelAtPeriodEnd: false },
+        { id: 'sub_C', cancelAtPeriodEnd: true }, // Portal-cancelled: never in renewingIds.
+      ],
+      onUpdate: (id, cancel) => {
+        calls.push({ id, cancel });
+        if (id === 'sub_B' && cancel === true) throw new Error('stripe boom');
+      },
+    });
+
+    await expect(requestSelfDeletion(user.id, PASSWORD)).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'STRIPE_CANCEL_FAILED',
+    });
+
+    // A flipped, B flip threw, A restored — C is never touched.
+    expect(calls).toEqual([
+      { id: 'sub_A', cancel: true },
+      { id: 'sub_B', cancel: true },
+      { id: 'sub_A', cancel: false },
+    ]);
+    expect(calls.some((c) => c.id === 'sub_C')).toBe(false);
+    // The just-inserted row is gone; nothing was deleted.
+    expect(
+      await db
+        .select()
+        .from(accountDeletionSchedules)
+        .where(eq(accountDeletionSchedules.userId, user.id)),
+    ).toHaveLength(0);
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(1);
+  });
+
+  it('logs one error naming the user and each still-flipped id when a restore also throws', async () => {
+    const user = await seedBillingUser();
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    stripeMock.client = makeStripe({
+      live: [
+        { id: 'sub_A', cancelAtPeriodEnd: false },
+        { id: 'sub_B', cancelAtPeriodEnd: false },
+      ],
+      onUpdate: (id, cancel) => {
+        if (id === 'sub_B' && cancel === true) throw new Error('flip boom');
+        if (id === 'sub_A' && cancel === false) throw new Error('restore boom');
+      },
+    });
+
+    await expect(requestSelfDeletion(user.id, PASSWORD)).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'STRIPE_CANCEL_FAILED',
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'account deletion compensation failed',
+      expect.objectContaining({ userId: user.id, subscriptionIds: ['sub_A'] }),
+    );
+    errorSpy.mockRestore();
+  });
+});
+
+describe('cancelScheduledDeletion', () => {
+  it('re-enables each stored subscription and deletes the claimed row (cancelling → deleted)', async () => {
+    const user = await seedUser();
+    await db.insert(accountDeletionSchedules).values({
+      userId: user.id,
+      state: 'scheduled',
+      dueAt: FUTURE,
+      stripeSubscriptionIds: ['sub_A'],
+    });
+    const calls: Array<{ id: string; cancel: boolean }> = [];
+    stripeMock.client = makeStripe({ onUpdate: (id, cancel) => calls.push({ id, cancel }) });
+
+    await cancelScheduledDeletion(user.id);
+
+    // setRenewal(id, true) → cancel_at_period_end false (renewal restored).
+    expect(calls).toEqual([{ id: 'sub_A', cancel: false }]);
+    expect(
+      await db
+        .select()
+        .from(accountDeletionSchedules)
+        .where(eq(accountDeletionSchedules.userId, user.id)),
+    ).toHaveLength(0);
+  });
+
+  it('throws 404 NO_DELETION_SCHEDULED when no row exists', async () => {
+    const user = await seedUser();
+    await expect(cancelScheduledDeletion(user.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: 'NO_DELETION_SCHEDULED',
+    });
+  });
+
+  it('reverts the row to scheduled and throws 402 when Stripe is unavailable', async () => {
+    const user = await seedUser();
+    await db.insert(accountDeletionSchedules).values({
+      userId: user.id,
+      state: 'scheduled',
+      dueAt: FUTURE,
+      stripeSubscriptionIds: ['sub_A'],
+    });
+    // stripeMock.client stays null.
+    await expect(cancelScheduledDeletion(user.id)).rejects.toMatchObject({
+      statusCode: 402,
+      code: 'BILLING_NOT_AVAILABLE',
+    });
+    const [row] = await db
+      .select()
+      .from(accountDeletionSchedules)
+      .where(eq(accountDeletionSchedules.userId, user.id));
+    expect(row.state).toBe('scheduled');
+    expect(row.claimedAt).toBeNull();
+  });
+
+  it('reverts the row to scheduled and throws 502 when re-enable fails (cancelling → scheduled)', async () => {
+    const user = await seedUser();
+    await db.insert(accountDeletionSchedules).values({
+      userId: user.id,
+      state: 'scheduled',
+      dueAt: FUTURE,
+      stripeSubscriptionIds: ['sub_A'],
+    });
+    stripeMock.client = makeStripe({
+      onUpdate: () => {
+        throw new Error('reenable boom');
+      },
+    });
+
+    await expect(cancelScheduledDeletion(user.id)).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'STRIPE_REENABLE_FAILED',
+    });
+    const [row] = await db
+      .select()
+      .from(accountDeletionSchedules)
+      .where(eq(accountDeletionSchedules.userId, user.id));
+    expect(row.state).toBe('scheduled');
+    expect(row.claimedAt).toBeNull();
+  });
+});
+
+describe('cancel versus fire — one atomic claim (D2)', () => {
+  it('a cancel claim leaves nothing for a later fire to claim (scheduled → cancelling)', async () => {
+    const user = await seedUser();
+    await db
+      .insert(accountDeletionSchedules)
+      .values({ userId: user.id, state: 'scheduled', dueAt: FUTURE, stripeSubscriptionIds: [] });
+
+    // Cancel claims first.
+    const claimed = await claimForCancel(db, user.id);
+    expect(claimed?.state).toBe('cancelling');
+
+    // The fire's due-claim skips the now-cancelling row — a no-op.
+    const due = await claimDueSchedules(
+      db,
+      new Date('2036-01-01T00:00:00.000Z'),
+      15 * 60 * 1000,
+      10,
+    );
+    expect(due.some((r) => r.userId === user.id)).toBe(false);
+  });
+
+  it('a fire claim makes a later cancel a 409 DELETION_IN_PROGRESS no-op (scheduled → firing)', async () => {
+    const user = await seedUser();
+    await db.insert(accountDeletionSchedules).values({
+      userId: user.id,
+      state: 'scheduled',
+      dueAt: FUTURE,
+      stripeSubscriptionIds: ['sub_A'],
+    });
+
+    // Fire claims first.
+    const due = await claimDueSchedules(
+      db,
+      new Date('2036-01-01T00:00:00.000Z'),
+      15 * 60 * 1000,
+      10,
+    );
+    expect(due.some((r) => r.userId === user.id)).toBe(true);
+
+    // Cancel loses the claim, makes no Stripe call, and reports in-progress.
+    const calls: Array<{ id: string; cancel: boolean }> = [];
+    stripeMock.client = makeStripe({ onUpdate: (id, cancel) => calls.push({ id, cancel }) });
+    await expect(cancelScheduledDeletion(user.id)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DELETION_IN_PROGRESS',
+    });
+    expect(calls).toHaveLength(0);
+    const [row] = await db
+      .select()
+      .from(accountDeletionSchedules)
+      .where(eq(accountDeletionSchedules.userId, user.id));
+    expect(row.state).toBe('firing');
+  });
+});
+
+describe('getDeletionStatus', () => {
+  it('returns null fields when no schedule row exists', async () => {
+    const user = await seedUser();
+    expect(await getDeletionStatus(user.id)).toEqual({ scheduledFor: null, state: null });
+  });
+
+  it('maps a schedule row to its due date and state', async () => {
+    const user = await seedUser();
+    await db
+      .insert(accountDeletionSchedules)
+      .values({ userId: user.id, state: 'scheduled', dueAt: FUTURE, stripeSubscriptionIds: [] });
+    expect(await getDeletionStatus(user.id)).toEqual({
+      scheduledFor: FUTURE.toISOString(),
+      state: 'scheduled',
+    });
   });
 });

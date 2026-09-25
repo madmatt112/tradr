@@ -105,14 +105,22 @@ export async function selectSchedule(
  * Cancel's atomic claim (Req 3.7): `scheduled` → `cancelling`, stamping a claim
  * token. The conditional `UPDATE … RETURNING` returns the claimed row, or `null`
  * when the row is not `scheduled` — a second claim, or a fire that already won.
+ *
+ * The token is a caller-supplied `now` (as `claimDueSchedules` takes it), not
+ * `sql\`now()\``: Postgres `now()` records microseconds, but the driver reads a
+ * `timestamptz` back as a millisecond `Date`, so a `now()`-stamped token can
+ * never match `revertToScheduled`/`deleteSchedule`'s `claimed_at = $token` (a
+ * live-PG probe: round-trip match count 0). The cancel caller holds this exact
+ * `Date` and passes it straight to those guards, so the round-trip is exact.
  */
 export async function claimForCancel(
   db: Database | Transaction,
   userId: string,
+  now: Date = new Date(),
 ): Promise<ScheduleRow | null> {
   const [row] = await db
     .update(accountDeletionSchedules)
-    .set({ state: 'cancelling', claimedAt: sql`now()`, updatedAt: sql`now()` })
+    .set({ state: 'cancelling', claimedAt: now, updatedAt: sql`now()` })
     .where(
       and(
         eq(accountDeletionSchedules.userId, userId),
