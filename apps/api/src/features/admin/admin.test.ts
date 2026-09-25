@@ -41,7 +41,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { eq } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AdminStatsSchema, AdminUsageSchema, AdminUserListResponseSchema } from '@tradr/shared';
 
@@ -68,6 +68,7 @@ import {
 } from '@/db/schema';
 import { config } from '@/lib/config';
 
+import * as adminQuery from './admin.query';
 import { bootstrapFirstAdmin, getPlatformStats } from './admin.service';
 import { currentPeriodKeyUtc } from './gating.query';
 
@@ -1492,6 +1493,62 @@ describe('POST /api/admin/users/:id/reset', () => {
     expect(second.status).toBe(200);
     const body = (await second.json()) as { deleted: Record<string, number> };
     expect(body.deleted).toMatchObject({ accounts: 0, positions: 0, fills: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Req 6.5 — an admin toggle or reset racing an account deletion answers 404,
+// never a 500 or a dangling audit row. The target is read unlocked, then again
+// under the row/set lock; a row that vanishes between the two reads is the
+// deletion race. Spying the locked read to null (the billing.concurrency
+// vi.spyOn-on-a-query-namespace precedent) forces that vanished-target path.
+// ---------------------------------------------------------------------------
+
+describe('admin action racing an account deletion (Req 6.5)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('promotion: target vanishes under the row lock => 404/NOT_FOUND, no audit row', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+
+    // The unlocked 404-feeder read finds the row; the FOR UPDATE lock read
+    // returns null, standing in for a concurrent deletion between the reads.
+    vi.spyOn(adminQuery, 'selectUserFlagForUpdate').mockResolvedValueOnce(null);
+
+    const res = await patchAdminFlag(target.id, true, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+    expect(await auditRows()).toHaveLength(0);
+  });
+
+  it('demotion: target absent from the locked set AND gone under lock => 404/NOT_FOUND', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser(); // non-admin ⇒ absent from the locked admin set
+
+    // Absent from the admin set triggers the locked re-read; that read returns
+    // null (deleted), so today's no-op becomes a 404.
+    vi.spyOn(adminQuery, 'selectUserFlagForUpdate').mockResolvedValueOnce(null);
+
+    const res = await patchAdminFlag(target.id, false, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+    expect(await auditRows()).toHaveLength(0);
+  });
+
+  it('reset: target vanishes under the FOR UPDATE read => 404/NOT_FOUND, no audit row', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+
+    // The locked target read returns null: a deletion racing the reset (Req
+    // 6.5) — 404 before any delete or audit write.
+    vi.spyOn(adminQuery, 'selectUserEmailForUpdate').mockResolvedValueOnce(null);
+
+    const res = await postReset(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+    expect(await auditRows()).toHaveLength(0);
   });
 });
 

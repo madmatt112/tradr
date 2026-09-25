@@ -33,6 +33,7 @@ import {
   selectUsageDaySeries,
   selectUserDetailAggregates,
   selectUserEmailById,
+  selectUserEmailForUpdate,
   selectUserFlagForUpdate,
   selectUserForAdminToggle,
   sumAllTimeRevenue,
@@ -156,9 +157,9 @@ export async function toggleAdmin(
   return withTransaction(db, async (tx) => {
     // Actor email for the audit snapshot — resolved INSIDE the tx via an
     // explicit-column PK read; authMiddleware exposes only userId/isAdmin on
-    // context, not email. A missing actor row aborts the toggle (unreachable
-    // today: no user-deletion path exists; pinned so the wire shape is
-    // designed, not improvised).
+    // context, not email. A missing actor row is a true invariant breach: the
+    // actor is the authenticated admin driving this request, not the deletion
+    // race that the target branches below answer with a 404.
     const actorEmail = await selectUserEmailById(tx, actorId);
     if (actorEmail === null) {
       throw new InvariantViolationError(`Toggle actor ${actorId} has no user row`);
@@ -169,9 +170,10 @@ export async function toggleAdmin(
     if (nextValue) {
       // Promotion: lock ONLY the target row, then decide no-op post-lock.
       const locked = await selectUserFlagForUpdate(tx, targetId);
-      // The target existed unlocked above and no deletion path exists today —
-      // a vanished row under lock is the same pinned invariant breach.
-      if (!locked) throw new InvariantViolationError(`Toggle target ${targetId} vanished`);
+      // The target existed unlocked above; a row that vanishes under the lock
+      // was removed by a concurrent account deletion between the two reads
+      // (Req 6.5) — a 404, not a 500 or a dangling audit row.
+      if (!locked) throw new NotFoundError('User', targetId);
       if (locked.isAdmin) return { ...target, isAdmin: true }; // post-lock no-op: 200, NO update, NO audit row
     } else {
       // Demotion: lock the current admin set (which includes the target while
@@ -179,7 +181,15 @@ export async function toggleAdmin(
       // lock-wait (EvalPlanQual), so a row demoted by a concurrent committed
       // tx drops out — the race-safe last-admin guard.
       const adminIds = await selectAdminIdsForUpdate(tx);
-      if (!adminIds.includes(targetId)) return { ...target, isAdmin: false }; // concurrently demoted ⇒ post-lock no-op, NO audit
+      if (!adminIds.includes(targetId)) {
+        // Absent from the locked admin set: either concurrently demoted (row
+        // still present) or concurrently deleted (row gone). Re-read the target
+        // under lock to tell them apart — a deleted target is a 404 (Req 6.5),
+        // a demoted one keeps today's no-op.
+        const locked = await selectUserFlagForUpdate(tx, targetId);
+        if (!locked) throw new NotFoundError('User', targetId);
+        return { ...target, isAdmin: false }; // concurrently demoted ⇒ post-lock no-op, NO audit
+      }
       if (adminIds.length <= 1) {
         throw new AppError(409, 'LAST_ADMIN', 'Cannot remove the last admin');
       }
@@ -340,7 +350,10 @@ export async function factoryResetUser(
       throw new InvariantViolationError(`Reset actor ${actorId} has no user row`);
     }
 
-    const targetEmail = await selectUserEmailById(tx, targetId);
+    // Target read under FOR UPDATE: a concurrent account deletion cannot slip
+    // between this read and the reset writes, so a vanished target is a 404,
+    // never a reset that audits rows it never touched (Req 6.5).
+    const targetEmail = await selectUserEmailForUpdate(tx, targetId);
     if (targetEmail === null) throw new NotFoundError('User', targetId);
 
     if (confirmEmail.trim().toLowerCase() !== targetEmail.toLowerCase()) {
