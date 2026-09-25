@@ -333,3 +333,22 @@ describe('UserTable — detail view', () => {
     expect(within(dialog()).getByText('—')).toBeTruthy();
   });
 });
+
+describe('UserTable — delete action', () => {
+  it("offers Delete on other rows but never on the caller's own row", async () => {
+    mockAuth.user = { id: SELF_ID, email: 'me@x.com', isAdmin: true };
+    mockUsersList();
+
+    renderTable();
+
+    // Another user's row carries the destructive Delete.
+    const plainRow = (await screen.findByText('user@x.com')).closest('tr')!;
+    const del = within(plainRow).getByRole('button', { name: 'Delete' });
+    expect(del.className).toContain('cursor-pointer');
+    expect(del.className).toContain('text-destructive');
+
+    // The caller's own row does not — self-deletion goes through Settings.
+    const selfRow = screen.getByText('me@x.com').closest('tr')!;
+    expect(within(selfRow).queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+});
