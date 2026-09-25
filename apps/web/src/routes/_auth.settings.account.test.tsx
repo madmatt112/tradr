@@ -84,6 +84,11 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes('/auth/verify-email/resend')) return resendResponse();
     if (url.includes('/auth/me')) return jsonResponse(200, meUser);
+    // The delete-account section reads the deletion status on mount; no schedule
+    // exists here, so it settles on the destructive delete button (the dialog,
+    // and its billing reads, only mount once that button is pressed).
+    if (url.includes('/users/me/deletion'))
+      return jsonResponse(200, { scheduledFor: null, state: null });
     throw new Error(`Unexpected fetch in test: ${url}`);
   });
 
