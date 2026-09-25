@@ -29,7 +29,7 @@ export function RetentionSummary({ creditBalance }: RetentionSummaryProps) {
     <div className="space-y-3 text-sm" data-testid="retention-summary">
       <div>
         <p className="font-medium">What deletion keeps</p>
-        <ul className="text-muted-foreground mt-1 list-disc space-y-1 pl-5">
+        <ul className="text-muted-foreground mt-1 list-disc space-y-1 pl-6">
           <li>Stripe keeps its customer and invoice records.</li>
           <li>An audit-log row stays, with the user reference nulled and the email hashed.</li>
           <li>One tombstone row stays, so the account cannot be deleted a second time.</li>
@@ -39,7 +39,7 @@ export function RetentionSummary({ creditBalance }: RetentionSummaryProps) {
 
       <div>
         <p className="font-medium">Your money</p>
-        <ul className="text-muted-foreground mt-1 list-disc space-y-1 pl-5">
+        <ul className="text-muted-foreground mt-1 list-disc space-y-1 pl-6">
           <li>
             Deletion is not refunded. A scheduled deletion keeps the paid tier until the period
             ends, without a refund.
