@@ -205,6 +205,16 @@ export const envSchema = z.object({
   // environments to tell apart. Deliberately NOT derived from NODE_ENV, which is
   // 'production' on every deployed tier and so cannot distinguish them.
   POSTHOG_ENVIRONMENT: z.string().optional(),
+  // PostHog person-deletion credentials (account-deletion, design C10). A
+  // personal API key (scope person:write) and the project id, used ONLY by
+  // deletePostHogPerson to POST the REST persons/bulk_delete endpoint on account
+  // deletion. Both plain optional strings (POSTHOG_API_KEY idiom): absent ⇒ the
+  // best-effort person delete is simply skipped. That REST API lives on the APP
+  // host (e.g. us.posthog.com), NOT the ingestion POSTHOG_HOST (us.i.posthog.com);
+  // deletePostHogPerson derives it. Probe of PostHog's persons API reference,
+  // recorded in the task 5 implementation log.
+  POSTHOG_PERSONAL_API_KEY: z.string().optional(),
+  POSTHOG_PROJECT_ID: z.string().optional(),
   // ─── Hosted platform (REQ-12.1) ───────────────────────────────────────────
   // ALL optional — every capability is a no-op when unconfigured (REQ-1 self-host
   // parity). With none of these set the system behaves EXACTLY as today: advisor
@@ -484,6 +494,18 @@ export function isProSubscriptionConfigured(): boolean {
 /** True when the PostHog backend surface is configured (REQ-1.2). Gates solely on the key. */
 export function isPostHogConfigured(): boolean {
   return !!config.POSTHOG_API_KEY;
+}
+
+/**
+ * True when the opt-in PostHog person-deletion path is fully configured
+ * (account-deletion Req 5.4): the project key AND a personal API key AND the
+ * project id must all be set. Absent ⇒ deletePostHogPerson is a no-op and the
+ * person record is left in place.
+ */
+export function isPostHogPersonDeletionConfigured(): boolean {
+  return (
+    !!config.POSTHOG_API_KEY && !!config.POSTHOG_PERSONAL_API_KEY && !!config.POSTHOG_PROJECT_ID
+  );
 }
 
 /** True when the platform delayed-quote provider is configured (REQ-9.3). Gates solely on the key. */
