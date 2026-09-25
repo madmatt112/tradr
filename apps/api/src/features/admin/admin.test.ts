@@ -251,6 +251,17 @@ function postReset(targetId: string, body: Record<string, unknown>, token?: stri
   });
 }
 
+function postDelete(targetId: string, body: Record<string, unknown>, token?: string) {
+  return app.request(`/api/admin/users/${targetId}/delete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Cookie: `session=${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 function usagePath(from?: string, to?: string): string {
   const params = new URLSearchParams();
   if (from) params.set('from', from);
@@ -1518,5 +1529,79 @@ describe('GET /api/admin/users/:id/reset-preview', () => {
     const admin = await seedAdmin();
     const res = await get(`/api/admin/users/${randomUUID()}/reset-preview`, admin.token);
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin account deletion — POST /api/admin/users/:id/delete (Req 6).
+//
+// The admin surface's second destructive endpoint: it removes the user
+// outright, not to a post-registration state. The guards that refuse it are
+// what make it safe to expose, and the proof that matters is that the target's
+// session dies with the row — the deleted user can no longer log in.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/admin/users/:id/delete', () => {
+  it('a non-admin is refused 403/ADMIN_REQUIRED and deletes nothing', async () => {
+    const target = await seedUser();
+    const plain = await seedUser();
+    const plainToken = await seedSession(plain.id);
+
+    const res = await postDelete(target.id, { confirmEmail: target.email }, plainToken);
+    expect(res.status).toBe(403);
+    expect((await errorBody(res)).code).toBe('ADMIN_REQUIRED');
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(1);
+  });
+
+  it('refuses a mismatched confirmEmail with 400 and deletes nothing', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+
+    const res = await postDelete(
+      target.id,
+      { confirmEmail: 'someone-else@example.com' },
+      admin.token,
+    );
+    expect(res.status).toBe(400);
+    expect((await errorBody(res)).code).toBe('VALIDATION_ERROR');
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(1);
+  });
+
+  it("refuses the caller's own id with 400 — self-deletion goes through Settings — and deletes nothing", async () => {
+    const admin = await seedAdmin();
+
+    const res = await postDelete(admin.id, { confirmEmail: admin.email }, admin.token);
+    expect(res.status).toBe(400);
+    expect((await errorBody(res)).code).toBe('VALIDATION_ERROR');
+    expect(await db.select().from(users).where(eq(users.id, admin.id))).toHaveLength(1);
+  });
+
+  it('404s an unknown id', async () => {
+    const admin = await seedAdmin();
+
+    const res = await postDelete(randomUUID(), { confirmEmail: 'nobody@example.com' }, admin.token);
+    expect(res.status).toBe(404);
+    expect((await errorBody(res)).code).toBe('NOT_FOUND');
+  });
+
+  it('deletes the target and ends its session, so it can no longer log in', async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+    const targetToken = await seedSession(target.id);
+
+    // Authenticated right up to the deletion.
+    expect((await get('/api/auth/me', targetToken)).status).toBe(200);
+
+    const res = await postDelete(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { userId: string; outcome: string }).toMatchObject({
+      userId: target.id,
+      outcome: 'deleted',
+    });
+
+    // The row is gone and its session died with it (FK cascade): the token no
+    // longer authenticates.
+    expect(await db.select().from(users).where(eq(users.id, target.id))).toHaveLength(0);
+    expect((await get('/api/auth/me', targetToken)).status).toBe(401);
   });
 });

@@ -607,6 +607,72 @@
         ]
       }
     },
+    "/api/admin/users/{id}/delete": {
+      "post": {
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). DESTRUCTIVE AND IRREVERSIBLE — the user row and every user-keyed row (accounts, positions, ledger, wallet, Stripe mirror, sessions, settings) are removed by the FK cascade in one transaction; there is no undo. POST (never GET) per the SameSite=Lax CSRF posture.\n`confirmEmail` must equal the target user's email (case-insensitive) or the request is a 400 `VALIDATION_ERROR` and nothing is changed; the check is enforced here, not only in the UI that collects it. An admin cannot delete their OWN account this way (400 `VALIDATION_ERROR`) — self-deletion goes through Settings.\nBefore the delete, every live subscription is cancelled immediately at Stripe (fail-closed): a cancel error is a 502 `STRIPE_CANCEL_FAILED` and nothing is deleted. Deleting the last remaining admin is refused with 409 `LAST_ADMIN`. With Stripe unconfigured but a non-terminal subscription mirror still present the deletion is refused with 409 `SUBSCRIPTION_UNRESOLVED`.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "confirmEmail": {
+                    "description": "Must match the target user's email, case-insensitively.",
+                    "format": "email",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirmEmail"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "AdminDeleteUserResult — { userId, outcome: \"deleted\", purgeOutcome }."
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — id is not a UUID, body malformed, confirmEmail does not match, or the caller targeted their own account."
+          },
+          "401": {
+            "description": "Not authenticated."
+          },
+          "403": {
+            "description": "ADMIN_REQUIRED — authenticated but not an admin."
+          },
+          "404": {
+            "description": "NOT_FOUND — no such user."
+          },
+          "409": {
+            "description": "LAST_ADMIN — cannot delete the last admin; or SUBSCRIPTION_UNRESOLVED — resolve billing first."
+          },
+          "429": {
+            "description": "Admin rate limit reached (60 / 60 s per user)."
+          },
+          "502": {
+            "description": "STRIPE_CANCEL_FAILED — a live subscription could not be cancelled; nothing deleted."
+          }
+        },
+        "summary": "Delete a user and all their data (admin only).",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
     "/api/admin/users/{id}/reset": {
       "post": {
         "description": "Admin-gated (403 `ADMIN_REQUIRED`). DESTRUCTIVE AND IRREVERSIBLE — there is no undo and no backup taken. POST (never GET) per the SameSite=Lax CSRF posture.\n`confirmEmail` must equal the target user's email (case-insensitive) or the request is a 400 `VALIDATION_ERROR` and nothing is changed; the check is enforced here, not only in the UI that collects it.\nALWAYS DELETED: accounts, positions, fills, ledger entries, expenses, the user's own brokerages and their fee schedules, and staged CSV rows. ALWAYS RESET: the user's onboarding state, so the walkthrough can be walked again. DELETED ONLY WHEN `removeSettings` IS TRUE (default false): BYOK provider and external API keys, advisor personas/conversations/messages/summaries, the dashboard layout, and the user's preference columns.\nNEVER TOUCHED: billing and wallet state (`wallets`, `wallet_transactions`, `usage_records`, `subscriptions`, `billing_customers`) — these mirror Stripe and hold purchased credit; the non-evasion quota counters (`csv_import_counters`, `advisor_turn_counters`, `advisor_image_counters`); and the user's identity (email, password, admin flag, verified flag, created-at) and sessions — the user stays logged in.\nDeletes and the `admin_audit_log` entry recording them commit in one transaction. That entry's `detail` is the only surviving record of what was removed.\n",
