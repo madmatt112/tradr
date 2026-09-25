@@ -49,6 +49,7 @@ import {
   selectUserForDeletion,
   updateTombstonePurge,
   upsertPendingSchedule,
+  type ScheduleRow,
   type ScheduleState,
 } from './account-deletion.query';
 
@@ -59,8 +60,8 @@ import {
 // entry points that wrap it: `requestSelfDeletion` (password gate, guard
 // pre-checks, Stripe not-renew and the schedule state machine),
 // `cancelScheduledDeletion`, `getDeletionStatus` and the admin
-// (`adminDeleteUser`) entry point. The fire (`fireScheduledDeletion`) entry
-// point is added in a later task.
+// (`adminDeleteUser`) entry point, plus the sweeper's per-row fire
+// (`fireScheduledDeletion`, design C6).
 // ---------------------------------------------------------------------------
 
 /** `deleted:` + the email hash is the audit-log marker (72 chars, design C5). */
@@ -395,6 +396,66 @@ export async function adminDeleteUser(
   // to the acting admin (initiator `admin`).
   const { purgeOutcome } = await executeDeletion({ userId: targetId, initiator: 'admin', actorId });
   return { userId: targetId, outcome: 'deleted', purgeOutcome };
+}
+
+/**
+ * The scheduled fire (design C6, Req 3.4): the sweeper's per-row entry point,
+ * called on a row the sweep has already claimed to `firing` with `row.claimedAt`.
+ * Re-run the Req 2.3 guard, cancel every still-live subscription fail-closed
+ * (D5), then run the shared delete transaction with initiator `self` and the
+ * claim token — a cancel that won the claim first leaves `executeDeletion` a
+ * no-op (Req 3.7). Any failure reverts the row to `scheduled`, re-arming the next
+ * sweep (Req 3.4, D18), and logs at error level with the user id, `due_at` and
+ * the reason; a partial `cancelNow` failure is benign, cancellation being the
+ * committed outcome at fire time. This function never throws — the sweep loop
+ * carries on to the next row.
+ */
+export async function fireScheduledDeletion(row: ScheduleRow): Promise<void> {
+  const { userId, dueAt, claimedAt } = row;
+  // A row claimed by `claimDueSchedules` always carries its claim token; without
+  // one neither the re-lock nor the revert can be guarded, so refuse to fire.
+  if (claimedAt === null) {
+    logger.error('scheduled account deletion failed', {
+      userId,
+      dueAt: dueAt.toISOString(),
+      error: 'fire row has no claim token',
+    });
+    return;
+  }
+
+  try {
+    // Req 2.3 re-run: Stripe unconfigured but a non-terminal mirror row remains is
+    // unresolvable; otherwise cancel every still-live subscription, fail closed
+    // (D5). A partial cancel is benign — the revert below re-arms a consistent retry.
+    const stripe = getStripeClient();
+    if (stripe === null) {
+      const mirrors = await selectSubscriptionsByUser(db, userId);
+      if (mirrors.some((m) => !TERMINAL_SUBSCRIPTION_STATUSES.has(m.status))) {
+        throw new AppError(
+          409,
+          'SUBSCRIPTION_UNRESOLVED',
+          'Resolve the subscription before deleting this account',
+        );
+      }
+    } else {
+      const link = await selectBillingCustomerByUser(db, userId);
+      const live = link === null ? [] : await listLiveSubscriptions(stripe, link.stripeCustomerId);
+      for (const sub of live) {
+        await cancelNow(stripe, sub.id);
+      }
+    }
+
+    // The shared delete transaction, re-locking the `firing` row on the claim
+    // token; a cancel that won the claim makes this a no-op (Req 3.7).
+    await executeDeletion({ userId, initiator: 'self', fireClaim: claimedAt });
+  } catch (err) {
+    await revertToScheduled(db, userId, claimedAt);
+    logger.error('scheduled account deletion failed', {
+      userId,
+      dueAt: dueAt.toISOString(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

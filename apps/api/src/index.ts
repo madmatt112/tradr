@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 
 import { sql } from '@/db';
 import { runPostMigrations } from '@/db/migrate';
+import { startDeletionSweeper } from '@/features/account-deletion/account-deletion.sweeper';
 import { bootstrapFirstAdmin } from '@/features/admin/admin.service';
 import { startMetricsServer } from '@/features/metrics/metrics.server';
 import { config } from '@/lib/config';
@@ -101,6 +102,12 @@ async function main() {
     logger.info(`Metrics listening on ${config.METRICS_HOST}:${config.METRICS_PORT}`);
   }
 
+  // The account-deletion sweeper (account-deletion design C6): an in-process
+  // timer that fires due schedules. Started after bootstrap() with an immediate
+  // first run; the timer is unref'd, so it never holds the process open. `stop()`
+  // clears it during shutdown, before the pool is torn down.
+  const deletionSweeper = startDeletionSweeper();
+
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return; // REQ-7.5 double-signal guard (SIGTERM then SIGINT)
@@ -112,6 +119,9 @@ async function main() {
     // so leaving the listener open past the connection teardown would answer it
     // against a closed pool.
     metricsServer?.close();
+    // Stop the deletion sweeper's timer before the pool is torn down: a sweep
+    // tick runs database work, so it must not fire against a closed pool.
+    deletionSweeper.stop();
     // Concurrent bounded drains — telemetry 3 s, mailer 5 s (worst case 5 s,
     // inside the ~10 s Docker grace, D9). Neither ever rejects, so Promise.all
     // is safe. Does NOT await in-flight/SSE request drain.
