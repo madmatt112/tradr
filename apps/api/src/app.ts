@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 import { Hono } from 'hono';
 
 import { runMigrations } from '@/db/migrate';
+import accountDeletionRouter from '@/features/account-deletion/account-deletion.route';
 import accountingRouter from '@/features/accounting/accounting.route';
 import {
   insertPositionCloseLedgerEntries,
@@ -144,6 +145,9 @@ app.route('/api', expensesRouter);
 // Same bare-/api reason as the three above: it owns the absolute
 // /api/users/me/timezone path, which cannot be declared on the /api/auth router.
 app.route('/api', userPreferencesRouter);
+// Self-service account deletion: mounted at its absolute path so the router's
+// three handlers own `/` (design C7). Router-level authMiddleware gates it.
+app.route('/api/users/me/deletion', accountDeletionRouter);
 
 // Error handler
 app.onError(errorHandler);

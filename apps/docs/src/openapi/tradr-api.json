@@ -4339,6 +4339,161 @@
         ]
       }
     },
+    "/api/users/me/deletion": {
+      "delete": {
+        "description": "Authed. Cancels a scheduled deletion and re-enables any subscription renewal it had turned off. A `cancelling` or `firing` schedule cannot be cancelled.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "scheduledFor": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "state": {
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The schedule was cancelled; the status is back to nulls."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "402": {
+            "description": "BILLING_NOT_AVAILABLE — billing is unconfigured, so a renewal cannot be restored."
+          },
+          "404": {
+            "description": "NO_DELETION_SCHEDULED — nothing is scheduled to cancel."
+          },
+          "409": {
+            "description": "DELETION_IN_PROGRESS — the deletion is already cancelling or firing."
+          },
+          "502": {
+            "description": "STRIPE_REENABLE_FAILED — the subscription renewal could not be restored."
+          }
+        },
+        "summary": "Cancel the signed-in user's scheduled deletion.",
+        "tags": [
+          "Account deletion"
+        ]
+      },
+      "get": {
+        "description": "Authed. Returns the pending/scheduled deletion, or nulls when none exists, so the Account settings section can render its state.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "scheduledFor": {
+                      "format": "date-time",
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "state": {
+                      "enum": [
+                        "pending",
+                        "scheduled",
+                        "cancelling",
+                        "firing"
+                      ],
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "AccountDeletionStatus — `{ scheduledFor, state }`, both null when no deletion is scheduled.\n"
+          },
+          "401": {
+            "description": "No valid session."
+          }
+        },
+        "summary": "The current scheduled-deletion status for the signed-in user.",
+        "tags": [
+          "Account deletion"
+        ]
+      },
+      "post": {
+        "description": "Authed and DESTRUCTIVE. Requires the account password (checked server-side). With no renewing subscription the account is deleted immediately and the `session` cookie is cleared; otherwise deletion is scheduled for when billing resolves and the response carries that instant. Rate limited to 5 requests per 15 minutes per user, tightening to 3 while the shared rate-limit store is unavailable.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "password": {
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "password"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "deleted",
+                        "scheduled"
+                      ],
+                      "type": "string"
+                    },
+                    "scheduledFor": {
+                      "format": "date-time",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "AccountDeletionResult — `{ outcome: 'deleted' }` (session cleared) or `{ outcome: 'scheduled', scheduledFor }`.\n"
+          },
+          "400": {
+            "description": "VALIDATION_ERROR — the password is missing or outside 8-72 characters."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "403": {
+            "description": "INVALID_PASSWORD — the password does not match."
+          },
+          "409": {
+            "description": "LAST_ADMIN, SUBSCRIPTION_UNRESOLVED, or DELETION_IN_PROGRESS."
+          },
+          "429": {
+            "description": "Rate limit exceeded (5 / 15 min per user)."
+          },
+          "502": {
+            "description": "STRIPE_CANCEL_FAILED — the subscription could not be updated; nothing was deleted."
+          }
+        },
+        "summary": "Request deletion of the signed-in user's own account.",
+        "tags": [
+          "Account deletion"
+        ]
+      }
+    },
     "/api/users/me/display-currency": {
       "get": {
         "description": "Authed. The single currency cross-account totals are reported in. `null` means the user has not chosen one.\n",
