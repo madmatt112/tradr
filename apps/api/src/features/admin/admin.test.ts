@@ -84,9 +84,11 @@ const DAY = 24 * HOUR;
 // rows that escaped their transactions). The admin surface aggregates
 // platform-wide, so every test first wipes user-rooted state INSIDE its own
 // rolled-back transaction (never committed) to make absolute count
-// assertions deterministic. Explicit child-first order sidesteps the
-// RESTRICT FKs (ledger_entries/positions → accounts) that can trip a bare
-// cascading `DELETE FROM users`.
+// assertions deterministic. The deletes run child-first for readability, not
+// out of necessity: the account-deletion cascade test
+// (account-deletion.service.test.ts) proves a bare `DELETE FROM users`
+// succeeds with every RESTRICT (ledger_entries/positions → accounts) and NO
+// ACTION edge populated.
 beforeEach(async () => {
   await db.delete(ledgerEntries);
   await db.delete(positions);
