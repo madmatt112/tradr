@@ -154,6 +154,8 @@ export function identifyServerUser(
 export async function deletePostHogPerson(distinctId: string, timeoutMs = 5000): Promise<void> {
   if (!isPostHogPersonDeletionConfigured()) return;
 
+  // Rewrite the ingestion host to the app host: `*.i.posthog.com` returns 404 for
+  // this management endpoint, so do not revert this to POSTHOG_HOST.
   const appHost = config.POSTHOG_HOST.replace('.i.posthog.com', '.posthog.com').replace(/\/$/, '');
   const url = `${appHost}/api/projects/${config.POSTHOG_PROJECT_ID}/persons/bulk_delete/`;
 

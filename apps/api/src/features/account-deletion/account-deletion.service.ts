@@ -148,7 +148,18 @@ export async function executeDeletion(
 
   // After commit — best-effort, never reverses the deletion (Req 5, Reliability):
   const purgeOutcome = await purgeUserObjects(getObjectStorage(), userId);
-  await updateTombstonePurge(db, tombstoneId, purgeOutcome);
+  // The tombstone purge-outcome UPDATE runs after the commit: a throw here must
+  // not turn a committed deletion into a caller-visible failure. The gc sweeper
+  // (account-deletion.sweeper.ts) recovers a tombstone left `pending`, so a warn
+  // is enough (Req 5, Reliability).
+  try {
+    await updateTombstonePurge(db, tombstoneId, purgeOutcome);
+  } catch (err) {
+    logger.warn('account deletion tombstone purge update failed', {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   captureServerEvent('user_deleted', {
     distinctId: 'anonymous',
     properties: { initiator, purgeOutcome },
