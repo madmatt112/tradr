@@ -285,6 +285,22 @@ export type {
   AdminUsage,
 } from './schemas/admin';
 export {
+  AccountDeletionRequestSchema,
+  AccountDeletionResultSchema,
+  AccountDeletionStatusSchema,
+  PurgeOutcomeSchema,
+  AdminDeleteUserRequestSchema,
+  AdminDeleteUserResultSchema,
+} from './schemas/account-deletion';
+export type {
+  AccountDeletionRequest,
+  AccountDeletionResult,
+  AccountDeletionStatus,
+  PurgeOutcome,
+  AdminDeleteUserRequest,
+  AdminDeleteUserResult,
+} from './schemas/account-deletion';
+export {
   ChangelogReleaseSchema,
   ChangelogReleasesResponseSchema,
   MarkChangelogViewedResponseSchema,
