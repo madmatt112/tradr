@@ -20,16 +20,7 @@ import type { StoredContentPart } from '@tradr/shared';
 
 import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
-import { getObjectStorage, type ObjectStorage } from '@/lib/object-storage';
-
-/** Bucket prefix every advisor image lives under (`advisor/{userId}/{uuid}`, D9). */
-const ADVISOR_OBJECT_PREFIX = 'advisor/';
-
-/** Bucket prefix every position image lives under (`positions/{userId}/{uuid}`). */
-const POSITION_OBJECT_PREFIX = 'positions/';
-
-/** Every prefix gc lists and sweeps (advisor + position images). */
-const OBJECT_PREFIXES = [ADVISOR_OBJECT_PREFIX, POSITION_OBJECT_PREFIX];
+import { getObjectStorage, USER_OBJECT_PREFIXES, type ObjectStorage } from '@/lib/object-storage';
 
 /**
  * Fixed safety buffer added on top of the config-derived in-flight-turn bound when
@@ -267,7 +258,7 @@ export async function runGc(
   // List every home's prefix and concatenate; one loop then sweeps them all.
   const listedByPrefix: Record<string, number> = {};
   const objects: Array<{ key: string; lastModified: Date }> = [];
-  for (const prefix of OBJECT_PREFIXES) {
+  for (const prefix of USER_OBJECT_PREFIXES) {
     const listed = await storage.list(prefix);
     listedByPrefix[prefix] = listed.length;
     objects.push(...listed);
