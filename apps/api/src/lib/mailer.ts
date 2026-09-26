@@ -12,7 +12,7 @@ import type { Transporter } from 'nodemailer';
 import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 
 import { config, isEmailConfigured, type Config } from './config';
-import { buildEmail, type EmailKind } from './email-templates';
+import { buildEmail, type EmailMessage } from './email-templates';
 import { logger } from './logger';
 import { scrubString } from './telemetry-redact';
 
@@ -92,16 +92,16 @@ export function initMailer(transportOverride?: Transporter): void {
  * The mandatory .catch keeps a failed send from becoming an unhandled
  * rejection (Node dies on those); the log carries neither token nor address.
  */
-export function dispatchEmail(kind: EmailKind, to: string, rawToken: string): void {
+export function dispatchEmail(to: string, message: EmailMessage): void {
   if (!isEmailConfigured() || !transporter) return;
   if (inFlight.size >= MAX_IN_FLIGHT) {
     logger.warn('email_send_dropped_capacity', {
-      purpose: kind,
+      purpose: message.kind,
       error: `in-flight cap (${MAX_IN_FLIGHT}) reached; send refused`,
     });
     return;
   }
-  const { subject, text, html } = buildEmail(kind, rawToken);
+  const { subject, text, html } = buildEmail(message);
   const send: Promise<void> = transporter
     .sendMail({
       from: { name: config.EMAIL_FROM_NAME ?? '', address: config.EMAIL_FROM! },
@@ -117,7 +117,7 @@ export function dispatchEmail(kind: EmailKind, to: string, rawToken: string): vo
       // stdout line — unlike the telemetry sink — has no redaction of its
       // own (REQ-2.5).
       logger.warn('email_send_failed', {
-        purpose: kind,
+        purpose: message.kind,
         error: scrubString(err instanceof Error ? err.message : String(err)),
       });
     })

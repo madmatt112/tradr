@@ -12,12 +12,17 @@ import { config } from './config';
 //
 // Invariants the unit tests pin (email-templates.test.ts) and the design honors:
 //   - no <img> (the wordmark is live text `[▴] Tradr`, not a hosted image),
-//   - the link is the ONLY url — the CTA button and the paste-in link share the
-//     same href, and there is no other http(s) reference (no `http-equiv`, no
-//     `xmlns="http…"`, no footer link),
-//   - the token is only ever inside the link.
+//   - the token kinds carry exactly ONE url — the CTA button and the paste-in
+//     link share the same href, and there is no other http(s) reference (no
+//     `http-equiv`, no `xmlns="http…"`, no footer link); the token appears only
+//     inside that link,
+//   - `data_export` carries NO url at all: its link, CTA and expiry blocks are
+//     omitted, so it has no token, link or marketing (Req 10.6).
 
-export type EmailKind = 'password_reset' | 'email_verification';
+export type EmailMessage =
+  | { kind: 'password_reset'; rawToken: string }
+  | { kind: 'email_verification'; rawToken: string }
+  | { kind: 'data_export'; exportedAt: Date };
 
 export type EmailContent = {
   subject: string;
@@ -30,9 +35,9 @@ type EmailParts = {
   preheader: string;
   heading: string;
   intro: string;
-  link: string;
-  cta: string;
-  expiry: string;
+  link?: string;
+  cta?: string;
+  expiry?: string;
   notice: string;
 };
 
@@ -53,8 +58,34 @@ function render(parts: EmailParts): EmailContent {
   // no-capture rule). Bare host (no scheme) keeps the "link is the only URL" invariant.
   const webHost = config.WEB_BASE_URL ? new URL(config.WEB_BASE_URL).host : '';
 
-  // Authoritative plain-text body (unchanged shape — intro, link, expiry, notice).
-  const text = `${intro}\n\n${link}\n\n${expiry}\n\n${notice}\n`;
+  // Authoritative plain-text body: intro, the optional link and expiry, then the
+  // notice. Token kinds keep the intro/link/expiry/notice shape; `data_export`
+  // drops link and expiry, so it reads as intro + notice.
+  const text = `${[intro, link, expiry, notice].filter((s): s is string => Boolean(s)).join('\n\n')}\n`;
+
+  // The CTA button + paste-in-link box and the expiry chip. Token kinds render
+  // both blocks; `data_export` omits them (no url). When present they reproduce
+  // the original markup byte-for-byte, so the token kinds are unchanged.
+  const linkBlock =
+    link && cta
+      ? `<tr><td style="padding:24px 32px 0;">
+  <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${link}" style="height:46px;v-text-anchor:middle;width:230px;" arcsize="18%" fillcolor="#e6a23c" stroke="f"><center style="color:#1c1608;font-family:sans-serif;font-size:15px;font-weight:bold;">${cta}</center></v:roundrect><![endif]-->
+  <!--[if !mso]><!-- --><a href="${link}" style="display:inline-block;background:#e6a23c;color:#1c1608;font-family:${SANS};font-size:15px;font-weight:700;text-decoration:none;padding:13px 26px;border-radius:8px;">${cta}</a><!--<![endif]-->
+</td></tr>
+<tr><td style="padding:22px 32px 0;">
+  <p class="t-muted" style="margin:0 0 8px;font-family:${SANS};font-size:14px;color:#5c626b;">Or paste this link into your browser:</p>
+  <div class="t-box" style="border:1px solid #e6e7ea;background:#f7f7f8;border-radius:8px;padding:12px 14px;">
+    <a href="${link}" class="t-link" style="font-family:${MONO};font-size:13px;color:#935608;text-decoration:none;word-break:break-all;">${link}</a>
+  </div>
+</td></tr>
+`
+      : '';
+  const expiryBlock = expiry
+    ? `<tr><td style="padding:14px 32px 0;">
+  <span class="t-box t-muted" style="display:inline-block;font-family:${MONO};font-size:12px;color:#5c626b;border:1px solid #e6e7ea;background:#f7f7f8;border-radius:6px;padding:5px 10px;">${expiry}</span>
+</td></tr>
+`
+    : '';
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -95,20 +126,7 @@ function render(parts: EmailParts): EmailContent {
   <h1 class="t-fg" style="margin:0;font-family:${SANS};font-size:23px;font-weight:600;color:#191c22;letter-spacing:-0.01em;">${heading}</h1>
   <p class="t-muted" style="margin:14px 0 0;font-family:${SANS};font-size:16px;line-height:1.6;color:#5c626b;">${intro}</p>
 </td></tr>
-<tr><td style="padding:24px 32px 0;">
-  <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${link}" style="height:46px;v-text-anchor:middle;width:230px;" arcsize="18%" fillcolor="#e6a23c" stroke="f"><center style="color:#1c1608;font-family:sans-serif;font-size:15px;font-weight:bold;">${cta}</center></v:roundrect><![endif]-->
-  <!--[if !mso]><!-- --><a href="${link}" style="display:inline-block;background:#e6a23c;color:#1c1608;font-family:${SANS};font-size:15px;font-weight:700;text-decoration:none;padding:13px 26px;border-radius:8px;">${cta}</a><!--<![endif]-->
-</td></tr>
-<tr><td style="padding:22px 32px 0;">
-  <p class="t-muted" style="margin:0 0 8px;font-family:${SANS};font-size:14px;color:#5c626b;">Or paste this link into your browser:</p>
-  <div class="t-box" style="border:1px solid #e6e7ea;background:#f7f7f8;border-radius:8px;padding:12px 14px;">
-    <a href="${link}" class="t-link" style="font-family:${MONO};font-size:13px;color:#935608;text-decoration:none;word-break:break-all;">${link}</a>
-  </div>
-</td></tr>
-<tr><td style="padding:14px 32px 0;">
-  <span class="t-box t-muted" style="display:inline-block;font-family:${MONO};font-size:12px;color:#5c626b;border:1px solid #e6e7ea;background:#f7f7f8;border-radius:6px;padding:5px 10px;">${expiry}</span>
-</td></tr>
-<tr><td style="padding:24px 32px 0;"><div class="t-hair" style="border-top:1px solid #e6e7ea;font-size:0;line-height:0;">&nbsp;</div></td></tr>
+${linkBlock}${expiryBlock}<tr><td style="padding:24px 32px 0;"><div class="t-hair" style="border-top:1px solid #e6e7ea;font-size:0;line-height:0;">&nbsp;</div></td></tr>
 <tr><td style="padding:18px 32px 28px;">
   <p class="t-muted" style="margin:0;font-family:${SANS};font-size:14px;line-height:1.6;color:#5c626b;">${notice}</p>
 </td></tr>
@@ -135,28 +153,40 @@ function render(parts: EmailParts): EmailContent {
  * is true, so WEB_BASE_URL is always present on real sends; the `?? ''`
  * fallback merely keeps the type narrow.
  */
-export function buildEmail(kind: EmailKind, rawToken: string): EmailContent {
+export function buildEmail(message: EmailMessage): EmailContent {
   const base = config.WEB_BASE_URL ?? '';
-  if (kind === 'password_reset') {
+  if (message.kind === 'password_reset') {
     return render({
       subject: 'Reset your Tradr password',
       preheader: 'Reset your Tradr password — this link expires in 60 minutes.',
       heading: 'Reset your password',
       intro: 'We received a request to reset the password for your Tradr account.',
-      link: `${base}/reset-password#token=${rawToken}`,
+      link: `${base}/reset-password#token=${message.rawToken}`,
       cta: 'Reset password',
       expiry: 'This link expires in 60 minutes.',
       notice: "If you didn't request this, you can ignore this email — your password is unchanged.",
     });
   }
+  if (message.kind === 'email_verification') {
+    return render({
+      subject: 'Verify your email address',
+      preheader: 'Verify your email address to finish setting up Tradr.',
+      heading: 'Confirm your email address',
+      intro: 'Confirm this email address for your Tradr account by opening the link below.',
+      link: `${base}/verify-email#token=${message.rawToken}`,
+      cta: 'Verify email address',
+      expiry: 'This link expires in 24 hours.',
+      notice: "If you didn't request this, you can ignore this email.",
+    });
+  }
+  // data_export — no link, token, expiry or marketing (Req 10.6). The export
+  // instant is rendered in UTC; the notice tells the reader what to do if the
+  // export was not theirs.
   return render({
-    subject: 'Verify your email address',
-    preheader: 'Verify your email address to finish setting up Tradr.',
-    heading: 'Confirm your email address',
-    intro: 'Confirm this email address for your Tradr account by opening the link below.',
-    link: `${base}/verify-email#token=${rawToken}`,
-    cta: 'Verify email address',
-    expiry: 'This link expires in 24 hours.',
-    notice: "If you didn't request this, you can ignore this email.",
+    subject: 'Your Tradr data was exported',
+    preheader: 'Your Tradr account data was exported.',
+    heading: 'Your data was exported',
+    intro: `Your Tradr account data was exported on ${message.exportedAt.toUTCString()}.`,
+    notice: 'If you did not do this, change your password now.',
   });
 }

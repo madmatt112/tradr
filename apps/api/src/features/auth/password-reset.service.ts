@@ -40,7 +40,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
   if (!user) return;
   try {
     const raw = await issueEmailToken(user.id, 'password_reset', RESET_TOKEN_TTL_MS);
-    dispatchEmail('password_reset', email, raw);
+    dispatchEmail(email, { kind: 'password_reset', rawToken: raw });
   } catch (err) {
     if (!(err instanceof IssuanceConflictError)) throw err;
   }
