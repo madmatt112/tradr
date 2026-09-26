@@ -144,6 +144,10 @@ const DETAILS = {
       '',
       'The sweep is age-guarded: it never reaps an object young enough to belong to a',
       'request still in flight.',
+      '',
+      'gc also refuses to run while an account import is in progress: it deletes',
+      'nothing and asks you to re-run it once the import has finished, so it can',
+      'never remove an object a live import just wrote.',
     ],
   },
 };

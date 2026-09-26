@@ -21,6 +21,7 @@ import type { StoredContentPart } from '@tradr/shared';
 import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
 import { getObjectStorage, USER_OBJECT_PREFIXES, type ObjectStorage } from '@/lib/object-storage';
+import { runGcFenced } from '@/lib/object-storage/gc-fence';
 import { purgeUserObjects } from '@/lib/object-storage/purge';
 
 /**
@@ -378,7 +379,17 @@ export async function runStorageGc(): Promise<number> {
   }
   const sql = openMaintenanceConnection();
   try {
-    const r = await runGc(sql, storage);
+    const r = await runGcFenced(sql, storage);
+    if (r === 'import-in-progress') {
+      // gc refuses while an import holds the fence, so it never deletes an object a
+      // live import wrote (design C8, Req 7.3). Nothing was listed or deleted.
+      console.error(
+        'storage gc skipped: an account import is in progress. gc did not delete anything — ' +
+          'it will not run while an import holds the fence. Re-run `tradr storage gc` once the ' +
+          'import has finished.',
+      );
+      return 2;
+    }
     const byPrefix = Object.entries(r.listedByPrefix)
       .map(([prefix, count]) => `${prefix} ${count}`)
       .join(', ');
