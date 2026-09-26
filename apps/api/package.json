@@ -25,6 +25,7 @@
     "csv-parse": "^5",
     "decimal.js": "^10.6.0",
     "drizzle-orm": "^0.38",
+    "fflate": "^0.8",
     "hono": "^4",
     "ioredis": "^5.11.1",
     "nodemailer": "^9.0.3",
