@@ -68,6 +68,19 @@ server {
         proxy_read_timeout ${CSV_IMPORT_NGINX_PROXY_TIMEOUT};
     }
 
+    # Account export/import: a within-cap synchronous export or restore can also
+    # run past nginx's default 60s. Same shape and reasoning as the csv-import
+    # location above (siblings do NOT inherit proxy_*, so every directive is
+    # restated) and it reuses the SAME ${CSV_IMPORT_NGINX_PROXY_TIMEOUT} value.
+    location /api/account-data/ {
+        proxy_pass http://api:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout ${CSV_IMPORT_NGINX_PROXY_TIMEOUT};
+    }
+
     # All other API traffic: single wildcard over every /api/ prefix
     # (app.ts:37-49). Normal buffering. nginx still honors an upstream
     # X-Accel-Buffering: no header here and never strips it (Req 4.3).

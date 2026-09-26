@@ -27,6 +27,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 import * as schema from '@/db/schema';
 import { ObjectUnreachableError, type ObjectStorage } from '@/lib/object-storage';
+import { GC_FENCE_KEY, runGcFenced } from '@/lib/object-storage/gc-fence';
 
 import { migrateToInline, runGc } from './storage-maintenance.service';
 
@@ -327,6 +328,127 @@ describe('runGc (REQ-3.2 — age-guarded sweep protects put-before-commit)', () 
       expect(storage.objects.has(youngOrphan)).toBe(true); // put-before-commit guard
       expect(storage.objects.has(agedOrphan)).toBe(false);
     } finally {
+      await sql.end();
+    }
+  });
+});
+
+/** Postgres `int8` (bigint) OID; the advisory-lock key binds as int8. */
+const PG_INT8_OID = 20;
+
+describe('runGcFenced (Req 7.3/7.4 — gc fence against in-progress imports)', () => {
+  const DB = `tradr_test_storage_fence_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  it('refuses and deletes nothing while an import holds the shared fence (Req 7.3)', async () => {
+    const sql = client(url);
+    const importer = client(url);
+    const storage = new FakeStorage();
+    // A reserved connection models the import's restore transaction: it holds the
+    // SHARED fence in an open transaction on its own connection.
+    const held = await importer.reserve();
+    try {
+      const { userId } = await seedUserAndConversation(sql);
+      // An aged, unreferenced object gc would sweep if it were allowed to run.
+      const orphan = `advisor/${userId}/${randomUUID()}`;
+      storage.seed(orphan, Buffer.from([1]), new Date(0));
+
+      await held`BEGIN`;
+      await held`SELECT pg_advisory_xact_lock_shared(${held.typed(GC_FENCE_KEY, PG_INT8_OID)})`;
+
+      // gc's exclusive try-lock must fail while the shared fence is held, so it
+      // lists and deletes nothing.
+      const outcome = await runGcFenced(sql, storage, { now: Date.now(), ageFloorMs: 0 });
+
+      expect(outcome).toBe('import-in-progress');
+      expect(storage.deleted).toEqual([]);
+      expect(storage.objects.has(orphan)).toBe(true);
+
+      await held`COMMIT`;
+    } finally {
+      held.release();
+      await importer.end();
+      await sql.end();
+    }
+  });
+
+  it('keeps a committed import pointer key even at ageFloorMs 0 (Req 7.3)', async () => {
+    const sql = client(url);
+    const importer = client(url);
+    const storage = new FakeStorage();
+    const held = await importer.reserve();
+    try {
+      const { userId, conversationId } = await seedUserAndConversation(sql);
+      const key = `advisor/${userId}/${randomUUID()}`;
+      storage.seed(key, Buffer.from([1]), new Date(0)); // written before the pointer commit
+
+      // A successful import: hold the fence, write the pointer row, then commit — the
+      // pointer becomes visible at the same commit that releases the fence.
+      await held`BEGIN`;
+      await held`SELECT pg_advisory_xact_lock_shared(${held.typed(GC_FENCE_KEY, PG_INT8_OID)})`;
+      await held`
+        INSERT INTO advisor_messages (conversation_id, role, content_parts)
+        VALUES (${conversationId}, 'user', ${held.json([
+          { type: 'image', format: 'png', storage: { kind: 'object', key } },
+        ] as never)})
+      `;
+      await held`COMMIT`;
+
+      const result = await runGcFenced(sql, storage, { now: Date.now(), ageFloorMs: 0 });
+
+      if (result === 'import-in-progress') throw new Error('expected a gc run, not a refusal');
+      expect(result.deleted).toBe(0);
+      expect(result.keptReferenced).toBe(1);
+      expect(storage.objects.has(key)).toBe(true); // referenced → never deleted
+      expect(storage.deleted).toEqual([]);
+    } finally {
+      held.release();
+      await importer.end();
+      await sql.end();
+    }
+  });
+
+  it('reaps an orphan left by a rolled-back import at ageFloorMs 0 (Req 7.4)', async () => {
+    const sql = client(url);
+    const importer = client(url);
+    const storage = new FakeStorage();
+    const held = await importer.reserve();
+    try {
+      const { userId, conversationId } = await seedUserAndConversation(sql);
+      const key = `advisor/${userId}/${randomUUID()}`;
+      storage.seed(key, Buffer.from([1]), new Date(0)); // the object the failed import wrote
+
+      // A crashed / rolled-back import: fence taken, pointer inserted, then aborted —
+      // the fence releases and the pointer never commits.
+      await held`BEGIN`;
+      await held`SELECT pg_advisory_xact_lock_shared(${held.typed(GC_FENCE_KEY, PG_INT8_OID)})`;
+      await held`
+        INSERT INTO advisor_messages (conversation_id, role, content_parts)
+        VALUES (${conversationId}, 'user', ${held.json([
+          { type: 'image', format: 'png', storage: { kind: 'object', key } },
+        ] as never)})
+      `;
+      await held`ROLLBACK`;
+
+      // No committed pointer references the key → it is a true orphan → gc reaps it.
+      const result = await runGcFenced(sql, storage, { now: Date.now(), ageFloorMs: 0 });
+
+      if (result === 'import-in-progress') throw new Error('expected a gc run, not a refusal');
+      expect(result.deleted).toBe(1);
+      expect(storage.deleted).toEqual([key]);
+      expect(storage.objects.has(key)).toBe(false);
+    } finally {
+      held.release();
+      await importer.end();
       await sql.end();
     }
   });

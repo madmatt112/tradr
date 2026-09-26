@@ -125,7 +125,7 @@ describe('dispatchEmail', () => {
     const sendMail = vi.fn();
 
     mailer.initMailer(stubTransport(sendMail));
-    mailer.dispatchEmail('password_reset', 'user@example.com', 'tok');
+    mailer.dispatchEmail('user@example.com', { kind: 'password_reset', rawToken: 'tok' });
 
     expect(sendMail).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
@@ -134,7 +134,9 @@ describe('dispatchEmail', () => {
   it('configured but uninitialized (initMailer never ran): no-op', async () => {
     const { mailer, warnSpy } = await load();
 
-    expect(() => mailer.dispatchEmail('password_reset', 'user@example.com', 'tok')).not.toThrow();
+    expect(() =>
+      mailer.dispatchEmail('user@example.com', { kind: 'password_reset', rawToken: 'tok' }),
+    ).not.toThrow();
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
@@ -143,9 +145,9 @@ describe('dispatchEmail', () => {
     const sendMail = vi.fn().mockResolvedValue({});
     mailer.initMailer(stubTransport(sendMail));
 
-    mailer.dispatchEmail('password_reset', 'user@example.com', 'a'.repeat(64));
+    mailer.dispatchEmail('user@example.com', { kind: 'password_reset', rawToken: 'a'.repeat(64) });
 
-    const expected = templates.buildEmail('password_reset', 'a'.repeat(64));
+    const expected = templates.buildEmail({ kind: 'password_reset', rawToken: 'a'.repeat(64) });
     expect(sendMail).toHaveBeenCalledTimes(1);
     // Exact-object match: from MUST be the { name, address } object form
     // (never a formatted string — MN-4), and no extra fields ride along.
@@ -164,7 +166,7 @@ describe('dispatchEmail', () => {
     const sendMail = vi.fn().mockResolvedValue({});
     mailer.initMailer(stubTransport(sendMail));
 
-    mailer.dispatchEmail('email_verification', 'user@example.com', 'tok');
+    mailer.dispatchEmail('user@example.com', { kind: 'email_verification', rawToken: 'tok' });
 
     const message = sendMail.mock.calls[0][0] as { from: unknown };
     expect(message.from).toEqual({ name: '', address: 'no-reply@tradr.test' });
@@ -178,7 +180,7 @@ describe('dispatchEmail', () => {
     mailer.initMailer(stubTransport(sendMail));
 
     for (let i = 0; i < 6; i++) {
-      mailer.dispatchEmail('password_reset', `user${i}@example.com`, `tok${i}`);
+      mailer.dispatchEmail(`user${i}@example.com`, { kind: 'password_reset', rawToken: `tok${i}` });
     }
 
     expect(sendMail).toHaveBeenCalledTimes(mailer.MAX_IN_FLIGHT);
@@ -202,7 +204,10 @@ describe('dispatchEmail', () => {
         .mockRejectedValue(new Error('Message failed: 550 <victim@example.com> rejected'));
       mailer.initMailer(stubTransport(sendMail));
 
-      mailer.dispatchEmail('email_verification', 'victim@example.com', 'f'.repeat(64));
+      mailer.dispatchEmail('victim@example.com', {
+        kind: 'email_verification',
+        rawToken: 'f'.repeat(64),
+      });
       await mailer.drainMailer();
       await tick(); // give any would-be unhandledRejection its process tick
 
@@ -233,12 +238,12 @@ describe('dispatchEmail', () => {
     mailer.initMailer(stubTransport(sendMail));
 
     for (let i = 0; i < 5; i++) {
-      mailer.dispatchEmail('password_reset', `user${i}@example.com`, `tok${i}`);
+      mailer.dispatchEmail(`user${i}@example.com`, { kind: 'password_reset', rawToken: `tok${i}` });
     }
     d.resolve({});
     await mailer.drainMailer();
 
-    mailer.dispatchEmail('password_reset', 'late@example.com', 'tok-late');
+    mailer.dispatchEmail('late@example.com', { kind: 'password_reset', rawToken: 'tok-late' });
     expect(sendMail).toHaveBeenCalledTimes(6); // not dropped — slots freed
     await mailer.drainMailer();
   });
@@ -261,7 +266,7 @@ describe('drainMailer', () => {
     const { mailer } = await load();
     const d = deferred();
     mailer.initMailer(stubTransport(vi.fn(() => d.promise)));
-    mailer.dispatchEmail('password_reset', 'user@example.com', 'tok');
+    mailer.dispatchEmail('user@example.com', { kind: 'password_reset', rawToken: 'tok' });
 
     let drained = false;
     const drain = mailer.drainMailer().then(() => {
@@ -278,7 +283,7 @@ describe('drainMailer', () => {
   it('is bounded by the timeout when a send hangs (never rejects)', async () => {
     const { mailer } = await load();
     mailer.initMailer(stubTransport(vi.fn(() => new Promise(() => {}))));
-    mailer.dispatchEmail('password_reset', 'user@example.com', 'tok');
+    mailer.dispatchEmail('user@example.com', { kind: 'password_reset', rawToken: 'tok' });
 
     vi.useFakeTimers();
     const drain = mailer.drainMailer(); // default MAILER_DRAIN_TIMEOUT_MS bound
@@ -293,7 +298,7 @@ describe('drainMailer', () => {
     const sendMail = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     mailer.initMailer(stubTransport(sendMail));
 
-    mailer.dispatchEmail('password_reset', 'user@example.com', 'tok1');
+    mailer.dispatchEmail('user@example.com', { kind: 'password_reset', rawToken: 'tok1' });
     let drained = false;
     const drain = mailer.drainMailer().then(() => {
       drained = true;
@@ -301,7 +306,7 @@ describe('drainMailer', () => {
     await tick(); // drain is now awaiting snapshot #1 (the first send only)
 
     // Dispatched BETWEEN snapshots — a single-snapshot drain would miss it.
-    mailer.dispatchEmail('email_verification', 'user@example.com', 'tok2');
+    mailer.dispatchEmail('user@example.com', { kind: 'email_verification', rawToken: 'tok2' });
     first.resolve({});
     await tick();
     await tick();

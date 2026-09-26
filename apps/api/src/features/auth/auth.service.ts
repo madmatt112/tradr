@@ -82,7 +82,7 @@ export async function registerUser(email: string, password: string, timezone?: s
   if (isEmailConfigured()) {
     try {
       const raw = await issueEmailToken(user.id, 'email_verification', VERIFY_TOKEN_TTL_MS);
-      dispatchEmail('email_verification', email, raw);
+      dispatchEmail(email, { kind: 'email_verification', rawToken: raw });
     } catch (error: unknown) {
       logger.warn('email_verification_issuance_failed', {
         userId: user.id,

@@ -10,6 +10,8 @@
 // object-storage.test.ts, cookie-policy.test.ts, pooler-correctness.test.ts,
 // rate-limit MapStore parity in rate-limit.middleware.test.ts).
 
+import { createHash, randomUUID } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 
@@ -17,7 +19,9 @@ import { DEFAULT_REPORTING_TIMEZONE } from '@tradr/shared';
 
 import app from '@/app';
 import { db, poolerDriverOptions } from '@/db';
-import { positionImages } from '@/db/schema';
+import { accounts, positionImages, positions, users } from '@/db/schema';
+import { createExport } from '@/features/account-data/export.service';
+import { confirmImport } from '@/features/account-data/import.service';
 import {
   config,
   isAdvisorEnabled,
@@ -92,6 +96,82 @@ describe('self-host default parity (REQ-1.6) — every gated capability off', ()
     const opts = poolerDriverOptions(config.DB_TRANSACTION_POOLER);
     expect(opts).toEqual({});
     expect('prepare' in opts).toBe(false);
+  });
+
+  // Whole-account export and import work with nothing configured, and images make
+  // the round trip inline (base64-in-JSONB), never as an object-storage pointer —
+  // the self-host home for a screenshot the parity case above proves for uploads,
+  // held across an export and re-import (REQ-1.6, Req 7.1).
+  it('exports and re-imports an account with images inline when nothing is configured', async () => {
+    expect(getObjectStorage()).toBeNull();
+
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const [userA] = await db
+      .insert(users)
+      .values({ email: `parity-export-${randomUUID()}@example.com`, passwordHash: 'x'.repeat(60) })
+      .returning({ id: users.id });
+    const [account] = await db
+      .insert(accounts)
+      .values({ userId: userA.id, name: 'Main', currency: 'USD', isDefault: true })
+      .returning({ id: accounts.id });
+    // eslint-disable-next-line no-restricted-syntax -- direct seed of an open position for the export/import parity round trip
+    const [position] = await db
+      .insert(positions)
+      .values({
+        userId: userA.id,
+        accountId: account.id,
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'stock',
+        status: 'open',
+        openedAt: new Date('2026-01-01T00:00:00Z'),
+      })
+      .returning({ id: positions.id });
+    await db.insert(positionImages).values({
+      positionId: position.id,
+      part: { type: 'image', format: 'png', dataBase64: png.toString('base64') },
+    });
+
+    // Export A (no storage ⇒ image bytes are stored zip entries).
+    const { stream } = await createExport(userA.id);
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      bytes.set(c, offset);
+      offset += c.length;
+    }
+
+    // Import into an empty user B (no storage ⇒ images restore inline, Req 7.1).
+    const [userB] = await db
+      .insert(users)
+      .values({ email: `parity-import-${randomUUID()}@example.com`, passwordHash: 'x'.repeat(60) })
+      .returning({ id: users.id });
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    await confirmImport(userB.id, body, digest);
+
+    const [img] = await db
+      .select({ part: positionImages.part })
+      .from(positionImages)
+      .innerJoin(positions, eq(positions.id, positionImages.positionId))
+      .where(eq(positions.userId, userB.id));
+    const part = img.part as Record<string, unknown>;
+    expect(part.type).toBe('image');
+    expect(part.dataBase64).toBe(png.toString('base64'));
+    expect('storage' in part).toBe(false);
   });
 });
 

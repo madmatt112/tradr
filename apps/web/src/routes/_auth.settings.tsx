@@ -1,5 +1,13 @@
 import { createFileRoute, Link, Outlet, redirect, useLocation } from '@tanstack/react-router';
-import { Bot, CircleQuestionMark, Settings as SettingsIcon, Tag, User, Wallet } from 'lucide-react';
+import {
+  Bot,
+  CircleQuestionMark,
+  Database,
+  Settings as SettingsIcon,
+  Tag,
+  User,
+  Wallet,
+} from 'lucide-react';
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -20,6 +28,9 @@ const SETTINGS_TABS = [
   // Manage the tag vocabulary — see, rename, recolour and delete tags. Appended
   // (never inserted) so the `/settings` redirect target stays the first tab.
   { id: 'tags', label: 'Tags', icon: Tag, route: '/settings/tags' },
+  // Export the whole account as one archive and import one into an empty account.
+  // Appended (never inserted) for the same reason as Tags.
+  { id: 'data', label: 'Data', icon: Database, route: '/settings/data' },
 ] as const;
 
 /**

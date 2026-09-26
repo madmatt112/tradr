@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 import { Hono } from 'hono';
 
 import { runMigrations } from '@/db/migrate';
+import accountDataRouter from '@/features/account-data/account-data.route';
 import accountDeletionRouter from '@/features/account-deletion/account-deletion.route';
 import accountingRouter from '@/features/accounting/accounting.route';
 import {
@@ -129,6 +130,10 @@ app.route('/api/brokerages', brokeragesRouter);
 app.route('/api/calculator', calculatorRouter);
 app.route('/api/changelog', changelogRouter);
 app.route('/api/csv-import', csvImport);
+// Account export/import: mounted next to csv-import (its upload sibling behind
+// the same raised nginx read timeout). Router-level authMiddleware gates it
+// and its /export, /import/preview and /import handlers own the base (design C9).
+app.route('/api/account-data', accountDataRouter);
 app.route('/api/dashboard', dashboardRoute);
 app.route('/api/options', optionsRouter);
 app.route('/api/positions', positions);

@@ -82,7 +82,7 @@ export async function resendVerification(userId: string): Promise<void> {
 
   try {
     const raw = await issueEmailToken(userId, 'email_verification', VERIFY_TOKEN_TTL_MS);
-    dispatchEmail('email_verification', user.email, raw);
+    dispatchEmail(user.email, { kind: 'email_verification', rawToken: raw });
   } catch (err) {
     if (!(err instanceof IssuanceConflictError)) throw err;
   }
