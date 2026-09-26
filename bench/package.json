@@ -7,6 +7,7 @@
   "dependencies": {
     "@tradr/shared": "workspace:*",
     "drizzle-orm": "^0.38",
+    "fflate": "^0.8",
     "postgres": "^3.4"
   },
   "devDependencies": {
