@@ -115,6 +115,135 @@
   },
   "openapi": "3.0.3",
   "paths": {
+    "/api/account-data/export": {
+      "post": {
+        "description": "Authed. Streams a `.zip` of every category the user owns from one consistent snapshot; secrets, billing and other users' data never travel. POST (not GET) so a cross-site navigation cannot start one. No password. Rate limited to 5 requests per hour per user (tightening to 3 while the shared rate-limit store is unavailable). Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The archive, chunked. `Content-Disposition` names the file `tradr-export-YYYY-MM-DD.zip` (UTC date).\n"
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "429": {
+            "description": "Rate limit exceeded (5 / hour per user)."
+          },
+          "503": {
+            "description": "OBJECT_UNREACHABLE — object storage was unreachable before the download began."
+          }
+        },
+        "summary": "Download the signed-in user's whole account as one archive.",
+        "tags": [
+          "Account data"
+        ]
+      }
+    },
+    "/api/account-data/import": {
+      "post": {
+        "description": "Authed. Re-uploads the raw `.zip` request body with the preview's `digest` in the query; a missing or malformed digest, or one that does not match the uploaded bytes, is refused. Restores whole-or-nothing in one transaction, giving every row a fresh identifier, resolving platform references and overwriting preferences and the dashboard layout (advisor trade-data consent keeps the target's value). Rate limited with preview (10 / hour per user, fallback 6, shared bucket). Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
+        "parameters": [
+          {
+            "description": "The sha256 hex digest the preview returned.",
+            "in": "query",
+            "name": "digest",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/zip": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "ImportResult — the created count per category and the platform-reference resolutions."
+          },
+          "400": {
+            "description": "ARCHIVE_DIGEST_MISMATCH (missing, malformed or mismatched digest), ARCHIVE_VERSION_UNSUPPORTED, ARCHIVE_INVALID or ARCHIVE_EMPTY."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "409": {
+            "description": "IMPORT_TARGET_NOT_EMPTY — the account already holds data; the message names the categories."
+          },
+          "413": {
+            "description": "ARCHIVE_TOO_LARGE — the upload exceeded a cap; the message names the cap."
+          },
+          "429": {
+            "description": "Rate limit exceeded (10 / hour per user)."
+          },
+          "500": {
+            "description": "IMPORT_FAILED — the restore rolled back; logged with the request id."
+          },
+          "503": {
+            "description": "IMPORT_BUSY (another data operation held the lock) or OBJECT_UNREACHABLE (an image write failed before any row)."
+          }
+        },
+        "summary": "Restore a previewed archive into the empty signed-in account.",
+        "tags": [
+          "Account data"
+        ]
+      }
+    },
+    "/api/account-data/import/preview": {
+      "post": {
+        "description": "Authed. Reads the raw `.zip` request body, validating it before any write: manifest present and version supported, counts match, every row strict, references resolve, invariants hold and the target account is empty. Writes nothing. Returns the server's own per-category counts, the source app version, the export date, any degradations and a `digest` the confirm call must echo. Rate limited with import (10 / hour per user, fallback 6). Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
+        "requestBody": {
+          "content": {
+            "application/zip": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`{ counts, sourceAppVersion, exportedAt, degradations, digest }`.\n"
+          },
+          "400": {
+            "description": "ARCHIVE_VERSION_UNSUPPORTED, ARCHIVE_INVALID or ARCHIVE_EMPTY."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "409": {
+            "description": "IMPORT_TARGET_NOT_EMPTY — the account already holds data; the message names the categories."
+          },
+          "413": {
+            "description": "ARCHIVE_TOO_LARGE — the upload exceeded a cap; the message names the cap."
+          },
+          "429": {
+            "description": "Rate limit exceeded (10 / hour per user)."
+          }
+        },
+        "summary": "Validate an uploaded archive and preview what it would restore.",
+        "tags": [
+          "Account data"
+        ]
+      }
+    },
     "/api/accounts": {
       "post": {
         "description": "Authed. Creates a trading account for the current user. When feature gating is enabled and the user is a non-admin Free user at the account cap, the create is refused with `403 TIER_LIMIT_ACCOUNTS` — admins and gating-off deployments pass through unchanged.\n\nWhile the sample account exists the create is refused with `409 DEMO_ACCOUNT_EXISTS` instead: sample and real data are mutually exclusive, because every aggregate scopes by currency and not by account. That check runs BEFORE the plan cap, so a Free user holding sample data is told to remove it rather than to upgrade — the sample account occupies their one slot. Remove it with `DELETE /api/accounts/{id}?cascade=demo` and retry.\n",
