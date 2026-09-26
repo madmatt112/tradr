@@ -66,6 +66,12 @@ value.
 | `csv_import_completed`     | CSV trade import committed               | `positionsCreated`, `fillsCreated` |
 | `checkout_session_created` | Stripe checkout started (wallet credits) | `packId`                           |
 | `credits_purchased`        | Credits granted after payment (webhook)  | `packId`                           |
+| `account_exported`         | Account export completed                 | `durationMs`, `count_*`            |
+| `account_imported`         | Archive import committed                 | `durationMs`, `count_*`            |
+
+For `account_exported` and `account_imported`, `durationMs` is the operation's
+duration and `count_*` is one `count_<category>` per archive category (accounts,
+positions, fills, images, and so on) — a row tally only, never a value.
 
 ### Person profile (`identify`)
 

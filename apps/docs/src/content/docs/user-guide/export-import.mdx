@@ -1,0 +1,125 @@
+---
+title: 'Export and import your account'
+description: 'What an account export contains, what it leaves out, how to import an archive into an empty account, and the size limits self-hosted instances apply.'
+---
+
+This page tells you what an account export holds, what it leaves out, and how to
+import an archive back into an empty account. Read it before you rely on an
+export as your only copy.
+
+The controls are in **Settings**, on the **Data** tab. Export downloads one
+archive file. Import restores an archive into an empty account.
+
+## What the export contains
+
+The export is one compressed `.zip` archive. Its file name contains
+`tradr-export` and the UTC date, for example `tradr-export-2026-09-26.zip`. The
+archive holds a manifest and one file per category. It carries no email address
+and no secret.
+
+### What travels
+
+- Your preferences: display currency, timezone, tax jurisdiction, theme,
+  buying-power basis, default advisor persona, writable account and onboarding
+  state.
+- Every trading account, including its demo and default flags.
+- Your brokerages and their fee schedules. For a built-in brokerage that an
+  account uses, the archive records a reference to it, not the platform's own
+  copy.
+- Every position, with its fills, tags and screenshots; and every tag.
+- Every ledger entry of all types, with each entry's group, and every exchange
+  rate and expense.
+- Advisor data: your own personas, and every conversation with its messages and
+  summaries. For a built-in persona your data names, the archive records a
+  reference to it.
+- Your dashboard layout, when you have one.
+
+Numbers, timestamps and stored notes are written exactly as stored, so a
+round-trip through export and import preserves every value.
+
+### What does not travel
+
+Some data stays behind. The archive is your journal data, not your account or
+your billing:
+
+- Your provider API keys. Tradr encrypts them at rest, and they stay on the
+  instance.
+- Wallet credits.
+- Your subscription and your billing history.
+- Your email address, password and account flags. Tradr never exports these.
+
+Import does not change your advisor trade-data consent. The archive records the
+value, but import keeps the target account's own setting. You grant that consent
+to one operator, not to another.
+
+## Export your account
+
+Open **Settings → Data** and use the export control. The archive downloads to
+your browser. When email is configured, Tradr also sends you a short notice with
+the export time and what to do if you did not request it. The notice carries no
+link and no marketing content.
+
+Export needs only that you are signed in. It does not ask for your password, and
+it never removes or changes any data. You can export while a deletion is
+scheduled.
+
+## Import into an empty account
+
+Import restores into an **empty** account only. If the target account already
+holds accounts, positions, ledger entries, exchange rates, expenses, your own
+brokerages, tags, advisor conversations or your own advisor personas, Tradr
+refuses the import and names the categories that hold data. Preferences, a
+dashboard layout, API keys and billing state do not block an import.
+
+Every restored row gets a new identifier. Import writes the rows as owned by
+you, and it never sets your email, password, account flags, API keys, wallet,
+subscription or tier.
+
+### The preview and confirm steps
+
+Import has two steps:
+
+1. **Choose a file.** Select the `.zip` archive. Tradr validates it and shows a
+   preview: the count for each category, the version the archive was written
+   with, the export date and any notes about data it could not recover. Tradr
+   writes nothing at this step.
+2. **Confirm.** Confirm the preview to restore the archive in one transaction.
+   If any part fails, Tradr rolls the whole restore back and writes nothing. On
+   success it shows the created count for each category.
+
+### If the confirm gets no response
+
+If the confirm request ends with no response, the restore **may** still have
+completed on the server. Try the import again: if the account is now refused as
+not empty, the earlier restore did complete. Do not confirm a second time before
+you check.
+
+## Size limits and self-hosted instances
+
+Import enforces fixed caps on the archive: 512 MiB compressed upload, 2 GiB
+after decompression, 10,000 images and 250,000 rows. If an archive exceeds a
+cap, the refusal names the cap. Export applies no such cap: a larger account
+still exports in full.
+
+### The self-hosted upload ceiling
+
+A self-hosted instance runs behind a proxy that limits upload size. The default
+is `MAX_UPLOAD_SIZE=20m` (`docker/Dockerfile.web`). If the proxy refuses your
+import with a 413, the app tells you that the operator can raise
+`MAX_UPLOAD_SIZE`. A large import can also need a longer read timeout; raise
+`CSV_IMPORT_NGINX_PROXY_TIMEOUT` (`docker/nginx.conf.template`) for it.
+
+### Larger accounts, and whole-database backups
+
+This flow moves one account between instances. For a whole-database backup of a
+self-hosted instance, use `pg_dump`. See
+[Back up and restore](/self-hosting/backup-restore/) for the commands, and
+[Configure email, Stripe, and LLM keys](/self-hosting/optional-integrations/)
+for which services an instance has configured.
+
+## Scripting
+
+Export is served as a POST, so a plain link cannot start one. A script must sign
+in first for a session cookie. On a split-origin deployment, where the web and
+API run on different origins, the script must also send an allowed `Origin`
+header.
