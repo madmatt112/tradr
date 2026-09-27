@@ -78,6 +78,7 @@ export async function runGcFenced(
     await reserved`BEGIN`;
     inTransaction = true;
 
+    // Keep the explicit int8 bind: postgres.Sql's default type set omits bigint, so a later editor must not drop this typed() call.
     const [row] = await reserved<{ locked: boolean }[]>`
       SELECT pg_try_advisory_xact_lock(${reserved.typed(GC_FENCE_KEY, PG_INT8_OID)}) AS locked
     `;
