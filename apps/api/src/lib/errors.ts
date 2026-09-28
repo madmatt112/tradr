@@ -54,6 +54,18 @@ export class TagLimitError extends AppError {
   }
 }
 
+export class TradingRuleLimitError extends AppError {
+  constructor(public limit: number) {
+    super(409, 'TRADING_RULE_LIMIT_REACHED', `Trading rule limit of ${limit} reached`);
+  }
+}
+
+export class TradingRuleDuplicateError extends AppError {
+  constructor() {
+    super(409, 'TRADING_RULE_DUPLICATE', 'A rule with the same type, scope and parameters exists');
+  }
+}
+
 export class PositionImageLimitError extends AppError {
   constructor(public limit: number) {
     super(409, 'POSITION_IMAGE_LIMIT', `A position can hold at most ${limit} screenshots`);

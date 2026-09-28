@@ -4460,6 +4460,223 @@
         ]
       }
     },
+    "/api/trading-rules": {
+      "get": {
+        "description": "Authed. Returns every rule the user owns, oldest first, each with a generated one-line description of its type and parameters. Rules are scored on read and never block a trade.\n",
+        "responses": {
+          "200": {
+            "description": "The user's trading rules",
+            "oldest first.": null
+          },
+          "401": {
+            "description": "No valid session."
+          }
+        },
+        "summary": "List the user's trading rules.",
+        "tags": [
+          "Trading rules"
+        ]
+      },
+      "post": {
+        "description": "Authed. The body carries the rule definition (type and parameters), a weight, an enabled flag and optional account and tag scopes. A scoped amount rule's currency must equal the account's currency. Subject to a per-user cap; an exact duplicate (same type, scope and parameters) is refused.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "definition": {
+                    "properties": {
+                      "params": {
+                        "type": "object"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "params"
+                    ],
+                    "type": "object"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "tagId": {
+                    "format": "uuid",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "weight": {
+                    "enum": [
+                      "critical",
+                      "important",
+                      "nice_to_have"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "definition",
+                  "weight",
+                  "enabled",
+                  "accountId",
+                  "tagId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created rule."
+          },
+          "400": {
+            "description": "Validation error",
+            "including an unowned scope or a currency mismatch.": null
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "409": {
+            "description": "`TRADING_RULE_LIMIT_REACHED` — the per-user rule cap has been reached; or `TRADING_RULE_DUPLICATE` — a rule with the same type, scope and parameters already exists.\n"
+          }
+        },
+        "summary": "Create a trading rule.",
+        "tags": [
+          "Trading rules"
+        ]
+      }
+    },
+    "/api/trading-rules/{id}": {
+      "delete": {
+        "description": "Authed. Removes an owned rule; it is never refused for being in use.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "404": {
+            "description": "No such rule for this user."
+          }
+        },
+        "summary": "Delete a trading rule.",
+        "tags": [
+          "Trading rules"
+        ]
+      },
+      "put": {
+        "description": "Authed. A full replacement — the whole rule, definition included, is sent. The same scope, currency and duplicate rules apply as on create.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "definition": {
+                    "properties": {
+                      "params": {
+                        "type": "object"
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "params"
+                    ],
+                    "type": "object"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "tagId": {
+                    "format": "uuid",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "weight": {
+                    "enum": [
+                      "critical",
+                      "important",
+                      "nice_to_have"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "definition",
+                  "weight",
+                  "enabled",
+                  "accountId",
+                  "tagId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated rule."
+          },
+          "400": {
+            "description": "Validation error",
+            "including an unowned scope or a currency mismatch.": null
+          },
+          "401": {
+            "description": "No valid session."
+          },
+          "404": {
+            "description": "No such rule for this user."
+          },
+          "409": {
+            "description": "`TRADING_RULE_DUPLICATE` — a rule with the same type, scope and parameters already exists.\n"
+          }
+        },
+        "summary": "Replace a trading rule.",
+        "tags": [
+          "Trading rules"
+        ]
+      }
+    },
     "/api/users/me/buying-power-basis": {
       "get": {
         "description": "Authed. Which account figure the position-sizing calculator caps position size against — `cash` (balance less the cost basis of open positions) or `balance` (total equity). Never null; the column defaults to `cash`.\n",
