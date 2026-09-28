@@ -38,6 +38,7 @@ import {
   dashboardLayouts,
   positionImages,
   positions,
+  tradingRules,
   users,
 } from '@/db/schema';
 import * as configModule from '@/lib/config';
@@ -285,6 +286,21 @@ describe('previewImport', () => {
     const err = await previewImport(userId, bytesToStream(bytes)).catch((e: unknown) => e);
     expect((err as { statusCode?: number }).statusCode).toBe(409);
     expect((err as { categories?: string[] }).categories).toContain('accounts');
+  });
+
+  it('refuses when the target holds only a trading rule, naming "rules"', async () => {
+    const userId = await seedUser();
+    await db.insert(tradingRules).values({
+      userId,
+      type: 'required_fields',
+      params: { fields: ['notes'] },
+      weight: 'important',
+      dedupKey: `required_fields|-|-|{"fields":["notes"]}`,
+    });
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+    const err = await previewImport(userId, bytesToStream(bytes)).catch((e: unknown) => e);
+    expect((err as { statusCode?: number }).statusCode).toBe(409);
+    expect((err as { categories?: string[] }).categories).toContain('rules');
   });
 });
 
@@ -657,6 +673,8 @@ describe('confirmImport with object storage', () => {
     const result = await confirmImport(userId, bytesToStream(bytes), digestOf(bytes));
     expect(result.counts.accounts).toBe(2);
     expect(result.counts.positions).toBe(1);
+    // The version-1 fixture predates rules; an absent entry restores none.
+    expect(result.counts.rules).toBe(0);
 
     const storedAccounts = await db.select().from(accounts).where(eq(accounts.userId, userId));
     expect(storedAccounts.map((a) => a.name).sort()).toEqual(['Demo', 'Main']);

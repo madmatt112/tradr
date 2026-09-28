@@ -22,6 +22,7 @@ import {
   positionTags,
   positions,
   tags,
+  tradingRules,
   users,
 } from '@/db/schema';
 import { createExport } from '@/features/account-data/export.service';
@@ -184,6 +185,27 @@ async function seedUserA(mode: ImageMode): Promise<string> {
       createdAt: sql`timestamptz '2026-01-02 03:04:05.123456+00'`,
     })
     .returning({ id: positions.id });
+
+  // An account-scoped rule (currency matches the account) and a tag-scoped rule;
+  // both scopes are remapped on import and must survive the round trip (Req 5.7).
+  await db.insert(tradingRules).values({
+    userId,
+    type: 'max_position_size',
+    params: { amount: '1000', currency: 'USD' },
+    weight: 'important',
+    accountId: main.id,
+    tagId: null,
+    dedupKey: `max_position_size|${main.id}|-|{"amount":"1000","currency":"USD"}`,
+  });
+  await db.insert(tradingRules).values({
+    userId,
+    type: 'required_fields',
+    params: { fields: ['stop_loss'] },
+    weight: 'nice_to_have',
+    accountId: null,
+    tagId: tag.id,
+    dedupKey: `required_fields|-|${tag.id}|{"fields":["stop_loss"]}`,
+  });
 
   await db.insert(fills).values({
     positionId: pos.id,
@@ -434,6 +456,16 @@ function buildIdTokens(p: Parsed): Map<string, string> {
   }
 
   // dependent on the entity tokens above
+  for (const r of rowsOf(p, 'rules.ndjson')) {
+    const def = r.definition as Row;
+    const scope =
+      r.accountId != null
+        ? `a:${t.get(r.accountId as string)!}`
+        : r.tagId != null
+          ? `g:${t.get(r.tagId as string)!}`
+          : 'global';
+    set(r.id, `rule:${String(def.type)}:${scope}`);
+  }
   for (const r of rowsOf(p, 'fills.ndjson')) {
     set(r.id, `fill:${t.get(r.positionId as string)!}/${String(r.filledAt)}/${String(r.price)}`);
   }
@@ -489,6 +521,7 @@ const MULTISET_ENTRIES = [
   'system-brokerages.ndjson',
   'accounts.ndjson',
   'tags.ndjson',
+  'rules.ndjson',
   'positions.ndjson',
   'fills.ndjson',
   'position-tags.ndjson',
@@ -523,6 +556,15 @@ function canonicalize(p: Parsed): Canon {
   m.set(
     'tags.ndjson',
     rowsOf(p, 'tags.ndjson').map((r) => ({ ...r, id: tok(t, r.id) })),
+  );
+  m.set(
+    'rules.ndjson',
+    rowsOf(p, 'rules.ndjson').map((r) => ({
+      ...r,
+      id: tok(t, r.id),
+      accountId: nz(r.accountId),
+      tagId: nz(r.tagId),
+    })),
   );
   m.set(
     'positions.ndjson',

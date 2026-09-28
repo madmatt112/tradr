@@ -4,6 +4,7 @@ import { CURRENCY_CODES } from '../constants/currencies';
 import { EXPENSE_CATEGORIES } from '../constants/expense-categories';
 
 import { resolveTimezone } from './performance';
+import { RuleWeightSchema, TradingRuleDefinitionSchema } from './trading-rule';
 
 // The frozen v1 account-archive contract (design C1, Data Models). One place
 // defines the archive shape, entry layout, caps, preview/result shapes and error
@@ -30,6 +31,7 @@ export const ARCHIVE_ENTRY_ORDER = [
   'system-brokerages.ndjson',
   'accounts.ndjson',
   'tags.ndjson',
+  'rules.ndjson',
   'positions.ndjson',
   'fills.ndjson',
   'position-tags.ndjson',
@@ -257,6 +259,9 @@ export const ArchiveCountsSchema = z
     systemBrokerages: nonNegInt,
     accounts: nonNegInt,
     tags: nonNegInt,
+    // Optional so a version-1 manifest (which has no rules entry) still parses;
+    // the reader treats an absent count as 0 (D4).
+    rules: nonNegInt.optional(),
     positions: nonNegInt,
     fills: nonNegInt,
     positionTags: nonNegInt,
@@ -369,6 +374,25 @@ export const ArchiveTagSchema = z
   })
   .strict();
 export type ArchiveTag = z.infer<typeof ArchiveTagSchema>;
+
+// A per-user trading rule (Data Models, Archive). The stored `definition` (type +
+// canonical params) is carried whole and re-validated with task 1's strict
+// discriminated union; `accountId`/`tagId` are the scope references (both remapped
+// on import). No `userId` and no `dedupKey`: the import owns the row and recomputes
+// the key from the remapped scope (design C8).
+export const ArchiveTradingRuleSchema = z
+  .object({
+    id: uuid,
+    definition: TradingRuleDefinitionSchema,
+    weight: RuleWeightSchema,
+    enabled: z.boolean(),
+    accountId: uuid.nullable(),
+    tagId: uuid.nullable(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  .strict();
+export type ArchiveTradingRule = z.infer<typeof ArchiveTradingRuleSchema>;
 
 export const ArchivePositionSchema = z
   .object({

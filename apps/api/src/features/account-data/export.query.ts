@@ -487,6 +487,27 @@ export async function spoolAccountData(
         FROM tags WHERE user_id = ${userId} ORDER BY created_at, id
       `,
     ),
+    rules: await spoolMapped(
+      tx,
+      dir,
+      'rules.ndjson',
+      sql`
+        SELECT id, type, params, weight, enabled,
+          account_id AS "accountId", tag_id AS "tagId",
+          ${ts('created_at')} AS "createdAt", ${ts('updated_at')} AS "updatedAt"
+        FROM trading_rules WHERE user_id = ${userId} ORDER BY created_at, id
+      `,
+      (row) => ({
+        id: row.id,
+        definition: { type: row.type, params: row.params },
+        weight: row.weight,
+        enabled: row.enabled,
+        accountId: row.accountId,
+        tagId: row.tagId,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }),
+    ),
     positions: await spoolFlat(
       tx,
       dir,

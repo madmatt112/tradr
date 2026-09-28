@@ -32,6 +32,7 @@ import {
   ArchiveSummarySchema,
   ArchiveSystemBrokerageRefSchema,
   ArchiveTagSchema,
+  ArchiveTradingRuleSchema,
   archiveDecimalString,
 } from './account-archive';
 
@@ -121,6 +122,19 @@ const rows = {
       name: 'breakout',
       category: 'setup',
       color: null,
+      createdAt: TS,
+      updatedAt: TS,
+    },
+  },
+  rule: {
+    schema: ArchiveTradingRuleSchema,
+    value: {
+      id: U(9),
+      definition: { type: 'max_position_size', params: { amount: '1000', currency: 'USD' } },
+      weight: 'important',
+      enabled: true,
+      accountId: U(2),
+      tagId: null,
       createdAt: TS,
       updatedAt: TS,
     },
@@ -283,6 +297,10 @@ describe('account-archive contract constants', () => {
     expect(ARCHIVE_VERSION).toBe(2);
     expect(ARCHIVE_ENTRY_ORDER[0]).toBe('manifest.json');
     expect(ARCHIVE_ENTRY_ORDER).toContain('dashboard-layout.json');
+    // rules.ndjson sits directly after tags.ndjson (design C8).
+    expect(ARCHIVE_ENTRY_ORDER.indexOf('rules.ndjson')).toBe(
+      ARCHIVE_ENTRY_ORDER.indexOf('tags.ndjson') + 1,
+    );
     expect(Object.keys(ARCHIVE_CAPS)).toHaveLength(10);
     expect(ARCHIVE_CAPS.maxUploadBytes).toBe(536_870_912);
     expect(ARCHIVE_CAPS.maxDecompressedBytes).toBe(2_147_483_648);

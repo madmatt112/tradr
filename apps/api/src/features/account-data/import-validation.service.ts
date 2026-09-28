@@ -23,13 +23,17 @@ import {
   ArchiveSummarySchema,
   ArchiveSystemBrokerageRefSchema,
   ArchiveTagSchema,
+  ArchiveTradingRuleSchema,
   OnboardingStateSchema,
   PutDashboardLayoutRequestSchema,
+  TRADING_RULE_LIMIT,
   type ArchiveCaps,
   type ArchiveCounts,
   type ArchiveDegradation,
   type ArchiveManifest,
 } from '@tradr/shared';
+
+import { ruleDedupKey } from '@/features/trading-rules/rule-key';
 
 import { ArchiveEmptyError, ArchiveInvalidError } from './account-data.errors';
 import { readArchive } from './archive-reader';
@@ -60,6 +64,7 @@ const EMPTY_CATEGORIES: readonly (keyof ArchiveCounts)[] = [
   'expenses',
   'brokerages',
   'tags',
+  'rules',
   'conversations',
   'personas',
 ];
@@ -70,6 +75,7 @@ const COUNT_KEY: Record<string, keyof ArchiveCounts> = {
   'system-brokerages.ndjson': 'systemBrokerages',
   'accounts.ndjson': 'accounts',
   'tags.ndjson': 'tags',
+  'rules.ndjson': 'rules',
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
   'position-tags.ndjson': 'positionTags',
@@ -90,6 +96,7 @@ const LABEL: Record<string, string> = {
   'system-brokerages.ndjson': 'system-brokerages',
   'accounts.ndjson': 'accounts',
   'tags.ndjson': 'tags',
+  'rules.ndjson': 'rules',
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
   'position-tags.ndjson': 'position-tags',
@@ -158,11 +165,14 @@ export async function validateArchive(
   };
 
   // Server-counted rows per category (Req 4.6), compared with the manifest below.
-  const counts: ArchiveCounts = {
+  // Every key (rules included) is a live number here; `rules` is optional only on
+  // the wire shape, where a version-1 manifest omits it.
+  const counts: Record<keyof ArchiveCounts, number> = {
     brokerages: 0,
     systemBrokerages: 0,
     accounts: 0,
     tags: 0,
+    rules: 0,
     positions: 0,
     fills: 0,
     positionTags: 0,
@@ -182,6 +192,7 @@ export async function validateArchive(
   const brokerageIds = new Set<string>();
   const accountIds = new Set<string>();
   const tagIds = new Set<string>();
+  const ruleIds = new Set<string>();
   const positionIds = new Set<string>();
   const fillIds = new Set<string>();
   const positionImageIds = new Set<string>();
@@ -198,6 +209,9 @@ export async function validateArchive(
   const accountLowerNames = new Set<string>();
   const brokerageLowerNames = new Set<string>();
   const tagLowerNames = new Set<string>();
+  const ruleDedupKeys = new Set<string>();
+  // account id → its currency, so a scoped amount rule can be checked against it.
+  const accountCurrencies = new Map<string, string>();
   const ratePairDates = new Set<string>();
   const summaryConversations = new Set<string>();
   const positionTagPairs = new Set<string>();
@@ -320,6 +334,7 @@ export async function validateArchive(
         const r = ArchiveAccountSchema.safeParse(value);
         if (!r.success) return void addZodFaults(base, r.error);
         uniqueId(accountIds, r.data.id, `${base}.id`);
+        accountCurrencies.set(r.data.id, r.data.currency);
         uniqueKey(
           accountLowerNames,
           r.data.name.toLowerCase(),
@@ -357,6 +372,44 @@ export async function validateArchive(
           r.data.name.toLowerCase(),
           `${base}.name`,
           `Duplicate tag name ${r.data.name}.`,
+        );
+        return;
+      }
+      case 'rules.ndjson': {
+        const r = ArchiveTradingRuleSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        uniqueId(ruleIds, r.data.id, `${base}.id`);
+        if (r.data.accountId !== null) {
+          ref(
+            accountIds.has(r.data.accountId),
+            `${base}.accountId`,
+            `accountId ${r.data.accountId} names no account in the archive.`,
+          );
+          // A scoped amount rule's currency must equal its account's (Req 2.3).
+          const params = r.data.definition.params;
+          if ('currency' in params) {
+            const accountCurrency = accountCurrencies.get(r.data.accountId);
+            if (accountCurrency !== undefined && accountCurrency !== params.currency) {
+              addFault(
+                `${base}.definition.params.currency`,
+                'invariant',
+                `Rule currency ${params.currency} does not match account currency ${accountCurrency}.`,
+              );
+            }
+          }
+        }
+        if (r.data.tagId !== null) {
+          ref(
+            tagIds.has(r.data.tagId),
+            `${base}.tagId`,
+            `tagId ${r.data.tagId} names no tag in the archive.`,
+          );
+        }
+        uniqueKey(
+          ruleDedupKeys,
+          ruleDedupKey(r.data.definition, r.data.accountId, r.data.tagId),
+          base,
+          'Duplicate trading rule (same type, scope and parameters).',
         );
         return;
       }
@@ -614,6 +667,13 @@ export async function validateArchive(
       `The archive has ${counts.tags} tags (max ${TAG_LIMITS.perUser}).`,
     );
   }
+  if (counts.rules > TRADING_RULE_LIMIT) {
+    addFault(
+      'rules',
+      'invariant',
+      `The archive has ${counts.rules} trading rules (max ${TRADING_RULE_LIMIT}).`,
+    );
+  }
   for (const [position, n] of positionTagCounts) {
     if (n > TAG_LIMITS.perPosition) {
       addFault(
@@ -657,11 +717,14 @@ export async function validateArchive(
 
   if (manifest) {
     for (const k of Object.keys(counts) as (keyof ArchiveCounts)[]) {
-      if (manifest.counts[k] !== counts[k]) {
+      // `rules` is optional on the manifest (a version-1 archive omits it); an
+      // absent count reads as 0.
+      const declared = manifest.counts[k] ?? 0;
+      if (declared !== counts[k]) {
         addFault(
           `manifest.counts.${k}`,
           'count',
-          `Manifest declares ${manifest.counts[k]} ${k} but the archive holds ${counts[k]}.`,
+          `Manifest declares ${declared} ${k} but the archive holds ${counts[k]}.`,
         );
       }
     }

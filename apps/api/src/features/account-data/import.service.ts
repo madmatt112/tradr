@@ -29,6 +29,7 @@ import {
   type ArchiveSummary,
   type ArchiveSystemBrokerageRef,
   type ArchiveTag,
+  type ArchiveTradingRule,
   type ImportPreview,
   type ImportResult,
 } from '@tradr/shared';
@@ -36,6 +37,7 @@ import {
 import { db } from '@/db';
 import type { Transaction } from '@/db';
 import { lockUserForAccountChange } from '@/features/accounts/accounts.query';
+import { ruleDedupKey } from '@/features/trading-rules/rule-key';
 import { AppError } from '@/lib/errors';
 import { IMAGE_CONTENT_TYPES } from '@/lib/image-serving';
 import {
@@ -75,6 +77,7 @@ import {
   insertArchivePositionTags,
   insertArchiveSummaries,
   insertArchiveTags,
+  insertArchiveTradingRules,
   type AccountInsert,
   type BrokerageInsert,
   type ConversationInsert,
@@ -87,6 +90,7 @@ import {
   type PositionImageInsert,
   type PositionInsert,
   type PositionTagInsert,
+  type RuleInsert,
   type SummaryInsert,
   type TagInsert,
 } from './import.query';
@@ -423,6 +427,7 @@ async function restore(
   // --- Per-category flushers (FK order matches ARCHIVE_ENTRY_ORDER) ----------
   const accountsF = makeFlusher<AccountInsert>((rows) => insertArchiveAccounts(tx, userId, rows));
   const tagsF = makeFlusher<TagInsert>((rows) => insertArchiveTags(tx, userId, rows));
+  const rulesF = makeFlusher<RuleInsert>((rows) => insertArchiveTradingRules(tx, userId, rows));
   const positionsF = makeFlusher<PositionInsert>((rows) =>
     insertArchivePositions(tx, userId, rows),
   );
@@ -499,6 +504,7 @@ async function restore(
   await ensureBrokerages();
   await accountsF.drain();
   await tagsF.drain();
+  await rulesF.drain();
   await positionsF.drain();
   await fillsF.drain();
   await positionTagsF.drain();
@@ -534,6 +540,9 @@ async function restore(
         return;
       case 'tags.ndjson':
         await tagsF.drain();
+        return;
+      case 'rules.ndjson':
+        await rulesF.drain();
         return;
       case 'positions.ndjson':
         await positionsF.drain();
@@ -622,6 +631,26 @@ async function restore(
           name: r.name,
           category: r.category,
           color: r.color,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+        });
+        return;
+      }
+      case 'rules.ndjson': {
+        const r = value as ArchiveTradingRule;
+        const accountId = r.accountId === null ? null : remapId(salt, r.accountId);
+        const tagId = r.tagId === null ? null : remapId(salt, r.tagId);
+        await rulesF.push({
+          id: remapId(salt, r.id),
+          type: r.definition.type,
+          params: r.definition.params,
+          weight: r.weight,
+          enabled: r.enabled,
+          accountId,
+          tagId,
+          // The unique key is (user_id, dedup_key); the remapped scope changes it,
+          // so recompute it from the fresh references rather than carrying it.
+          dedupKey: ruleDedupKey(r.definition, accountId, tagId),
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         });

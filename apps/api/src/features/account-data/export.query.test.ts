@@ -24,6 +24,7 @@ import {
   positionTags,
   positions,
   tags,
+  tradingRules,
   users,
 } from '@/db/schema';
 import { withTransaction } from '@/lib/transaction';
@@ -132,6 +133,18 @@ async function seedFull(): Promise<Seed> {
     .insert(tags)
     .values({ userId, name: 'Breakout', category: 'setup', color: '#ffffff' })
     .returning({ id: tags.id });
+
+  // An account-scoped rule (currency matches the account), spooled after tags.
+  await db.insert(tradingRules).values({
+    userId,
+    type: 'max_position_size',
+    params: { amount: '1000', currency: 'USD' },
+    weight: 'important',
+    enabled: true,
+    accountId: acct.id,
+    tagId: null,
+    dedupKey: `max_position_size|${acct.id}|-|{"amount":"1000","currency":"USD"}`,
+  });
 
   // eslint-disable-next-line no-restricted-syntax -- seeding a fixed closed position for the reader test
   const [pos] = await db
@@ -302,6 +315,7 @@ describe('spoolAccountData', () => {
       systemBrokerages: 1,
       accounts: 1,
       tags: 1,
+      rules: 1,
       positions: 1,
       fills: 1,
       positionTags: 1,
@@ -315,6 +329,16 @@ describe('spoolAccountData', () => {
       messages: 1,
       summaries: 1,
     });
+
+    const [rule] = await readNdjson('rules.ndjson');
+    expect(rule.definition).toEqual({
+      type: 'max_position_size',
+      params: { amount: '1000', currency: 'USD' },
+    });
+    expect(rule.weight).toBe('important');
+    expect(rule.accountId).toBe(seed.accountId);
+    expect(rule.tagId).toBeNull();
+    expect(rule.createdAt).toMatch(MICRO_TS_RE);
 
     const [account] = await readNdjson('accounts.ndjson');
     expect(account.startingBalance).toBe('1234.5600');
