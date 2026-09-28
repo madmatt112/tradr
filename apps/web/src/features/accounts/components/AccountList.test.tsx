@@ -11,21 +11,35 @@ import type { Account, TierState } from '@tradr/shared';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { accountsData, tierData, setWritableMutate, setDefaultMutate, demoState, demoTeardown } =
-  vi.hoisted(() => ({
-    accountsData: { current: [] as unknown[] },
-    tierData: { current: undefined as unknown },
-    setWritableMutate: vi.fn(),
-    setDefaultMutate: vi.fn(),
-    demoState: { isDemoPresent: false, isPending: false },
-    demoTeardown: vi.fn(),
-  }));
+const {
+  accountsData,
+  tierData,
+  rulesData,
+  setWritableMutate,
+  setDefaultMutate,
+  demoState,
+  demoTeardown,
+} = vi.hoisted(() => ({
+  accountsData: { current: [] as unknown[] },
+  tierData: { current: undefined as unknown },
+  rulesData: { current: [] as unknown[] },
+  setWritableMutate: vi.fn(),
+  setDefaultMutate: vi.fn(),
+  demoState: { isDemoPresent: false, isPending: false },
+  demoTeardown: vi.fn(),
+}));
 
 vi.mock('../hooks/useAccounts', () => ({
   useAccounts: () => ({ data: accountsData.current, isLoading: false }),
   useDeleteAccount: () => ({ mutate: vi.fn() }),
   useSetDefaultAccount: () => ({ mutate: setDefaultMutate, isPending: false }),
   useSetWritableAccount: () => ({ mutate: setWritableMutate, isPending: false }),
+}));
+
+// The rules list drives the scoped-rule count on the delete confirmation (C12);
+// mocking it keeps this file free of a QueryClientProvider.
+vi.mock('@/features/trading-rules/hooks/useTradingRules', () => ({
+  useTradingRules: () => ({ data: rulesData.current }),
 }));
 
 vi.mock('@/features/billing/useTierState', () => ({
@@ -126,6 +140,7 @@ function tierState(usage: TierState['usage'], overrides: Partial<TierState> = {}
 beforeEach(() => {
   accountsData.current = ACCOUNTS;
   tierData.current = undefined;
+  rulesData.current = [];
   setWritableMutate.mockReset();
   setDefaultMutate.mockReset();
   demoState.isDemoPresent = false;
@@ -392,6 +407,32 @@ describe('AccountList — default-account designation', () => {
     await openRowMenu('Sample Data');
     expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Make default' })).toBeNull();
+  });
+});
+
+describe('AccountList — delete confirmation names scoped rules (C12)', () => {
+  it('names how many rules a delete removes when one is scoped to the account', async () => {
+    rulesData.current = [{ id: 'r1', accountId: ACCOUNT_A, tagId: null }];
+    render(<AccountList />);
+
+    const row = screen.getByText('Main').closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: '⋯' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).getByText(/It also deletes 1 rule scoped to it\./)).toBeTruthy();
+  });
+
+  it('names no rules when none are scoped to the account', async () => {
+    rulesData.current = [{ id: 'r1', accountId: ACCOUNT_B, tagId: null }];
+    render(<AccountList />);
+
+    const row = screen.getByText('Main').closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: '⋯' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(within(dialog).queryByText(/It also deletes/)).toBeNull();
   });
 });
 

@@ -40,6 +40,13 @@ vi.mock('@/features/onboarding/hooks/useOnboarding', () => ({
   ONBOARDING_QUERY_KEY: ['users', 'me', 'onboarding'],
 }));
 
+// The rules list drives the scoped-rule count on the delete dialog (C12). No rule
+// is scoped here, so the delete copy is unchanged; a QueryClientProvider is not
+// needed because the hook is mocked.
+vi.mock('@/features/trading-rules/hooks/useTradingRules', () => ({
+  useTradingRules: () => ({ data: [] }),
+}));
+
 import { TagsSettings } from './TagsSettings';
 
 function tag(overrides: Partial<TagWithCount> = {}): TagWithCount {

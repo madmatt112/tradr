@@ -35,6 +35,7 @@ import { writabilityRestricted } from '@/features/billing/tier-usage';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
 import { useDemoAccount } from '@/features/onboarding/hooks/useDemoAccount';
+import { useTradingRules } from '@/features/trading-rules/hooks/useTradingRules';
 
 import {
   useAccounts,
@@ -47,6 +48,7 @@ import { AccountDialog } from './AccountDialog';
 
 export function AccountList() {
   const { data: accounts, isLoading } = useAccounts();
+  const { data: rules } = useTradingRules();
   const deleteAccount = useDeleteAccount();
   const setWritable = useSetWritableAccount();
   const setDefault = useSetDefaultAccount();
@@ -315,6 +317,14 @@ export function AccountList() {
             <AlertDialogTitle>Delete account</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete "{deleteTarget?.name}"? This action cannot be undone.
+              {(() => {
+                // Rules scoped to this account are deleted with it (C12); name how
+                // many, singular for one and nothing when there are none.
+                const n = rules?.filter((r) => r.accountId === deleteTarget?.id).length ?? 0;
+                return n > 0
+                  ? ` It also deletes ${n} ${n === 1 ? 'rule' : 'rules'} scoped to it.`
+                  : '';
+              })()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
