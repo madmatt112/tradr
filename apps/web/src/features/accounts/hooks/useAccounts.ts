@@ -117,6 +117,9 @@ export function useDeleteAccount() {
       queryClient.invalidateQueries({ queryKey: ['dashboard', 'totals'] });
       // Deleting can change used count AND the effective designation (D18).
       queryClient.invalidateQueries({ queryKey: billingKeys.tier() });
+      // The account cascade-deletes any rule scoped to it (trading-rules C9), so
+      // a rule list already on screen and any position score can change.
+      queryClient.invalidateQueries({ queryKey: ['trading-rules'] });
       toast.success('Account deleted');
     },
     onError: (err: unknown) => {

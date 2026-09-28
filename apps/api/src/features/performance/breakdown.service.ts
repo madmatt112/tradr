@@ -5,14 +5,24 @@ import {
   type BreakdownRow,
   BreakdownResponseSchema,
 } from '@tradr/shared';
-import { groupPositions, orderGroups } from '@tradr/shared/lib/breakdown';
-import { computePositionSetStatistics } from '@tradr/shared/lib/performance';
+import { type BreakdownPosition, groupPositions, orderGroups } from '@tradr/shared/lib/breakdown';
+import { computeComplianceRate, computePositionSetStatistics } from '@tradr/shared/lib/performance';
 
 import type { Database } from '@/db';
+import { buildScoringContext, scorePosition } from '@/features/trading-rules/rule-evaluator';
+import { loadScoringData } from '@/features/trading-rules/trading-rules.query';
 import { config } from '@/lib/config';
+import { ClientAbortError, TimeoutError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 
 import { fetchTimeframeSnapshot } from './performance.query';
 import { classifyTimeframePositions, resolveRequestTimezone } from './performance.service';
+
+// The scoring loop mirrors `classifyTimeframePositions`: it checks the abort and
+// timeout signals every position and yields to the event loop once a chunk (the
+// same 1000) and the same ten-second deadline the timeout middleware enforces.
+const SCORING_CHUNK_SIZE = 1000;
+const SCORING_TIMEOUT_MS = 10_000;
 
 /**
  * Per-dimension performance breakdown for one window.
@@ -54,6 +64,14 @@ export async function getBreakdown(
     (p) => p.closedAt.getTime() >= start.getTime() && p.closedAt.getTime() < end.getTime(),
   );
 
+  // C7: `by=compliance` scores the flat-in-window population once, across every
+  // currency, and stamps each position's live compliance status before it is
+  // grouped. Every other dimension leaves the field absent, so `groupPositions`
+  // files them all as `unscored`.
+  if (input.by === 'compliance') {
+    await scoreComplianceStatuses(db, userId, population, abortSignal, startTime);
+  }
+
   // DD4: the currencies present in the population sorted by code, or exactly the
   // requested code — present or not.
   const currencyCodes = input.currency
@@ -76,6 +94,10 @@ export async function getBreakdown(
       code,
       total: computePositionSetStatistics(positionsOfCurrency),
       rows,
+      // C7/D11: the compliance rate lives only on `by=compliance` — compliant
+      // over compliant plus non-compliant, from the two scored rows' counts,
+      // null on a zero sum. Other dimensions leave it absent.
+      ...(input.by === 'compliance' ? { complianceRate: complianceRateFor(rows) } : {}),
     };
   });
 
@@ -89,4 +111,75 @@ export async function getBreakdown(
     dataQuality: { timeframeExcluded: snapshot.timeframeExcluded },
     currencies,
   });
+}
+
+/**
+ * Stamp each flat-in-window position with its live trading-rule compliance
+ * status, in place (design C7). The scoring read is a SECOND `repeatable read`,
+ * `read only` transaction, deliberately separate from the snapshot's (D10): a
+ * scoring error must not be able to abort the snapshot read, and a position
+ * changed between the two reads simply scores from the later one.
+ *
+ * The population is scored in chunks of 1000, checking the abort and timeout
+ * signals every position and yielding to the event loop once a chunk — the same
+ * shape `classifyTimeframePositions` uses. `TimeoutError` and `ClientAbortError`
+ * propagate. Any other error is logged once with the user id and the population
+ * size, and every position is left `unscored` (Requirement 7.4, 10.3).
+ */
+async function scoreComplianceStatuses(
+  db: Database,
+  userId: string,
+  population: BreakdownPosition[],
+  abortSignal: AbortSignal,
+  startTime: number,
+): Promise<void> {
+  if (population.length === 0) return;
+
+  try {
+    const data = await db.transaction(
+      async (tx) =>
+        loadScoringData(
+          tx,
+          userId,
+          population.map((p) => p.id),
+        ),
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+
+    // No enabled rule: `loadScoringData` returns an empty population, nothing is
+    // scored, and every position keeps the default `unscored` grouping.
+    if (data.positions.length === 0) return;
+
+    const ctx = buildScoringContext(data, config.WEEK_START_DAY);
+
+    for (let i = 0; i < population.length; i++) {
+      if (abortSignal.reason instanceof ClientAbortError) throw abortSignal.reason;
+      if (Date.now() - startTime > SCORING_TIMEOUT_MS) throw new TimeoutError();
+      if (abortSignal.reason instanceof TimeoutError) throw abortSignal.reason;
+
+      population[i]!.compliance = scorePosition(ctx, population[i]!.id).status;
+
+      if ((i + 1) % SCORING_CHUNK_SIZE === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+  } catch (error) {
+    if (error instanceof TimeoutError || error instanceof ClientAbortError) throw error;
+    logger.error('trading_rules_breakdown_scoring_failed', {
+      userId,
+      populationSize: population.length,
+      error,
+    });
+    for (const p of population) p.compliance = 'unscored';
+  }
+}
+
+/**
+ * The compliance rate for one currency's rows: compliant over compliant plus
+ * non-compliant (the two scored rows' counts), null on a zero sum (D11). The
+ * `unscored` row never enters the ratio.
+ */
+function complianceRateFor(rows: readonly BreakdownRow[]): number | null {
+  const countOf = (key: string) => rows.find((r) => r.key === key)?.stats.totalPositions ?? 0;
+  return computeComplianceRate(countOf('compliant'), countOf('non_compliant'));
 }

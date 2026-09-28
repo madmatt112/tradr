@@ -43,6 +43,7 @@ const NDJSON_ORDER: Array<[keyof Spec, string, string]> = [
   ['systemBrokerages', 'system-brokerages.ndjson', 'systemBrokerages'],
   ['accounts', 'accounts.ndjson', 'accounts'],
   ['tags', 'tags.ndjson', 'tags'],
+  ['rules', 'rules.ndjson', 'rules'],
   ['positions', 'positions.ndjson', 'positions'],
   ['fills', 'fills.ndjson', 'fills'],
   ['positionTags', 'position-tags.ndjson', 'positionTags'],
@@ -63,6 +64,7 @@ interface Spec {
   systemBrokerages?: unknown[];
   accounts?: unknown[];
   tags?: unknown[];
+  rules?: unknown[];
   positions?: unknown[];
   fills?: unknown[];
   positionTags?: unknown[];
@@ -105,6 +107,9 @@ function makeArchive(spec: Spec): Buffer {
     summaries: spec.summaries?.length ?? 0,
     images: spec.images?.length ?? 0,
   };
+  // `rules` is optional on the manifest; only declare it when the spec has rules,
+  // so a spec with none exercises the absent-count path.
+  if (spec.rules) counts.rules = spec.rules.length;
   Object.assign(counts, spec.countsOverride ?? {});
 
   if (!spec.omitManifest) {
@@ -170,6 +175,17 @@ const tag = (o: Obj = {}): Obj => ({
   name: `Tag-${rid().slice(0, 8)}`,
   category: 'general',
   color: null,
+  createdAt: TS,
+  updatedAt: TS,
+  ...o,
+});
+const rule = (o: Obj = {}): Obj => ({
+  id: rid(),
+  definition: { type: 'max_position_size', params: { amount: '100', currency: 'USD' } },
+  weight: 'important',
+  enabled: true,
+  accountId: null,
+  tagId: null,
   createdAt: TS,
   updatedAt: TS,
   ...o,
@@ -752,6 +768,63 @@ describe('validateArchive — references', () => {
       images: [{ name: 'images/advisor/000001.png', bytes: new Uint8Array([9]) }],
     });
     expect(has(f, 'unreferenced_image')).toBe(true);
+  });
+});
+
+describe('validateArchive — trading rules', () => {
+  it('rejects a rule scoped to an unknown account', async () => {
+    const acct = account({ isDefault: true });
+    const f = await faults({
+      accounts: [acct],
+      rules: [rule({ accountId: rid() })],
+      preferences: preferences(),
+      dashboardLayout: null,
+    });
+    expect(has(f, 'reference', 'rules[0].accountId')).toBe(true);
+  });
+
+  it("rejects a scoped amount rule whose currency differs from its account's", async () => {
+    const acct = account({ isDefault: true, currency: 'USD' });
+    const f = await faults({
+      accounts: [acct],
+      rules: [
+        rule({
+          accountId: acct.id,
+          definition: { type: 'max_position_size', params: { amount: '100', currency: 'EUR' } },
+        }),
+      ],
+      preferences: preferences(),
+      dashboardLayout: null,
+    });
+    expect(has(f, 'invariant', 'rules[0].definition.params.currency')).toBe(true);
+  });
+
+  it('rejects more than the trading-rule limit', async () => {
+    const rules = Array.from({ length: 51 }, (_, i) =>
+      rule({ definition: { type: 'max_trades_per_day', params: { count: i + 1 } } }),
+    );
+    const f = await faults({
+      accounts: [account({ isDefault: true })],
+      rules,
+      preferences: preferences(),
+      dashboardLayout: null,
+    });
+    expect(has(f, 'invariant', 'rules')).toBe(true);
+  });
+
+  it('rejects two rules with the same dedup key', async () => {
+    const f = await faults({
+      accounts: [account({ isDefault: true })],
+      rules: [rule(), rule()],
+      preferences: preferences(),
+      dashboardLayout: null,
+    });
+    expect(has(f, 'duplicate', 'rules[1]')).toBe(true);
+  });
+
+  it('accepts an archive whose manifest omits the rules count', async () => {
+    const result = await validateArchive(await save(makeArchive(validSpec())));
+    expect(result.counts.rules).toBe(0);
   });
 });
 

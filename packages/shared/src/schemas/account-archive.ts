@@ -4,19 +4,22 @@ import { CURRENCY_CODES } from '../constants/currencies';
 import { EXPENSE_CATEGORIES } from '../constants/expense-categories';
 
 import { resolveTimezone } from './performance';
+import { RuleWeightSchema, TradingRuleDefinitionSchema } from './trading-rule';
 
 // The frozen v1 account-archive contract (design C1, Data Models). One place
 // defines the archive shape, entry layout, caps, preview/result shapes and error
 // codes, shared by export, import, the web and every test (Req 3.6). This file is
 // SHAPE ONLY: it carries no API, DB or web code, and edits no existing schema.
 //
-// Version discipline (Req 3.4): every schema here is frozen at archive version 1.
-// Any change to a payload shape increases ARCHIVE_VERSION; readers refuse a newer
-// version by number, not by a parse failure.
+// Version discipline (Req 3.4, D4): ARCHIVE_VERSION is the version this build
+// writes. A payload-shape change increments it; the manifest still accepts every
+// earlier version whose payload this build reads (1 and 2), so a version-1 export
+// imports unchanged. The reader refuses a version above ARCHIVE_VERSION by number,
+// not by a parse failure.
 
 // The archive schema version. The manifest's `format` and `archiveVersion` field
 // are frozen across versions; the value increments when a payload shape changes.
-export const ARCHIVE_VERSION = 1;
+export const ARCHIVE_VERSION = 2;
 
 // The fixed entry names, in the order they appear in the archive (Data Models).
 // Image entries (matching ARCHIVE_IMAGE_ENTRY_RE) come first, before
@@ -28,6 +31,7 @@ export const ARCHIVE_ENTRY_ORDER = [
   'system-brokerages.ndjson',
   'accounts.ndjson',
   'tags.ndjson',
+  'rules.ndjson',
   'positions.ndjson',
   'fills.ndjson',
   'position-tags.ndjson',
@@ -255,6 +259,9 @@ export const ArchiveCountsSchema = z
     systemBrokerages: nonNegInt,
     accounts: nonNegInt,
     tags: nonNegInt,
+    // Optional so a version-1 manifest (which has no rules entry) still parses;
+    // the reader treats an absent count as 0 (D4).
+    rules: nonNegInt.optional(),
     positions: nonNegInt,
     fills: nonNegInt,
     positionTags: nonNegInt,
@@ -300,7 +307,8 @@ export type ArchiveDegradation = z.infer<typeof ArchiveDegradationSchema>;
 export const ArchiveManifestSchema = z
   .object({
     format: z.literal('tradr-account-archive'),
-    archiveVersion: z.literal(ARCHIVE_VERSION),
+    // Accept the frozen version-1 payload and this build's version (D4).
+    archiveVersion: z.union([z.literal(1), z.literal(2)]),
     // APP_VERSION at export, or 'unknown'.
     sourceAppVersion: z.string(),
     exportedAt: timestamp,
@@ -366,6 +374,25 @@ export const ArchiveTagSchema = z
   })
   .strict();
 export type ArchiveTag = z.infer<typeof ArchiveTagSchema>;
+
+// A per-user trading rule (Data Models, Archive). The stored `definition` (type +
+// canonical params) is carried whole and re-validated with task 1's strict
+// discriminated union; `accountId`/`tagId` are the scope references (both remapped
+// on import). No `userId` and no `dedupKey`: the import owns the row and recomputes
+// the key from the remapped scope (design C8).
+export const ArchiveTradingRuleSchema = z
+  .object({
+    id: uuid,
+    definition: TradingRuleDefinitionSchema,
+    weight: RuleWeightSchema,
+    enabled: z.boolean(),
+    accountId: uuid.nullable(),
+    tagId: uuid.nullable(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  .strict();
+export type ArchiveTradingRule = z.infer<typeof ArchiveTradingRuleSchema>;
 
 export const ArchivePositionSchema = z
   .object({

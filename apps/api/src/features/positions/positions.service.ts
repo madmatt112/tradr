@@ -11,6 +11,7 @@ import {
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
 import { findTagsByPosition } from '@/features/tags/tags.query';
+import { getPositionCompliance } from '@/features/trading-rules/compliance.service';
 import {
   AppError,
   NotFoundError,
@@ -634,7 +635,13 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     stopLoss: position.stopLoss,
   });
 
-  return {
+  // Live rule compliance (design C6). Scored on read in its own bounded read-only
+  // transaction; `undefined` when the user holds no rules, so the `compliance`
+  // key is added only when it has a value and a no-rules user gets no key
+  // (Requirement 6.1). Scoring never fails the read — a throw returns unscored.
+  const compliance = await getPositionCompliance(db, userId, position.id, position.status);
+
+  const detail = {
     ...position,
     // Account timezone defines the trading day the client uses to decide
     // whether a closed position may be reopened (R13 same-day rule). Surfaced
@@ -665,6 +672,8 @@ export async function getPositionDetail(db: Database, id: string, userId: string
       currencyMinorUnits,
     ),
   };
+
+  return compliance === undefined ? detail : { ...detail, compliance };
 }
 
 export async function editPosition(

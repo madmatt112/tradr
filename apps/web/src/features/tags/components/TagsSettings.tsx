@@ -13,6 +13,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useOnboardingQuery } from '@/features/onboarding/hooks/useOnboarding';
+import { useTradingRules } from '@/features/trading-rules/hooks/useTradingRules';
 import { cn } from '@/lib/utils';
 
 import { useAnswerStarterOffer, useDeleteTag, useTags } from '../hooks/useTags';
@@ -44,6 +45,7 @@ const SWATCH_BG: Record<TagColor, string> = {
 export function TagsSettings() {
   const { data: tags, isLoading, isError } = useTags();
   const { data: onboarding } = useOnboardingQuery();
+  const { data: rules } = useTradingRules();
   const answer = useAnswerStarterOffer();
   const deleteTag = useDeleteTag();
 
@@ -202,6 +204,7 @@ export function TagsSettings() {
             if (!open) setDeleteTarget(null);
           }}
           tag={deleteTarget}
+          ruleCount={rules?.filter((r) => r.tagId === deleteTarget.id).length ?? 0}
           onConfirm={() => {
             deleteTag.mutate(deleteTarget.id);
             setDeleteTarget(null);

@@ -3,6 +3,7 @@ import {
   Bot,
   CircleQuestionMark,
   Database,
+  ListChecks,
   Settings as SettingsIcon,
   Tag,
   User,
@@ -31,6 +32,9 @@ const SETTINGS_TABS = [
   // Export the whole account as one archive and import one into an empty account.
   // Appended (never inserted) for the same reason as Tags.
   { id: 'data', label: 'Data', icon: Database, route: '/settings/data' },
+  // See, create, enable, disable and delete the trading rules Tradr scores each
+  // position against. Appended after Data (never inserted) for the same reason.
+  { id: 'rules', label: 'Rules', icon: ListChecks, route: '/settings/rules' },
 ] as const;
 
 /**

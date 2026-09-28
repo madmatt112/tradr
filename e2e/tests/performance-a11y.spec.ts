@@ -128,12 +128,17 @@ test.describe('Performance page — keyboard accessibility', () => {
       'breakdown-dimension-tag',
     ];
     const reached = new Set<string>();
+    // Count only the TARGET testids: the early-exit assumes every reached testid
+    // is one of them. The CompliancePanel (rendered after StatsPanel) adds a
+    // focusable link with its own `data-testid` between the currency selector and
+    // the calendar, so an unfiltered `reached` would hit `targets.length` on that
+    // link before Tab ever reaches the last dimension tab, and no bound would help.
     for (let i = 0; i < 40 && reached.size < targets.length; i++) {
       await page.keyboard.press('Tab');
       const testid = await page.evaluate(
         () => document.activeElement?.getAttribute('data-testid') ?? null,
       );
-      if (testid) reached.add(testid);
+      if (testid && targets.includes(testid)) reached.add(testid);
     }
     for (const target of targets) {
       expect(reached.has(target), `Tab never reached ${target}`).toBe(true);

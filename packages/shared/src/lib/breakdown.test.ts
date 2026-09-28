@@ -29,6 +29,7 @@ function bpos(overrides: Partial<BreakdownPosition> = {}): BreakdownPosition {
     symbol: overrides.symbol ?? 'AAPL',
     assetType: overrides.assetType ?? 'stock',
     tags: overrides.tags ?? [],
+    compliance: overrides.compliance,
   };
 }
 
@@ -154,6 +155,33 @@ describe('groupPositions', () => {
     expect(untagged).toBeDefined();
     expect(untagged.positions).toHaveLength(0);
   });
+
+  it('compliance: three rows in fixed order, keyed by status, tag null; missing status is unscored', () => {
+    const groups = groupPositions(
+      'compliance',
+      [
+        bpos({ id: 'ok', compliance: 'compliant' }),
+        bpos({ id: 'bad', compliance: 'non_compliant' }),
+        bpos({ id: 'skip', compliance: 'unscored' }),
+        bpos({ id: 'none' }), // no status -> unscored
+      ],
+      'UTC',
+      0,
+    );
+    expect(groups.map((g) => g.key)).toEqual(['compliant', 'non_compliant', 'unscored']);
+    expect(groups.map((g) => g.label)).toEqual(['Compliant', 'Non-compliant', 'Unscored']);
+    expect(groups.every((g) => g.tag === null)).toBe(true);
+    const byKey = Object.fromEntries(groups.map((g) => [g.key, g]));
+    expect(byKey['compliant']!.positions.map((p) => p.id)).toEqual(['ok']);
+    expect(byKey['non_compliant']!.positions.map((p) => p.id)).toEqual(['bad']);
+    expect(byKey['unscored']!.positions.map((p) => p.id).sort()).toEqual(['none', 'skip']);
+  });
+
+  it('compliance: all three rows are present even when empty', () => {
+    const groups = groupPositions('compliance', [], 'UTC', 0);
+    expect(groups.map((g) => g.key)).toEqual(['compliant', 'non_compliant', 'unscored']);
+    expect(groups.every((g) => g.positions.length === 0)).toBe(true);
+  });
 });
 
 describe('orderGroups', () => {
@@ -191,6 +219,25 @@ describe('orderGroups', () => {
     expect(orderGroups('weekday', wd)).toBe(wd);
     const hr = groupPositions('hour', [bpos({ closedAt: PROBE })], 'UTC', 0);
     expect(orderGroups('hour', hr).map((g) => g.key)).toEqual(hr.map((g) => g.key));
+  });
+
+  it('compliance keeps the generated order regardless of net P&L', () => {
+    const groups = groupPositions(
+      'compliance',
+      [
+        bpos({ id: 'ok', compliance: 'compliant', netPnl: new Decimal(-100) }),
+        bpos({ id: 'bad', compliance: 'non_compliant', netPnl: new Decimal(500) }),
+        bpos({ id: 'none', netPnl: new Decimal(1000) }),
+      ],
+      'UTC',
+      0,
+    );
+    expect(orderGroups('compliance', groups)).toBe(groups);
+    expect(orderGroups('compliance', groups).map((g) => g.key)).toEqual([
+      'compliant',
+      'non_compliant',
+      'unscored',
+    ]);
   });
 });
 

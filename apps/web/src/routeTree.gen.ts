@@ -30,6 +30,7 @@ import { Route as AuthPositionsIndexRouteImport } from './routes/_auth/positions
 import { Route as AuthAdvisorIndexRouteImport } from './routes/_auth.advisor.index'
 import { Route as AuthAccountsIndexRouteImport } from './routes/_auth/accounts/index'
 import { Route as AuthSettingsTagsRouteImport } from './routes/_auth.settings.tags'
+import { Route as AuthSettingsRulesRouteImport } from './routes/_auth.settings.rules'
 import { Route as AuthSettingsProfileRouteImport } from './routes/_auth.settings.profile'
 import { Route as AuthSettingsHelpRouteImport } from './routes/_auth.settings.help'
 import { Route as AuthSettingsDataRouteImport } from './routes/_auth.settings.data'
@@ -148,6 +149,11 @@ const AuthSettingsTagsRoute = AuthSettingsTagsRouteImport.update({
   path: '/tags',
   getParentRoute: () => AuthSettingsRoute,
 } as any)
+const AuthSettingsRulesRoute = AuthSettingsRulesRouteImport.update({
+  id: '/rules',
+  path: '/rules',
+  getParentRoute: () => AuthSettingsRoute,
+} as any)
 const AuthSettingsProfileRoute = AuthSettingsProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
@@ -245,6 +251,7 @@ export interface FileRoutesByFullPath {
   '/settings/data': typeof AuthSettingsDataRoute
   '/settings/help': typeof AuthSettingsHelpRoute
   '/settings/profile': typeof AuthSettingsProfileRoute
+  '/settings/rules': typeof AuthSettingsRulesRoute
   '/settings/tags': typeof AuthSettingsTagsRoute
   '/accounts/': typeof AuthAccountsIndexRoute
   '/advisor/': typeof AuthAdvisorIndexRoute
@@ -280,6 +287,7 @@ export interface FileRoutesByTo {
   '/settings/data': typeof AuthSettingsDataRoute
   '/settings/help': typeof AuthSettingsHelpRoute
   '/settings/profile': typeof AuthSettingsProfileRoute
+  '/settings/rules': typeof AuthSettingsRulesRoute
   '/settings/tags': typeof AuthSettingsTagsRoute
   '/accounts': typeof AuthAccountsIndexRoute
   '/advisor': typeof AuthAdvisorIndexRoute
@@ -317,6 +325,7 @@ export interface FileRoutesById {
   '/_auth/settings/data': typeof AuthSettingsDataRoute
   '/_auth/settings/help': typeof AuthSettingsHelpRoute
   '/_auth/settings/profile': typeof AuthSettingsProfileRoute
+  '/_auth/settings/rules': typeof AuthSettingsRulesRoute
   '/_auth/settings/tags': typeof AuthSettingsTagsRoute
   '/_auth/accounts/': typeof AuthAccountsIndexRoute
   '/_auth/advisor/': typeof AuthAdvisorIndexRoute
@@ -354,6 +363,7 @@ export interface FileRouteTypes {
     | '/settings/data'
     | '/settings/help'
     | '/settings/profile'
+    | '/settings/rules'
     | '/settings/tags'
     | '/accounts/'
     | '/advisor/'
@@ -389,6 +399,7 @@ export interface FileRouteTypes {
     | '/settings/data'
     | '/settings/help'
     | '/settings/profile'
+    | '/settings/rules'
     | '/settings/tags'
     | '/accounts'
     | '/advisor'
@@ -425,6 +436,7 @@ export interface FileRouteTypes {
     | '/_auth/settings/data'
     | '/_auth/settings/help'
     | '/_auth/settings/profile'
+    | '/_auth/settings/rules'
     | '/_auth/settings/tags'
     | '/_auth/accounts/'
     | '/_auth/advisor/'
@@ -590,6 +602,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthSettingsTagsRouteImport
       parentRoute: typeof AuthSettingsRoute
     }
+    '/_auth/settings/rules': {
+      id: '/_auth/settings/rules'
+      path: '/rules'
+      fullPath: '/settings/rules'
+      preLoaderRoute: typeof AuthSettingsRulesRouteImport
+      parentRoute: typeof AuthSettingsRoute
+    }
     '/_auth/settings/profile': {
       id: '/_auth/settings/profile'
       path: '/profile'
@@ -707,6 +726,7 @@ interface AuthSettingsRouteChildren {
   AuthSettingsDataRoute: typeof AuthSettingsDataRoute
   AuthSettingsHelpRoute: typeof AuthSettingsHelpRoute
   AuthSettingsProfileRoute: typeof AuthSettingsProfileRoute
+  AuthSettingsRulesRoute: typeof AuthSettingsRulesRoute
   AuthSettingsTagsRoute: typeof AuthSettingsTagsRoute
 }
 
@@ -717,6 +737,7 @@ const AuthSettingsRouteChildren: AuthSettingsRouteChildren = {
   AuthSettingsDataRoute: AuthSettingsDataRoute,
   AuthSettingsHelpRoute: AuthSettingsHelpRoute,
   AuthSettingsProfileRoute: AuthSettingsProfileRoute,
+  AuthSettingsRulesRoute: AuthSettingsRulesRoute,
   AuthSettingsTagsRoute: AuthSettingsTagsRoute,
 }
 

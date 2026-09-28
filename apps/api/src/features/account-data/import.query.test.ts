@@ -15,6 +15,7 @@ import {
   externalApiKeys,
   ledgerEntries,
   tags,
+  tradingRules,
   users,
   wallets,
 } from '@/db/schema';
@@ -124,6 +125,15 @@ async function seedCategory(label: string, userId: string): Promise<void> {
       return;
     case 'tags':
       await db.insert(tags).values({ userId, name: 'setup-a', category: 'general' });
+      return;
+    case 'rules':
+      await db.insert(tradingRules).values({
+        userId,
+        type: 'required_fields',
+        params: { fields: ['notes'] },
+        weight: 'important',
+        dedupKey: `required_fields|-|-|{"fields":["notes"]}`,
+      });
       return;
     case 'conversations':
       await db

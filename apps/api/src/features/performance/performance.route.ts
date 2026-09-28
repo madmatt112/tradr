@@ -95,7 +95,7 @@ performance.get(
  *         description: >
  *           Dimension to group by. This enum is the extension point later specs add
  *           dimensions to; `trading-rules` adds `compliance`.
- *         schema: { type: string, enum: [symbol, weekday, hour, tag] }
+ *         schema: { type: string, enum: [symbol, weekday, hour, tag, compliance] }
  *       - in: query
  *         name: start
  *         required: true

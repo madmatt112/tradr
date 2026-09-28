@@ -31,3 +31,15 @@ export const STAT_ANCHORS: Record<StatField, string> = {
 export function statDocsUrl(field: StatField): string {
   return `${docsUrl('metricsGlossary')}#${STAT_ANCHORS[field]}`;
 }
+
+// The compliance-rate figure on the performance page's Compliance panel (C11)
+// is not a `PerformanceStats` field, so it sits outside `STAT_ANCHORS`, but its
+// label deep-links to the glossary the same way. The anchor is the id the docs
+// build derives from the "Compliance rate" heading; `statAnchors.test.ts` checks
+// it against the page's slugs alongside `STAT_ANCHORS`.
+export const COMPLIANCE_RATE_ANCHOR = 'compliance-rate';
+
+/** Absolute URL to the Methodology heading that defines the compliance rate. */
+export function complianceRateDocsUrl(): string {
+  return `${docsUrl('metricsGlossary')}#${COMPLIANCE_RATE_ANCHOR}`;
+}

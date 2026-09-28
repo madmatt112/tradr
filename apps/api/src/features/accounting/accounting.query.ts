@@ -19,7 +19,7 @@ import { accounts, exchangeRates, ledgerEntries, users } from '@/db/schema';
 // The ledger-cash-movements spec widens this list to seven: the four manual
 // cash-movement types ('deposit', 'withdrawal', 'deposit_reversal',
 // 'withdrawal_reversal') join the three below.
-const BALANCE_ENTRY_TYPES = [
+export const BALANCE_ENTRY_TYPES = [
   'position_pnl',
   'position_pnl_reversal',
   'balance_adjustment',

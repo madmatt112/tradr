@@ -301,6 +301,26 @@ export type {
   AdminDeleteUserResult,
 } from './schemas/account-deletion';
 export {
+  TRADING_RULE_TYPES,
+  RULE_WEIGHTS,
+  RULE_WEIGHT_VALUES,
+  TRADING_RULE_LIMIT,
+  TradingRuleDefinitionSchema,
+  TradingRuleInputSchema,
+  TradingRuleSchema,
+  ComplianceEntrySchema,
+  PositionComplianceSchema,
+} from './schemas/trading-rule';
+export type {
+  TradingRuleType,
+  RuleWeight,
+  TradingRuleDefinition,
+  TradingRuleInput,
+  TradingRule,
+  ComplianceEntry,
+  PositionCompliance,
+} from './schemas/trading-rule';
+export {
   ChangelogReleaseSchema,
   ChangelogReleasesResponseSchema,
   MarkChangelogViewedResponseSchema,
@@ -356,6 +376,7 @@ export {
   ArchiveSystemBrokerageRefSchema,
   ArchiveAccountSchema,
   ArchiveTagSchema,
+  ArchiveTradingRuleSchema,
   ArchivePositionSchema,
   ArchiveFillSchema,
   ArchivePositionTagSchema,
@@ -387,6 +408,7 @@ export type {
   ArchiveSystemBrokerageRef,
   ArchiveAccount,
   ArchiveTag,
+  ArchiveTradingRule,
   ArchivePosition,
   ArchiveFill,
   ArchivePositionTag,

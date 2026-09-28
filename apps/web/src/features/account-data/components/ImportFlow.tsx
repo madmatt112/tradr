@@ -37,6 +37,7 @@ const COUNT_ROWS: ReadonlyArray<readonly [keyof ArchiveCounts, string]> = [
   ['positions', 'Positions'],
   ['fills', 'Fills'],
   ['tags', 'Tags'],
+  ['rules', 'Trading rules'],
   ['positionTags', 'Position tags'],
   ['positionImages', 'Position images'],
   ['ledgerEntries', 'Ledger entries'],
@@ -182,7 +183,7 @@ function CountsTable({ counts, label }: { counts: ArchiveCounts; label: string }
         {COUNT_ROWS.map(([key, rowLabel]) => (
           <TableRow key={key}>
             <TableCell>{rowLabel}</TableCell>
-            <TableCell className="text-right">{counts[key]}</TableCell>
+            <TableCell className="text-right">{counts[key] ?? 0}</TableCell>
           </TableRow>
         ))}
       </TableBody>

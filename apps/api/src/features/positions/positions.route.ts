@@ -157,7 +157,10 @@ positions.get('/', validate('query', ListQuerySchema), async (c) => {
  *     summary: Get a position's detail.
  *     description: >
  *       Authed. Returns the position with its fills, computed P&L, and its
- *       `tags` array ordered by category then case-insensitive name.
+ *       `tags` array ordered by category then case-insensitive name. Carries a
+ *       `compliance` object (live rule score: `finality`, `score`, `status` and
+ *       one `entries` element per applicable enabled rule) only when the user
+ *       holds at least one trading rule, and omits the field when they hold none.
  *     tags: [Positions]
  *     parameters:
  *       - in: path
@@ -165,7 +168,7 @@ positions.get('/', validate('query', ListQuerySchema), async (c) => {
  *         required: true
  *         schema: { type: string, format: uuid }
  *     responses:
- *       200: { description: 'The position detail, including its `tags` array.' }
+ *       200: { description: 'The position detail, including its `tags` array and, when the user has rules, its `compliance` score.' }
  *       404: { description: Position not found (or not owned by the user). }
  */
 positions.get('/:id', validate('param', ParamSchema), async (c) => {

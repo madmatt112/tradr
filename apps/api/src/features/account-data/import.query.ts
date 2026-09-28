@@ -24,7 +24,7 @@ type ImportDb = Database | Transaction;
 
 // --- Emptiness check (Req 5.1) ----------------------------------------------
 
-// The nine categories that block an import: user-owned data plus USER-CREATED
+// The ten categories that block an import: user-owned data plus USER-CREATED
 // brokerages and personas only. Every one of these tables carries `user_id`, so
 // a single `WHERE user_id = $1` predicate excludes system brokerages and builtin
 // personas (both have a NULL `user_id`). Preferences, a dashboard layout, API
@@ -37,6 +37,7 @@ export const IMPORT_BLOCKING_CATEGORIES = [
   { label: 'expenses', table: 'expenses' },
   { label: 'brokerages', table: 'brokerages' },
   { label: 'tags', table: 'tags' },
+  { label: 'rules', table: 'trading_rules' },
   { label: 'conversations', table: 'advisor_conversations' },
   { label: 'personas', table: 'advisor_personas' },
 ] as const;
@@ -251,6 +252,19 @@ export interface TagInsert {
   updatedAt: string;
 }
 
+export interface RuleInsert {
+  id: string;
+  type: string;
+  params: Record<string, unknown>;
+  weight: string;
+  enabled: boolean;
+  accountId: string | null;
+  tagId: string | null;
+  dedupKey: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PositionInsert {
   id: string;
   accountId: string;
@@ -417,6 +431,20 @@ const TAG_COLUMNS: Column[] = [
   { name: 'name', cast: 'plain' },
   { name: 'category', cast: 'plain' },
   { name: 'color', cast: 'plain' },
+  { name: 'created_at', cast: 'timestamptz' },
+  { name: 'updated_at', cast: 'timestamptz' },
+];
+
+const RULE_COLUMNS: Column[] = [
+  { name: 'id', cast: 'plain' },
+  { name: 'user_id', cast: 'plain' },
+  { name: 'type', cast: 'plain' },
+  { name: 'params', cast: 'jsonb' },
+  { name: 'weight', cast: 'plain' },
+  { name: 'enabled', cast: 'plain' },
+  { name: 'account_id', cast: 'plain' },
+  { name: 'tag_id', cast: 'plain' },
+  { name: 'dedup_key', cast: 'plain' },
   { name: 'created_at', cast: 'timestamptz' },
   { name: 'updated_at', cast: 'timestamptz' },
 ];
@@ -618,6 +646,31 @@ export async function insertArchiveTags(
     'tags',
     TAG_COLUMNS,
     rows.map((r) => [r.id, userId, r.name, r.category, r.color, r.createdAt, r.updatedAt]),
+  );
+}
+
+export async function insertArchiveTradingRules(
+  tx: ImportDb,
+  userId: string,
+  rows: RuleInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'trading_rules',
+    RULE_COLUMNS,
+    rows.map((r) => [
+      r.id,
+      userId,
+      r.type,
+      r.params,
+      r.weight,
+      r.enabled,
+      r.accountId,
+      r.tagId,
+      r.dedupKey,
+      r.createdAt,
+      r.updatedAt,
+    ]),
   );
 }
 

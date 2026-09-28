@@ -403,7 +403,7 @@ describe('createExport', () => {
       degradations: unknown[];
     };
     expect(manifest.format).toBe('tradr-account-archive');
-    expect(manifest.archiveVersion).toBe(1);
+    expect(manifest.archiveVersion).toBe(2);
     expect(manifest.sourceAppVersion).toBe('unknown'); // APP_VERSION unset in tests
     expect(manifest.exportedAt).toMatch(MICRO_TS_RE);
     expect(manifest.degradations).toEqual([]);

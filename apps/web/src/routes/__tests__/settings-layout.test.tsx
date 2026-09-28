@@ -46,6 +46,7 @@ import { Route as AccountRoute } from '../_auth.settings.account';
 import { Route as HelpRoute } from '../_auth.settings.help';
 import { Route as TagsRoute } from '../_auth.settings.tags';
 import { Route as DataRoute } from '../_auth.settings.data';
+import { Route as RulesRoute } from '../_auth.settings.rules';
 
 // The real routes are typed against the app's route registration; re-hosting
 // them under a fresh root requires loosening those option types.
@@ -57,6 +58,7 @@ const accountOpts = AccountRoute.options as any;
 const helpOpts = HelpRoute.options as any;
 const tagsOpts = TagsRoute.options as any;
 const dataOpts = DataRoute.options as any;
+const rulesOpts = RulesRoute.options as any;
 
 // ---- Test router ----------------------------------------------------------
 // Re-host the real Settings routes under a fresh root so we can exercise the
@@ -109,6 +111,14 @@ function buildRouter(initialPath: string) {
     path: '/data',
     component: dataOpts.component,
   });
+  // Re-hosted beside Data so the layout's `<Link to="/settings/rules">` tab
+  // trigger has a matching route; the component only mounts if a test navigates
+  // here.
+  const rules = createRoute({
+    getParentRoute: () => settingsLayout as any,
+    path: '/rules',
+    component: rulesOpts.component,
+  });
   // A stub, not the real Billing tab (which polls the tier): it exists only as
   // the redirect target when the advisor is withdrawn.
   const billing = createRoute({
@@ -118,7 +128,7 @@ function buildRouter(initialPath: string) {
   });
 
   const routeTree = rootRoute.addChildren([
-    settingsLayout.addChildren([advisor, billing, profile, account, help, tags, data]),
+    settingsLayout.addChildren([advisor, billing, profile, account, help, tags, data, rules]),
   ]);
 
   return createRouter({
@@ -159,6 +169,8 @@ describe('Settings tabbed layout', () => {
     expect(screen.getByRole('tab', { name: /Tags/i })).toBeTruthy();
     // The appended Data tab (export/import) renders beside the others.
     expect(screen.getByRole('tab', { name: /Data/i })).toBeTruthy();
+    // The appended Rules tab (trading-rules) renders after Data.
+    expect(screen.getByRole('tab', { name: /Rules/i })).toBeTruthy();
   });
 
   it('case 2: navigating to /settings redirects to /settings/advisor', async () => {

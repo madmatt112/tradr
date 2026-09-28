@@ -1,0 +1,171 @@
+---
+title: 'Trading rules & compliance'
+description: 'Write down the risk, entry and behaviour rules you trade by, weight each one, and read the compliance score Tradr gives every position. Tradr scores your trades and never blocks them.'
+---
+
+Trading rules let you write down the limits and habits you mean to trade by.
+Tradr scores every open and closed position against your rules. It shows the
+score and each breach on the position, and a compliance rate and a
+compliant-versus-non-compliant P&L split on the performance page.
+
+You manage your rules in **Settings**, on the **Rules** tab. You can hold up to
+50 rules.
+
+## Tradr scores your trades. It never blocks them.
+
+A rule never refuses, delays or changes a trade. A breach adds no confirmation
+step, no warning dialog and no disabled control. Every position saves exactly as
+you enter it, whatever your rules say.
+
+If scoring ever fails, the position still saves. Tradr shows it as unscored, and
+does not fail the request.
+
+## What a rule is
+
+Each rule has:
+
+- A **type**, from the thirteen types below.
+- One or more **parameters**, such as a percent, an amount or a set of weekdays.
+- A **weight**: critical, important or nice-to-have.
+- An **enabled** switch. A disabled rule is kept but does not score.
+- An optional **scope**: one account, or one tag. A rule with no scope covers
+  every position. A scoped rule covers only the positions in that account, or
+  the positions that carry that tag.
+
+The **population** of a rule is the set of non-draft positions it covers.
+
+## The thirteen rule types
+
+The rule form groups the types into three families: risk and sizing, entry
+discipline, and behaviour.
+
+For the exact definition of _risk_, _entry notional_ and _planned reward-to-risk_,
+see the [Methodology page](/user-guide/reference/metrics-glossary/).
+
+### Risk and sizing
+
+| Rule                                           | Parameter                          | Measured value                                                                                 | Breach when                               |
+| ---------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Max risk % of balance (`max_risk_percent`)     | A percent, above 0 and at most 100 | Risk divided by the account balance at the open instant, times 100                             | The measured percent is above the limit   |
+| Max risk amount (`max_risk_amount`)            | An amount and its currency         | Risk                                                                                           | Risk is above the amount                  |
+| Max position size (`max_position_size`)        | An amount and its currency         | Entry notional                                                                                 | Entry notional is above the amount        |
+| Min reward-to-risk (`min_risk_reward`)         | A ratio, above 0 and at most 100   | Planned reward-to-risk                                                                         | Planned reward-to-risk is below the ratio |
+| Max daily loss (`max_daily_loss`)              | An amount and its currency         | The net P&L your population booked in the trading day, before this position opened             | The loss reaches or passes the amount     |
+| Max weekly loss (`max_weekly_loss`)            | An amount and its currency         | The same, over the trading week                                                                | The loss reaches or passes the amount     |
+| Max total open exposure (`max_total_exposure`) | An amount and its currency         | Entry notional plus the open cost basis of every other population position open at the instant | The total is above the amount             |
+
+### Entry discipline
+
+| Rule                                      | Parameter                                                           | Measured value                   | Breach when                      |
+| ----------------------------------------- | ------------------------------------------------------------------- | -------------------------------- | -------------------------------- |
+| Required fields (`required_fields`)       | One or more of a stop loss, a target price, notes, at least one tag | The chosen fields that are empty | A chosen field is empty          |
+| Allowed markets (`allowed_markets`)       | One or both of stocks and options                                   | The position's asset type        | The asset type is not in the set |
+| Allowed directions (`allowed_directions`) | One or both of long and short                                       | The position's side              | The side is not in the set       |
+
+### Behaviour
+
+| Rule                                          | Parameter                | Measured value                                                                        | Breach when                                                                      |
+| --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| No trading on days (`no_trading_days`)        | One to six weekdays      | The trading-day weekday                                                               | The weekday is in the set                                                        |
+| Max trades per day (`max_trades_per_day`)     | A count from 1 to 1000   | The position's order among that day's population trades                               | The position is past the count for its trading day                               |
+| Cooldown after a loss (`cooldown_after_loss`) | Minutes, from 1 to 10080 | The minutes since your last losing population trade went flat, inside the past 7 days | A losing trade went flat fewer minutes before the open instant than the cooldown |
+
+Tradr compares unrounded values. A value exactly equal to the limit passes,
+except for the daily and weekly loss, where a loss equal to the amount breaches.
+The trading day and the trading week use the position's account timezone.
+
+## Outcomes
+
+Every rule gives one outcome per position:
+
+- **Pass** — the rule holds.
+- **Breach** — the rule does not hold.
+- **Not applicable** — the rule does not cover this position (a draft, the wrong
+  account, the wrong tag, or the wrong currency). It is not shown and does not
+  score.
+- **Not evaluable** — the rule covers the position but the position lacks a value
+  the rule needs. Tradr gives the reason and does not score the rule.
+
+A rule is not evaluable for one of these reasons:
+
+- **No stop loss** — for `max_risk_percent`, `max_risk_amount` and
+  `min_risk_reward`.
+- **No target price** or a **null planned reward-to-risk** — for
+  `min_risk_reward`.
+- **A balance at or below zero** at the open instant — for `max_risk_percent`.
+
+A pass or a breach records the measured value and the limit, so a breach reads as
+"measured against limit".
+
+## The compliance score
+
+Each enabled rule carries a weight:
+
+- **Critical** counts 3.
+- **Important** counts 2.
+- **Nice-to-have** counts 1.
+
+The [compliance score](/user-guide/reference/metrics-glossary/#compliance-score)
+is the weighted share of the rules that pass:
+
+```
+score = 100 × (summed weight of the rules that pass)
+            ÷ (summed weight of the rules that pass or breach)
+```
+
+Tradr rounds the result half up to a whole number from 0 to 100.
+
+Only a pass or a breach counts. A rule that is not applicable or not evaluable is
+left out of both sums. If no enabled rule passes or breaches, the position has no
+score. It is **unscored**.
+
+Tradr then classifies the position:
+
+- **Compliant** — no enabled rule breaches. The position has a score.
+- **Non-compliant** — at least one enabled rule breaches.
+- **Unscored** — no rule produced a pass or a breach, so there is no score.
+
+## Provisional and final
+
+- A **draft** has no score and shows no compliance card.
+- While a position is **open**, its score is **provisional**.
+- When a position is **closed**, its score is **final**.
+- When you **reopen** a closed position, its score becomes provisional again,
+  from the data as it now stands.
+
+## When a rule reads its facts
+
+Most rules read the position as it stands now. Six rules read facts as of the
+moment the position opened, so a trade you make later never changes them:
+
+- Max daily loss
+- Max weekly loss
+- Max total open exposure
+- Max trades per day
+- Cooldown after a loss
+- No trading on days
+
+## Scores are always current
+
+Tradr computes the score on every read and never stores it. So a rule you add,
+edit, enable, disable, re-weight or delete shows on the next read. A change to
+the position — its fills, plan prices, notes, tags, or its open, close or reopen
+— shows on the next read too.
+
+## Where your rules show
+
+- **Settings, on the Rules tab** — create, edit, enable, disable and delete your
+  rules.
+- **The position page** — a compliance card shows the score with its Provisional
+  or Final label, each breach with its measured value and limit, and each rule
+  that could not be evaluated with its reason. A position that no rule covers
+  says so and shows no score.
+- **The performance page** — a Compliance panel shows your
+  [compliance rate](/user-guide/reference/metrics-glossary/#compliance-rate) and
+  a compliant-versus-non-compliant P&L split, and the breakdown offers a
+  [By compliance](/user-guide/reference/metrics-glossary/#by-compliance)
+  grouping.
+
+Your rules are your data. A rule is deleted with the account or the tag it is
+scoped to, removed when you delete your account, and carried by your
+[account export](/user-guide/export-import/).

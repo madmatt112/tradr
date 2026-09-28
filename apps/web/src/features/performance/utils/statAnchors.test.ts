@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DOCS_BASE_URL } from '@/lib/docs';
 
-import { STAT_ANCHORS } from './statAnchors';
+import { COMPLIANCE_RATE_ANCHOR, STAT_ANCHORS } from './statAnchors';
 
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(THIS_DIR, '../../../../../..');
@@ -68,5 +68,16 @@ describe('STAT_ANCHORS', () => {
   it('does not hardcode the docs host (it lives in docs.ts only)', () => {
     const source = readFileSync(path.join(THIS_DIR, 'statAnchors.ts'), 'utf8');
     expect(source).not.toContain(DOCS_BASE_URL);
+  });
+});
+
+describe('COMPLIANCE_RATE_ANCHOR', () => {
+  it('is a heading id on the Methodology page', () => {
+    const ids = collectHeadingIds(readFileSync(GLOSSARY, 'utf8'));
+    const present = [...ids];
+    expect(
+      present,
+      `COMPLIANCE_RATE_ANCHOR points at #${COMPLIANCE_RATE_ANCHOR}, which the page does not have. Page ids: ${present.join(', ')}`,
+    ).toContain(COMPLIANCE_RATE_ANCHOR);
   });
 });

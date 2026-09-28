@@ -17,6 +17,7 @@ import type { PerformancePreset } from '../utils/derivePresetRange';
 import { BreakdownDimensionSelector } from './BreakdownDimensionSelector';
 import { BreakdownTable } from './BreakdownTable';
 import { ChartChunkStaleBanner } from './ChartChunkStaleBanner';
+import { CompliancePanel } from './CompliancePanel';
 import { CurrencySelector } from './CurrencySelector';
 import { DataQualityBanner, hasAnyDataQualityIssue } from './DataQualityBanner';
 import { DimensionBreakdownTable } from './DimensionBreakdownTable';
@@ -281,6 +282,8 @@ export function PerformancePage({ params, month, by }: PerformancePageProps) {
       </ChunkErrorBoundary>
 
       <StatsPanel stats={activeCurrency.stats} currency={currencyCode} />
+
+      <CompliancePanel params={params} currency={currencyCode} />
 
       <PnlCalendar
         params={params}
