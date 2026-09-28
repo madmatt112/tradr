@@ -236,6 +236,40 @@ range but went flat outside it. So the breakdown's total P&L, its position count
 and its rates can all read differently from the panel; they are answering
 different questions.
 
+### Compliance score
+
+A position's **compliance score** is the weighted share of your enabled trading
+rules that it passes. Each rule carries a weight — critical counts 3, important
+2, nice-to-have 1 — and the score is
+
+```
+100 × (summed weight of the rules that pass)
+    ÷ (summed weight of the rules that pass or breach)
+```
+
+rounded half up to a whole number from 0 to 100. Only a pass or a breach counts;
+a rule that does not apply, or that Tradr cannot evaluate, is left out of both
+sums. A position that no rule passes or breaches is **unscored** and has no
+score. See [Trading rules](/user-guide/trading-rules/) for each rule and its
+outcomes.
+
+### Compliance rate
+
+The **compliance rate** is the share of your scored positions that are compliant:
+the compliant positions divided by the compliant plus non-compliant positions,
+times 100. Unscored positions are left out. When that sum is zero, the rate reads
+as an em dash rather than a figure.
+
+### By compliance
+
+This breakdown groups the population into exactly three rows — **Compliant**,
+**Non-compliant** and **Unscored** — in that order, one set per currency. A
+position is compliant when no enabled rule breaches it, non-compliant when at
+least one does, and unscored when no rule produced a pass or a breach. Each
+position lands in exactly one row, so the rows' positions and P&L sum to the
+currency total. A reopened position sits in the row of its current, provisional
+status.
+
 ## Calendar
 
 Each day cell carries two figures from two different events.
