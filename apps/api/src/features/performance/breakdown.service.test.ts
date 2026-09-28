@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 import { sql } from 'drizzle-orm';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
 import {
   type BreakdownQueryInput,
@@ -9,9 +9,11 @@ import {
 } from '@tradr/shared';
 
 import { db } from '@/db';
-import { accounts, fills, positionTags, tags, users } from '@/db/schema';
+import { accounts, fills, positionTags, tags, tradingRules, users } from '@/db/schema';
 import { seedPositions } from '@/db/seed';
+import * as ruleEvaluator from '@/features/trading-rules/rule-evaluator';
 import { ClientAbortError, TimeoutError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 
 import { getBreakdown } from './breakdown.service';
 import { getPerformance } from './performance.service';
@@ -73,6 +75,49 @@ async function insertClosedPosition(
   `);
   return result[0]!.id;
 }
+
+// A reopened position: currently open, but the flat latch survives, so
+// classifyOne files it in the flat-in-window population at last_flat_at while
+// scoring reads its live open status.
+async function insertReopenedPosition(
+  userId: string,
+  accountId: string,
+  opts: { symbol: string; side?: 'long' | 'short'; lastFlatAt: string; netPnl: string },
+): Promise<string> {
+  const result = await db.execute<{ id: string }>(sql`
+    INSERT INTO positions
+      (user_id, account_id, symbol, side, asset_type, status, opened_at, closed_at, last_flat_at, last_flat_net_pnl)
+    VALUES
+      (${userId}, ${accountId}, ${opts.symbol}, ${opts.side ?? 'long'},
+       'stock', 'open',
+       ${opts.lastFlatAt}::timestamptz - interval '1 day', NULL,
+       ${opts.lastFlatAt}::timestamptz, ${opts.netPnl}::numeric)
+    RETURNING id
+  `);
+  return result[0]!.id;
+}
+
+async function insertRule(
+  userId: string,
+  definition: { type: string; params: Record<string, unknown> },
+  overrides: { enabled?: boolean; accountId?: string | null; tagId?: string | null } = {},
+) {
+  await db.insert(tradingRules).values({
+    userId,
+    type: definition.type,
+    params: definition.params,
+    weight: 'important',
+    enabled: overrides.enabled ?? true,
+    accountId: overrides.accountId ?? null,
+    tagId: overrides.tagId ?? null,
+    dedupKey: crypto.randomUUID(),
+  });
+}
+
+// A long-only direction rule: a long position passes (compliant), a short
+// breaches (non-compliant), and a position outside the rule's scope has no
+// applicable rule (unscored).
+const LONG_ONLY_RULE = { type: 'allowed_directions', params: { directions: ['long'] } };
 
 function breakdownInput(overrides: Partial<BreakdownQueryInput> = {}): BreakdownQueryInput {
   return {
@@ -439,6 +484,152 @@ describe('getBreakdown', () => {
     // The breakdown drops the boundary: flat-in-window is the only population.
     expect(bdUsd.total.totalPositions).toBe(1);
     expect(bdUsd.rows.some((r) => r.key === 'BND')).toBe(false);
+  });
+
+  // C7: by=compliance scores the flat-in-window population live and files each
+  // position under its compliant / non-compliant / unscored status.
+  describe('by=compliance', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('scores three compliance rows in order that sum to the currency total', async () => {
+      const user = await createUser();
+      const usdA = await createAccount(user.id, 'USD');
+      const usdB = await createAccount(user.id, 'USD');
+      // The rule is scoped to account A: a long trade there is compliant, a short
+      // is non-compliant, and the account-B trade has no applicable rule.
+      await insertRule(user.id, LONG_ONLY_RULE, { accountId: usdA.id });
+
+      await insertClosedPosition(user.id, usdA.id, {
+        symbol: 'AAPL',
+        side: 'long',
+        closedAt: '2026-01-05T14:00:00.000Z',
+        netPnl: '100',
+      });
+      await insertClosedPosition(user.id, usdA.id, {
+        symbol: 'MSFT',
+        side: 'short',
+        closedAt: '2026-01-06T14:00:00.000Z',
+        netPnl: '-40',
+      });
+      await insertClosedPosition(user.id, usdB.id, {
+        symbol: 'NVDA',
+        side: 'long',
+        closedAt: '2026-01-07T14:00:00.000Z',
+        netPnl: '20',
+      });
+
+      const res = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'compliance' }),
+        freshController().signal,
+        Date.now(),
+      );
+      expect(res.by).toBe('compliance');
+      expect(res.multiValued).toBe(false);
+      const cur = res.currencies.find((c) => c.code === 'USD')!;
+      // Three rows in the fixed order, whatever the P&L.
+      expect(cur.rows.map((r) => r.key)).toEqual(['compliant', 'non_compliant', 'unscored']);
+      expect(cur.rows.map((r) => r.stats.totalPositions)).toEqual([1, 1, 1]);
+      expect(sumPositions(cur.rows)).toBe(cur.total.totalPositions);
+      expect(cur.total.totalPositions).toBe(3);
+      // D11: compliant / (compliant + non-compliant) = 1 / 2 = 50.
+      expect(cur.complianceRate).toBe(50);
+    });
+
+    it('files a reopened position by its live provisional status', async () => {
+      const user = await createUser();
+      const usd = await createAccount(user.id, 'USD');
+      await insertRule(user.id, LONG_ONLY_RULE, { accountId: usd.id });
+
+      // Reopened short: currently open (provisional), latched flat in the window.
+      // Its live direction score is a breach, so it files under non-compliant —
+      // it was scored despite no longer being closed, not left unscored.
+      await insertReopenedPosition(user.id, usd.id, {
+        symbol: 'TSLA',
+        side: 'short',
+        lastFlatAt: '2026-01-10T14:00:00.000Z',
+        netPnl: '-25',
+      });
+
+      const res = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'compliance' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const cur = res.currencies.find((c) => c.code === 'USD')!;
+      expect(cur.total.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === 'non_compliant')!.stats.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === 'unscored')!.stats.totalPositions).toBe(0);
+    });
+
+    it('leaves every position unscored and logs once when scoring throws', async () => {
+      const user = await createUser();
+      const usd = await createAccount(user.id, 'USD');
+      await insertRule(user.id, LONG_ONLY_RULE, { accountId: usd.id });
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'AAPL',
+        side: 'long',
+        closedAt: '2026-01-05T14:00:00.000Z',
+        netPnl: '100',
+      });
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'MSFT',
+        side: 'short',
+        closedAt: '2026-01-06T14:00:00.000Z',
+        netPnl: '-40',
+      });
+
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+      vi.spyOn(ruleEvaluator, 'scorePosition').mockImplementation(() => {
+        throw new Error('forced scoring failure');
+      });
+
+      const res = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'compliance' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const cur = res.currencies.find((c) => c.code === 'USD')!;
+      // The read still succeeds; every position falls through to unscored.
+      expect(cur.total.totalPositions).toBe(2);
+      expect(cur.rows.find((r) => r.key === 'compliant')!.stats.totalPositions).toBe(0);
+      expect(cur.rows.find((r) => r.key === 'non_compliant')!.stats.totalPositions).toBe(0);
+      expect(cur.rows.find((r) => r.key === 'unscored')!.stats.totalPositions).toBe(2);
+      expect(cur.complianceRate).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith(
+        'trading_rules_breakdown_scoring_failed',
+        expect.objectContaining({ userId: user.id, populationSize: 2 }),
+      );
+    });
+
+    it('omits complianceRate on the other dimensions', async () => {
+      const user = await createUser();
+      const usd = await createAccount(user.id, 'USD');
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'AAPL',
+        closedAt: '2026-01-05T14:00:00.000Z',
+        netPnl: '100',
+      });
+
+      for (const by of ['symbol', 'weekday', 'hour', 'tag'] as const) {
+        const res = await getBreakdown(
+          db,
+          user.id,
+          breakdownInput({ by }),
+          freshController().signal,
+          Date.now(),
+        );
+        const cur = res.currencies.find((c) => c.code === 'USD')!;
+        expect(cur.complianceRate).toBeUndefined();
+      }
+    });
   });
 
   it('propagates a client abort as ClientAbortError', async () => {
