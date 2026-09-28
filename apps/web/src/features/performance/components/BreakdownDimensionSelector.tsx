@@ -10,6 +10,7 @@ const DIMENSION_LABELS: Record<BreakdownDimension, string> = {
   weekday: 'Weekday',
   hour: 'Hour',
   tag: 'Tag',
+  compliance: 'Compliance',
 };
 
 export interface BreakdownDimensionSelectorProps {
@@ -18,8 +19,8 @@ export interface BreakdownDimensionSelectorProps {
 }
 
 /**
- * BreakdownDimensionSelector — four tabs (Symbol, Weekday, Hour, Tag) that set
- * the performance route's `by=` search param (R6.1, R6.7). Same flat-tablist
+ * BreakdownDimensionSelector — five tabs (Symbol, Weekday, Hour, Tag, Compliance)
+ * that set the performance route's `by=` search param (R6.1, R6.7). Same flat-tablist
  * shape as `TimeframeSelector` (`TimeframeSelector.tsx:97-128`): a
  * `<div role="tablist">` of `<button role="tab">`, keyboard-operable natively,
  * each carrying `cursor-pointer` and the focus ring.

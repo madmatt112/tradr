@@ -14,6 +14,9 @@ export interface BreakdownPosition extends ClassifiedPosition {
   symbol: string;
   assetType: 'stock' | 'option';
   tags: Tag[];
+  // C7: the trading-rule compliance status at request time. Absent means the
+  // position is grouped as `unscored`.
+  compliance?: 'compliant' | 'non_compliant' | 'unscored';
 }
 
 // D3: an option keys on its parsed underlying (falling back to the stored symbol
@@ -116,6 +119,21 @@ export function groupPositions(
     return groups;
   }
 
+  if (by === 'compliance') {
+    // C7: exactly three pre-created groups in a fixed order, keyed by the status
+    // value so the client keys on `key`. A position with no status is `unscored`.
+    const groups: BreakdownGroup[] = [
+      { key: 'compliant', label: 'Compliant', tag: null, positions: [] },
+      { key: 'non_compliant', label: 'Non-compliant', tag: null, positions: [] },
+      { key: 'unscored', label: 'Unscored', tag: null, positions: [] },
+    ];
+    const byStatus = new Map(groups.map((g) => [g.key, g]));
+    for (const p of positions) {
+      byStatus.get(p.compliance ?? 'unscored')!.positions.push(p);
+    }
+    return groups;
+  }
+
   // `tag`: one group per distinct tag id carried by at least one position, plus an
   // always-present `untagged` group holding every position with no tag (R5.1–R5.3).
   const tagGroups = new Map<string, BreakdownGroup>();
@@ -143,10 +161,10 @@ export function groupPositions(
 }
 
 // R3.7: `symbol` and `tag` rows by summed net P&L descending, ties by `key` ascending
-// in code-unit order, the `untagged` group last; `weekday` and `hour` keep the
-// generated order.
+// in code-unit order, the `untagged` group last; `weekday`, `hour` and `compliance`
+// keep the generated order.
 export function orderGroups(by: BreakdownDimension, groups: BreakdownGroup[]): BreakdownGroup[] {
-  if (by === 'weekday' || by === 'hour') return groups;
+  if (by === 'weekday' || by === 'hour' || by === 'compliance') return groups;
 
   const sums = new Map<BreakdownGroup, ReturnType<typeof decimalSum>>();
   for (const g of groups) sums.set(g, decimalSum(g.positions.map((p) => p.netPnl)));

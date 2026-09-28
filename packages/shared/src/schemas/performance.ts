@@ -25,9 +25,9 @@ export type Granularity = z.infer<typeof GranularitySchema>;
 export const CLASSIFICATIONS = ['winning', 'losing', 'breakeven'] as const;
 export const ClassificationSchema = z.enum(CLASSIFICATIONS);
 
-// The breakdown dimensions a caller may group by. The extension point §41 adds
-// `compliance` to.
-export const BREAKDOWN_DIMENSIONS = ['symbol', 'weekday', 'hour', 'tag'] as const;
+// The breakdown dimensions a caller may group by. `compliance` (§41) splits the
+// population by its trading-rule compliance status.
+export const BREAKDOWN_DIMENSIONS = ['symbol', 'weekday', 'hour', 'tag', 'compliance'] as const;
 export const BreakdownDimensionSchema = z.enum(BREAKDOWN_DIMENSIONS);
 export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
 
@@ -392,6 +392,9 @@ export const BreakdownCurrencySchema = z.object({
   code: z.string(),
   total: PerformanceStatsSchema,
   rows: z.array(BreakdownRowSchema),
+  // Set only for `by=compliance`: compliant over compliant plus non-compliant,
+  // times 100; null when that sum is zero (D11).
+  complianceRate: z.number().nullable().optional(),
 });
 
 export const BreakdownResponseSchema = z.object({

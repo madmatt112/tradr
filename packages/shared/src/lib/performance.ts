@@ -137,6 +137,14 @@ function percent(numerator: number, denominator: number): number {
   );
 }
 
+// D11: the compliance rate is compliant positions over compliant plus
+// non-compliant, times 100, rounded like the other rates; null when that sum is
+// zero (Requirement 8.1).
+export function computeComplianceRate(compliant: number, nonCompliant: number): number | null {
+  const denominator = compliant + nonCompliant;
+  return denominator === 0 ? null : percent(compliant, denominator);
+}
+
 // REQ-4.* aggregation. All monetary outputs are decimal strings; rate/factor
 // outputs are JS numbers rounded to the precision the schema validates. Null
 // semantics follow REQ-4.3..4.9 exactly so the frontend can distinguish the

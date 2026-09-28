@@ -8,6 +8,7 @@ import {
   buildCumulativeSeries,
   classifyPosition,
   computeBucketCount,
+  computeComplianceRate,
   computePositionSetStatistics,
   generateBucketSeries,
   type ClassifiedPosition,
@@ -628,5 +629,17 @@ describe('buildCumulativeSeries', () => {
       },
     );
     fc.assert(prop, { numRuns: 1000, seed: 0x4e91b8 });
+  });
+});
+
+describe('computeComplianceRate', () => {
+  it('is compliant over compliant plus non-compliant, times 100, rounded to one decimal', () => {
+    expect(computeComplianceRate(2, 1)).toBe(66.7); // 2/3 = 66.66… rounds half-up
+    expect(computeComplianceRate(1, 0)).toBe(100);
+    expect(computeComplianceRate(0, 3)).toBe(0);
+  });
+
+  it('returns null when the compliant plus non-compliant sum is zero', () => {
+    expect(computeComplianceRate(0, 0)).toBeNull();
   });
 });
