@@ -102,6 +102,9 @@ export function useDeleteTag() {
       // A delete removes chips already rendered on the list and detail.
       queryClient.invalidateQueries({ queryKey: ['tags'] });
       queryClient.invalidateQueries({ queryKey: ['positions'] });
+      // The tag cascade-deletes any rule scoped to it (trading-rules C9), so a
+      // rule list already on screen and any position score can change.
+      queryClient.invalidateQueries({ queryKey: ['trading-rules'] });
       toast.success('Tag deleted');
     },
     onError: (err: unknown) => {
