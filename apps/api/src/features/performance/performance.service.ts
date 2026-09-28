@@ -205,7 +205,7 @@ interface CurrencyRealization {
  * `grossPnl` is still surfaced for the fee-attribution breakdown; it is the
  * pre-fee figure, and `fees` is the sum actually recorded on the fills.
  */
-function classifyOne(position: SnapshotPosition): BreakdownPosition | null {
+export function classifyOne(position: SnapshotPosition): BreakdownPosition | null {
   // Bucket A (design: "requires flat"). Keyed on the LATCHED flat snapshot, not
   // on live `closedAt`:
   //
