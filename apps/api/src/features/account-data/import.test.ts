@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { asc, eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -641,6 +643,27 @@ describe('confirmImport with object storage', () => {
     const posRows = await db.select().from(positions).where(eq(positions.userId, userId));
     expect(acctRows).toHaveLength(0);
     expect(posRows).toHaveLength(0);
+  });
+
+  // A real version-1 export (fixtures/archive-v1.zip, written by the unchanged
+  // code before the version bump) imports whole into an empty user (Req 9.3, 9.4).
+  it('imports the version-1 fixture, restoring its accounts and positions', async () => {
+    vi.spyOn(objectStorage, 'getObjectStorage').mockReturnValue(null);
+    const userId = await seedUser();
+    const bytes = readFileSync(
+      fileURLToPath(new URL('./fixtures/archive-v1.zip', import.meta.url)),
+    );
+
+    const result = await confirmImport(userId, bytesToStream(bytes), digestOf(bytes));
+    expect(result.counts.accounts).toBe(2);
+    expect(result.counts.positions).toBe(1);
+
+    const storedAccounts = await db.select().from(accounts).where(eq(accounts.userId, userId));
+    expect(storedAccounts.map((a) => a.name).sort()).toEqual(['Demo', 'Main']);
+
+    const storedPositions = await db.select().from(positions).where(eq(positions.userId, userId));
+    expect(storedPositions).toHaveLength(1);
+    expect(storedPositions[0].symbol).toBe('AAPL');
   });
 });
 

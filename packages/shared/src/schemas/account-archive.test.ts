@@ -280,7 +280,7 @@ const rows = {
 
 describe('account-archive contract constants', () => {
   it('freezes the version, entry order and caps', () => {
-    expect(ARCHIVE_VERSION).toBe(1);
+    expect(ARCHIVE_VERSION).toBe(2);
     expect(ARCHIVE_ENTRY_ORDER[0]).toBe('manifest.json');
     expect(ARCHIVE_ENTRY_ORDER).toContain('dashboard-layout.json');
     expect(Object.keys(ARCHIVE_CAPS)).toHaveLength(10);

@@ -10,13 +10,15 @@ import { resolveTimezone } from './performance';
 // codes, shared by export, import, the web and every test (Req 3.6). This file is
 // SHAPE ONLY: it carries no API, DB or web code, and edits no existing schema.
 //
-// Version discipline (Req 3.4): every schema here is frozen at archive version 1.
-// Any change to a payload shape increases ARCHIVE_VERSION; readers refuse a newer
-// version by number, not by a parse failure.
+// Version discipline (Req 3.4, D4): ARCHIVE_VERSION is the version this build
+// writes. A payload-shape change increments it; the manifest still accepts every
+// earlier version whose payload this build reads (1 and 2), so a version-1 export
+// imports unchanged. The reader refuses a version above ARCHIVE_VERSION by number,
+// not by a parse failure.
 
 // The archive schema version. The manifest's `format` and `archiveVersion` field
 // are frozen across versions; the value increments when a payload shape changes.
-export const ARCHIVE_VERSION = 1;
+export const ARCHIVE_VERSION = 2;
 
 // The fixed entry names, in the order they appear in the archive (Data Models).
 // Image entries (matching ARCHIVE_IMAGE_ENTRY_RE) come first, before
@@ -300,7 +302,8 @@ export type ArchiveDegradation = z.infer<typeof ArchiveDegradationSchema>;
 export const ArchiveManifestSchema = z
   .object({
     format: z.literal('tradr-account-archive'),
-    archiveVersion: z.literal(ARCHIVE_VERSION),
+    // Accept the frozen version-1 payload and this build's version (D4).
+    archiveVersion: z.union([z.literal(1), z.literal(2)]),
     // APP_VERSION at export, or 'unknown'.
     sourceAppVersion: z.string(),
     exportedAt: timestamp,
