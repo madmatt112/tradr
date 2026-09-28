@@ -5,6 +5,7 @@ import { parseOccSymbol } from '../options';
 import { ClassificationSchema } from './performance';
 import { PositionImageSchema } from './position-image';
 import { TagSchema } from './tag';
+import { PositionComplianceSchema } from './trading-rule';
 
 const sideEnum = z.enum(['long', 'short']);
 const assetTypeEnum = z.enum(['stock', 'option']);
@@ -256,6 +257,11 @@ export const PositionDetailSchema = z.object({
   // carry one; null for draft/open rows. Optional so callers that do not compute
   // it can omit the key.
   classification: ClassificationSchema.nullable().optional(),
+  // Live rule compliance for this position (design C6). Present only when the
+  // user holds at least one rule, so the web tells "no rules" from "rules exist"
+  // (Requirement 6.1); absent otherwise. Optional so the shape stays
+  // backward-compatible and callers that do not score can omit the key.
+  compliance: PositionComplianceSchema.optional(),
 });
 
 export type CreatePositionInput = z.infer<typeof CreatePositionSchema>;
