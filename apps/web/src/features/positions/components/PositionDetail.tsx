@@ -22,6 +22,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { TagChipList } from '@/features/tags/components/TagChip';
 import { TagPicker } from '@/features/tags/components/TagPicker';
+import { ComplianceCard } from '@/features/trading-rules/components/ComplianceCard';
 import { formatCurrency } from '@/lib/format';
 
 import {
@@ -361,6 +362,12 @@ export function PositionDetailView({ positionId }: Props) {
           </CardContent>
         </Card>
       )}
+
+      {/* Compliance card — the score, its finality and each breach and
+          not-evaluable rule (design C10; Requirement 6.2-6.4). Shown after the
+          Notes card and before the screenshots for a non-draft position whose
+          `compliance` field is present (absent when the user holds no rules). */}
+      {!isDraft && position.compliance && <ComplianceCard compliance={position.compliance} />}
 
       {/* Screenshots — shown on every status, between Notes and Fills. */}
       <PositionScreenshots
