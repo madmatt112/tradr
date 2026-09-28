@@ -611,6 +611,14 @@ export async function mockAppShell(page: Page): Promise<void> {
   // for. Anchored on the collection so it does not swallow the `/tags/:id`
   // mutation routes, which no spec fires on load.
   await page.route(/\/api\/tags(\?.*)?$/, (route) => route.fulfill(json([])));
+  // The performance page's CompliancePanel reads the rule list to tell "no rules"
+  // from "all unscored", so `/api/trading-rules` is shell surface on every
+  // performance view. Unmocked it 401s against the synthetic session and trips
+  // the /login redirect described above. Empty is the neutral answer: no rules,
+  // so the panel paints its "set up rules" prompt and no spec sees a compliance
+  // surface it was not written for. Anchored on the collection so it does not
+  // swallow the `/trading-rules/:id` mutation routes, which no spec fires on load.
+  await page.route(/\/api\/trading-rules(\?.*)?$/, (route) => route.fulfill(json([])));
   await page.route('**/api/users/me/display-currency', (route) =>
     route.fulfill(json({ currency: 'USD' })),
   );
