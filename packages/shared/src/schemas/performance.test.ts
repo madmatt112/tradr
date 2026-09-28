@@ -579,8 +579,8 @@ describe('BreakdownQuerySchema', () => {
     }
   });
 
-  it('rejects a fifth dimension', () => {
-    const result = BreakdownQuerySchema.safeParse({ ...validBase, by: 'compliance' });
+  it('rejects a dimension outside the enum', () => {
+    const result = BreakdownQuerySchema.safeParse({ ...validBase, by: 'not-a-dimension' });
     expect(result.success).toBe(false);
   });
 
