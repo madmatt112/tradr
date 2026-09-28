@@ -110,13 +110,23 @@ vi.mock('../hooks/usePerformance', async () => {
   };
 });
 
-// The populated path mounts `DimensionBreakdownTable`, which calls `useBreakdown`
-// (React Query → `api.get`). This file renders with no `QueryClientProvider`, so
-// the hook is mocked with a FACTORY that returns a query result (R4-1); a bare
-// `vi.mock(path)` would automock it to `undefined` and throw on destructuring.
+// The populated path mounts `DimensionBreakdownTable` AND the new `CompliancePanel`,
+// both of which call `useBreakdown` (React Query → `api.get`). This file renders
+// with no `QueryClientProvider`, so the hook is mocked with a FACTORY that returns
+// a query result (R4-1); a bare `vi.mock(path)` would automock it to `undefined`
+// and throw on destructuring. The factory forwards its params so the mock can hand
+// the panel a compliance-shaped result when it asks for `by: 'compliance'`.
 const useBreakdownMock = vi.fn();
 vi.mock('../hooks/useBreakdown', () => ({
-  useBreakdown: () => useBreakdownMock(),
+  useBreakdown: (params: unknown) => useBreakdownMock(params),
+}));
+
+// `CompliancePanel` also reads rule existence from `useTradingRules` (React Query
+// → `api.get`). Mock it (Decision D10) so the provider-less harness does not throw;
+// a non-empty list keeps the panel on its figures path rather than the no-rules link.
+const useTradingRulesMock = vi.fn();
+vi.mock('@/features/trading-rules/hooks/useTradingRules', () => ({
+  useTradingRules: () => useTradingRulesMock(),
 }));
 
 import { __resetInvalidTimezoneState, recordRejectedTimezone } from '@/lib/invalidTimezone';
@@ -224,6 +234,49 @@ function buildBreakdownResult() {
   };
 }
 
+// A successful `by=compliance` breakdown — the three fixed groups with a compliance
+// rate — so the populated path's `CompliancePanel` renders its figures. The mock
+// returns it as `any`, so no strict typing here.
+function buildComplianceBreakdownResult() {
+  const stats = {
+    totalPositions: 4,
+    totalNetPnl: '125.50',
+    winRate: 75.0,
+    breakevenRate: 0.0,
+    avgWin: '50.00',
+    avgLoss: '-25.00',
+    profitFactor: 6.0,
+    largestWin: '60.00',
+    largestLoss: '-25.00',
+    expectancy: '31.38',
+    hasWins: true,
+    hasLosses: true,
+  };
+  return {
+    status: 'success' as const,
+    data: {
+      by: 'compliance',
+      multiValued: false,
+      resolvedTimezone: 'UTC',
+      resolvedWeekStartDay: 0,
+      dataQuality: { timeframeExcluded: { total: 0, unsupported: 0, mismatch: 0 } },
+      currencies: [
+        {
+          code: 'USD',
+          total: stats,
+          complianceRate: 66.7,
+          rows: [
+            { key: 'compliant', label: 'Compliant', tag: null, stats },
+            { key: 'non_compliant', label: 'Non-compliant', tag: null, stats },
+            { key: 'unscored', label: 'Unscored', tag: null, stats },
+          ],
+        },
+      ],
+    },
+    refetch: vi.fn(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -249,7 +302,17 @@ beforeEach(() => {
   navigateMock.mockReset();
   useQueryMock.mockReset();
   useBreakdownMock.mockReset();
-  useBreakdownMock.mockReturnValue(buildBreakdownResult());
+  // Hand the panel a compliance-shaped result when it asks for `by: 'compliance'`,
+  // and the symbol breakdown to `DimensionBreakdownTable` otherwise.
+  useBreakdownMock.mockImplementation((params: unknown) => {
+    const by =
+      params && typeof params === 'object' && 'by' in params
+        ? (params as { by?: string }).by
+        : undefined;
+    return by === 'compliance' ? buildComplianceBreakdownResult() : buildBreakdownResult();
+  });
+  useTradingRulesMock.mockReset();
+  useTradingRulesMock.mockReturnValue({ data: [{ id: 'rule-1' }] });
   vi.mocked(captureClientEvent).mockClear();
   sessionStorage.clear();
   __resetInvalidTimezoneState();
