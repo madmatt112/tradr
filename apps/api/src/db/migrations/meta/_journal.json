@@ -260,6 +260,13 @@
       "when": 1790296202136,
       "tag": "0036_account_deletion_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790607645644,
+      "tag": "0037_trading_rules",
+      "breakpoints": true
     }
   ]
 }
