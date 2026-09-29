@@ -49,6 +49,13 @@ export interface NormalizeOptions {
   signedQuantity?: boolean;
   /** Preset-only: the `fees` cell's sign marks a cost; the magnitude is stored. */
   signedFees?: boolean;
+  /** Preset-only: the `price` cell's sign marks direction; the magnitude is stored. */
+  signedPrice?: boolean;
+  /**
+   * Preset-only: an option `price` cell is a per-contract premium (premium ×
+   * 100); divide by 100 to a per-share magnitude before quantization (C6).
+   */
+  optionPriceIsContractValue?: boolean;
 }
 
 /**
@@ -130,6 +137,8 @@ export function normalizeRow(
   let quantityDirection: 'buy' | 'sell' | undefined;
 
   for (const [field, raw] of Object.entries(mappedRow.values)) {
+    // `fees` is summed with any extra fee parts after the loop (C6, REQ-5.4).
+    if (field === 'fees') continue;
     if (QUANTIZED_FIELDS.includes(field)) {
       const result = normalizeNumber(raw, opts.numberFormat);
       if ('error' in result) {
@@ -148,8 +157,19 @@ export function normalizeRow(
       if (opts.signedQuantity && field === 'quantity') {
         quantityDirection = value.isNegative() ? 'sell' : 'buy';
         value = value.abs();
-      } else if (opts.signedFees && field === 'fees') {
+      } else if (opts.signedPrice && field === 'price') {
         value = value.abs();
+      }
+      // An option `price` cell that is a per-contract premium becomes a
+      // per-share magnitude by dividing by 100, before the quantize-then-bound
+      // step (C6, REQ-6.4). Gated on the row's asset type so a stock price is
+      // never divided; a non-100 multiplier is refused later in csv-contract.
+      if (
+        opts.optionPriceIsContractValue &&
+        field === 'price' &&
+        mappedRow.values.assetType === 'option'
+      ) {
+        value = value.dividedBy(100);
       }
       // Quantize to the column scale BEFORE the magnitude bound (order matters:
       // quantization can carry into a new integer digit).
@@ -215,6 +235,54 @@ export function normalizeRow(
     } else {
       // Unknown field: pass through unchanged rather than drop it.
       out[field] = raw;
+    }
+  }
+
+  // Fees (C6, REQ-5.4): the fill fee is the `fees` cell plus every extra fee
+  // part. Each contributor passes through `normalizeNumber` and, under
+  // `signedFees`, contributes its magnitude. The sum is quantized once, then
+  // bounded. A contributor that fails to parse is a located error on `fees`;
+  // with no `fees` cell but at least one part, the parts alone set `fees`.
+  const feeCell = mappedRow.values.fees;
+  const feeParts = mappedRow.feeParts ?? [];
+  if (feeCell !== undefined || feeParts.length > 0) {
+    const contributors = feeCell !== undefined ? [feeCell, ...feeParts] : feeParts;
+    let sum = new Decimal(0);
+    let feeUnparseable = false;
+    for (const raw of contributors) {
+      const result = normalizeNumber(raw, opts.numberFormat);
+      if ('error' in result) {
+        errors.push({
+          rowNumber: sourceRow,
+          tradrField: 'fees',
+          code: result.error,
+          message: result.message,
+        });
+        feeUnparseable = true;
+        continue;
+      }
+      sum = sum.plus(opts.signedFees ? result.value.abs() : result.value);
+    }
+    if (!feeUnparseable) {
+      const quantized = sum.toDecimalPlaces(COLUMN_SCALE, Decimal.ROUND_HALF_UP);
+      if (!quantized.equals(sum)) {
+        warnings.push({
+          rowNumber: sourceRow,
+          csvColumn: 'fees',
+          kind: 'rounded',
+          message: `Value "${feeCell ?? sum.toFixed()}" for field "fees" was rounded to 8 decimal places.`,
+        });
+      }
+      if (quantized.abs().greaterThanOrEqualTo(MAGNITUDE_BOUND)) {
+        errors.push({
+          rowNumber: sourceRow,
+          tradrField: 'fees',
+          code: 'NUMBER_MAGNITUDE_TOO_LARGE',
+          message: `The summed fee for field "fees" exceeds the maximum representable magnitude.`,
+        });
+      } else {
+        out.fees = quantized.toFixed();
+      }
     }
   }
 
