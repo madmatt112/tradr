@@ -117,6 +117,42 @@ describe('csv-import-presets', () => {
     }
   });
 
+  // --- Task 1 contract (broker-csv-presets, Requirement 2.7) ---
+  // Pre-condition: MappingSchema is the shared Zod contract for a csv-import
+  // mapping; design C1 / Data Models add five optional fields to it
+  // (rowFilter, extraFeeColumns, positionEffect, signedPrice,
+  // optionPriceIsContractValue) with the exact shapes shown in "MappingSchema
+  // additions (all optional)".
+  // Call (the Test: line's seam): `MappingSchema.parse(mapping)`.
+  // Observable result / source of expected value:
+  //   - a mapping literal carrying all five fields round-trips through parse
+  //     unchanged (source: the design's Data Models shapes — the fields are
+  //     additive, so nothing about them is stripped or coerced);
+  //   - a `rowFilter` whose `values` array is empty fails parse (source:
+  //     design's `values: z.array(z.string().min(1)).min(1)` — an empty array
+  //     violates the `.min(1)` on the array itself).
+  it('MappingSchema accepts a mapping carrying all five new optional fields', () => {
+    const mapping = {
+      rowShape: 'execution',
+      columns: { symbol: 'Symbol' },
+      rowFilter: { column: 'Type', values: ['Trade'] },
+      extraFeeColumns: ['Commissions', 'Fees'],
+      positionEffect: { BUY_TO_OPEN: 'entry', SELL_TO_CLOSE: 'exit' },
+      signedPrice: true,
+      optionPriceIsContractValue: true,
+    };
+    expect(MappingSchema.parse(mapping)).toEqual(mapping);
+  });
+
+  it('MappingSchema rejects a rowFilter with an empty values list', () => {
+    const mapping = {
+      rowShape: 'execution',
+      columns: { symbol: 'Symbol' },
+      rowFilter: { column: 'Type', values: [] },
+    };
+    expect(() => MappingSchema.parse(mapping)).toThrow();
+  });
+
   it('generic-manual has no pre-filled mapping', () => {
     const manual = CSV_IMPORT_PRESETS.find((p) => p.id === 'generic-manual')!;
     expect(manual.mapping.columns).toEqual({});
