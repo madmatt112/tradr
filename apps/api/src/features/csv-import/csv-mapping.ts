@@ -60,6 +60,12 @@ export interface MappedRow {
   sourceRow: number;
   /** Tradr field -> value. */
   values: Record<string, string>;
+  /**
+   * Non-empty trimmed cells from the mapping's `extraFeeColumns`, in column
+   * order. Absent when no extra fee column resolved to a non-empty cell; the
+   * normalizer (Component 3) sums these into the fill fee.
+   */
+  feeParts?: string[];
 }
 
 /** Result of {@link applyMapping}: mapped rows plus any located cell/row errors. */
@@ -234,6 +240,27 @@ export function validateMappingShape(headers: string[], mapping: Mapping): Mappi
     }
   }
 
+  // 5. Preset-only columns read outside `columns` must exist too (REQ-3.5,
+  // REQ-4.1): every extra fee column, and the row filter's column.
+  for (const column of mapping.extraFeeColumns ?? []) {
+    if (!headerSet.has(column)) {
+      errors.push({
+        tradrField: 'fees',
+        csvColumn: column,
+        code: 'MAPPING_COLUMN_ABSENT',
+        message: `Field "fees" is mapped to column "${column}", which is not in the file.`,
+      });
+    }
+  }
+  if (mapping.rowFilter && !headerSet.has(mapping.rowFilter.column)) {
+    errors.push({
+      tradrField: 'rowFilter',
+      csvColumn: mapping.rowFilter.column,
+      code: 'MAPPING_COLUMN_ABSENT',
+      message: `Field "rowFilter" is mapped to column "${mapping.rowFilter.column}", which is not in the file.`,
+    });
+  }
+
   return errors;
 }
 
@@ -273,11 +300,34 @@ export function applyMapping(parsed: ParsedCsv, mapping: Mapping): ApplyMappingR
   const descriptorResolved =
     mapping.contractForm === 'descriptor' && fieldColumns.some((fc) => fc.field === 'descriptor');
 
+  // Resolve the extra fee columns once; each non-empty cell becomes a fee part
+  // for the normalizer to sum (REQ-5.4). Columns absent from the file are
+  // caught by validateMappingShape before we get here.
+  const feeColumnIndices: number[] = [];
+  for (const column of mapping.extraFeeColumns ?? []) {
+    const index = headerIndex.get(column);
+    if (index !== undefined) feeColumnIndices.push(index);
+  }
+
+  // Position-effect lookup: keys trimmed and upper-cased like the transform
+  // maps (REQ-5.5), so a lower-cased declaration still matches the raw cell.
+  const positionEffect = mapping.positionEffect;
+  const positionEffectMap: Record<string, 'entry' | 'exit'> = {};
+  if (positionEffect) {
+    for (const [k, v] of Object.entries(positionEffect)) {
+      positionEffectMap[k.trim().toUpperCase()] = v;
+    }
+  }
+  const actionColumnIndex = mapping.columns.action
+    ? headerIndex.get(mapping.columns.action)
+    : undefined;
+
   const required = REQUIRED_FIELDS[mapping.rowShape];
 
   parsed.rows.forEach((rawRow, i) => {
-    // 1-based source row number; the header counts as row 1 (REQ-5.5).
-    const sourceRow = i + 2;
+    // 1-based file row number: the row filter supplies it, else the header
+    // counts as row 1 (REQ-5.5).
+    const sourceRow = parsed.rowNumbers?.[i] ?? i + 2;
     const values: Record<string, string> = {};
 
     for (const { field, index } of fieldColumns) {
@@ -309,6 +359,21 @@ export function applyMapping(parsed: ParsedCsv, mapping: Mapping): ApplyMappingR
       values.assetType = values.descriptor !== undefined ? 'option' : 'stock';
     }
 
+    // Collect every non-empty extra-fee cell for the normalizer (REQ-5.4).
+    const feeParts: string[] = [];
+    for (const index of feeColumnIndices) {
+      const cell = (rawRow[index] ?? '').trim();
+      if (cell !== '') feeParts.push(cell);
+    }
+
+    // Position effect: the raw action cell (trimmed, upper-cased) maps to an
+    // explicit fill type beside the canonicalized action (REQ-5.5).
+    if (positionEffect && actionColumnIndex !== undefined) {
+      const rawAction = (rawRow[actionColumnIndex] ?? '').trim().toUpperCase();
+      const effect = positionEffectMap[rawAction];
+      if (effect !== undefined) values.type = effect;
+    }
+
     // Non-conforming row: a required field absent after mapping/transform is a
     // located row error, never coerced into the other shape (REQ-2.7).
     const missing = required.filter((f) => values[f] === undefined);
@@ -335,7 +400,7 @@ export function applyMapping(parsed: ParsedCsv, mapping: Mapping): ApplyMappingR
       }
     }
 
-    rows.push({ sourceRow, values });
+    rows.push(feeParts.length > 0 ? { sourceRow, values, feeParts } : { sourceRow, values });
   });
 
   return { rows, errors };
