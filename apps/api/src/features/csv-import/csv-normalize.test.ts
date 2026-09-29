@@ -16,6 +16,14 @@ function row(values: Record<string, string>, sourceRow = 2): MappedRow {
   return { sourceRow, values };
 }
 
+function rowWithFeeParts(
+  values: Record<string, string>,
+  feeParts: string[],
+  sourceRow = 2,
+): MappedRow {
+  return { sourceRow, values, feeParts };
+}
+
 /** Narrow a result to success, failing the test if it is a located-error array. */
 function ok(result: NormalizeSuccess | unknown[]): NormalizeSuccess {
   if (Array.isArray(result)) {
@@ -355,5 +363,75 @@ describe('normalizeRow — passthrough + multi-error collection', () => {
     });
     expect(Array.isArray(result)).toBe(true);
     expect((result as { code: string }[])[0].code).toBe('INVALID_TIMEZONE');
+  });
+});
+
+describe('normalizeRow — fee parts sum and price rules (design C6, REQ-5.4, REQ-5.6, REQ-6.4)', () => {
+  it('signedFees: the fees cell plus a signed feePart sum to their combined magnitude (-1 and -0.14 -> 1.14)', () => {
+    // REQ-5.4: every fee column is summed. Each of the fees cell and the
+    // feePart is put through the same signedFees magnitude rule as
+    // csv-normalize.ts:144-153 already applies to the fees cell alone, so
+    // -1 and -0.14 both contribute their magnitude: 1 + 0.14 = 1.14.
+    const r = ok(
+      normalizeRow(rowWithFeeParts({ fees: '-1' }, ['-0.14']), { ...US, signedFees: true }),
+    );
+    expect(r.row.values.fees).toBe('1.14');
+  });
+
+  it('parts without a fees cell: the parts alone set fees (REQ-5.4)', () => {
+    // _Prompt: "with no fees cell and at least one part, the parts alone set
+    // fees." No fees cell is mapped; the sum of the two feeParts is fees.
+    const r = ok(normalizeRow(rowWithFeeParts({}, ['0.50', '0.25']), US));
+    expect(r.row.values.fees).toBe('0.75');
+  });
+
+  it('an unparseable feePart is a located error on fees with the parse code (REQ-5.6)', () => {
+    // _Prompt: "a part that fails to parse is a located error with
+    // tradrField: 'fees' and the parse code." normalizeNumber's own
+    // NUMBER_UNPARSEABLE code (csv-normalize.ts:262-328) for a malformed cell.
+    const result = normalizeRow(rowWithFeeParts({}, ['12.3.4']), US);
+    expect(Array.isArray(result)).toBe(true);
+    const err = (result as { code: string; tradrField?: string }[])[0];
+    expect(err.code).toBe('NUMBER_UNPARSEABLE');
+    expect(err.tradrField).toBe('fees');
+  });
+
+  it('signedPrice: a negative stock price stores the magnitude (REQ-6.4)', () => {
+    // Design C6: "signedPrice stores the magnitude, like signedFees".
+    const r = ok(
+      normalizeRow(row({ price: '-150', assetType: 'stock' }), { ...US, signedPrice: true }),
+    );
+    expect(r.row.values.price).toBe('150');
+  });
+
+  it('optionPriceIsContractValue + signedPrice on an option: -132 -> 1.32 (REQ-6.4)', () => {
+    // Design C6: signedPrice takes the magnitude first, then
+    // optionPriceIsContractValue divides by 100 (per-contract premium ->
+    // per-share magnitude) before quantization: |-132| = 132, /100 = 1.32.
+    const r = ok(
+      normalizeRow(row({ price: '-132', assetType: 'option' }), {
+        ...US,
+        signedPrice: true,
+        optionPriceIsContractValue: true,
+      }),
+    );
+    expect(r.row.values.price).toBe('1.32');
+  });
+
+  it('optionPriceIsContractValue leaves a stock price undivided (REQ-6.4)', () => {
+    // Design C6: the divide-by-100 rule applies only when
+    // mappedRow.values.assetType === 'option'. Paired with signedPrice on the
+    // same magnitude as the option case (-132 -> 132, not 1.32) so this test
+    // distinguishes "gated on assetType" from "unimplemented no-op" — a
+    // passthrough of the raw value would fail this because signedPrice must
+    // still take the magnitude.
+    const r = ok(
+      normalizeRow(row({ price: '-132', assetType: 'stock' }), {
+        ...US,
+        signedPrice: true,
+        optionPriceIsContractValue: true,
+      }),
+    );
+    expect(r.row.values.price).toBe('132');
   });
 });
