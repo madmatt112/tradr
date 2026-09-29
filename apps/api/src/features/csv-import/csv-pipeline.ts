@@ -18,6 +18,7 @@ import { resolveContracts } from './csv-contract';
 import { applyMapping, validateMappingShape } from './csv-mapping';
 import { normalizeRow, type NormalizedRow } from './csv-normalize';
 import type { ParsedCsv } from './csv-parse';
+import { filterRows } from './csv-row-filter';
 import { segment, type Segment } from './csv-segment';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,8 @@ export interface PipelineResult {
   errors: LocatedError[];
   warnings: LocatedWarning[];
   totalFills: number;
+  /** Rows dropped by the mapping's row filter (design C8/D9); 0 with no filter. */
+  rowsSkipped: number;
 }
 
 /**
@@ -68,8 +71,25 @@ export function runPipeline(
     });
   }
 
+  // Row filter (design C4/C8, AC 4.1/4.2, D9) — skip non-trade rows before
+  // mapping, keeping their file row numbers. When it skipped any row, push one
+  // file-level `rows_skipped` warning ahead of every other pipeline warning:
+  // the count, the filter column, the declared values joined with " or ", then
+  // each skipped value with its count in first-seen order.
+  const filtered = filterRows(parsed, mapping.rowFilter);
+  if (mapping.rowFilter && filtered.skipped.length > 0) {
+    const values = mapping.rowFilter.values.join(' or ');
+    const detail = filtered.skipped.map((s) => `${s.value} (${s.count})`).join(', ');
+    warnings.push({
+      kind: 'rows_skipped',
+      csvColumn: mapping.rowFilter.column,
+      rowNumber: undefined,
+      message: `Skipped ${filtered.rowsSkipped} rows whose ${mapping.rowFilter.column} is not ${values}: ${detail}.`,
+    });
+  }
+
   // Map + transform.
-  const mapped = applyMapping(parsed, mapping);
+  const mapped = applyMapping(filtered.parsed, mapping);
   for (const e of mapped.errors) {
     errors.push({
       rowNumber: e.rowNumber,
@@ -101,6 +121,8 @@ export function runPipeline(
       expiryFormat: mapping.expiryFormat,
       signedQuantity: mapping.signedQuantity,
       signedFees: mapping.signedFees,
+      signedPrice: mapping.signedPrice,
+      optionPriceIsContractValue: mapping.optionPriceIsContractValue,
     });
     if (Array.isArray(result)) {
       errors.push(...result);
@@ -140,6 +162,7 @@ export function runPipeline(
     errors,
     warnings,
     totalFills,
+    rowsSkipped: filtered.rowsSkipped,
   };
 }
 
