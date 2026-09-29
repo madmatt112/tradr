@@ -11,8 +11,8 @@ import { runPipeline } from './csv-pipeline';
 
 /**
  * Preset conformance (design Component 8, REQ-3.3 / REQ-7.2 / REQ-7.3): every
- * named preset's committed real-export sample runs the service's own pure
- * pipeline (`runPipeline`) with zero errors and the expected proposed
+ * named preset's committed sample runs the service's own pure
+ * pipeline (`runPipeline`) with its expected errors and the expected proposed
  * positions, symbols and P&L. The test imports neither `@/db` nor `@/app` — the
  * pipeline is DB-free.
  *
@@ -76,6 +76,12 @@ const EXPECTED: Record<string, ExpectedPosition[]> = {
   ],
 };
 
+// Declared refusals per preset (REQ-3.6): a sample that legitimately errors on
+// a row registers `{ code, rowNumber }` here. The loop compares against this
+// order-independently, defaulting to none, so every shipped sample still
+// asserts an empty error set.
+const EXPECTED_ERRORS: Record<string, Array<{ code: string; rowNumber: number }>> = {};
+
 describe('csv-import preset conformance', () => {
   it('TZ pin is in force (offset-less ISO parses as UTC)', () => {
     expect(
@@ -85,7 +91,7 @@ describe('csv-import preset conformance', () => {
   });
 
   for (const id of Object.keys(CSV_IMPORT_SAMPLE_FILES)) {
-    it(`${id}: sample previews through runPipeline with zero errors and the expected positions`, () => {
+    it(`${id}: sample previews through runPipeline with its expected errors and the expected positions`, () => {
       const preset = CSV_IMPORT_PRESETS.find((p) => p.id === id);
       expect(preset, `no preset for sample id "${id}"`).toBeDefined();
       if (!preset) return;
@@ -109,9 +115,18 @@ describe('csv-import preset conformance', () => {
       });
       const result = runPipeline(parsed, request, 'USD');
 
-      expect(result.errors).toEqual([]);
+      // Order-independent compare of each error's code and row number against
+      // the preset's declared refusals (default none).
+      const byCodeThenRow = (
+        a: { code: string; rowNumber: number },
+        b: { code: string; rowNumber: number },
+      ) => a.code.localeCompare(b.code) || a.rowNumber - b.rowNumber;
+      expect(
+        result.errors.map((e) => ({ code: e.code, rowNumber: e.rowNumber })).sort(byCodeThenRow),
+      ).toEqual([...(EXPECTED_ERRORS[id] ?? [])].sort(byCodeThenRow));
 
       const expectedPositions = EXPECTED[id];
+      expect(expectedPositions, `no expected positions for sample id "${id}"`).toBeDefined();
       expect(result.proposedPositions).toHaveLength(expectedPositions.length);
 
       for (const exp of expectedPositions) {
