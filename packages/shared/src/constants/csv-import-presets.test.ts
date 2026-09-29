@@ -89,6 +89,7 @@ describe('csv-import-presets', () => {
         'generic-execution',
         'generic-manual',
         'interactive-brokers',
+        'tastytrade',
         'tradervue',
         'tradezella',
       ].sort(),

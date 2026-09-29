@@ -74,13 +74,47 @@ const EXPECTED: Record<string, ExpectedPosition[]> = {
       proposedPnl: 48.7,
     },
   ],
+  // tastytrade (task 9): each position has its own symbol (Decision D6, Req 3.1)
+  // — a closed stock round trip, a closed option round trip, the same-instant
+  // short option (its closing row first in file order, so it segments `short`
+  // only because positionEffect sets an explicit `type` that openRank reads
+  // before `action`), and the open stock residual. The Future trade row refuses
+  // (see EXPECTED_ERRORS) and imports no position.
+  tastytrade: [
+    { symbol: 'AAPL', assetType: 'stock', side: 'long', closes: true, proposedPnl: 798.86 },
+    {
+      symbol: 'AAPL180720C195',
+      assetType: 'option',
+      side: 'long',
+      closes: true,
+      proposedPnl: 57.86,
+    },
+    {
+      symbol: 'SPY180921P250',
+      assetType: 'option',
+      side: 'short',
+      closes: true,
+      proposedPnl: 598.9,
+    },
+    { symbol: 'MSFT', assetType: 'stock', side: 'long', closes: false, quantity: 50 },
+  ],
 };
 
 // Declared refusals per preset (REQ-3.6): a sample that legitimately errors on
 // a row registers `{ code, rowNumber }` here. The loop compares against this
 // order-independently, defaulting to none, so every shipped sample still
 // asserts an empty error set.
-const EXPECTED_ERRORS: Record<string, Array<{ code: string; rowNumber: number }>> = {};
+const EXPECTED_ERRORS: Record<string, Array<{ code: string; rowNumber: number }>> = {
+  // The tastytrade fixture's file row 11 is a `Trade` with Instrument Type
+  // `Future`, which matches no assetType transform: applyMapping pushes
+  // TRANSFORM_NO_MATCH on the unstored cell, and assetType being a required
+  // execution field then adds ROW_MISSING_REQUIRED_FIELD on the same row
+  // (design Error Handling #2, D6). Both block commit.
+  tastytrade: [
+    { code: 'TRANSFORM_NO_MATCH', rowNumber: 11 },
+    { code: 'ROW_MISSING_REQUIRED_FIELD', rowNumber: 11 },
+  ],
+};
 
 describe('csv-import preset conformance', () => {
   it('TZ pin is in force (offset-less ISO parses as UTC)', () => {
@@ -155,6 +189,96 @@ describe('csv-import preset conformance', () => {
           kind: 'derived_expiry',
         });
       }
+
+      if (id === 'tastytrade') {
+        // The two Money Movement rows are skipped before mapping and reported as
+        // one file-level rows_skipped warning (design C8/D9); it is the only
+        // warning (no rounding, no derived expiry, no direction inferred).
+        expect(result.rowsSkipped).toBe(2);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toMatchObject({
+          kind: 'rows_skipped',
+          csvColumn: 'Type',
+          message: 'Skipped 2 rows whose Type is not Trade: Money Movement (2).',
+        });
+
+        // Fees (Commissions plus Fees, in magnitude) and filledAt of each fill of
+        // both round trips (Req 3.2). The stock round trip's opening row carries
+        // Commissions -1 and Fees -0.14 (summed to 1.14); its close carries none.
+        const stock = result.proposedPositions.find((p) => p.scope.symbol === 'AAPL');
+        expect(stock?.fills.map((f) => [f.fees, f.filledAt])).toEqual([
+          ['1.14', '2018-05-21T15:55:20.000Z'],
+          ['0', '2018-05-22T14:30:00.000Z'],
+        ]);
+        // The option round trip: the option price cell is a per-contract premium
+        // (÷100 to per share), and the fees still sum from the two cost columns.
+        const option = result.proposedPositions.find((p) => p.scope.symbol === 'AAPL180720C195');
+        expect(option?.fills.map((f) => [f.fees, f.filledAt])).toEqual([
+          ['1.14', '2018-06-11T13:31:00.000Z'],
+          ['0', '2018-06-12T19:50:00.000Z'],
+        ]);
+      }
     });
   }
+
+  // AC 3.5 (tastytrade): a mapping resolves columns by name, so reordering the
+  // header and every row's cells together proposes the same positions; removing a
+  // mapped column reports MAPPING_COLUMN_ABSENT naming the field and the column.
+  it('tastytrade: reordered columns propose the same positions, a removed mapped column refuses', () => {
+    const preset = CSV_IMPORT_PRESETS.find((p) => p.id === 'tastytrade');
+    expect(preset).toBeDefined();
+    if (!preset) return;
+
+    const request: CsvPreviewRequest = {
+      accountId: '00000000-0000-0000-0000-000000000000',
+      rowShape: preset.rowShape,
+      mapping: preset.mapping,
+      presetId: preset.id,
+      timezone: 'UTC',
+      dateFormat: preset.dateFormat,
+      numberFormat: preset.numberFormat,
+    };
+    const parsed = parseCsv(readCsvImportSample('tastytrade'), {
+      delimiter: preset.mapping.delimiter,
+      hasHeader: preset.mapping.hasHeader,
+    });
+
+    // Reverse is a full permutation of the columns; move the header and each
+    // row's cells together so only column order changes, not row order.
+    const perm = [...parsed.headers.keys()].reverse();
+    const permuted = {
+      headers: perm.map((i) => parsed.headers[i]),
+      rows: parsed.rows.map((r) => perm.map((i) => r[i])),
+      rowCount: parsed.rowCount,
+    };
+    const permResult = runPipeline(permuted, request, 'USD');
+    expect(permResult.proposedPositions.map((p) => p.scope.symbol).sort()).toEqual(
+      ['AAPL', 'AAPL180720C195', 'MSFT', 'SPY180921P250'].sort(),
+    );
+    const byCodeThenRow = (
+      a: { code: string; rowNumber: number },
+      b: { code: string; rowNumber: number },
+    ) => a.code.localeCompare(b.code) || a.rowNumber - b.rowNumber;
+    expect(
+      permResult.errors.map((e) => ({ code: e.code, rowNumber: e.rowNumber })).sort(byCodeThenRow),
+    ).toEqual([...EXPECTED_ERRORS.tastytrade].sort(byCodeThenRow));
+
+    // Remove the mapped `Commissions` column: fees is mapped to it, so the
+    // shape check refuses at row 0 naming the field and the column.
+    const dropIdx = parsed.headers.indexOf('Commissions');
+    const dropped = {
+      headers: parsed.headers.filter((_, i) => i !== dropIdx),
+      rows: parsed.rows.map((r) => r.filter((_, i) => i !== dropIdx)),
+      rowCount: parsed.rowCount,
+    };
+    const dropResult = runPipeline(dropped, request, 'USD');
+    expect(dropResult.errors).toContainEqual(
+      expect.objectContaining({
+        code: 'MAPPING_COLUMN_ABSENT',
+        tradrField: 'fees',
+        csvColumn: 'Commissions',
+        rowNumber: 0,
+      }),
+    );
+  });
 });
