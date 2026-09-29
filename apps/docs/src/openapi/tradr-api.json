@@ -1973,7 +1973,7 @@
                     "type": "string"
                   },
                   "request": {
-                    "description": "A JSON string (CsvPreviewRequest): `{ accountId, rowShape, mapping, presetId?, timezone, dateFormat, numberFormat }`. Option rows add `mapping.contractForm` and, for the composed form, `mapping.expiryFormat`. The preset-only `mapping.signedQuantity` and `mapping.signedFees` read the magnitude from a signed quantity or commission column.\n",
+                    "description": "A JSON string (CsvPreviewRequest): `{ accountId, rowShape, mapping, presetId?, timezone, dateFormat, numberFormat }`. Option rows add `mapping.contractForm` and, for the composed form, `mapping.expiryFormat`. The preset-only `mapping.signedQuantity` and `mapping.signedFees` read the magnitude from a signed quantity or commission column. Further preset-only `mapping` fields: `rowFilter` keeps only rows whose column matches its values, `extraFeeColumns` are summed into fees, `positionEffect` maps a raw action value to an entry/exit fill, `signedPrice` stores the price magnitude, and `optionPriceIsContractValue` divides an option price cell holding premium x 100.\n",
                     "type": "string"
                   }
                 },
@@ -1989,7 +1989,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation }`. `token` is consumed by the commit endpoint.\n"
+            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`.\n"
           },
           "400": {
             "description": "Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS)."

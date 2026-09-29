@@ -88,12 +88,19 @@ function surfaceCodedPreviewError(err: unknown): never {
  *                   form, `mapping.expiryFormat`. The preset-only
  *                   `mapping.signedQuantity` and `mapping.signedFees` read the
  *                   magnitude from a signed quantity or commission column.
+ *                   Further preset-only `mapping` fields: `rowFilter` keeps only
+ *                   rows whose column matches its values, `extraFeeColumns` are
+ *                   summed into fees, `positionEffect` maps a raw action value to
+ *                   an entry/exit fill, `signedPrice` stores the price magnitude,
+ *                   and `optionPriceIsContractValue` divides an option price cell
+ *                   holding premium x 100.
  *     responses:
  *       200:
  *         description: >
  *           `{ token, summary, positions, errors, warnings, timezone,
  *           committable, requiresDuplicateAffirmation }`. `token` is consumed by
- *           the commit endpoint.
+ *           the commit endpoint. A file-level `rows_skipped` warning reports rows
+ *           dropped by `mapping.rowFilter`.
  *       400: { description: 'Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS).' }
  *       413: { description: 'File over CSV_IMPORT_MAX_FILE_BYTES (PAYLOAD_TOO_LARGE), too many rows (CSV_IMPORT_TOO_MANY_ROWS), or staged result too large (CSV_IMPORT_RESULT_TOO_LARGE).' }
  *       409: { description: 'An import is already in progress for this user (CSV_IMPORT_IN_PROGRESS).' }

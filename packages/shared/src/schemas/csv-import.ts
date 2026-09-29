@@ -28,6 +28,21 @@ export const MappingSchema = z.object({
   signedQuantity: z.boolean().optional(),
   // Preset-only: the fees column's sign marks a cost; the magnitude is stored.
   signedFees: z.boolean().optional(),
+  // Preset-only: keep only rows whose filter column matches one of these values.
+  rowFilter: z
+    .object({
+      column: z.string().min(1),
+      values: z.array(z.string().min(1)).min(1), // trade-row values, case-insensitive
+    })
+    .optional(),
+  // Preset-only: extra columns summed into fees.
+  extraFeeColumns: z.array(z.string().min(1)).optional(),
+  // Preset-only: raw action value -> fill type.
+  positionEffect: z.record(z.string(), z.enum(['entry', 'exit'])).optional(),
+  // Preset-only: price sign is direction; the magnitude is stored.
+  signedPrice: z.boolean().optional(),
+  // Preset-only: option price cell holds premium x 100 (contract value).
+  optionPriceIsContractValue: z.boolean().optional(),
 });
 
 export const CsvPreviewRequestSchema = z.object({
@@ -59,6 +74,7 @@ export const LocatedWarningSchema = z.object({
     'currency_hint_mismatch',
     'rounded',
     'derived_expiry',
+    'rows_skipped',
   ]),
   message: z.string(),
 });
