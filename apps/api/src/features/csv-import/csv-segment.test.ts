@@ -213,6 +213,40 @@ describe('segment — timestamps (REQ-4.5)', () => {
   });
 });
 
+describe('segment — explicit type outranks action at one instant (REQ-5.5)', () => {
+  it('a same-instant sell/entry and buy/exit segment short with no warning, in either file order', () => {
+    const sellEntryFirst = [
+      exec(
+        { action: 'sell', type: 'entry', quantity: '100', filledAt: '2024-01-01T10:00:00.000Z' },
+        2,
+      ),
+      exec(
+        { action: 'buy', type: 'exit', quantity: '100', filledAt: '2024-01-01T10:00:00.000Z' },
+        3,
+      ),
+    ];
+    const buyExitFirst = [
+      exec(
+        { action: 'buy', type: 'exit', quantity: '100', filledAt: '2024-01-01T10:00:00.000Z' },
+        2,
+      ),
+      exec(
+        { action: 'sell', type: 'entry', quantity: '100', filledAt: '2024-01-01T10:00:00.000Z' },
+        3,
+      ),
+    ];
+
+    for (const rows of [sellEntryFirst, buyExitFirst]) {
+      const { segments, errors, warnings } = segment(rows, 'execution');
+      expect(errors).toHaveLength(0);
+      expect(warnings.filter((w) => w.kind === 'direction_inferred')).toHaveLength(0);
+      expect(segments).toHaveLength(1);
+      expect(segments[0].side).toBe('short');
+      expect(segments[0].closes).toBe(true);
+    }
+  });
+});
+
 describe('segment — round-trip rows (REQ-4.1, manual-mapping fixture)', () => {
   it('each round-trip row becomes one closed segment with one entry + one exit', () => {
     const rows: NormalizedRow[] = [
