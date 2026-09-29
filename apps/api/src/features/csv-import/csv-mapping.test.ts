@@ -465,3 +465,100 @@ describe('applyMapping descriptor-derived assetType', () => {
     expect(rows[0].values.assetType).toBeUndefined();
   });
 });
+
+describe('applyMapping fee parts (design C5, REQ-5.4)', () => {
+  it('collects non-empty trimmed extraFeeColumns cells into feeParts, ignoring empty cells', () => {
+    const m = execMapping({ extraFeeColumns: ['Commission', 'ExtraFee'] });
+    const headers = [
+      'Symbol',
+      'AssetType',
+      'Action',
+      'Quantity',
+      'Price',
+      'FilledAt',
+      'Commission',
+      'ExtraFee',
+    ];
+    const p = parsed(headers, [['AAPL', 'STK', 'BUY', '10', '150.00', '2024-01-02', ' 2.50 ', '']]);
+    const { rows } = applyMapping(p, m);
+    expect(rows[0].feeParts).toEqual(['2.50']);
+  });
+});
+
+describe('applyMapping position effect (design C5, REQ-5.5)', () => {
+  it('sets type from positionEffect beside the mapped action', () => {
+    const m = execMapping({ positionEffect: { BUY: 'entry', SELL: 'exit' } });
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const p = parsed(headers, [
+      ['AAPL', 'STK', 'BUY', '10', '150.00', '2024-01-02'],
+      ['AAPL', 'STK', 'SELL', '10', '150.00', '2024-01-02'],
+    ]);
+    const { rows } = applyMapping(p, m);
+    expect(rows[0].values.action).toBe('buy');
+    expect(rows[0].values.type).toBe('entry');
+    expect(rows[1].values.action).toBe('sell');
+    expect(rows[1].values.type).toBe('exit');
+  });
+
+  it('matches a lower-case positionEffect key against the upper-cased raw action cell', () => {
+    const m = execMapping({ positionEffect: { buy: 'entry' } });
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const p = parsed(headers, [['AAPL', 'STK', 'BUY', '10', '150.00', '2024-01-02']]);
+    const { rows } = applyMapping(p, m);
+    expect(rows[0].values.type).toBe('entry');
+  });
+});
+
+describe('applyMapping rowNumbers (design C5)', () => {
+  it('numbers rows from parsed.rowNumbers when present, in both rows and errors', () => {
+    const m = execMapping();
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const p: ParsedCsv = {
+      headers,
+      rows: [
+        ['AAPL', 'STK', 'BUY', '10', '150.00', '2024-01-02'],
+        ['AAPL', 'STK', 'BUY', '10', '', '2024-01-03'],
+      ],
+      rowCount: 2,
+      rowNumbers: [10, 20],
+    };
+    const { rows, errors } = applyMapping(p, m);
+    expect(rows[0].sourceRow).toBe(10);
+    expect(rows[1].sourceRow).toBe(20);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        code: 'ROW_MISSING_REQUIRED_FIELD',
+        rowNumber: 20,
+        tradrField: 'price',
+      }),
+    );
+  });
+});
+
+describe('validateMappingShape new MAPPING_COLUMN_ABSENT cases (REQ-3.5, REQ-4.1)', () => {
+  it('reports MAPPING_COLUMN_ABSENT for an extraFeeColumns entry not in the file', () => {
+    const m = execMapping({ extraFeeColumns: ['Commission'] });
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const errors = validateMappingShape(headers, m);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        code: 'MAPPING_COLUMN_ABSENT',
+        tradrField: 'fees',
+        csvColumn: 'Commission',
+      }),
+    );
+  });
+
+  it('reports MAPPING_COLUMN_ABSENT for a rowFilter.column not in the file', () => {
+    const m = execMapping({ rowFilter: { column: 'Type', values: ['Trade'] } });
+    const headers = ['Symbol', 'AssetType', 'Action', 'Quantity', 'Price', 'FilledAt'];
+    const errors = validateMappingShape(headers, m);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        code: 'MAPPING_COLUMN_ABSENT',
+        tradrField: 'rowFilter',
+        csvColumn: 'Type',
+      }),
+    );
+  });
+});
