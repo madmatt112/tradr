@@ -182,8 +182,10 @@ export async function previewImport(
   // BEFORE building the full in-memory result → 413 CSV_IMPORT_TOO_MANY_ROWS.
   guardRowCount(parsed.rowCount);
 
-  // No `fees` column mapped → fills default fees to 0 (REQ-10.2).
-  if (!request.mapping.columns.fees) {
+  // No `fees` column mapped → fills default fees to 0 (REQ-10.2). With
+  // `extraFeeColumns` declared, those columns supply the fees, so the warning
+  // does not fire (design C8/D8).
+  if (!request.mapping.columns.fees && (request.mapping.extraFeeColumns?.length ?? 0) === 0) {
     warnings.push({
       kind: 'no_fees_column',
       message: 'No fees column was mapped; fills default to 0 fees.',
@@ -229,7 +231,9 @@ export async function previewImport(
   const rowsWithErrors = new Set(errors.map((e) => e.rowNumber).filter((n) => n > 0)).size;
   const summary = {
     rowsParsed: parsed.rowCount,
-    rowsValid: parsed.rowCount - rowsWithErrors,
+    // Valid rows are rows that mapped cleanly: subtract error rows AND the rows
+    // the filter skipped (design C8/D9). `rowsParsed` stays the parsed count.
+    rowsValid: parsed.rowCount - rowsWithErrors - pipeline.rowsSkipped,
     rowsWithErrors,
     positions: proposedPositions.length,
     fills: totalFills,

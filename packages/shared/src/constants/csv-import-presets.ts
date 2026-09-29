@@ -1,10 +1,10 @@
-import type { CsvPreset } from '../schemas/csv-import';
+import type { CsvPreset, Mapping } from '../schemas/csv-import';
 
 /**
  * In-repo broker presets (REQ-3). NOT database rows — pure config shipped with
  * the app. Each preset pre-fills a {@link CsvPreset} mapping (Tradr field → CSV
  * column) that a user can adopt and then adjust (REQ-3.4). Adding a preset =
- * a config entry here + a committed real-export sample fixture under
+ * a config entry here + a committed documented-format sample fixture under
  * `__fixtures__/csv-import-samples/` + a test that resolves the mapping against
  * it and asserts the declared row shape (REQ-3.5). No DB migration, no engine
  * change.
@@ -15,7 +15,7 @@ import type { CsvPreset } from '../schemas/csv-import';
  * reachable only via the manual row-shape selector (Task 21); no preset ships
  * with that shape.
  *
- * Headers are sourced from real export samples (committed fixtures), never
+ * Headers are sourced from documented-format samples (committed fixtures), never
  * invented:
  *   - interactive-brokers: IBKR Trades Flex Query field codes (Symbol,
  *     Description, UnderlyingSymbol, Strike, Expiry, Put/Call, Multiplier,
@@ -32,6 +32,15 @@ import type { CsvPreset } from '../schemas/csv-import';
  *   - tradervue: Tradervue generic import format
  *     (Time, Date, Quantity, Symbol, Side, Price, Option, Commission, …).
  *   - generic-execution: Tradr's own canonical one-row-per-fill template.
+ *   - tastytrade: tastytrade transactions CSV, per the Help Center article
+ *     "Export Transaction Data to a Spreadsheet (CSV File)" (Date, Type, Action,
+ *     Symbol, Instrument Type, Description, Value, Quantity, Average Price,
+ *     Commissions, Fees, Multiplier, Underlying Symbol, Expiration Date, Strike
+ *     Price, Call or Put). Recorded omission (REQ-1.5, D5): the fixture carries
+ *     no option lifecycle row, because the documented format names no lifecycle
+ *     value and an invented one would breach the documented-format rule; a real
+ *     expiration/assignment row has a Type other than `Trade`, so the row filter
+ *     skips and counts it rather than importing it.
  */
 export const CSV_IMPORT_PRESETS: CsvPreset[] = [
   {
@@ -144,4 +153,66 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
       },
     },
   },
+  {
+    id: 'tastytrade',
+    label: 'tastytrade (transactions CSV)',
+    rowShape: 'execution',
+    dateFormat: 'iso-datetime',
+    numberFormat: 'us',
+    mapping: {
+      rowShape: 'execution',
+      contractForm: 'occ-symbol',
+      signedFees: true,
+      signedPrice: true,
+      optionPriceIsContractValue: true,
+      rowFilter: { column: 'Type', values: ['Trade'] },
+      extraFeeColumns: ['Fees'],
+      transforms: {
+        assetType: { Equity: 'stock', 'Equity Option': 'option' },
+        action: {
+          BUY_TO_OPEN: 'buy',
+          BUY_TO_CLOSE: 'buy',
+          SELL_TO_OPEN: 'sell',
+          SELL_TO_CLOSE: 'sell',
+        },
+      },
+      positionEffect: {
+        BUY_TO_OPEN: 'entry',
+        SELL_TO_OPEN: 'entry',
+        BUY_TO_CLOSE: 'exit',
+        SELL_TO_CLOSE: 'exit',
+      },
+      columns: {
+        symbol: 'Symbol',
+        assetType: 'Instrument Type',
+        action: 'Action',
+        quantity: 'Quantity',
+        price: 'Average Price',
+        filledAt: 'Date',
+        fees: 'Commissions',
+        multiplier: 'Multiplier',
+      },
+    },
+  },
 ];
+
+/**
+ * Every CSV column a mapping reads (design C2): the values of `columns`, then
+ * `extraFeeColumns`, then `rowFilter.column`, deduplicated, in that order. The
+ * grounding check and the header suggestion both resolve a mapping's columns
+ * through this one helper (REQ-1.2 / 2.3 / 2.4).
+ */
+export function mappingColumns(mapping: Mapping): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const add = (column: string) => {
+    if (!seen.has(column)) {
+      seen.add(column);
+      result.push(column);
+    }
+  };
+  for (const column of Object.values(mapping.columns)) add(column);
+  for (const column of mapping.extraFeeColumns ?? []) add(column);
+  if (mapping.rowFilter) add(mapping.rowFilter.column);
+  return result;
+}

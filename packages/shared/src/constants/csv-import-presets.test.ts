@@ -1,20 +1,17 @@
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { CSV_IMPORT_SAMPLE_FILES, csvImportSamplePath } from '../node/csv-import-samples';
 import {
   CsvPresetSchema,
   MappingSchema,
   type CsvPreset,
+  type Mapping,
   type RowShape,
 } from '../schemas/csv-import';
 
-import { CSV_IMPORT_PRESETS } from './csv-import-presets';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SAMPLES_DIR = path.resolve(__dirname, '__fixtures__/csv-import-samples');
+import { CSV_IMPORT_PRESETS, mappingColumns } from './csv-import-presets';
 
 /**
  * Per-shape required-field set (REQ-2.2 / design Component 2). These are the
@@ -29,17 +26,8 @@ const EXECUTION_DIRECTION_FIELDS = ['type', 'action'] as const;
 const ROUND_TRIP_ENTRY_FIELDS = ['entryPrice', 'entryQuantity', 'entryDate'] as const;
 const ROUND_TRIP_EXIT_FIELDS = ['exitPrice', 'exitQuantity', 'exitDate'] as const;
 
-// Named presets each ship a committed real-export sample fixture (REQ-3.3).
-// generic-manual has no mapping, so no fixture.
-const SAMPLE_FILES: Record<string, string> = {
-  'interactive-brokers': 'interactive-brokers.csv',
-  tradezella: 'tradezella.csv',
-  tradervue: 'tradervue.csv',
-  'generic-execution': 'generic-execution.csv',
-};
-
-function readSampleHeaders(file: string): string[] {
-  const contents = readFileSync(path.join(SAMPLES_DIR, file), 'utf8');
+function readSampleHeaders(presetId: string): string[] {
+  const contents = readFileSync(csvImportSamplePath(presetId), 'utf8');
   const firstLine = contents.split(/\r?\n/)[0];
   return firstLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
 }
@@ -79,12 +67,14 @@ function assertRowShapeGrounded(preset: CsvPreset, headers: string[] | null): vo
     }
   }
 
-  // Every mapped column must resolve against the sample headers (REQ-3.3).
+  // Every column the mapping reads (columns, extraFeeColumns, rowFilter.column
+  // — design C2's mappingColumns helper) must resolve against the sample
+  // headers (REQ-1.2 / REQ-2.3 / REQ-2.4).
   if (headers) {
-    for (const [field, column] of Object.entries(preset.mapping.columns)) {
+    for (const column of mappingColumns(preset.mapping)) {
       if (!headers.includes(column)) {
         throw new Error(
-          `preset ${preset.id} maps ${field} -> "${column}" but that column is absent from the sample`,
+          `preset ${preset.id} reads column "${column}" but that column is absent from the sample`,
         );
       }
     }
@@ -99,6 +89,7 @@ describe('csv-import-presets', () => {
         'generic-execution',
         'generic-manual',
         'interactive-brokers',
+        'tastytrade',
         'tradervue',
         'tradezella',
       ].sort(),
@@ -117,6 +108,42 @@ describe('csv-import-presets', () => {
     }
   });
 
+  // --- Task 1 contract (broker-csv-presets, Requirement 2.7) ---
+  // Pre-condition: MappingSchema is the shared Zod contract for a csv-import
+  // mapping; design C1 / Data Models add five optional fields to it
+  // (rowFilter, extraFeeColumns, positionEffect, signedPrice,
+  // optionPriceIsContractValue) with the exact shapes shown in "MappingSchema
+  // additions (all optional)".
+  // Call (the Test: line's seam): `MappingSchema.parse(mapping)`.
+  // Observable result / source of expected value:
+  //   - a mapping literal carrying all five fields round-trips through parse
+  //     unchanged (source: the design's Data Models shapes — the fields are
+  //     additive, so nothing about them is stripped or coerced);
+  //   - a `rowFilter` whose `values` array is empty fails parse (source:
+  //     design's `values: z.array(z.string().min(1)).min(1)` — an empty array
+  //     violates the `.min(1)` on the array itself).
+  it('MappingSchema accepts a mapping carrying all five new optional fields', () => {
+    const mapping = {
+      rowShape: 'execution',
+      columns: { symbol: 'Symbol' },
+      rowFilter: { column: 'Type', values: ['Trade'] },
+      extraFeeColumns: ['Commissions', 'Fees'],
+      positionEffect: { BUY_TO_OPEN: 'entry', SELL_TO_CLOSE: 'exit' },
+      signedPrice: true,
+      optionPriceIsContractValue: true,
+    };
+    expect(MappingSchema.parse(mapping)).toEqual(mapping);
+  });
+
+  it('MappingSchema rejects a rowFilter with an empty values list', () => {
+    const mapping = {
+      rowShape: 'execution',
+      columns: { symbol: 'Symbol' },
+      rowFilter: { column: 'Type', values: [] },
+    };
+    expect(() => MappingSchema.parse(mapping)).toThrow();
+  });
+
   it('generic-manual has no pre-filled mapping', () => {
     const manual = CSV_IMPORT_PRESETS.find((p) => p.id === 'generic-manual')!;
     expect(manual.mapping.columns).toEqual({});
@@ -124,8 +151,8 @@ describe('csv-import-presets', () => {
 
   it("each named preset's declared rowShape is consistent with its mapping and sample headers", () => {
     for (const preset of CSV_IMPORT_PRESETS) {
-      const file = SAMPLE_FILES[preset.id];
-      const headers = file ? readSampleHeaders(file) : null;
+      const hasFixture = preset.id in CSV_IMPORT_SAMPLE_FILES;
+      const headers = hasFixture ? readSampleHeaders(preset.id) : null;
       expect(() => assertRowShapeGrounded(preset, headers)).not.toThrow();
     }
   });
@@ -185,7 +212,7 @@ describe('csv-import-presets', () => {
   });
 
   it('a preset mapping an invented (absent) column fails the sample-resolution check', () => {
-    const headers = readSampleHeaders(SAMPLE_FILES.tradezella);
+    const headers = readSampleHeaders('tradezella');
     const invented: CsvPreset = {
       id: 'invented',
       label: 'Invented header',
@@ -214,7 +241,64 @@ describe('csv-import-presets', () => {
         columns: { symbol: 'Symbol', action: 'Buy/Sell', price: 'Price' },
       },
     };
-    const headers = readSampleHeaders(SAMPLE_FILES.tradezella);
+    const headers = readSampleHeaders('tradezella');
     expect(() => assertRowShapeGrounded(misShaped, headers)).toThrow();
+  });
+
+  // --- Task 2 contract (broker-csv-presets, Requirements 1.2, 2.3, 2.4) ---
+  // Pre-condition: design C2 specifies `mappingColumns(mapping: Mapping): string[]`
+  // as the values of `columns`, then `extraFeeColumns`, then `rowFilter.column`,
+  // deduplicated, in that order; design C3 merges the two fixture registries into
+  // the single `CSV_IMPORT_SAMPLE_FILES`/`csvImportSamplePath` pair so the
+  // grounding check above resolves every column a mapping reads from one
+  // registry.
+  // Call (the Test: line's seam): `mappingColumns(mapping)`, and
+  // `assertRowShapeGrounded(preset, headers)` for the negative proof.
+  // Observable result / source of expected value:
+  //   - a mapping whose `columns`, `extraFeeColumns` and `rowFilter.column`
+  //     values overlap returns each distinct column once, in that stage order
+  //     (source: design C2's stated interface — "the values of columns, then
+  //     extraFeeColumns, then rowFilter.column, deduplicated, in that order");
+  //   - a mapping with no `extraFeeColumns`/`rowFilter` returns only its
+  //     `columns` values (source: design C2 — the later stages contribute
+  //     nothing when absent);
+  //   - a preset whose `extraFeeColumns` names a column absent from its
+  //     fixture's header fails `assertRowShapeGrounded`, because it now
+  //     resolves every column `mappingColumns` returns, not only `columns`
+  //     (source: Req 1.2/2.3/2.4 — the grounding check resolves every column a
+  //     mapping reads, from one registry).
+  it("mappingColumns returns columns' values, then extraFeeColumns, then rowFilter.column, deduplicated, in that order", () => {
+    const mapping: Mapping = {
+      rowShape: 'execution',
+      columns: { symbol: 'Symbol', price: 'Price', fees: 'Fees' },
+      extraFeeColumns: ['Fees', 'Commissions'],
+      rowFilter: { column: 'Commissions', values: ['Trade'] },
+    };
+    expect(mappingColumns(mapping)).toEqual(['Symbol', 'Price', 'Fees', 'Commissions']);
+  });
+
+  it('mappingColumns returns only the columns values for a mapping with no extras', () => {
+    const mapping: Mapping = {
+      rowShape: 'execution',
+      columns: { symbol: 'Symbol', price: 'Price' },
+    };
+    expect(mappingColumns(mapping)).toEqual(['Symbol', 'Price']);
+  });
+
+  it('a preset whose extraFeeColumns names an absent column fails the grounding check', () => {
+    const headers = readSampleHeaders('tradezella');
+    const invented: CsvPreset = {
+      id: 'invented-fee-column',
+      label: 'Invented fee column',
+      rowShape: 'execution',
+      dateFormat: 'us',
+      numberFormat: 'us',
+      mapping: {
+        rowShape: 'execution',
+        columns: { symbol: 'Symbol' },
+        extraFeeColumns: ['ColumnThatDoesNotExist'],
+      },
+    };
+    expect(() => assertRowShapeGrounded(invented, headers)).toThrow(/ColumnThatDoesNotExist/);
   });
 });

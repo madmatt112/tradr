@@ -55,10 +55,10 @@ Tradr does not guess what your columns mean. Tell it, either by choosing a prese
 or by mapping each field by hand.
 
 **Presets** pre-fill the mapping for a known export format — Interactive Brokers
-Flex Query trades, a generic one-row-per-fill layout, and formats used by common
-journalling tools. A preset for a format with options also sets the option
-contract form (see [Options](#options)). Choosing one fills the fields in; you
-can then adjust any of them. A preset is a starting point, not a lock.
+Flex Query trades, TradeZella, Tradervue, a generic one-row-per-fill layout, and
+tastytrade. A preset for a format with options also sets the option contract form
+(see [Options](#options)). Choosing one fills the fields in; you can then adjust
+any of them. A preset is a starting point, not a lock.
 
 Set these alongside the mapping:
 
@@ -152,6 +152,29 @@ commission is a cost. Tradr stores the size either way.
 To map the contract with separate columns instead of the OCC symbol, also
 include `UnderlyingSymbol`, `Strike`, `Expiry`, and `Put/Call`. Then switch the
 contract form to separate columns.
+
+### tastytrade
+
+Export from **Activity › Transactions**, then choose **CSV**. This is the
+transactions export, not a positions report.
+
+Its dates carry their own offset, so the **Timezone** setting does not move them.
+
+Fees are the `Commissions` column plus the `Fees` column. Tradr adds the two
+together for each fill.
+
+Rows whose `Type` is not `Trade` — cash movements and the like — are skipped. The
+preview counts them and names what it skipped.
+
+Tradr imports stock and option trades from this export. It refuses a `Future` row
+and any other instrument type.
+
+Expirations and assignments are not imported, so a contract left to expire or
+assign stays open. Close or remove it by hand.
+
+Set the export to start **before your opening trade**, so the file holds the
+opening fill of every position. A position whose opening trade falls before the
+export window has no entry row to group against.
 
 ### Tradervue monthly options
 

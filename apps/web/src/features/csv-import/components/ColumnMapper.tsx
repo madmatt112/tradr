@@ -8,6 +8,7 @@ import type {
   RowShape,
 } from '@tradr/shared';
 
+import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -18,6 +19,7 @@ import {
 } from '@/components/ui/select';
 
 import { PRESET_ONLY_LABELS, targetFieldsForShape, type TargetField } from '../lib/fields';
+import { suggestPreset } from '../lib/suggestPreset';
 
 /**
  * Step 3 of the import flow (REQ-12.1/12.2): choose a preset or map columns by
@@ -88,6 +90,10 @@ export function ColumnMapper({ columns, value, onChange }: ColumnMapperProps) {
     .filter((key) => key in value.mapping.columns && !shapeFieldKeys.has(key))
     .map((key) => ({ field: key, label: PRESET_ONLY_LABELS[key], required: false }));
   const fields = [...shapeFields, ...presetOnlyFields];
+
+  // Name the one preset the file's headers match, without applying it (design
+  // C9; Req 7). Browser-only — the server never selects a preset (Req 7.3).
+  const suggestion = suggestPreset(columns);
 
   function applyPreset(presetId: string) {
     if (presetId === NO_PRESET) {
@@ -162,6 +168,22 @@ export function ColumnMapper({ columns, value, onChange }: ColumnMapperProps) {
               ))}
             </SelectContent>
           </Select>
+          {value.presetId === null && suggestion && (
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                This file matches the {suggestion.label} preset.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="cursor-pointer"
+                onClick={() => applyPreset(suggestion.id)}
+              >
+                Use this preset
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="space-y-2">

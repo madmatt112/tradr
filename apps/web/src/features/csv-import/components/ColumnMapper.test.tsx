@@ -190,6 +190,68 @@ describe('ColumnMapper — contract-form selectors', () => {
   });
 });
 
+describe('ColumnMapper — preset suggestion', () => {
+  // Contract: pre-condition: `columns` is TRADEZELLA_COLUMNS, a superset of
+  // exactly tradezella's mapped columns and of no other preset's (verified
+  // against `mappingColumns` for every shipped preset), and `value.presetId`
+  // starts `null`. Test: render, then rerender with `presetId: 'tradezella'`.
+  // Observable: the suggestion text is present on the first render and absent
+  // once a preset is chosen. Source: design C9 ("when `value.presetId ===
+  // null` and the suggestion is non-null, it renders one row") and Req 7.1.
+  it('shows the suggestion row only while no preset is chosen', () => {
+    const { rerender } = render(
+      <ColumnMapper columns={TRADEZELLA_COLUMNS} value={makeValue()} onChange={vi.fn()} />,
+    );
+
+    expect(screen.getByText('This file matches the TradeZella (generic CSV) preset.')).toBeTruthy();
+
+    rerender(
+      <ColumnMapper
+        columns={TRADEZELLA_COLUMNS}
+        value={makeValue({ presetId: 'tradezella' })}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('This file matches the TradeZella (generic CSV) preset.')).toBeNull();
+  });
+
+  // Contract: pre-condition: same suggestible render as above. Test: locate
+  // the "Use this preset" button. Observable: its className includes
+  // `cursor-pointer`. Source: Req 7.5 ("Any control the suggestion adds SHALL
+  // carry `cursor-pointer`") and design C9 ("outline `Button` ... (`className`
+  // includes `cursor-pointer`)").
+  it('gives the suggestion button cursor-pointer', () => {
+    render(<ColumnMapper columns={TRADEZELLA_COLUMNS} value={makeValue()} onChange={vi.fn()} />);
+
+    const button = screen.getByRole('button', { name: 'Use this preset' });
+
+    expect(button.className).toContain('cursor-pointer');
+  });
+
+  // Contract: pre-condition: same suggestible render as above, with a spy
+  // `onChange`. Test: click the "Use this preset" button. Observable:
+  // `onChange` is called once with `presetId: 'tradezella'` and the tradezella
+  // mapping applied (`contractForm: 'composed'`, `expiryFormat: 'dd-mon-yy'`,
+  // `mapping.columns.expiry: 'Expiration'`) — the same fields the existing
+  // "fills the composed contract form..." preset-fill test asserts for
+  // `applyPreset('tradezella')`. Source: design C9 ("calls `applyPreset
+  // (suggestion.id)`") and Req 7.1 ("the user applies it").
+  it('calls onChange with the preset applied when the suggestion button is clicked', () => {
+    const onChange = vi.fn();
+    render(<ColumnMapper columns={TRADEZELLA_COLUMNS} value={makeValue()} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use this preset' }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0] as ColumnMapperValue;
+    expect(next.presetId).toBe('tradezella');
+    expect(next.mapping.contractForm).toBe('composed');
+    expect(next.mapping.expiryFormat).toBe('dd-mon-yy');
+    expect(next.mapping.columns.expiry).toBe('Expiration');
+  });
+});
+
 describe('ColumnMapper — preset-only field rows', () => {
   it('renders no Multiplier / Notes-Codes rows for generic-execution', () => {
     const onChange = vi.fn();

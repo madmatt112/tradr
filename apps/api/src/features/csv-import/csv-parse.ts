@@ -27,6 +27,8 @@ export interface ParsedCsv {
   rows: string[][];
   /** Number of data rows. */
   rowCount: number;
+  /** 1-based file row per data row; absent = i + 2. Set by the row filter. */
+  rowNumbers?: number[];
 }
 
 const SUPPORTED_DELIMITERS: Delimiter[] = [',', ';', '\t'];
