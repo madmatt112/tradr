@@ -144,7 +144,7 @@ export * from './constants/currencies';
 export * from './constants/timezones';
 export * from './constants/expense-categories';
 export * from './constants/tags';
-export { CSV_IMPORT_PRESETS } from './constants/csv-import-presets';
+export { CSV_IMPORT_PRESETS, mappingColumns } from './constants/csv-import-presets';
 export * from './lib/occ';
 export * from './fees';
 export { calculateTrade } from './calculator';

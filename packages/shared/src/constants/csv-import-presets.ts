@@ -1,4 +1,4 @@
-import type { CsvPreset } from '../schemas/csv-import';
+import type { CsvPreset, Mapping } from '../schemas/csv-import';
 
 /**
  * In-repo broker presets (REQ-3). NOT database rows — pure config shipped with
@@ -145,3 +145,24 @@ export const CSV_IMPORT_PRESETS: CsvPreset[] = [
     },
   },
 ];
+
+/**
+ * Every CSV column a mapping reads (design C2): the values of `columns`, then
+ * `extraFeeColumns`, then `rowFilter.column`, deduplicated, in that order. The
+ * grounding check and the header suggestion both resolve a mapping's columns
+ * through this one helper (REQ-1.2 / 2.3 / 2.4).
+ */
+export function mappingColumns(mapping: Mapping): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const add = (column: string) => {
+    if (!seen.has(column)) {
+      seen.add(column);
+      result.push(column);
+    }
+  };
+  for (const column of Object.values(mapping.columns)) add(column);
+  for (const column of mapping.extraFeeColumns ?? []) add(column);
+  if (mapping.rowFilter) add(mapping.rowFilter.column);
+  return result;
+}
