@@ -7,11 +7,11 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * One journey, one freshly-registered demo user, walking the eight verification
  * steps of the spec:
  *
- *   1. Monthly preset; the March 2026 `breakdown-table` row, the calendar's
- *      March month total and its day cells all agree on net P&L.
+ *   1. Monthly preset; the April 2026 `breakdown-table` row, the calendar's
+ *      April month total and its day cells all agree on net P&L.
  *   2. A full same-tab document load of the stale `tz=UTC` URL after the
  *      reporting zone changed to Asia/Tokyo re-buckets the NVDA close from the
- *      4 March cell to the 5 March cell (04:30 JST), and back when restored.
+ *      29 April cell to the 30 April cell (04:30 JST), and back when restored.
  *   3. `by=symbol` over all-time: the rows' net P&L sums to the total row and
  *      that row counts ten closed positions.
  *   4. `by=tag`: the `breakout` and `calm` rows (both holding AAPL) and an
@@ -199,16 +199,16 @@ function percentToNumber(text: string | null): number {
 // close instant for a single-exit trade — rather than presuming an hour range.
 // ---------------------------------------------------------------------------
 const DEMO_CLOSED_EXITS = [
-  '2026-02-19T18:20:00.000Z', // AAPL
-  '2026-03-02T17:05:00.000Z', // MSFT
-  '2026-03-04T19:30:00.000Z', // NVDA
-  '2026-03-18T15:45:00.000Z', // TSLA
-  '2026-03-31T18:55:00.000Z', // AMD
-  '2026-04-24T19:10:00.000Z', // SPY
-  '2026-05-01T17:40:00.000Z', // META
-  '2026-05-19T18:15:00.000Z', // GOOGL
-  '2026-06-17T18:30:00.000Z', // AMZN
-  '2026-07-08T19:00:00.000Z', // QQQ
+  '2026-04-16T18:20:00.000Z', // AAPL
+  '2026-04-27T17:05:00.000Z', // MSFT
+  '2026-04-29T19:30:00.000Z', // NVDA
+  '2026-05-13T15:45:00.000Z', // TSLA
+  '2026-05-26T18:55:00.000Z', // AMD
+  '2026-06-19T19:10:00.000Z', // SPY
+  '2026-06-26T17:40:00.000Z', // META
+  '2026-07-14T18:15:00.000Z', // GOOGL
+  '2026-08-12T18:30:00.000Z', // AMZN
+  '2026-09-02T19:00:00.000Z', // QQQ
 ] as const;
 
 // DD12 weekday labels (breakdown.ts), indexed by getUTCDay() (0 = Sunday).
@@ -289,50 +289,50 @@ test.describe('calendar and breakdowns', () => {
 
     let staleUtcUrl = '';
 
-    // ---- Step 1: monthly preset, March 2026 calendar reconciles ------------
-    await test.step('1. March calendar day cells and month total match the breakdown row', async () => {
+    // ---- Step 1: monthly preset, April 2026 calendar reconciles ------------
+    await test.step('1. April calendar day cells and month total match the breakdown row', async () => {
       // A complete monthly window whose `end` sits in the past (every demo close
-      // is ≤ 2026-07-08). The bare-URL monthly default ends at start-of-tomorrow,
+      // is ≤ 2026-09-02). The bare-URL monthly default ends at start-of-tomorrow,
       // and step 2 resyncs the reporting zone to Asia/Tokyo — a zone ahead of UTC
       // — under which that near-now `end` exceeds the schema's "today + 1 day"
       // bound and 400s the page. A past `end` keeps this a monthly view over
-      // March 2026 and every closed demo trade without that edge (see the RETRO
+      // April 2026 and every closed demo trade without that edge (see the RETRO
       // reported for the loop: the resync + near-now window crash is a real one).
       await page.goto(
-        '/performance?granularity=month&start=2025-10-01T00:00:00.000Z&end=2026-08-01T00:00:00.000Z&tz=UTC',
+        '/performance?granularity=month&start=2025-12-01T00:00:00.000Z&end=2026-10-01T00:00:00.000Z&tz=UTC',
       );
       await expect(page.locator(PAGE)).toBeVisible();
       await expect(page.locator(`${PAGE} [data-testid="breakdown-table"]`)).toBeVisible();
       await expect(page.locator(`${PAGE} [data-testid="pnl-calendar"]`)).toBeVisible();
 
-      // Navigate the calendar back to March 2026 through the month control.
+      // Navigate the calendar back to April 2026 through the month control.
       const title = page.getByTestId('calendar-month-title');
       const prev = page.getByTestId('calendar-prev');
       await expect
         .poll(
           async () => {
             const t = (await title.textContent())?.trim();
-            if (t !== 'March 2026') await prev.click();
+            if (t !== 'April 2026') await prev.click();
             return t;
           },
           { timeout: 30_000, intervals: [200] },
         )
-        .toBe('March 2026');
-      await expect(page).toHaveURL(/month=2026-03/);
+        .toBe('April 2026');
+      await expect(page).toHaveURL(/month=2026-04/);
 
-      // The month header total equals the "Mar 2026" breakdown-table row net.
-      const marchRow = page
+      // The month header total equals the "Apr 2026" breakdown-table row net.
+      const monthRow = page
         .locator(`${PAGE} [data-testid="breakdown-table"] tbody tr`)
-        .filter({ hasText: 'Mar 2026' });
-      await expect(marchRow).toHaveCount(1);
-      const marchRowNet = (await cellNumeric(marchRow, 5)).trim();
+        .filter({ hasText: 'Apr 2026' });
+      await expect(monthRow).toHaveCount(1);
+      const monthRowNet = (await cellNumeric(monthRow, 5)).trim();
       const monthTotalText = (
         (await page
           .locator('[data-testid="calendar-month-total"] [data-testid="numeric"]')
           .first()
           .textContent()) ?? ''
       ).trim();
-      expect(monthTotalText).toBe(marchRowNet);
+      expect(monthTotalText).toBe(monthRowNet);
 
       // The active day cells sum (as exact minor units) to that same figure.
       const dayCells = page.locator(`${PAGE} [data-testid="pnl-calendar"] tbody td[aria-label]`);
@@ -348,22 +348,22 @@ test.describe('calendar and breakdowns', () => {
         activeDays += 1;
       }
       expect(activeDays).toBeGreaterThan(0);
-      expect(sumCents).toBe(moneyToCents(marchRowNet));
+      expect(sumCents).toBe(moneyToCents(monthRowNet));
 
       staleUtcUrl = page.url();
       expect(staleUtcUrl).toMatch(/tz=UTC/);
     });
 
     // ---- Step 2: the reload-durable reporting-zone flip --------------------
-    await test.step('2. NVDA close moves 4 → 5 March on the stale-URL reload and back', async () => {
+    await test.step('2. NVDA close moves 29 → 30 April on the stale-URL reload and back', async () => {
       const cell4 = page.locator(
-        `${PAGE} [data-testid="pnl-calendar"] td[aria-label^="March 4, 2026:"]`,
+        `${PAGE} [data-testid="pnl-calendar"] td[aria-label^="April 29, 2026:"]`,
       );
       const cell5 = page.locator(
-        `${PAGE} [data-testid="pnl-calendar"] td[aria-label^="March 5, 2026:"]`,
+        `${PAGE} [data-testid="pnl-calendar"] td[aria-label^="April 30, 2026:"]`,
       );
 
-      // Before: in UTC the NVDA close is on 4 March; 5 March is empty.
+      // Before: in UTC the NVDA close is on 29 April; 30 April is empty.
       await expect(cell4).toHaveAttribute('aria-label', /USD, \d+ positions?$/);
       await expect(cell5).toHaveAttribute('aria-label', /no activity$/);
 
@@ -380,14 +380,14 @@ test.describe('calendar and breakdowns', () => {
       await expect(page.locator(`${PAGE} [data-testid="pnl-calendar"]`)).toBeVisible();
       await expect(page).toHaveURL(/tz=Asia%2FTokyo/);
 
-      // After: 04:30 JST on 5 March; 4 March is now empty.
+      // After: 04:30 JST on 30 April; 29 April is now empty.
       await expect(cell5).toHaveAttribute('aria-label', /USD, \d+ positions?$/);
       await expect(cell4).toHaveAttribute('aria-label', /no activity$/);
       const tokyoUrl = page.url();
 
       // Set the zone back to UTC (the picker no longer offers UTC once Tokyo is
       // stored, so restore it over the API) and reload the Tokyo URL: the
-      // provenance resync rewrites tz back to UTC and the close returns to 4 March.
+      // provenance resync rewrites tz back to UTC and the close returns to 29 April.
       await setReportingTimezone(request, 'UTC');
       await page.goto(tokyoUrl);
       await expect(page.locator(`${PAGE} [data-testid="pnl-calendar"]`)).toBeVisible();
