@@ -631,7 +631,7 @@ test.describe('documentation screenshots', () => {
       // Explicit dates rather than the sidebar link's rolling default: the link
       // anchors its window on today, which would move the chart under every
       // regeneration. This window brackets the fixture's own span.
-      await page.goto('/performance?granularity=month&start=2026-02-01&end=2026-08-01&tz=UTC');
+      await page.goto('/performance?granularity=month&start=2026-04-01&end=2026-10-01&tz=UTC');
       await expect(page.getByTestId('performance-page')).toBeVisible();
       await shoot(page, 'performance', theme);
     }

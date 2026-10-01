@@ -249,7 +249,7 @@ describe('POST /api/accounts/demo', () => {
 
     // The ledger row lands on the close, not on the seeding run.
     const aapl = data.ledger.find((l) => l.symbol === 'AAPL')!;
-    expect(aapl.occurredAt).toBe('2026-02-19T18:20:00.000Z');
+    expect(aapl.occurredAt).toBe('2026-04-16T18:20:00.000Z');
     expect(aapl.amount).toBe('438.0000');
 
     // Closed positions have both fills; the planned one has only its entry.
