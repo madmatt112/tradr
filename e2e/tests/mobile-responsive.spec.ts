@@ -389,4 +389,28 @@ test.describe('mobile responsive routes', () => {
     await expectNoHorizontalScroll(page);
     await expectTargetSizes(page);
   });
+
+  test('the dashboard stack fits the phone (Req 6.1, 6.2, 6.6, 6.9, 7.1, 7.2)', async ({
+    page,
+  }) => {
+    await loginAs(page, seed.email);
+    await page.goto('/dashboard');
+
+    // Wait for the default widgets to render (Stats Summary, and the seeded
+    // open position's row inside Open Positions) before the phone-fit
+    // assertions, so the whole stack is on screen and not mid-render.
+    await expect(page.getByRole('heading', { name: 'Stats Summary' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Open Positions' })).toBeVisible();
+    await expect(page.getByRole('link', { name: seed.symbol })).toBeVisible();
+
+    // Requirement 6.6: the dashboard's mobile stack renders each widget full
+    // content width, with no page-level horizontal scroll — this is the
+    // observable proof that a widget's table (Req 7.1) reflows or scrolls
+    // inside its own container rather than forcing the page wide, and that no
+    // widget's flex row escapes its column.
+    await expectNoHorizontalScroll(page);
+    // Requirement 6.2: every visible interactive target (including each
+    // widget's row actions) is at least 24x24 CSS px.
+    await expectTargetSizes(page);
+  });
 });
