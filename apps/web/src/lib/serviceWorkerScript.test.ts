@@ -279,7 +279,11 @@ function dispatch(ctx: SandboxCtx, type: string, event: unknown): void {
 function routedFetch(routes: Record<string, () => Promise<Response>>) {
   return vi.fn(async (input: FakeRequest | string) => {
     const url = typeof input === 'string' ? input : input.url;
-    const key = url.startsWith(ORIGIN) ? url.slice(ORIGIN.length) || '/' : url;
+    // Resolve against ORIGIN so relative fetches (e.g. '/config.js') parse, then
+    // compare the parsed origin exactly — a substring/startsWith check on a URL
+    // can be spoofed (CodeQL: incomplete URL substring sanitization).
+    const parsed = new URL(url, ORIGIN);
+    const key = parsed.origin === ORIGIN ? parsed.pathname + parsed.search : url;
     const handler = routes[key] ?? routes[url];
     if (!handler) throw new Error(`unhandled fetch in test fixture: ${url}`);
     return handler();

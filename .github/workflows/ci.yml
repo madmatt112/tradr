@@ -218,7 +218,10 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, not 20: pwa-upgrade.spec.ts runs two real Vite production builds in-job
+    # (the two-build upgrade harness), which pushes the single-job suite past 20m
+    # on ubuntu-latest.
+    timeout-minutes: 30
 
     # ENCRYPTION_KEY is e2e-only (the API requires a 64-hex key on boot). The
     # other secrets (DATABASE_URL, SESSION_SECRET, NODE_ENV) come from the

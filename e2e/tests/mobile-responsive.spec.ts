@@ -23,16 +23,22 @@ import { expectNoHorizontalScroll, expectTargetSizes } from '../support/mobile-c
 
 const PASSWORD = 'test-password-1234';
 
+// A unique token per call. Prefer crypto.randomUUID (globally unique across
+// Playwright workers); fall back to a module-level incrementing counter. Never
+// Math.random — CodeQL flags it as insecure randomness even for test fixtures.
+let tokenCounter = 0;
+function uniqueToken(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${(tokenCounter += 1)}`;
+}
+
 function uniqueEmail(label: string): string {
-  return `e2e-mobile-${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
+  return `e2e-mobile-${label}-${Date.now()}-${uniqueToken().replace(/-/g, '').slice(0, 8)}@example.com`;
 }
 
 function uniqueSymbol(): string {
-  const uuid =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()}`;
-  return `TEST-MOBILE-${uuid.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+  return `TEST-MOBILE-${uniqueToken().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
 }
 
 /**
