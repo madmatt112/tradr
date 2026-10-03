@@ -25,21 +25,27 @@ vi.mock('@tanstack/react-router', () => ({
     children,
     className,
     search,
+    onClick,
     ...rest
   }: {
     to: string;
     children: React.ReactNode;
     className?: string;
     search?: unknown;
+    onClick?: (e: React.MouseEvent) => void;
   } & Record<string, unknown>) => {
     linkSearch.set(to, search);
     return (
       <a
         href={to}
         className={className}
+        // Record the click first, then forward any onClick the component passed
+        // (e.g. SidebarNav's `onNavigate`). Destructuring `onClick` out of
+        // `rest` stops the spread from replacing this recording handler.
         onClick={(e) => {
           e.preventDefault();
           linkClicks.push({ to });
+          onClick?.(e);
         }}
         {...rest}
       >
