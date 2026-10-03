@@ -413,4 +413,49 @@ test.describe('mobile responsive routes', () => {
     // widget's row actions) is at least 24x24 CSS px.
     await expectTargetSizes(page);
   });
+
+  test('the side drawer fits the phone across its tabs (Req 6.1, 6.2, 6.7)', async ({ page }) => {
+    await loginAs(page, seed.email);
+    await page.goto('/dashboard');
+
+    // Wait for the dashboard shell before opening the drawer, so the toggle is
+    // mounted and the page behind the drawer is not mid-render.
+    await expect(page.getByRole('heading', { name: 'Stats Summary' })).toBeVisible();
+
+    // Open the side drawer through its real toggle (DrawerToggle) and confirm
+    // its mobile mode is open.
+    await page.getByRole('button', { name: 'Open side drawer' }).click();
+    const drawer = page.getByTestId('side-drawer');
+    await expect(drawer).toHaveAttribute('data-state', 'open');
+
+    // Requirement 6.7 / design C6 item 6: the drawer's mobile mode meets the
+    // phone-fit checks on each of its four tabs. For each tab: select it,
+    // confirm it is the active tab, wait for that tab's settled content, then
+    // run both helpers over the whole page (the full-width drawer plus the
+    // dashboard behind it) — proof the drawer never forces the page wide and
+    // every tab's interactive targets are tappable.
+    const tabCases = [
+      { name: 'Open Positions', settled: /Cost Basis only/ },
+      { name: 'Quick Stats', settled: null },
+      { name: 'Options Pricing', settled: /Inputs reset when you leave this tab/ },
+      { name: 'Recently Created', settled: /Sorted by creation date/ },
+    ] as const;
+
+    for (const { name, settled } of tabCases) {
+      const tab = page.getByRole('tab', { name });
+      await tab.click();
+      await expect(tab).toHaveAttribute('aria-selected', 'true');
+
+      if (settled) {
+        await expect(drawer.getByText(settled)).toBeVisible();
+      } else {
+        // Quick Stats renders four skeleton values while its performance and
+        // positions queries load; wait for the first real value instead.
+        await expect(drawer.getByTestId('quick-stats-win-rate-value')).toBeVisible();
+      }
+
+      await expectNoHorizontalScroll(page);
+      await expectTargetSizes(page);
+    }
+  });
 });
