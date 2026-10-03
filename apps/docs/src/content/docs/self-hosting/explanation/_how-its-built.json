@@ -36,5 +36,5 @@
     "e2e",
     "docker-smoke"
   ],
-  "dockerSmokeAssertions": 13
+  "dockerSmokeAssertions": 14
 }

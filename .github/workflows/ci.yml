@@ -742,6 +742,37 @@ jobs:
             exit 1
           fi
 
+      # (n) The PWA manifest and service worker must carry the right Content-Type
+      # and a revalidating Cache-Control, or browsers refuse to install the app
+      # and never pick up a new worker (C4 / Req 4.1-4.4). nginx's mime.types has
+      # no `webmanifest` entry, so the `location = /manifest.webmanifest` block is
+      # the only thing setting that type; this step is what fails if either block
+      # regresses. It runs against the container (l)/(m) left running (nginx was
+      # never touched by the METRICS_ENABLED flips).
+      - name: Assert manifest and worker headers (n)
+        run: |
+          mh=$(curl -sI "http://localhost:${WEB_PORT}/manifest.webmanifest" | tr -d '\r' || true)
+          echo "$mh"
+          echo "$mh" | grep -iq '^Content-Type: application/manifest+json' || {
+            echo "expected Content-Type application/manifest+json for /manifest.webmanifest"
+            exit 1
+          }
+          echo "$mh" | grep -iq '^Cache-Control:.*no-cache' || {
+            echo "expected Cache-Control: no-cache for /manifest.webmanifest"
+            exit 1
+          }
+
+          wh=$(curl -sI "http://localhost:${WEB_PORT}/sw.js" | tr -d '\r' || true)
+          echo "$wh"
+          echo "$wh" | grep -iqE '^Content-Type: (application|text)/javascript' || {
+            echo "expected Content-Type application/javascript or text/javascript for /sw.js"
+            exit 1
+          }
+          echo "$wh" | grep -iq '^Cache-Control:.*no-cache' || {
+            echo "expected Cache-Control: no-cache for /sw.js"
+            exit 1
+          }
+
       # Dump container logs on ANY failure above (Req 8.6).
       - name: Dump container logs on failure
         if: failure()
