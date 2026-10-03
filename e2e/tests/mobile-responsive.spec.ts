@@ -458,4 +458,52 @@ test.describe('mobile responsive routes', () => {
       await expectTargetSizes(page);
     }
   });
+
+  /**
+   * Requirement 6.8 / design C6 item 7: below 768px the `Tabs` root switches to
+   * `orientation="horizontal"` (design: "below 768 px the `Tabs` root gets
+   * orientation=\"horizontal\""), so every tab sits in the list's own
+   * `overflow-x-auto` scroll and the content below takes the full width, with
+   * no page-level horizontal scroll. One case per covered tab — billing,
+   * profile, account, help, tags, data, rules and advisor (the e2e API boots
+   * with DISABLE_ADVISOR=false, so the advisor tab renders). Each case
+   * navigates straight to the tab's route, confirms the `Tabs` root's
+   * orientation, confirms the tab is active, waits for a heading unique to
+   * that tab's content, then runs both phone-fit helpers.
+   */
+  const SETTINGS_TAB_CASES = [
+    { tabName: 'Billing', route: '/settings/billing', heading: 'Billing' },
+    { tabName: 'Profile', route: '/settings/profile', heading: 'Reporting timezone' },
+    { tabName: 'Account', route: '/settings/account', heading: 'Account' },
+    { tabName: 'Help', route: '/settings/help', heading: 'Help' },
+    { tabName: 'Tags', route: '/settings/tags', heading: 'Tags' },
+    { tabName: 'Data', route: '/settings/data', heading: 'Data' },
+    { tabName: 'Rules', route: '/settings/rules', heading: 'Rules' },
+    { tabName: 'Advisor', route: '/settings/advisor', heading: 'Advisor' },
+  ] as const;
+
+  for (const { tabName, route, heading } of SETTINGS_TAB_CASES) {
+    test(`the settings ${tabName} tab fits the phone (Req 6.1, 6.2, 6.8)`, async ({ page }) => {
+      await loginAs(page, seed.email);
+      await page.goto(route);
+
+      // The tab the route lands on is the active one, and its content is on
+      // screen before the phone-fit assertions run.
+      const activeTab = page.getByRole('tab', { name: tabName, exact: true });
+      await expect(activeTab).toHaveAttribute('aria-selected', 'true');
+
+      // Design C6 item 7: below 768px the settings Tabs root's orientation is
+      // "horizontal", not today's hardcoded "vertical" — the switch that turns
+      // TabsList into a full-width, horizontally-scrolling strip. The side
+      // drawer (always mounted in the layout shell) renders its own `Tabs`
+      // root too, so this walks up from the active settings tab itself to
+      // reach the settings `Tabs` root specifically, never the drawer's.
+      const settingsTabsRoot = activeTab.locator('xpath=ancestor::*[@data-slot="tabs"]');
+      await expect(settingsTabsRoot).toHaveAttribute('data-orientation', 'horizontal');
+      await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+
+      await expectNoHorizontalScroll(page);
+      await expectTargetSizes(page);
+    });
+  }
 });
