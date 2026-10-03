@@ -8,22 +8,20 @@
  * job — the one thing a single `vite preview` cannot do. Build B carries a marker
  * folded into every chunk's content hash, so the entry and the lazy route chunks
  * all get fresh hashes and the two `index.html` entry `src` values differ (the
- * helper fails loudly otherwise). The marker is folded through Rollup's
- * `augmentChunkHash` hook, not `output.banner`: a banner is appended after the
- * hash is computed and so leaves `[hash]` unchanged (verified against the
- * installed rollup under vite 6.4.1).
+ * helper fails loudly otherwise).
  *
- * Vite cannot be imported from the e2e package: `import('vite')` from `e2e/`
- * fails with `ERR_MODULE_NOT_FOUND` because vite is a dependency of apps/web, not
- * of e2e, and pnpm does not hoist it to the workspace root. It is loaded with
- * `createRequire` anchored at `apps/web/package.json` and a dynamic import of the
- * resolved path (Requirement 8.4).
+ * The two builds run in a short-lived CHILD process (pwa-build-worker.ts, run
+ * with tsx) that `buildPair` spawns and awaits. In-process they left esbuild's
+ * service process and the builds' retained resources alive for the rest of the
+ * single-worker e2e job, starving every spec that ran after pwa-upgrade.spec.ts
+ * on the 2-core CI runner; a child process reclaims all of it on exit.
  *
  * The server never writes into `apps/web/dist`: every build targets an `outDir`
  * under the OS temp directory. The generated `/config.js` is the minimal body the
  * docker entrypoint writes at runtime (`docker/docker-entrypoint.d/10-runtime-config.sh`);
  * production adds other keys, which this harness does not need.
  */
+import { spawn } from 'node:child_process';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
 import {
   createServer,
@@ -33,26 +31,16 @@ import {
   type ServerResponse,
 } from 'node:http';
 import { createRequire } from 'node:module';
-import { extname, join, resolve, sep } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Design Data Models: the harness binds port 4604 (free alongside the stub
 // servers on 4599-4603, the API on 3100 and web on 5173).
 const DEFAULT_PORT = 4604;
 
-const WEB_ROOT = fileURLToPath(new URL('../../apps/web', import.meta.url));
-const WEB_PACKAGE_JSON = join(WEB_ROOT, 'package.json');
-const WEB_CONFIG_FILE = join(WEB_ROOT, 'vite.config.ts');
-
-// Build B's marker: folded into every chunk's content hash (and prepended as a
-// banner for a visible trace), so build B's entry and lazy chunks all differ
-// from build A's.
-const BUILD_B_MARKER = '/* pwa-upgrade-b */';
-
-// A permissive `build` option bag — the e2e package cannot resolve vite's types
-// any more than it can resolve vite itself, so the inline config is typed loosely
-// and vite validates it at run time.
-type ViteBuild = (inlineConfig: Record<string, unknown>) => Promise<unknown>;
+// The child-process builder, run with tsx so the two Vite builds (and their
+// esbuild service) are fully reclaimed when it exits.
+const BUILD_WORKER = fileURLToPath(new URL('./pwa-build-worker.ts', import.meta.url));
 
 /**
  * The module entry `<script type="module" src="...">` value from a built
@@ -69,51 +57,38 @@ export function readEntrySrc(buildDir: string): string {
 }
 
 /**
- * Build apps/web twice into `<outDir>/a` and `<outDir>/b` through vite's Node API
- * (loaded via `createRequire` anchored at apps/web). Build B carries a banner so
- * its entry hash differs; the helper throws unless the two entry `src` values
- * differ. Returns the two build directories for {@link startPwaBuildServer}.
+ * Build apps/web twice into `<outDir>/a` and `<outDir>/b` by spawning
+ * {@link BUILD_WORKER} (pwa-build-worker.ts) in a short-lived tsx child process
+ * and awaiting its exit, so esbuild and Vite are fully reclaimed and never starve
+ * the rest of the single-worker e2e job. Build B carries a marker so its entry
+ * hash differs; the helper throws unless the two entry `src` values differ.
+ * Returns the two build directories for {@link startPwaBuildServer}.
  */
 export async function buildPair(outDir: string): Promise<{ a: string; b: string }> {
-  const require = createRequire(WEB_PACKAGE_JSON);
-  const vitePath = require.resolve('vite');
-  const { build } = (await import(vitePath)) as { build: ViteBuild };
+  // Resolve the tsx CLI from the workspace root (hoisted there, not in e2e) so
+  // the worker's TypeScript runs without a prior compile step.
+  const require = createRequire(import.meta.url);
+  const tsxPackageJson = require.resolve('tsx/package.json');
+  const tsxBin = JSON.parse(readFileSync(tsxPackageJson, 'utf8')).bin as string;
+  const tsxCli = join(dirname(tsxPackageJson), tsxBin);
+
+  await new Promise<void>((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [tsxCli, BUILD_WORKER, outDir], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) resolvePromise();
+      else reject(new Error(`pwa-build-server: build worker exited with code ${code}`));
+    });
+  });
 
   const aDir = join(outDir, 'a');
   const bDir = join(outDir, 'b');
 
-  const buildOne = async (buildOutDir: string, marker?: string): Promise<void> => {
-    await build({
-      root: WEB_ROOT,
-      configFile: WEB_CONFIG_FILE,
-      logLevel: 'warn',
-      // `augmentChunkHash` folds the marker into every chunk's content hash so the
-      // entry and the lazy route chunks all get new hashes; the banner is a
-      // visible trace only (it does not affect the hash on its own).
-      ...(marker
-        ? {
-            plugins: [
-              {
-                name: 'pwa-upgrade-variant',
-                augmentChunkHash: () => marker,
-              },
-            ],
-          }
-        : {}),
-      build: {
-        outDir: buildOutDir,
-        emptyOutDir: true,
-        ...(marker ? { rollupOptions: { output: { banner: marker } } } : {}),
-      },
-    });
-  };
-
-  await buildOne(aDir);
-  await buildOne(bDir, BUILD_B_MARKER);
-
   if (readEntrySrc(aDir) === readEntrySrc(bDir)) {
     throw new Error(
-      'pwa-build-server: builds A and B share an entry src — the banner did not change the hash',
+      'pwa-build-server: builds A and B share an entry src — the marker did not change the hash',
     );
   }
 
