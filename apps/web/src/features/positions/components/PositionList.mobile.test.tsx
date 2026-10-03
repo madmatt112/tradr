@@ -15,7 +15,7 @@ import { makePosition } from '@/features/positions/__fixtures__/position-fixture
 const h = vi.hoisted(() => ({
   navigate: vi.fn(),
   inspectPosition: vi.fn(),
-  mediaQuery: vi.fn(() => false),
+  mediaQuery: vi.fn<(query: string) => boolean>(() => false),
 }));
 
 vi.mock('@tanstack/react-router', () => ({

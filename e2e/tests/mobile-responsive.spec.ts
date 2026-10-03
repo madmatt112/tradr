@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
+import { expectNoHorizontalScroll, expectTargetSizes } from '../support/mobile-checks';
+
 /**
  * Mobile responsive + navigation E2E (mobile-pwa design C7).
  *
@@ -264,5 +266,43 @@ test.describe('mobile navigation', () => {
       await expect(dialog.getByRole('link', { name, exact: true })).toBeVisible();
     }
     await expect(dialog.getByRole('button', { name: 'Log out' })).toBeVisible();
+  });
+});
+
+/**
+ * Requirement 6.1/6.2 per-route pass (design C6/C7). Each case renders a touched
+ * route at the iPhone 13 viewport and asserts the page does not scroll sideways
+ * and every visible interactive target is at least 24px. Later tasks add their
+ * routes to this block and share its one seed.
+ */
+test.describe('mobile responsive routes', () => {
+  test.skip(
+    ({ isMobile }) => !isMobile,
+    'Mobile-only: the responsive route pass runs at the iPhone 13 viewport (Req 6.1, 6.2).',
+  );
+
+  let seed: SeededFixture;
+
+  test.beforeAll(async ({ request }, testInfo) => {
+    // The desktop projects skip every test here; do not spend a seed on them.
+    if (!(testInfo.project.use as { isMobile?: boolean }).isMobile) return;
+    await ensureStackOrSkip(request);
+    seed = await seedFixture(request);
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await ensureStackOrSkip(page.request);
+  });
+
+  test('the positions list fits the phone (Req 6.1, 6.2)', async ({ page }) => {
+    await loginAs(page, seed.email);
+    await page.goto('/positions');
+
+    // Wait for the seeded open position's row before the phone-fit assertions, so
+    // the table is on screen and not mid-render.
+    await expect(page.getByRole('link', { name: seed.symbol })).toBeVisible();
+
+    await expectNoHorizontalScroll(page);
+    await expectTargetSizes(page);
   });
 });
