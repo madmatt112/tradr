@@ -111,7 +111,7 @@ export function WidgetCard({
             <DropdownMenu>
               <DropdownMenuTrigger
                 aria-label={`${def.displayName} menu`}
-                className="cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent"
+                className="cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center max-md:justify-center"
               >
                 <span aria-hidden="true">···</span>
               </DropdownMenuTrigger>
