@@ -38,6 +38,11 @@ function readIndexHtml(): string {
   return readFileSync(path.resolve(__dirname, '../../index.html'), 'utf8');
 }
 
+function readManifest(): { theme_color: string; background_color: string } {
+  const raw = readFileSync(path.resolve(__dirname, '../../public/manifest.webmanifest'), 'utf8');
+  return JSON.parse(raw) as { theme_color: string; background_color: string };
+}
+
 // The `@theme` (light) block declares --color-background before the `.dark`
 // block re-values it, so the first match is light and the second is dark.
 function extractBackgroundTokens(css: string): [string, string] {
@@ -76,5 +81,11 @@ describe('PWA theme colours track the background tokens (culori guard, Req 1.4, 
   it('INLINE_BOOT_SCRIPT_SOURCE carries the culori hex of both background tokens (the boot-script branch literals, Req 1.5/D10)', () => {
     expect(INLINE_BOOT_SCRIPT_SOURCE).toContain(lightHex);
     expect(INLINE_BOOT_SCRIPT_SOURCE).toContain(darkHex);
+  });
+
+  it('manifest.webmanifest theme_color and background_color equal the culori hex of the light background token (Req 1.1, D10)', () => {
+    const manifest = readManifest();
+    expect(manifest.theme_color).toBe(lightHex);
+    expect(manifest.background_color).toBe(lightHex);
   });
 });
