@@ -17,6 +17,12 @@ export function applyBootTheme(): void {
   const root = document.documentElement;
   if (resolved === 'dark') root.classList.add('dark');
   else root.classList.remove('dark');
+  if (valid === 'light' || valid === 'dark') {
+    const themeColor = valid === 'dark' ? '#0c0d0f' : '#ffffff';
+    document
+      .querySelectorAll('meta[name="theme-color"]')
+      .forEach((meta) => meta.setAttribute('content', themeColor));
+  }
 }
 
 export function readCookie(name: string): string | null {
@@ -39,5 +45,10 @@ export const INLINE_BOOT_SCRIPT_SOURCE = `
     : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   if (resolved === 'dark') document.documentElement.classList.add('dark');
   else document.documentElement.classList.remove('dark');
+  if (valid === 'light' || valid === 'dark') {
+    var themeColor = valid === 'dark' ? '#0c0d0f' : '#ffffff';
+    var metas = document.querySelectorAll('meta[name="theme-color"]');
+    for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', themeColor);
+  }
 })();
 `.trim();

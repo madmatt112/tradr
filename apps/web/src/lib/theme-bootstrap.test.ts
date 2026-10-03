@@ -205,4 +205,22 @@ describe('applyBootTheme — theme-color metas (Requirement 1.5)', () => {
     applyBootTheme();
     expect(themeColorContents()).toEqual(['#ffffff', '#ffffff']);
   });
+
+  // D7: a `system` or absent cookie leaves the media-matched metas alone, even
+  // when matchMedia resolves a theme for the .dark class. Guards against keying
+  // the branch on the resolved theme instead of the explicit cookie value.
+  it('cookie "system" leaves both theme-color metas unchanged (D7)', () => {
+    addThemeColorMetas('#ffffff', '#0c0d0f');
+    setCookie('system');
+    mockMatchMedia(true); // resolves dark for the class, but no explicit cookie
+    applyBootTheme();
+    expect(themeColorContents()).toEqual(['#ffffff', '#0c0d0f']);
+  });
+
+  it('absent cookie leaves both theme-color metas unchanged (D7)', () => {
+    addThemeColorMetas('#ffffff', '#0c0d0f');
+    mockMatchMedia(true);
+    applyBootTheme();
+    expect(themeColorContents()).toEqual(['#ffffff', '#0c0d0f']);
+  });
 });

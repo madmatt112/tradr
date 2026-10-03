@@ -8,6 +8,8 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c0d0f" media="(prefers-color-scheme: dark)" />
     <!-- tradr:boot-theme -->
     <script>
 (function () {
@@ -21,6 +23,11 @@
     : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   if (resolved === 'dark') document.documentElement.classList.add('dark');
   else document.documentElement.classList.remove('dark');
+  if (valid === 'light' || valid === 'dark') {
+    var themeColor = valid === 'dark' ? '#0c0d0f' : '#ffffff';
+    var metas = document.querySelectorAll('meta[name="theme-color"]');
+    for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', themeColor);
+  }
 })();
     </script>
     <!-- /tradr:boot-theme -->
