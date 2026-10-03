@@ -354,4 +354,39 @@ test.describe('mobile responsive routes', () => {
     await expect(page.getByRole('columnheader', { name: 'Fees' })).toBeHidden();
     await expect(page.getByRole('columnheader', { name: 'Notes' })).toBeHidden();
   });
+
+  test('the fill dialog fits the phone (Req 6.1, 6.2, 6.5)', async ({ page }) => {
+    await loginAs(page, seed.email);
+    await page.goto(`/positions/${seed.positionId}`);
+    await expect(page.getByRole('heading', { name: seed.symbol })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Add Fill' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Add Fill' });
+    await expect(dialog).toBeVisible();
+
+    // Requirement 6.5: the dialog itself is never taller than the viewport.
+    const innerHeight = await page.evaluate(() => window.innerHeight);
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox, 'fill dialog has a bounding box').not.toBeNull();
+    expect(
+      dialogBox!.height,
+      `dialog height (${dialogBox!.height}) must not exceed viewport height (${innerHeight})`,
+    ).toBeLessThanOrEqual(innerHeight);
+
+    // Requirement 6.5: the submit control is reachable by scrolling inside the
+    // dialog, not clipped past the viewport edge.
+    const submit = dialog.getByRole('button', { name: 'Add', exact: true });
+    await submit.scrollIntoViewIfNeeded();
+    const submitBox = await submit.boundingBox();
+    expect(submitBox, 'submit control has a bounding box').not.toBeNull();
+    expect(
+      submitBox!.y + submitBox!.height,
+      `submit control bottom (${submitBox!.y + submitBox!.height}) must stay within the viewport (${innerHeight})`,
+    ).toBeLessThanOrEqual(innerHeight);
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeVisible();
+
+    // Requirement 6.1, 6.2: the rest of the phone-fit pass, with the dialog open.
+    await expectNoHorizontalScroll(page);
+    await expectTargetSizes(page);
+  });
 });
