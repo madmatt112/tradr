@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
+import { openMobileNavIfPresent } from '../support/mobile-nav';
+
 /**
  * Dashboard e2e suite (Task 46).
  *
@@ -113,6 +115,7 @@ async function loginViaUi(page: Page, email: string): Promise<void> {
  * Log out via the sidebar button. Returns once redirected to /login.
  */
 async function logoutViaUi(page: Page): Promise<void> {
+  await openMobileNavIfPresent(page);
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page).toHaveURL(/\/login/);
 }

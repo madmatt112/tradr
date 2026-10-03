@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
 
+import { openMobileNavIfPresent } from '../support/mobile-nav';
+
 /**
  * Expenses-tax e2e suite (Task 27).
  *
@@ -256,6 +258,7 @@ test.describe('Expenses-tax — expense CRUD', () => {
 
     // Navigate via sidebar — Accounting redirects to /accounting/expenses.
     await page.goto('/dashboard');
+    await openMobileNavIfPresent(page);
     await page.getByRole('link', { name: 'Accounting' }).click();
     await expect(page).toHaveURL(/\/accounting\/expenses/);
     await expect(page.getByRole('heading', { name: 'Expenses', exact: true })).toBeVisible();

@@ -1,6 +1,7 @@
 import { createFileRoute, Navigate, Outlet } from '@tanstack/react-router';
 
 import { DrawerToggleRefProvider } from '@/components/layout/DrawerToggleRefContext';
+import { MobileNav } from '@/components/layout/MobileNav';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { SideDrawer } from '@/components/layout/SideDrawer';
 import {
@@ -41,12 +42,14 @@ function AuthLayout() {
 
   return (
     <DrawerToggleRefProvider>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen max-md:flex-col">
         <EventBusBridge />
+        <MobileNav />
         <Sidebar />
         <main
           className={cn(
             'flex-1 p-6 transition-[padding] duration-200 ease-out motion-reduce:duration-0',
+            'max-md:min-w-0 max-md:p-4',
             drawerOpen && 'lg:pr-[384px]',
             feedbackMainGutterClasses(drawerOpen),
           )}

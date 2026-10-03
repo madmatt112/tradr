@@ -335,7 +335,9 @@ export function Sidebar() {
     // `align-items: stretch` from re-growing it.
     <aside
       className={cn(
-        'sticky top-0 flex h-screen flex-col border-r border-hairline bg-card',
+        // Below the md breakpoint the desk rail yields entirely to MobileNav;
+        // the overlay there reuses SidebarNav/SidebarSession (design C5).
+        'max-md:hidden sticky top-0 flex h-screen flex-col border-r border-hairline bg-card',
         'transition-[width] duration-200 motion-reduce:duration-0',
         expanded ? EXPANDED_WIDTH : RAIL_WIDTH,
       )}
