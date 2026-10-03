@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
+import { openMobileNavIfPresent } from '../support/mobile-nav';
+
 /**
  * changelog e2e suite (Task 14).
  *
@@ -177,6 +179,7 @@ test.describe('changelog', () => {
     await registerUser(page.request, 'badge');
 
     await gotoAndAwaitReleases(page, '/dashboard');
+    await openMobileNavIfPresent(page);
     const changelogLink = page.getByRole('link', { name: 'Changelog' });
     await expect(changelogLink).toBeVisible();
     await expect(changelogLink).toHaveAttribute('href', '/changelog');
@@ -191,6 +194,7 @@ test.describe('changelog', () => {
 
     // Badge stays absent after a full reload (floor only ever moves forward).
     await gotoAndAwaitReleases(page, '/dashboard');
+    await openMobileNavIfPresent(page);
     await expect(page.getByRole('link', { name: 'Changelog' })).toBeVisible();
     await expect(page.getByText('New updates available')).toHaveCount(0);
   });

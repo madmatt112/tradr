@@ -282,7 +282,7 @@ export function CoachMark({ surface, available = true }: CoachMarkProps) {
               href={docsUrl(mark.docs)}
               target="_blank"
               rel="noreferrer"
-              className="pointer-events-auto cursor-pointer text-sm font-medium text-primary underline underline-offset-2"
+              className="pointer-events-auto cursor-pointer text-sm font-medium text-primary underline underline-offset-2 max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
             >
               Read more
             </a>

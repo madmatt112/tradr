@@ -1,5 +1,7 @@
 import { expect, type Page, type Response } from '@playwright/test';
 
+import { openMobileNavIfPresent } from '../support/mobile-nav';
+
 import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fixtures';
 
 /**
@@ -153,7 +155,15 @@ async function route404Chunk(page: Page, glob: string): Promise<void> {
  * the monitor", which must be true before the clock is fast-forwarded.
  */
 async function waitForAuthShell(page: Page): Promise<void> {
+  // Below md the Dashboard link lives in the MobileNav overlay, not the hidden
+  // rail — open it to see the link, then close it so the clock/prompt steps that
+  // follow act on the bare page.
+  const opened = await openMobileNavIfPresent(page);
   await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
+  if (opened) {
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('link', { name: 'Dashboard' })).toBeHidden();
+  }
 }
 
 test.describe('app update prompt', () => {
@@ -308,6 +318,7 @@ test.describe('app update prompt', () => {
     await waitForAuthShell(page);
 
     await page.clock.fastForward(5 * 60_000);
+    await openMobileNavIfPresent(page);
     await page.getByRole('link', { name: 'Positions' }).click();
     await expect(page).toHaveURL(/\/positions/);
     await page.clock.fastForward(10 * 60_000);
@@ -347,6 +358,7 @@ test.describe('app update prompt', () => {
     // Navigate to /changelog: the chunk 404s, the boundary spends its one
     // automatic reload (one extra document load), the reload's chunk 404s again,
     // the guard is spent, and the fallback renders.
+    await openMobileNavIfPresent(page);
     await page.getByRole('link', { name: 'Changelog' }).click();
     await expect(page.getByTestId('chunk-load-fallback')).toBeVisible();
     expect(loadCount).toBe(loadsAfterInitial + 1);

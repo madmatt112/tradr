@@ -25,21 +25,27 @@ vi.mock('@tanstack/react-router', () => ({
     children,
     className,
     search,
+    onClick,
     ...rest
   }: {
     to: string;
     children: React.ReactNode;
     className?: string;
     search?: unknown;
+    onClick?: (e: React.MouseEvent) => void;
   } & Record<string, unknown>) => {
     linkSearch.set(to, search);
     return (
       <a
         href={to}
         className={className}
+        // Record the click first, then forward any onClick the component passed
+        // (e.g. SidebarNav's `onNavigate`). Destructuring `onClick` out of
+        // `rest` stops the spread from replacing this recording handler.
         onClick={(e) => {
           e.preventDefault();
           linkClicks.push({ to });
+          onClick?.(e);
         }}
         {...rest}
       >
@@ -104,7 +110,7 @@ vi.mock('@/features/onboarding/hooks/useSidebarPin', () => ({
 
 import { useDrawerStore } from '@/stores/drawer.store';
 
-import { Sidebar } from './Sidebar';
+import { Sidebar, SidebarNav } from './Sidebar';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -413,6 +419,42 @@ describe('Sidebar — rail and expanded chrome states', () => {
     expect(aside?.className).toContain('w-14');
     // The pin itself is untouched — collapse is derived, not written back.
     expect(pinState.calls).toEqual([]);
+
+    unmount(container, root);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7 (design C5): the nav list is extracted to `SidebarNav({ expanded,
+// onNavigate })` so the rail and the mobile overlay share one destination
+// list. `SidebarNav` does not exist yet — this import fails until task 7
+// exports it.
+//
+// Contract:
+//   Pre-condition: SidebarNav is mounted standalone with expanded=true and an
+//     onNavigate spy, with the same Link/useAuth/etc. mocks as the rest of
+//     this file.
+//   Call: click the rendered Performance link (`a[href="/performance"]`).
+//   Observable result: the onNavigate spy was called exactly once.
+//   Source of expected value: design.md C5 — "Every link calls `onNavigate`
+//     on click." (tasks.md task 7 Prompt, Requirement 5.2).
+// ---------------------------------------------------------------------------
+
+describe('Sidebar — extracted SidebarNav', () => {
+  it('calls onNavigate once when a nav link is clicked', () => {
+    const onNavigate = vi.fn();
+    const { container, root } = mountWith(<SidebarNav expanded={true} onNavigate={onNavigate} />);
+
+    const performanceLink = Array.from(container.querySelectorAll('a')).find(
+      (a) => a.getAttribute('href') === '/performance',
+    );
+    expect(performanceLink).toBeDefined();
+
+    act(() => {
+      performanceLink!.click();
+    });
+
+    expect(onNavigate).toHaveBeenCalledTimes(1);
 
     unmount(container, root);
   });

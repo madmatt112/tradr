@@ -136,3 +136,91 @@ describe('applyBootTheme', () => {
     expect(dedented).toEqual(INLINE_BOOT_SCRIPT_SOURCE.trim());
   });
 });
+
+// Contract — Requirement 1.5 (D7): applyBootTheme() sets the browser's
+// theme-color before first paint when the cookie-resolved theme differs
+// from the system scheme. Pre-condition: two `meta[name="theme-color"]`
+// elements exist in <head> (one per `prefers-color-scheme` media value), as
+// index.html ships them (design C1). Call: `applyBootTheme()`. Observable
+// result: both metas' `content` attribute. Expected value source: design
+// C1's hex literals (`#ffffff` light, `#0c0d0f` dark — the culori
+// conversion of the `--color-background` tokens at apps/web/src/index.css:47
+// and :149, cross-checked in pwaColors.test.ts).
+//
+// Note: the companion D7 clause ("a `system` or absent cookie leaves the
+// metas alone") cannot be authored as a red test here — with no branch
+// implemented yet, the metas are never touched by any cookie value, so an
+// assertion of "unchanged on system" passes vacuously at base (RED-IMPOSSIBLE).
+// It becomes a meaningful regression check only once the light/dark branch
+// below exists; flagged for the implementer brief.
+function addThemeColorMetas(lightContent: string, darkContent: string): void {
+  const light = document.createElement('meta');
+  light.setAttribute('name', 'theme-color');
+  light.setAttribute('media', '(prefers-color-scheme: light)');
+  light.setAttribute('content', lightContent);
+  document.head.appendChild(light);
+
+  const dark = document.createElement('meta');
+  dark.setAttribute('name', 'theme-color');
+  dark.setAttribute('media', '(prefers-color-scheme: dark)');
+  dark.setAttribute('content', darkContent);
+  document.head.appendChild(dark);
+}
+
+function removeThemeColorMetas(): void {
+  document.querySelectorAll('meta[name="theme-color"]').forEach((el) => el.remove());
+}
+
+function themeColorContents(): string[] {
+  return Array.from(document.querySelectorAll('meta[name="theme-color"]')).map(
+    (el) => el.getAttribute('content') ?? '',
+  );
+}
+
+describe('applyBootTheme — theme-color metas (Requirement 1.5)', () => {
+  beforeEach(() => {
+    clearCookie();
+    document.documentElement.classList.remove('dark');
+  });
+
+  afterEach(() => {
+    clearCookie();
+    document.documentElement.classList.remove('dark');
+    removeThemeColorMetas();
+    vi.restoreAllMocks();
+  });
+
+  it('cookie "dark" (system prefers light, so the resolved theme differs) sets both theme-color metas to #0c0d0f', () => {
+    addThemeColorMetas('#ffffff', '#0c0d0f');
+    setCookie('dark');
+    mockMatchMedia(false); // system prefers light
+    applyBootTheme();
+    expect(themeColorContents()).toEqual(['#0c0d0f', '#0c0d0f']);
+  });
+
+  it('cookie "light" (system prefers dark, so the resolved theme differs) sets both theme-color metas to #ffffff', () => {
+    addThemeColorMetas('#ffffff', '#0c0d0f');
+    setCookie('light');
+    mockMatchMedia(true); // system prefers dark
+    applyBootTheme();
+    expect(themeColorContents()).toEqual(['#ffffff', '#ffffff']);
+  });
+
+  // D7: a `system` or absent cookie leaves the media-matched metas alone, even
+  // when matchMedia resolves a theme for the .dark class. Guards against keying
+  // the branch on the resolved theme instead of the explicit cookie value.
+  it('cookie "system" leaves both theme-color metas unchanged (D7)', () => {
+    addThemeColorMetas('#ffffff', '#0c0d0f');
+    setCookie('system');
+    mockMatchMedia(true); // resolves dark for the class, but no explicit cookie
+    applyBootTheme();
+    expect(themeColorContents()).toEqual(['#ffffff', '#0c0d0f']);
+  });
+
+  it('absent cookie leaves both theme-color metas unchanged (D7)', () => {
+    addThemeColorMetas('#ffffff', '#0c0d0f');
+    mockMatchMedia(true);
+    applyBootTheme();
+    expect(themeColorContents()).toEqual(['#ffffff', '#0c0d0f']);
+  });
+});

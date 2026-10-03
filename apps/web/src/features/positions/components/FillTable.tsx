@@ -53,9 +53,9 @@ export function FillTable({ fills, positionId, positionStatus }: Props) {
             <TableHead>Type</TableHead>
             <TableHead className="text-right">Price</TableHead>
             <TableHead className="text-right">Qty</TableHead>
-            <TableHead className="text-right">Fees</TableHead>
+            <TableHead className="text-right max-md:hidden">Fees</TableHead>
             <TableHead>Date</TableHead>
-            <TableHead>Notes</TableHead>
+            <TableHead className="max-md:hidden">Notes</TableHead>
             <TableHead className="w-12" />
           </TableRow>
         </TableHeader>
@@ -76,9 +76,11 @@ export function FillTable({ fills, positionId, positionStatus }: Props) {
                 </TableCell>
                 <TableCell className="text-right">{fill.price}</TableCell>
                 <TableCell className="text-right">{fill.quantity}</TableCell>
-                <TableCell className="text-right">{fill.fees}</TableCell>
+                <TableCell className="text-right max-md:hidden">{fill.fees}</TableCell>
                 <TableCell>{new Date(fill.filledAt).toLocaleString()}</TableCell>
-                <TableCell className="max-w-32 truncate">{fill.notes || '—'}</TableCell>
+                <TableCell className="max-w-32 truncate max-md:hidden">
+                  {fill.notes || '—'}
+                </TableCell>
                 <TableCell>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

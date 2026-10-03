@@ -20,6 +20,7 @@ import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { TagChipList } from '@/features/tags/components/TagChip';
 import { TagFilterControl } from '@/features/tags/components/TagFilterControl';
 import { useTags } from '@/features/tags/hooks/useTags';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { captureClientEvent } from '@/lib/telemetry/posthog';
 import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
@@ -64,6 +65,10 @@ export function PositionList() {
   // in a single reflow, and the drawer's own transition already honours
   // reduced motion.
   const drawerOpen = useDrawerStore((s) => s.isOpen);
+  // Below 768 px a row click opens the full detail page, not the inspect drawer
+  // (design D12): the phone drawer is a full-screen overlay that only duplicates
+  // that page. jsdom's matchMedia stub returns false, so desktop keeps inspect.
+  const isPhone = useMediaQuery('(max-width: 767px)');
 
   const hasAccounts = !!accounts?.length;
 
@@ -109,7 +114,7 @@ export function PositionList() {
         }
       />
 
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex items-center gap-3 max-md:flex-wrap">
         <Tabs
           value={search.status ?? 'all'}
           onValueChange={(value) =>
@@ -182,14 +187,14 @@ export function PositionList() {
               <TableHead>Side</TableHead>
               <TableHead>Status</TableHead>
               {!drawerOpen && <TableHead className="hidden md:table-cell">Tags</TableHead>}
-              {!drawerOpen && <TableHead>Account</TableHead>}
-              <TableHead className="text-right">Qty</TableHead>
-              {!drawerOpen && <TableHead className="text-right">Entry</TableHead>}
-              {!drawerOpen && <TableHead className="text-right">Exit</TableHead>}
+              {!drawerOpen && <TableHead className="max-md:hidden">Account</TableHead>}
+              <TableHead className="text-right max-md:hidden">Qty</TableHead>
+              {!drawerOpen && <TableHead className="text-right max-md:hidden">Entry</TableHead>}
+              {!drawerOpen && <TableHead className="text-right max-md:hidden">Exit</TableHead>}
               <TableHead className="text-right">P&L</TableHead>
-              <TableHead className="text-right">R</TableHead>
-              {!drawerOpen && <TableHead className="text-right">Fees</TableHead>}
-              {!drawerOpen && <TableHead className="text-right">Age</TableHead>}
+              <TableHead className="text-right max-md:hidden">R</TableHead>
+              {!drawerOpen && <TableHead className="text-right max-md:hidden">Fees</TableHead>}
+              {!drawerOpen && <TableHead className="text-right max-md:hidden">Age</TableHead>}
               <TableHead className="w-10 text-right">
                 <span className="sr-only">Actions</span>
               </TableHead>
@@ -215,6 +220,10 @@ export function PositionList() {
                   data-state={selected ? 'selected' : undefined}
                   onClick={(e) => {
                     if (!shouldNavigateFromRowClick(e)) return;
+                    if (isPhone) {
+                      navigate({ to: '/positions/$positionId', params: { positionId: pos.id } });
+                      return;
+                    }
                     inspectPosition(pos);
                   }}
                 >
@@ -224,7 +233,7 @@ export function PositionList() {
                     <Link
                       to="/positions/$positionId"
                       params={{ positionId: pos.id }}
-                      className="hover:underline"
+                      className="hover:underline max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
                       title={pos.symbol}
                     >
                       {optionContract ? optionContract.underlying : pos.symbol}
@@ -249,8 +258,10 @@ export function PositionList() {
                       <TagChipList tags={pos.tags ?? []} max={3} />
                     </TableCell>
                   )}
-                  {!drawerOpen && <TableCell className="py-0">{pos.accountName}</TableCell>}
-                  <TableCell className="py-0 text-right">
+                  {!drawerOpen && (
+                    <TableCell className="py-0 max-md:hidden">{pos.accountName}</TableCell>
+                  )}
+                  <TableCell className="py-0 text-right max-md:hidden">
                     <Numeric
                       value={qty === 0 && pos.status === 'draft' ? null : qty}
                       kind="integer"
@@ -258,7 +269,7 @@ export function PositionList() {
                     />
                   </TableCell>
                   {!drawerOpen && (
-                    <TableCell className="py-0 text-right">
+                    <TableCell className="py-0 text-right max-md:hidden">
                       <Numeric
                         value={pos.avgEntryPrice}
                         kind="money"
@@ -268,7 +279,7 @@ export function PositionList() {
                     </TableCell>
                   )}
                   {!drawerOpen && (
-                    <TableCell className="py-0 text-right">
+                    <TableCell className="py-0 text-right max-md:hidden">
                       <Numeric
                         value={pos.avgExitPrice}
                         kind="money"
@@ -285,11 +296,11 @@ export function PositionList() {
                       direction="auto"
                     />
                   </TableCell>
-                  <TableCell className="py-0 text-right">
+                  <TableCell className="py-0 text-right max-md:hidden">
                     <Numeric value={pos.actualRR} kind="decimal" direction="auto" />
                   </TableCell>
                   {!drawerOpen && (
-                    <TableCell className="py-0 text-right">
+                    <TableCell className="py-0 text-right max-md:hidden">
                       <Numeric
                         value={pos.brokerageFees > 0 ? pos.brokerageFees : null}
                         kind="money"
@@ -299,7 +310,7 @@ export function PositionList() {
                     </TableCell>
                   )}
                   {!drawerOpen && (
-                    <TableCell className="py-0 text-right">
+                    <TableCell className="py-0 text-right max-md:hidden">
                       {age !== null ? (
                         <span className="font-mono text-xs text-muted-foreground">{age}d</span>
                       ) : (

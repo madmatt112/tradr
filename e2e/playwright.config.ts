@@ -149,6 +149,11 @@ export default defineConfig({
     baseURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    // Block service-worker registration suite-wide so every existing spec's
+    // page.route stubs of /config.js and /assets/ keep reaching the page, the
+    // same as today. Only the PWA specs opt back in with
+    // test.use({ serviceWorkers: 'allow' }) (design D7, Requirement 9.3).
+    serviceWorkers: 'block',
   },
   // Boot the full stack: UW stub → GitHub stub → SEC stub → quote stub → API
   // (all upstream base URLs → stubs) → web dev server.

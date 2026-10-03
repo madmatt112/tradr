@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
 
 import { promoteToAdmin } from '../support/db';
+import { openMobileNavIfPresent } from '../support/mobile-nav';
 
 /**
  * admin-platform e2e suite (Task 23).
@@ -124,6 +125,7 @@ test.describe('admin-platform', () => {
     // Sidebar shows the Admin link (shield icon entry below Settings) for
     // admins (REQ-7.2).
     await page.goto('/dashboard');
+    await openMobileNavIfPresent(page);
     const adminLink = page.getByRole('link', { name: 'Admin' });
     await expect(adminLink).toBeVisible();
     await expect(adminLink).toHaveAttribute('href', '/admin');
@@ -178,6 +180,7 @@ test.describe('admin-platform', () => {
     // No Admin link in the sidebar — but the sidebar itself IS rendered
     // (Settings is there), so the absence assertion is not vacuous (REQ-7.2).
     await page.goto('/dashboard');
+    await openMobileNavIfPresent(page);
     await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Admin' })).toHaveCount(0);
 

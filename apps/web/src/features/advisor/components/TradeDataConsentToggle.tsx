@@ -60,6 +60,7 @@ export function TradeDataConsentToggle() {
             onCheckedChange={onToggle}
             disabled={isLoading}
             aria-label="Trade-data access"
+            className="max-md:min-h-6"
           />
           <Label htmlFor="trade-data-consent" className="cursor-pointer">
             {consent ? 'On' : 'Off'}
@@ -67,7 +68,7 @@ export function TradeDataConsentToggle() {
         </div>
 
         <Collapsible open={disclosureOpen} onOpenChange={setDisclosureOpen}>
-          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-sm font-medium text-foreground hover:underline">
+          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 text-sm font-medium text-foreground hover:underline max-md:min-h-6">
             What this means
             <ChevronDown
               className={`size-4 transition-transform ${disclosureOpen ? 'rotate-180' : ''}`}

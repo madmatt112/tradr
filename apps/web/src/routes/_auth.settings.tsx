@@ -12,6 +12,7 @@ import {
 
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { isAdvisorEnabledForRoute, useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 
 // Single composition point for the Settings shell. New tabs are added by
@@ -51,12 +52,24 @@ function SettingsLayout() {
   const tabs = visibleTabs(useAdvisorEnabled());
   // Active tab is driven by the URL (REQ-7.2). Fall back to the first tab.
   const active = tabs.find((t) => pathname.startsWith(t.route))?.id ?? tabs[0].id;
+  // Below 768px the tab rail cannot sit beside the content (design C6 item 7):
+  // the Tabs root switches to horizontal so the list becomes a full-width,
+  // horizontally-scrolling strip above the content, which then takes the full
+  // width. jsdom's matchMedia reports false, so unit tests keep today's layout.
+  const isPhone = useMediaQuery('(max-width: 767px)');
 
   return (
     <div className="space-y-6">
       <PageHeader page="Settings" className="mb-0" />
-      <Tabs value={active} orientation="vertical" className="flex-row">
-        <TabsList variant="line" className="shrink-0">
+      <Tabs
+        value={active}
+        orientation={isPhone ? 'horizontal' : 'vertical'}
+        className={isPhone ? undefined : 'flex-row'}
+      >
+        <TabsList
+          variant="line"
+          className={isPhone ? 'w-full justify-start overflow-x-auto' : 'shrink-0'}
+        >
           {tabs.map((tab) => {
             const Icon = tab.icon;
             return (

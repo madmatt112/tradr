@@ -3,3 +3,10 @@
 
 /config.js
   Cache-Control: no-store
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: no-cache
+
+/sw.js
+  Cache-Control: no-cache
