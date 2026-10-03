@@ -55,6 +55,7 @@ interface SeededFixture {
   accountId: string;
   positionId: string;
   symbol: string;
+  brokerageName: string;
 }
 
 async function registerUser(
@@ -79,6 +80,21 @@ async function createAccount(
   const res = await req.post('/api/accounts', { data: { name, currency } });
   expect(res.status(), `POST /accounts ${currency}`).toBe(201);
   return (await res.json()) as { id: string };
+}
+
+async function createBrokerage(req: APIRequestContext, name: string): Promise<{ id: string }> {
+  const res = await req.post('/api/brokerages', { data: { name } });
+  expect(res.status(), 'POST /brokerages').toBe(201);
+  return (await res.json()) as { id: string };
+}
+
+async function assignBrokerage(
+  req: APIRequestContext,
+  accountId: string,
+  brokerageId: string,
+): Promise<void> {
+  const res = await req.put(`/api/accounts/${accountId}`, { data: { brokerageId } });
+  expect(res.status(), 'PUT /accounts brokerageId').toBe(200);
 }
 
 async function createOpenPosition(
@@ -122,6 +138,13 @@ async function seedFixture(req: APIRequestContext): Promise<SeededFixture> {
   // authenticated as the user just created.
   const user = await registerUser(req, 'nav');
   const account = await createAccount(req, 'Mobile USD', 'USD');
+  // A brokerage on the account, not the position (positions.query.ts joins
+  // through accounts.brokerageId), so the detail page's brokerage-fees card
+  // renders its link rather than the "no brokerage assigned" placeholder —
+  // the element Requirement 6.2 / design C6 item 2 targets.
+  const brokerageName = `Mobile Brokerage ${Date.now()}`;
+  const brokerage = await createBrokerage(req, brokerageName);
+  await assignBrokerage(req, account.id, brokerage.id);
   const symbol = uniqueSymbol();
   const position = await createOpenPosition(req, account.id, symbol);
   await markOnboardingDone(req);
@@ -131,6 +154,7 @@ async function seedFixture(req: APIRequestContext): Promise<SeededFixture> {
     accountId: account.id,
     positionId: position.id,
     symbol,
+    brokerageName,
   };
 }
 
@@ -304,5 +328,30 @@ test.describe('mobile responsive routes', () => {
 
     await expectNoHorizontalScroll(page);
     await expectTargetSizes(page);
+  });
+
+  test('the position detail page and its fills table fit the phone (Req 6.1, 6.2, 6.4, 7.1, 7.2)', async ({
+    page,
+  }) => {
+    await loginAs(page, seed.email);
+    await page.goto(`/positions/${seed.positionId}`);
+
+    // Wait for the detail header and the seeded entry fill row before the
+    // phone-fit assertions, so the header, summary and fills table are all on
+    // screen and not mid-render.
+    await expect(page.getByRole('heading', { name: seed.symbol })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'entry' })).toBeVisible();
+
+    // Requirement 6.4 / design D14: the fills table may scroll inside its own
+    // container, but the PAGE itself must never scroll sideways — Fees and
+    // Notes must not be the thing that forces the page wide.
+    await expectNoHorizontalScroll(page);
+    await expectTargetSizes(page);
+
+    // Requirement 7.1: a compact-register table reflows by dropping columns,
+    // never by turning into stacked cards — Fees and Notes drop out of the
+    // accessibility tree below 768px rather than surviving as relabelled cards.
+    await expect(page.getByRole('columnheader', { name: 'Fees' })).toBeHidden();
+    await expect(page.getByRole('columnheader', { name: 'Notes' })).toBeHidden();
   });
 });
