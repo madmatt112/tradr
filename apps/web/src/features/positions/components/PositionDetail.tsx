@@ -120,9 +120,9 @@ export function PositionDetailView({ positionId }: Props) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between max-md:flex-col max-md:gap-4">
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 max-md:flex-wrap">
             <h1 className="text-2xl font-bold" title={position.symbol}>
               {optionContract ? optionContract.underlying : position.symbol}
             </h1>
@@ -154,7 +154,7 @@ export function PositionDetailView({ positionId }: Props) {
             </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 max-md:flex-wrap">
           <Button variant="outline" className="cursor-pointer" onClick={() => setEditOpen(true)}>
             Edit
           </Button>
@@ -307,7 +307,10 @@ export function PositionDetailView({ positionId }: Props) {
                 <p className="text-lg font-semibold">
                   {formatCurrency(position.brokerageFees, currency)}
                 </p>
-                <Link to="/brokerages" className="text-xs text-muted-foreground hover:underline">
+                <Link
+                  to="/brokerages"
+                  className="text-xs text-muted-foreground hover:underline max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
+                >
                   {position.brokerageName}
                 </Link>
               </>
