@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 /**
  * PWA installability e2e suite (design C7, Requirements 1.5, 1.6, 4.1, 9.1).
@@ -30,59 +30,22 @@ import { expect, test, type Page } from '@playwright/test';
  * because Playwright drives every context off-the-record — which broke case 1. The
  * default `chrome-headless-shell` returns `[]` and registers the worker in every
  * local run (the shell, the full browser headed, and a persistent context all
- * activate it in < 2s against this same preview build). On the GitHub Actions
- * runner the worker never registers in any browser mode; the diagnostic captures
- * why.
+ * activate it in < 2s against this same preview build).
+ *
+ * These cases assert the PRODUCTION APP's own registration (main.tsx →
+ * registerServiceWorker, on `load`): no test-side `register()`. Locally that
+ * resolves `.ready` in < 2s. On the GitHub Actions runner it does NOT — the app's
+ * load-time registration is dropped (getRegistration stays null for 8s), so cases
+ * 1 and 3 hang on `.ready` exactly as pwa-upgrade.spec.ts does. A round-4
+ * diagnostic proved an EXPLICIT in-page `register('/sw.js')` DOES resolve and
+ * activate the worker on the runner, so the worker can run there — only the app's
+ * initial-load registration is lost under the runner's headless Chromium. That
+ * masking diagnostic was removed so the check is not falsely green; the runner
+ * wall is ESCALATED (needs real Chrome on the e2e jobs or a post-deploy synthetic
+ * check). Unreproducible locally.
  */
 
 test.use({ serviceWorkers: 'allow', colorScheme: 'light' });
-
-/**
- * Runner-only diagnostic. Service workers register only in a secure context
- * (`https` or `localhost`/`127.0.0.1`), so log the live origin and
- * `isSecureContext` to rule that in or out at a glance. Also snapshot the
- * registration lifecycle (polled briefly, exiting as soon as a worker is active)
- * so a CI run shows whether registration never started, stalled mid-install, or
- * activated — the config alone cannot answer that.
- */
-async function logPwaDiagnostic(page: Page): Promise<void> {
-  const diag = await page.evaluate(async () => {
-    const base = {
-      origin: location.origin,
-      isSecureContext: window.isSecureContext,
-      swSupported: 'serviceWorker' in navigator,
-    };
-    if (!('serviceWorker' in navigator)) return { ...base, registration: 'no-sw-api' as const };
-    const deadline = Date.now() + 8000;
-    let snapshot: Record<string, string | null> | null = null;
-    while (Date.now() < deadline) {
-      const reg = await navigator.serviceWorker.getRegistration('/').catch(() => null);
-      if (reg) {
-        snapshot = {
-          installing: reg.installing?.state ?? null,
-          waiting: reg.waiting?.state ?? null,
-          active: reg.active?.state ?? null,
-          controller: navigator.serviceWorker.controller?.state ?? null,
-        };
-        if (reg.active) break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    // When nothing registered, the SPA's own registration already rejected and
-    // was swallowed (serviceWorker.ts). Re-run it here — register() is idempotent
-    // for the same script+scope — to surface the reason the runner refuses the
-    // worker (MIME, security, or a resolved-but-never-activated promise).
-    let registerError: string | null = null;
-    if (!snapshot) {
-      registerError = await navigator.serviceWorker
-        .register('/sw.js', { scope: '/' })
-        .then(() => 'resolved (but getRegistration stayed null)')
-        .catch((err) => (err instanceof Error ? `${err.name}: ${err.message}` : String(err)));
-    }
-    return { ...base, registration: snapshot, registerError };
-  });
-  console.log(`[pwa-diagnostic] ${JSON.stringify(diag)}`);
-}
 
 test.describe('pwa installability', () => {
   test.skip(
@@ -92,7 +55,6 @@ test.describe('pwa installability', () => {
 
   test('1 — Chrome reports no installability errors on /', async ({ page, context }) => {
     await page.goto('/');
-    await logPwaDiagnostic(page);
     // The worker must be active before Chrome's installability pipeline settles.
     await page.evaluate(() => navigator.serviceWorker.ready);
 
@@ -114,7 +76,6 @@ test.describe('pwa installability', () => {
 
   test('3 — navigator.serviceWorker.ready resolves with an active worker', async ({ page }) => {
     await page.goto('/');
-    await logPwaDiagnostic(page);
     const hasActiveWorker = await page.evaluate(() =>
       navigator.serviceWorker.ready.then((registration) => registration.active !== null),
     );
