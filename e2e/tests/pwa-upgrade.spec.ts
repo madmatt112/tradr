@@ -94,7 +94,12 @@ async function shellCacheKeys(page: Page): Promise<string[]> {
   );
 }
 
-test.use({ serviceWorkers: 'allow' });
+// `channel: 'chromium'` opts into Chromium's new headless mode (the full browser).
+// The default headless run uses `chrome-headless-shell`, which never registers a
+// service worker, so the whole two-build flow hung to its per-test timeout on the
+// CI runner. `playwright install chromium` already downloads this binary, so no
+// extra CI install is needed. Scoped to this file, not the whole suite.
+test.use({ serviceWorkers: 'allow', channel: 'chromium' });
 
 test.describe('pwa upgrade across two builds', () => {
   // The whole suite — the two builds included — is Chromium desktop only.
@@ -103,7 +108,11 @@ test.describe('pwa upgrade across two builds', () => {
     'Chromium desktop only — a registering worker driven across two real builds.',
   );
   // A generous per-test budget covers the reloads and the clock-driven poll.
-  test.describe.configure({ timeout: 180_000 });
+  // retries: 0 — Playwright re-runs beforeAll on every retry, and beforeAll here
+  // runs two full production Vite builds. A retry would rebuild both and blow the
+  // dedicated job's time budget, so this suite never retries (overriding the
+  // config's CI default of 1).
+  test.describe.configure({ timeout: 180_000, retries: 0 });
 
   let tmpRoot: string | undefined;
   let builds: { a: string; b: string };
