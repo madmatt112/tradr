@@ -25,24 +25,22 @@ import { expect, test } from '@playwright/test';
  *
  * It runs on the suite's normal headless Chromium (no `channel` override). A
  * round forced `channel: 'chromium'` (the full browser / new headless) and was
- * reverted: it did not register the worker on the CI runner either, and the full
- * browser reports `Page.getInstallabilityErrors` as `[{ errorId: 'in-incognito' }]`
- * because Playwright drives every context off-the-record — which broke case 1. The
- * default `chrome-headless-shell` returns `[]` and registers the worker in every
- * local run (the shell, the full browser headed, and a persistent context all
- * activate it in < 2s against this same preview build).
+ * reverted: the full browser reports `Page.getInstallabilityErrors` as
+ * `[{ errorId: 'in-incognito' }]` because Playwright drives every context
+ * off-the-record — which broke case 1. The default `chrome-headless-shell`
+ * returns `[]` and activates the worker in < 2s against this same preview build.
  *
  * These cases assert the PRODUCTION APP's own registration (main.tsx →
- * registerServiceWorker, on `load`): no test-side `register()`. Locally that
- * resolves `.ready` in < 2s. On the GitHub Actions runner it does NOT — the app's
- * load-time registration is dropped (getRegistration stays null for 8s), so cases
- * 1 and 3 hang on `.ready` exactly as pwa-upgrade.spec.ts does. A round-4
- * diagnostic proved an EXPLICIT in-page `register('/sw.js')` DOES resolve and
- * activate the worker on the runner, so the worker can run there — only the app's
- * initial-load registration is lost under the runner's headless Chromium. That
- * masking diagnostic was removed so the check is not falsely green; the runner
- * wall is ESCALATED (needs real Chrome on the e2e jobs or a post-deploy synthetic
- * check). Unreproducible locally.
+ * registerServiceWorker, on `load`): no test-side `register()`. That registration
+ * is PROD-gated (`import.meta.env.PROD`), so it only runs in a build whose PROD is
+ * true. The CI workflow set NODE_ENV=test for the whole job, which made
+ * `vite build` compile import.meta.env.PROD to `false` (verified: the emitted
+ * chunk carries `isProd??!1` under test vs `isProd??!0` under production) — so the
+ * app's SW was a silent no-op in CI and cases 1 and 3 hung on `.ready`. The e2e
+ * job now forces NODE_ENV=production on the webServer build step, and the worker
+ * registers on the runner exactly as it does locally. This IS reproducible
+ * locally: build the webServer SPA under NODE_ENV=test and the two cases fail here
+ * too (the earlier "unreproducible / runner wall" reading was wrong).
  */
 
 test.use({ serviceWorkers: 'allow', colorScheme: 'light' });

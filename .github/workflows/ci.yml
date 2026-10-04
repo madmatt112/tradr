@@ -261,6 +261,17 @@ jobs:
         run: pnpm --filter @tradr/e2e exec playwright install --with-deps chromium webkit
 
       - name: Run e2e suite (Playwright boots web + api + UW stub)
+        # NODE_ENV=production scopes to THIS step only (not `pnpm install`, which
+        # must keep devDependencies). The webServer `vite build` in
+        # playwright.config.ts compiles import.meta.env.PROD from NODE_ENV: under
+        # the workflow-level NODE_ENV=test it is `false`, so the app's own
+        # load-time registerServiceWorker() returns early and never registers —
+        # the SW-dependent specs then hang on navigator.serviceWorker.ready. The
+        # booted API pins NODE_ENV=development inside playwright.config.ts, so this
+        # override never reaches it, and the api/migrations vitest run lives in the
+        # separate test-api job, untouched.
+        env:
+          NODE_ENV: production
         # The PWA two-build upgrade harness (pwa-upgrade.spec.ts) runs in its own
         # e2e-pwa-upgrade job, not here — folded into this shared, long-running job
         # on the 2-vCPU runner it stalled late in the run (it passes in isolation,
@@ -325,6 +336,15 @@ jobs:
         run: pnpm --filter @tradr/e2e exec playwright install --with-deps chromium
 
       - name: Run the PWA upgrade harness (Playwright boots web + api + UW stub)
+        # NODE_ENV=production scopes to THIS step only (not `pnpm install`). The
+        # harness's buildPair spawns two `vite build`s (pwa-build-worker.ts) that
+        # inherit this process's env; under the workflow-level NODE_ENV=test
+        # import.meta.env.PROD compiles to `false`, so the app's own
+        # registerServiceWorker() is a no-op and the harness hangs on
+        # navigator.serviceWorker.ready. The booted API pins NODE_ENV=development
+        # in playwright.config.ts, so this override never reaches it.
+        env:
+          NODE_ENV: production
         run: pnpm --filter @tradr/e2e exec playwright test tests/pwa-upgrade.spec.ts --project=chromium
 
       - name: Upload Playwright report

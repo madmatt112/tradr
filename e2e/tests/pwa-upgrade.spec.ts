@@ -96,10 +96,14 @@ async function shellCacheKeys(page: Page): Promise<string[]> {
 
 // Runs on the suite's normal headless Chromium (no `channel` override). A round
 // forced `channel: 'chromium'` (the full browser) and was reverted — it did not
-// register the worker on the CI runner any more than the default does. The worker
-// registers and activates in < 2s locally in every browser mode against a real
-// production build, but never registers on the GitHub Actions runner; this harness
-// hangs at waitForWorker there for the same reason pwa.spec.ts case 3 does.
+// register the worker any more than the default does. The worker registers and
+// activates in < 2s in every browser mode against a build whose
+// import.meta.env.PROD is true. It "never registered on the runner" only because
+// the CI job set NODE_ENV=test, which compiled import.meta.env.PROD to `false` and
+// no-op'd the app's own registerServiceWorker() (the same cause as pwa.spec.ts);
+// the e2e-pwa-upgrade job now forces NODE_ENV=production on its run step, so
+// buildPair's two builds are genuinely PROD and the worker registers as it does
+// locally.
 test.use({ serviceWorkers: 'allow' });
 
 test.describe('pwa upgrade across two builds', () => {
