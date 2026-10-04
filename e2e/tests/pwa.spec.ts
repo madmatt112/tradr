@@ -23,18 +23,19 @@ import { expect, test, type Page } from '@playwright/test';
  * skips there. The iphone-13 project never collects it (its testMatch is
  * drawer.mobile only).
  *
- * `channel: 'chromium'` opts this spec into Chromium's new headless mode. Without
- * it, Playwright's default headless run uses the stripped-down
- * `chrome-headless-shell` binary (playwright-core registry getExecutableName:
- * `headless ? 'chromium-headless-shell' : 'chromium'`), which never registers a
- * service worker — so on the CI runner `navigator.serviceWorker.ready` hung to a
- * 30s timeout while every non-worker case passed. The new headless mode is the
- * full browser, and `playwright install chromium` already downloads that binary
- * (registry resolveBrowsers installs both), so no extra CI install is needed. The
- * override is scoped to this file, not the whole suite.
+ * It runs on the suite's normal headless Chromium (no `channel` override). A
+ * round forced `channel: 'chromium'` (the full browser / new headless) and was
+ * reverted: it did not register the worker on the CI runner either, and the full
+ * browser reports `Page.getInstallabilityErrors` as `[{ errorId: 'in-incognito' }]`
+ * because Playwright drives every context off-the-record — which broke case 1. The
+ * default `chrome-headless-shell` returns `[]` and registers the worker in every
+ * local run (the shell, the full browser headed, and a persistent context all
+ * activate it in < 2s against this same preview build). On the GitHub Actions
+ * runner the worker never registers in any browser mode; the diagnostic captures
+ * why.
  */
 
-test.use({ serviceWorkers: 'allow', colorScheme: 'light', channel: 'chromium' });
+test.use({ serviceWorkers: 'allow', colorScheme: 'light' });
 
 /**
  * Runner-only diagnostic. Service workers register only in a secure context
@@ -67,7 +68,18 @@ async function logPwaDiagnostic(page: Page): Promise<void> {
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    return { ...base, registration: snapshot };
+    // When nothing registered, the SPA's own registration already rejected and
+    // was swallowed (serviceWorker.ts). Re-run it here — register() is idempotent
+    // for the same script+scope — to surface the reason the runner refuses the
+    // worker (MIME, security, or a resolved-but-never-activated promise).
+    let registerError: string | null = null;
+    if (!snapshot) {
+      registerError = await navigator.serviceWorker
+        .register('/sw.js', { scope: '/' })
+        .then(() => 'resolved (but getRegistration stayed null)')
+        .catch((err) => (err instanceof Error ? `${err.name}: ${err.message}` : String(err)));
+    }
+    return { ...base, registration: snapshot, registerError };
   });
   console.log(`[pwa-diagnostic] ${JSON.stringify(diag)}`);
 }

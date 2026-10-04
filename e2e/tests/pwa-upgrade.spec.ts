@@ -94,12 +94,13 @@ async function shellCacheKeys(page: Page): Promise<string[]> {
   );
 }
 
-// `channel: 'chromium'` opts into Chromium's new headless mode (the full browser).
-// The default headless run uses `chrome-headless-shell`, which never registers a
-// service worker, so the whole two-build flow hung to its per-test timeout on the
-// CI runner. `playwright install chromium` already downloads this binary, so no
-// extra CI install is needed. Scoped to this file, not the whole suite.
-test.use({ serviceWorkers: 'allow', channel: 'chromium' });
+// Runs on the suite's normal headless Chromium (no `channel` override). A round
+// forced `channel: 'chromium'` (the full browser) and was reverted — it did not
+// register the worker on the CI runner any more than the default does. The worker
+// registers and activates in < 2s locally in every browser mode against a real
+// production build, but never registers on the GitHub Actions runner; this harness
+// hangs at waitForWorker there for the same reason pwa.spec.ts case 3 does.
+test.use({ serviceWorkers: 'allow' });
 
 test.describe('pwa upgrade across two builds', () => {
   // The whole suite — the two builds included — is Chromium desktop only.
