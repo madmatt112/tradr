@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client';
 import { setRouter } from './lib/api';
 import { installChunkRecovery } from './lib/chunkRecovery';
 import { queryClient } from './lib/queryClient';
+import { registerServiceWorker } from './lib/serviceWorker';
 import { initPostHogClient } from './lib/telemetry/posthog';
 import { routeTree } from './routeTree.gen';
 import './index.css';
@@ -38,3 +39,8 @@ createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </StrictMode>,
 );
+
+// Register the service worker after first render (design Component 3). The call
+// is internally gated — a no-op in dev/preview builds and where service workers
+// are unsupported — and never blocks first paint.
+registerServiceWorker();

@@ -208,7 +208,7 @@ export function FillDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-md:max-h-[calc(100dvh-2rem)] max-md:overflow-y-auto max-md:[&>button]:size-6">
         <DialogHeader>
           <DialogTitle>
             {isEdit
@@ -242,7 +242,7 @@ export function FillDialog({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
             <div className="space-y-2">
               <Label htmlFor="price">Price</Label>
               <Input id="price" {...form.register('price')} placeholder="0.00" />
@@ -283,7 +283,7 @@ export function FillDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="fees">Fees</Label>
@@ -297,7 +297,7 @@ export function FillDialog({
                     </Label>
                     <Switch
                       id="fee-override"
-                      className="cursor-pointer"
+                      className="cursor-pointer max-md:min-h-6"
                       checked={feeOverride}
                       onCheckedChange={setFeeOverride}
                     />

@@ -15,7 +15,7 @@
     },
     {
       "name": "web",
-      "testFiles": 211
+      "testFiles": 216
     },
     {
       "name": "web-scripts",
@@ -26,15 +26,16 @@
       "testFiles": 3
     }
   ],
-  "testFilesTotal": 424,
-  "e2eSpecFiles": 34,
+  "testFilesTotal": 429,
+  "e2eSpecFiles": 37,
   "migrations": 38,
   "ciJobs": [
     "checks",
     "test-api",
     "test-web",
     "e2e",
+    "e2e-pwa-upgrade",
     "docker-smoke"
   ],
-  "dockerSmokeAssertions": 13
+  "dockerSmokeAssertions": 14
 }

@@ -83,7 +83,7 @@ function OpenPositionsWidget() {
                 <Link
                   to="/positions/$positionId"
                   params={{ positionId: pos.id }}
-                  className="hover:underline"
+                  className="hover:underline max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
                 >
                   {pos.symbol}
                 </Link>
@@ -108,7 +108,10 @@ function OpenPositionsWidget() {
         </TableBody>
       </Table>
       <div className="text-right">
-        <Link to="/positions" className="text-sm font-medium hover:underline">
+        <Link
+          to="/positions"
+          className="text-sm font-medium hover:underline max-md:inline-flex max-md:min-h-6 max-md:items-center"
+        >
           View all {positions.length} open positions
         </Link>
       </div>

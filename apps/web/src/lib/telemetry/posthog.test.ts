@@ -2,8 +2,8 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Vite's ?raw loader returns the module source as a string (cwd-independent).
-// @ts-expect-error -- no ambient type for the ?raw query in this tsconfig
+// Vite's ?raw loader returns the module source as a string (cwd-independent);
+// the ?raw ambient type comes from vite/client (src/vite-env.d.ts).
 import posthogSource from './posthog.ts?raw';
 
 // Stub the dynamically-imported posthog-js to a minimal init/capture surface.

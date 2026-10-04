@@ -44,6 +44,17 @@ server {
         return 404;
     }
 
+    # PWA manifest: nginx mime.types has no webmanifest entry, so set the type here (C4 / Req 4.1-4.4).
+    location = /manifest.webmanifest {
+        types { }
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache" always;
+    }
+    # Service worker: must revalidate every load so a new worker is picked up (C4 / Req 4.3).
+    location = /sw.js {
+        add_header Cache-Control "no-cache" always;
+    }
+
     # SSE streaming: matches both advisor stream routes
     # (/api/advisor/conversations/<id|new>/messages/stream). [^/]+ matches the
     # conversation :id and the literal `new`. Response buffering is disabled via
