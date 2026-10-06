@@ -31,7 +31,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+      test: ['CMD-SHELL', 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,7 +50,7 @@ services:
     env_file: .env
     environment:
       # Built from POSTGRES_* (M1) — overrides any DATABASE_URL in .env.
-      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      DATABASE_URL: 'postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}'
       # CSV import (api container). All optional with defaults. Operator
       # constraints (hand-synced — these timeouts/caps live in the web container):
       #   MAX_UPLOAD_SIZE (web) >= CSV_IMPORT_MAX_FILE_BYTES
@@ -158,7 +158,12 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
       start_period: 180s
       interval: 15s
       timeout: 5s
@@ -177,13 +182,13 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/healthz']
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - '${WEB_PORT:-8080}:80'
     environment:
       API_BASE_URL: ${API_BASE_URL:-}
       ADVISOR_NGINX_PROXY_TIMEOUT: ${ADVISOR_NGINX_PROXY_TIMEOUT:-180s}
