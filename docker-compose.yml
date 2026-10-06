@@ -170,7 +170,14 @@ services:
       context: .
       dockerfile: docker/Dockerfile.web
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     ports:
       - "${WEB_PORT:-8080}:80"
     environment:

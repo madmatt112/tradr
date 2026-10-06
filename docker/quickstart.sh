@@ -65,8 +65,14 @@ if [ "$ENV_ONLY" = true ]; then
   exit 0
 fi
 
-# 3. Start the stack, then wait for the api to report healthy.
-docker compose up -d
+# 3. Start the stack, then wait for the api to report healthy. `web` now waits
+#    for a healthy `api`, so `up -d` exits non-zero if the api never turns
+#    healthy — guard it, because `set -e` would otherwise abort before the hint
+#    at the end of this script runs.
+docker compose up -d || {
+  echo "api did not become healthy — check: docker compose logs api" >&2
+  exit 1
+}
 
 WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2)"
 WEB_PORT="${WEB_PORT:-8080}"
