@@ -37,5 +37,5 @@
     "e2e-pwa-upgrade",
     "docker-smoke"
   ],
-  "dockerSmokeAssertions": 14
+  "dockerSmokeAssertions": 17
 }
