@@ -1,18 +1,118 @@
 ---
-title: 'Bring your own Postgres / run behind a pooler'
-description: 'Point at an external database, and use DIRECT_DATABASE_URL and DB_TRANSACTION_POOLER for transaction-mode poolers (migrations need a direct connection).'
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Bring your own Postgres
+description: Run Tradr against a database outside the compose stack, and set DIRECT_DATABASE_URL with DB_TRANSACTION_POOLER when that database sits behind a transaction-mode pooler.
 ---
 
-Point at an external database, and use DIRECT_DATABASE_URL and DB_TRANSACTION_POOLER for transaction-mode poolers (migrations need a direct connection).
+import HostedOnly from '@/components/HostedOnly.astro';
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+The compose stack ships its own `postgres` service and stores its data in the
+`pgdata` volume. You can instead run Tradr against a database you manage outside
+the stack — a managed Postgres, or one on another host. This page covers pointing
+`api` at that database, and the extra settings a transaction-mode pooler needs.
+
+<HostedOnly>
+  `app.tradr.cloud` runs against a managed database already. This page is for running your own
+  instance.
+</HostedOnly>
+
+## Why a `DATABASE_URL` in `.env` is ignored under compose
+
+`.env.example` ships a `DATABASE_URL`, but **the compose stack does not read it.**
+The `api` service builds its own `DATABASE_URL` in `api.environment`, from the
+`POSTGRES_*` values:
+
+```yaml
+environment:
+  DATABASE_URL: 'postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}'
+```
+
+A value set under `environment:` overrides the same key loaded from `env_file:`,
+so whatever `DATABASE_URL` you write in `.env` is replaced by this composed one.
+Compose also does not recursively expand a `${VAR}` written **inside** an `.env`
+value — it treats it as a literal — which is why the URL is composed here rather
+than in `.env`. To point at an outside database you therefore edit the compose
+file, not just `.env`.
+
+## Point `api` at an outside database
+
+Three edits to `docker-compose.yml`, plus one line in `.env`.
+
+**1. Read `DATABASE_URL` from `.env`.** In the `api` service, replace the composed
+line with a plain reference:
+
+```yaml
+environment:
+  DATABASE_URL: ${DATABASE_URL}
+```
+
+**2. Drop the dependency on the bundled database.** Remove this block from the
+`api` service, so `api` no longer waits for a local `postgres` container:
+
+```yaml
+depends_on:
+  postgres:
+    condition: service_healthy
+```
+
+**3. Remove the bundled database.** Delete the whole `postgres:` service, and the
+now-unused `pgdata:` entry under the top-level `volumes:`. The `POSTGRES_*` values
+in `.env` are no longer used once that service is gone.
+
+Then set the full connection URL in `.env`. Write a complete literal URL — not one
+built from `${POSTGRES_*}`, which compose will not expand inside an `.env` value:
+
+```ini
+DATABASE_URL=postgresql://USER:PASSWORD@db.example.com:5432/tradr
+```
+
+Check the result before you start the stack:
+
+```bash
+docker compose config
+```
+
+In the rendered output, the `api` service's `DATABASE_URL` should show your
+external host, and there should be no `postgres` service. Then bring the stack up:
+
+```bash
+docker compose up -d
+```
+
+## Behind a transaction-mode pooler
+
+If your database is reached through a transaction-mode pooler (for example a
+managed Postgres served through PgBouncer in transaction mode), two more settings
+apply. Both are already forwarded by `docker-compose.yml`, so you set them in
+`.env` only — no further compose edit:
+
+- **`DB_TRANSACTION_POOLER`** — set it to `true` (it must be exactly `true` or
+  `false`). The app connection pool then opens with prepared statements off
+  (`prepare: false`), which a transaction-mode pooler requires. The app pool always
+  connects over `DATABASE_URL`, so point `DATABASE_URL` at the pooler.
+- **`DIRECT_DATABASE_URL`** — a direct, non-pooled URL for the **same** database.
+  Migrations and the `tradr` CLI serialize with a session-level advisory lock that
+  a transaction pooler cannot hold reliably, so they need a direct connection. When
+  `DIRECT_DATABASE_URL` is set they use it; otherwise they fall back to
+  `DATABASE_URL`.
+
+```ini
+DATABASE_URL=postgresql://USER:PASSWORD@pooler.example.com:6543/tradr
+DIRECT_DATABASE_URL=postgresql://USER:PASSWORD@db.example.com:5432/tradr
+DB_TRANSACTION_POOLER=true
+```
+
+Setting `DB_TRANSACTION_POOLER=true` **without** `DIRECT_DATABASE_URL` is a
+misconfiguration: `api` refuses to start and logs that
+`DB_TRANSACTION_POOLER=true` requires `DIRECT_DATABASE_URL`, because the migration
+advisory lock needs a direct connection.
+
+For a plain external database with **no** pooler in front, leave both
+`DIRECT_DATABASE_URL` and `DB_TRANSACTION_POOLER` unset. Migrations and the app
+both run over `DATABASE_URL`, exactly as the bundled database does.
+
+## Next steps
+
+- [Self-host with Docker Compose](/self-hosting/docker-compose/) — the base setup
+  this page builds on.
+- [Environment variable reference](/self-hosting/reference/env-vars/) — every key
+  and its default.
