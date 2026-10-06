@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **74 environment variables**, of which **3 are required** —
+Tradr reads **77 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 74 variables, **46 ship unset** — either commented out in the
+Of the 77 variables, **49 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -82,6 +82,14 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `APP_VERSION` | Optional | Optional version string (e.g. v0.1.0). LEAVE THIS COMMENTED OUT. The release workflow bakes APP_VERSION into the api image, and GET /api/health reports it. The api reads this file through compose's `env_file:`, and env_file OVERRIDES the image's baked value — so an uncommented, blank APP_VERSION here erases the released version and /api/health silently drops its `version` field. Commented out, the image's own stamp survives. Set it only to override the stamp deliberately. |
 | `CSV_IMPORT_NGINX_PROXY_TIMEOUT` | `300s` | nginx proxy read timeout for the dedicated /api/csv-import/ AND /api/account-data/ routes (both reuse this one value). A large within-cap synchronous CSV import, account export or account import can exceed nginx's default 60s; this raises the timeout for those routes only (others unchanged). Keep CSV_IMPORT_CLAIM_TIMEOUT_SECONDS (api) ≥ 2 × this value — the two live in different containers and are hand-synced. |
 | `MAX_UPLOAD_SIZE` | `20m` | nginx client_max_body_size for uploads. Must accommodate the largest upload a single request can carry, or large uploads 413. OPERATOR CONSTRAINT: keep MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (below), or oversized CSV imports are rejected by nginx before the api can size them. OPERATOR CONSTRAINT: also keep MAX_UPLOAD_SIZE ≥ the position-screenshot request (one image, at most 4,504,096 bytes), or screenshot uploads are rejected by nginx before the api can size them. It ALSO caps uploaded account-import archives (/api/account-data/import*): an archive larger than this is refused by nginx with 413 before the api can size it, and the app tells the user the operator can raise this value. |
+
+## TLS reverse proxy (compose overrides)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TRADR_DOMAIN` | Optional | Read only by the Caddy/Traefik compose overrides (docker-compose.caddy.yml, docker-compose.traefik.yml); the base stack ignores them. See the TLS reverse proxy docs page. Domain the proxy serves and requests a certificate for; a DNS record must point it at this host. Required by both overrides — the render fails and names it when unset. |
+| `ACME_EMAIL` | Optional | Contact email the certificate authority needs (Traefik override only; Caddy needs none). Required by the Traefik override — its render fails and names it when unset. |
+| `COMPOSE_FILE` | Optional | Compose's own variable. Set it so a plain `docker compose up -d` loads an override without typing both -f flags each time. Pick Caddy OR Traefik, not both. |
 
 ## Metrics (Prometheus exposition)
 

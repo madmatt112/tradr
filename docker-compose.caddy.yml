@@ -1,0 +1,40 @@
+# Caddy TLS reverse proxy — automatic HTTPS in front of `web`.
+#
+# Usage:
+#   Point a DNS record for TRADR_DOMAIN at this host, open ports 80 and 443,
+#   set TRADR_DOMAIN in .env, then:
+#     docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#   Or set COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml in .env and
+#   run a plain `docker compose up -d`.
+#
+# Caddy obtains and renews the certificate itself, redirects HTTP to HTTPS, and
+# forwards to the internal `web` service on port 80. The override resets `web`'s
+# own host-port publish, so only the proxy's 80 and 443 are bound.
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+services:
+  caddy:
+    image: caddy:2.11-alpine
+    command:
+      ["caddy", "reverse-proxy", "--from", "${TRADR_DOMAIN:?set TRADR_DOMAIN in .env}", "--to", "web:80"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - tradr
+    restart: unless-stopped
+
+  # Compose `-f` merge APPENDS to the ports list, so a plain omission or
+  # `ports: []` would leave the base `${WEB_PORT:-8080}:80` bound. `!reset []`
+  # removes it, so the plaintext path is unreachable behind the proxy.
+  web:
+    ports: !reset []

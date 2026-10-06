@@ -1,0 +1,21 @@
+# Traefik dynamic configuration (file provider).
+#
+# Loaded by docker-compose.traefik.yml via --providers.file.filename. Routes the
+# operator's TRADR_DOMAIN over HTTPS to the internal `web` service and lets the
+# `le` ACME resolver obtain the certificate. TRADR_DOMAIN is read from the
+# traefik container environment at load time.
+
+http:
+  routers:
+    tradr:
+      rule: "Host(`{{ env \"TRADR_DOMAIN\" }}`)"
+      entryPoints:
+        - websecure
+      service: tradr
+      tls:
+        certResolver: le
+  services:
+    tradr:
+      loadBalancer:
+        servers:
+          - url: "http://web:80"

@@ -1,0 +1,51 @@
+# Traefik TLS reverse proxy — automatic HTTPS in front of `web`.
+#
+# Usage:
+#   Point a DNS record for TRADR_DOMAIN at this host, open ports 80 and 443,
+#   set TRADR_DOMAIN and ACME_EMAIL in .env, then:
+#     docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+#   Or set COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml in .env and
+#   run a plain `docker compose up -d`.
+#
+# Traefik obtains and renews the certificate through the `le` ACME resolver,
+# redirects HTTP to HTTPS, and routes TRADR_DOMAIN to the internal `web` service
+# via the shipped file provider (docker/traefik/dynamic.yml). No Docker socket is
+# mounted. The override resets `web`'s own host-port publish, so only the proxy's
+# 80 and 443 are bound.
+
+volumes:
+  traefik_acme:
+
+services:
+  traefik:
+    image: traefik:v3.7
+    command:
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL:?set ACME_EMAIL in .env}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge=true"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+    environment:
+      TRADR_DOMAIN: ${TRADR_DOMAIN:?set TRADR_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik_acme:/letsencrypt
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - tradr
+    restart: unless-stopped
+
+  # Compose `-f` merge APPENDS to the ports list, so a plain omission or
+  # `ports: []` would leave the base `${WEB_PORT:-8080}:80` bound. `!reset []`
+  # removes it, so the plaintext path is unreachable behind the proxy.
+  web:
+    ports: !reset []
