@@ -72,6 +72,10 @@ services:
       STRIPE_PRO_PRICE_ID: ${STRIPE_PRO_PRICE_ID:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # OpenAI/Claude base URLs for local LLM servers (self-host-experience C7).
+      # Bare ${VAR:-} is SAFE — the schema preprocesses '' to undefined.
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       MIN_RESERVATION_CREDITS: ${MIN_RESERVATION_CREDITS:-1}
       RESERVATION_TTL_MS: ${RESERVATION_TTL_MS:-600000}
       PRICING_MARKUP: ${PRICING_MARKUP:-1.2}
