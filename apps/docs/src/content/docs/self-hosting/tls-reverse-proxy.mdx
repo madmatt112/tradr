@@ -1,18 +1,187 @@
 ---
-title: 'Put TLS in front of the stack'
-description: 'Terminate HTTPS at your own edge (compose ships none) and add it to TRUSTED_PROXIES so per-IP rate limiting stays accurate.'
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Put TLS in front of the stack
+description: Serve Tradr over HTTPS with the shipped Caddy or Traefik compose override, or front the stack with an edge you already run, and keep per-IP rate limiting accurate.
 ---
 
-Terminate HTTPS at your own edge (compose ships none) and add it to TRUSTED_PROXIES so per-IP rate limiting stays accurate.
+import HostedOnly from '@/components/HostedOnly.astro';
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+The base compose stack publishes plain HTTP on the `web` container (port
+`${WEB_PORT:-8080}`). To serve Tradr over HTTPS you have two supported paths: add
+one of the two shipped compose overrides — Caddy or Traefik — in front of `web`,
+or front the stack with a reverse proxy you already run. Both overrides obtain and
+renew a certificate automatically, redirect HTTP to HTTPS, and close the base
+plaintext port so only HTTPS is reachable.
+
+<HostedOnly>
+  None of this applies to `app.tradr.cloud` — the managed platform terminates HTTPS for you. This
+  page is for running your own instance.
+</HostedOnly>
+
+## Prerequisites
+
+- **A domain with a DNS record that points at this host.** Both overrides request
+  a certificate for it over port 80, so the name must already resolve to your
+  server.
+- **Ports 80 and 443 open** to the host. The certificate authority reaches port 80
+  for the HTTP challenge, and clients reach port 443 for HTTPS.
+- **Docker Compose v2.24.4 or newer.** The overrides drop `web`'s own published
+  port with the `!reset` YAML merge tag; that tag, and the
+  [multi-file merge fixes it relies on](https://github.com/docker/compose/releases/tag/v2.24.4),
+  shipped in Compose v2.24.4. Check your version with `docker compose version`.
+  The [merge reference](https://docs.docker.com/reference/compose-file/merge/#reset-value)
+  describes what `!reset` does.
+
+## Step 1 — Prepare your `.env`
+
+If you have not run the stack yet, generate the required secrets without starting
+it:
+
+```bash
+./docker/quickstart.sh --env-only
+```
+
+This writes `.env` with a fresh `POSTGRES_PASSWORD`, `SESSION_SECRET` and
+`ENCRYPTION_KEY`. An existing `.env` is never overwritten.
+
+Then set the TLS variables in `.env`:
+
+- `TRADR_DOMAIN` — the domain the proxy serves and requests a certificate for (for
+  example `tradr.example.com`). Both overrides require it.
+- `ACME_EMAIL` — a contact address the certificate authority needs. The Traefik
+  override requires it; Caddy does not.
+- `COMPOSE_FILE` — set it so a plain `docker compose up -d` loads the override
+  without passing both `-f` files each time. Pick one override, not both.
+
+## Step 2 — Add an override
+
+### Caddy
+
+Caddy needs only `TRADR_DOMAIN`. In `.env`:
+
+```
+TRADR_DOMAIN=tradr.example.com
+COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml
+```
+
+Start the stack:
+
+```bash
+docker compose up -d
+```
+
+If you did not set `COMPOSE_FILE`, pass both files instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+Caddy obtains and renews the certificate itself, redirects HTTP to HTTPS, and
+forwards to the internal `web` service on port 80. Certificate state lives in a
+named volume, so a restart or an image upgrade does not request a new
+certificate.
+
+### Traefik
+
+Traefik needs `TRADR_DOMAIN` and `ACME_EMAIL`. In `.env`:
+
+```
+TRADR_DOMAIN=tradr.example.com
+ACME_EMAIL=you@example.com
+COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml
+```
+
+Start the stack:
+
+```bash
+docker compose up -d
+```
+
+If you did not set `COMPOSE_FILE`, pass both files instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+```
+
+Traefik obtains and renews the certificate through its ACME resolver, redirects
+HTTP to HTTPS, and routes `TRADR_DOMAIN` to the internal `web` service through the
+shipped file provider (`docker/traefik/dynamic.yml`). No Docker socket is mounted.
+Certificate state lives in a named volume.
+
+## Step 3 — Check the result
+
+From any host that can resolve the domain:
+
+```bash
+curl -I https://tradr.example.com
+```
+
+A response over HTTP/2 — a `200`, or the SPA's own redirect — confirms TLS is
+live. `curl -I http://tradr.example.com` should return a redirect to the HTTPS
+URL.
+
+Either override closes `web`'s base plaintext port (`${WEB_PORT:-8080}`): the
+override resets `web.ports`, so only the proxy's 80 and 443 are bound and the
+plain-HTTP path is no longer reachable.
+
+## Set `WEB_BASE_URL` when email is on
+
+If you have configured transactional email (the `SMTP_HOST`, `EMAIL_FROM` and
+`WEB_BASE_URL` trio), set `WEB_BASE_URL` to the HTTPS origin:
+
+```
+WEB_BASE_URL=https://tradr.example.com
+```
+
+The links in password-reset and verification emails are built from
+`WEB_BASE_URL`, so it must point at the HTTPS origin, not the old plain-HTTP port.
+
+## Rate limiting and `TRUSTED_PROXIES`
+
+The api keys its per-IP rate limit on the real client address. It reads that
+address from the `X-Forwarded-For` header only when the immediate sender is a
+trusted proxy. `TRUSTED_PROXIES` in `.env` lists those senders; it defaults to
+`172.28.0.0/24`, the compose network's subnet.
+
+- **A shipped override needs no change.** The Caddy or Traefik service runs on the
+  `tradr` network, so its address falls inside `${TRADR_SUBNET:-172.28.0.0/24}` —
+  already the default `TRUSTED_PROXIES`. The api therefore trusts the proxy and
+  keys the limit on the forwarded client address.
+- **If you change `TRADR_SUBNET`,** set `TRUSTED_PROXIES` to the same range.
+  Otherwise the proxy's address no longer matches, the api stops trusting it, and
+  every request is attributed to the proxy.
+- **An edge outside the `tradr` network** — your own host proxy, or Cloudflare —
+  has no address in that subnet. Add that edge's address, or Cloudflare's
+  published IP ranges, to `TRUSTED_PROXIES` as a comma-separated list.
+
+## If you already run an edge
+
+If you already terminate TLS with your own reverse proxy or with Cloudflare, do
+not add an override. Keep the base stack, which publishes `web` on
+`${WEB_PORT:-8080}`, point your edge at that port, and terminate HTTPS there. Add
+the edge's address to `TRUSTED_PROXIES`, as described above, so per-IP rate
+limiting stays accurate.
+
+## When a certificate fails
+
+If HTTPS does not come up, the proxy logs the certificate error. Read it with:
+
+```bash
+docker compose logs caddy
+```
+
+or, for Traefik:
+
+```bash
+docker compose logs traefik
+```
+
+The usual causes are a DNS record that does not yet point at this host, or port 80
+closed so the certificate authority cannot reach the HTTP challenge. Fix the
+prerequisite, then restart the stack.
+
+## Next steps
+
+- [Self-host with Docker Compose](/self-hosting/docker-compose/) — the base setup
+  this page builds on.
+- [Environment variable reference](/self-hosting/reference/env-vars/) — every key
+  and its default.
