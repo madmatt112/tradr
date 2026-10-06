@@ -104,4 +104,23 @@ describe('initProviderRegistry / getProvider', () => {
       expect.objectContaining({ baseURL: 'http://localhost:11434/v1' }),
     );
   });
+
+  // Non-red check (Req 3.8): the Gemini and OpenRouter adapters keep their own
+  // config base URLs whatever OPENAI_BASE_URL holds — OPENAI_BASE_URL reaches
+  // only the plain OpenAIAdapter, never its compat subclasses. (Gemini/OpenRouter
+  // share the mocked 'openai' ctor spy, so each lands its own baseURL there.)
+  it('keeps the Gemini and OpenRouter base URLs regardless of OPENAI_BASE_URL', async () => {
+    mockConfig.OPENAI_BASE_URL = 'http://localhost:11434/v1';
+
+    initProviderRegistry(new ListModelsCache());
+    await getProvider('gemini').listModels('sk-test');
+    await getProvider('openrouter').listModels('sk-test');
+
+    expect(openaiCtorOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'https://gemini.example/v1' }),
+    );
+    expect(openaiCtorOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'https://openrouter.example/v1' }),
+    );
+  });
 });

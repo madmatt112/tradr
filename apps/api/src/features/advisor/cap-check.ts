@@ -9,6 +9,7 @@
 
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 
+import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
 
 import { ProviderKeyRejectedError } from './advisor.errors';
@@ -193,7 +194,12 @@ async function estimate(args: EstimateTokensArgs): Promise<EstimateTokensResult>
   const systemWithDecls = declarationsJson ? `${system}\n\n${declarationsJson}` : system;
 
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey });
+  // Follow the configured Anthropic base URL (design D10; REQ-3.6) so the
+  // token-count client targets the same local server as the streaming client.
+  const client = new Anthropic({
+    apiKey,
+    ...(config.ANTHROPIC_BASE_URL ? { baseURL: config.ANTHROPIC_BASE_URL } : {}),
+  });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
