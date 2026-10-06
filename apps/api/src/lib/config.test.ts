@@ -7,12 +7,14 @@ import {
   getCorsAllowedOrigins,
   isDirectDatabaseConfigured,
   isEmailConfigured,
+  isLocalProviderHost,
   isMetricsConfigured,
   isObjectStorageConfigured,
   isPostHogConfigured,
   isProSubscriptionConfigured,
   isRedisConfigured,
   isSplitOriginConfigured,
+  warnPlaintextProviderBaseUrls,
 } from './config';
 
 const baseEnv = {
@@ -884,6 +886,128 @@ describe('isMetricsConfigured predicate', () => {
     expect(isMetricsConfigured()).toBe(true);
     config.METRICS_ENABLED = false;
     expect(isMetricsConfigured()).toBe(false);
+  });
+});
+
+describe.each(['OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL'] as const)('envSchema.%s', (key) => {
+  // Req 3.1: unset and '' both read as undefined (compose `${VAR:-}` safety —
+  // the ENCRYPTION_KEY_PREVIOUS / WEB_BASE_URL empty-tolerant idiom). Folded
+  // into this test alongside Req 3.2's positive-parse cases: before this task
+  // lands, the key is unrecognized by envSchema and z.object silently strips
+  // it, so the unset/empty assertions already hold — only the parse
+  // assertions below make this test fail at base.
+  it('unset and empty string are undefined; a https URL and a local http URL parse', () => {
+    const unset = envSchema.parse(baseEnv);
+    expect(unset[key]).toBeUndefined();
+
+    const empty = envSchema.parse({ ...baseEnv, [key]: '' });
+    expect(empty[key]).toBeUndefined();
+
+    const https = envSchema.parse({ ...baseEnv, [key]: 'https://api.example.com/v1' });
+    expect(https[key]).toBe('https://api.example.com/v1');
+
+    const localHttp = envSchema.parse({ ...baseEnv, [key]: 'http://localhost:11434/v1' });
+    expect(localHttp[key]).toBe('http://localhost:11434/v1');
+  });
+
+  // Req 3.2: a non-http(s) scheme or a non-URL value fails the parse, and the
+  // issue names this key — `parseEnv` (config.ts:425-440) prints `path:
+  // message` per issue, so the key must appear in `issue.path`.
+  it('rejects a non-http(s) scheme and a non-URL value, naming the key in the issue path', () => {
+    const badScheme = envSchema.safeParse({ ...baseEnv, [key]: 'ftp://x/' });
+    expect(badScheme.success).toBe(false);
+    if (!badScheme.success) {
+      expect(badScheme.error.issues.some((issue) => issue.path.join('.') === key)).toBe(true);
+    }
+
+    const notUrl = envSchema.safeParse({ ...baseEnv, [key]: 'not a url' });
+    expect(notUrl.success).toBe(false);
+    if (!notUrl.success) {
+      expect(notUrl.error.issues.some((issue) => issue.path.join('.') === key)).toBe(true);
+    }
+  });
+});
+
+describe('isLocalProviderHost', () => {
+  // Req 3.3: every named local-host class, plus three non-local examples
+  // (a public IPv4, a public IPv6 literal in bracketed URL.hostname form, and
+  // an ordinary dotted hostname) from the task prompt's required table.
+  it.each([
+    ['localhost', true],
+    ['127.0.0.1', true],
+    ['[::1]', true],
+    ['[fc00::1]', true],
+    ['[fe80::1]', true],
+    ['10.0.0.5', true],
+    ['172.16.5.4', true],
+    ['192.168.1.1', true],
+    ['api', true],
+    ['host.docker.internal', true],
+    ['8.8.8.8', false],
+    ['[2001:4860::8888]', false],
+    ['api.example.com', false],
+  ] as const)('%s → local=%s', (hostname, expected) => {
+    expect(isLocalProviderHost(hostname)).toBe(expected);
+  });
+});
+
+describe('warnPlaintextProviderBaseUrls', () => {
+  // Req 3.3: one warning per non-local http(s=http) key, naming the key and
+  // saying the connection is unencrypted (D6).
+  it('warns once per non-local http key, naming the key and saying the connection is unencrypted', () => {
+    const calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    const warn = (message: string, extra?: Record<string, unknown>) => {
+      calls.push([message, extra]);
+    };
+    warnPlaintextProviderBaseUrls(
+      {
+        OPENAI_BASE_URL: 'http://8.8.8.8:1234/v1',
+        ANTHROPIC_BASE_URL: 'http://api.example.com/v1',
+      },
+      warn,
+    );
+    expect(calls).toHaveLength(2);
+    expect(
+      calls.some(
+        ([message]) =>
+          message.includes('OPENAI_BASE_URL') && /unencrypted|plaintext/i.test(message),
+      ),
+    ).toBe(true);
+    expect(
+      calls.some(
+        ([message]) =>
+          message.includes('ANTHROPIC_BASE_URL') && /unencrypted|plaintext/i.test(message),
+      ),
+    ).toBe(true);
+  });
+
+  // Req 3.3: no warning for a https base URL or a local http base URL.
+  it('does not warn for a https base URL or a local http base URL', () => {
+    const calls: unknown[] = [];
+    const warn = (...args: unknown[]) => {
+      calls.push(args);
+    };
+    warnPlaintextProviderBaseUrls(
+      {
+        OPENAI_BASE_URL: 'https://api.openai.com/v1',
+        ANTHROPIC_BASE_URL: 'http://localhost:11434/v1',
+      },
+      warn,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  // Req 3.3: no warning when neither base URL is set (the no-op default path).
+  it('does not warn when neither base URL is set', () => {
+    const calls: unknown[] = [];
+    const warn = (...args: unknown[]) => {
+      calls.push(args);
+    };
+    warnPlaintextProviderBaseUrls(
+      { OPENAI_BASE_URL: undefined, ANTHROPIC_BASE_URL: undefined },
+      warn,
+    );
+    expect(calls).toHaveLength(0);
   });
 });
 
