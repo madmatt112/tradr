@@ -19,6 +19,15 @@ server {
     # conf.d/probe/_probe.conf to activate the streaming probe (Req 8.4 / 4.3).
     include /etc/nginx/conf.d/probe/*.conf;
 
+    # Health probe answered by nginx itself — no proxy_pass, so an `api` restart
+    # never touches it; an exact match wins over the SPA fallback (design C1 / Req 1.1, 1.2).
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+        return 200 "ok\n";
+    }
+
     # Runtime config: regenerated each container start, never cached (Req 3.4).
     location = /config.js {
         add_header Cache-Control "no-store" always;
