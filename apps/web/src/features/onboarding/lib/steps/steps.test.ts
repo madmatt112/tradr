@@ -287,6 +287,29 @@ describe('walkthrough step definitions', () => {
   });
 });
 
+// The calculator set is the one place `gettingStarted` was a placeholder
+// choice rather than the real answer: six of its seven steps are about the
+// calculator screen itself, and the written trade-calculator page is what
+// they should deep-link to. The seventh step covers the results panel's
+// figures, which is what the metrics glossary already explains.
+describe('calculator walkthrough docs targets (self-host-experience task 14)', () => {
+  const calcSteps = WALKTHROUGH_STEPS.calculator;
+
+  it('the first six calculator steps link the trade-calculator page', () => {
+    expect(calcSteps.length).toBe(7);
+    for (const step of calcSteps.slice(0, 6)) {
+      expect(step.docs).toBe('tradeCalculator');
+      expect(step.description).toContain(docsUrl('tradeCalculator'));
+    }
+  });
+
+  it('the last calculator step keeps its metrics-glossary link', () => {
+    const last = calcSteps[calcSteps.length - 1];
+    expect(last.docs).toBe('metricsGlossary');
+    expect(last.description).toContain(docsUrl('metricsGlossary'));
+  });
+});
+
 // A page named by a step must not be one of the placeholder pages apps/docs
 // ships to show the shape of the documentation — "read more" that lands on
 // "this page is not written yet" is worse than no link at all.
