@@ -65,7 +65,7 @@ TLS, against your own Postgres, or on a different port, see the
 
 ## Status
 
-**v0.11.x — pre-1.0, and moving quickly.** What that promises:
+**Pre-1.0, and moving quickly.** What that promises:
 
 - **The HTTP API is not stable yet.** Breaking endpoint changes can land in any release
   until v1.0.0. Pin a tag rather than tracking `:latest` if that matters to you.
@@ -74,6 +74,9 @@ TLS, against your own Postgres, or on a different port, see the
   redeploying the previous image stays a viable recovery.
 - **Releases are CI-gated.** A tag publishes images only after CI passes on that exact
   commit.
+- **Track minor versions.** Pre-1.0, a minor bump carries any breaking change — read that
+  release's notes before you upgrade. A patch is an out-of-band fix that touches nothing
+  you depend on.
 - **Back up before every upgrade.** See the [deployment runbook](docs/runbooks/deployment.md).
 
 Full policy — what counts as a breaking change, which surfaces are covered — in

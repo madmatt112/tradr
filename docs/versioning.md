@@ -11,11 +11,13 @@ the new image and restart without reading anything first?**
 
 Tradr is in the `0.y.z` series. Under semantic versioning that means the
 compatibility contract below is **not yet stable** — anything in it may change
-in a release. Concretely, while on `0.y.z`:
+in a release. Concretely, while on `0.y.z` a release follows one of two tracks:
 
-- A breaking change bumps the **minor** (`0.5.1` → `0.6.0`).
-- Everything else — features, fixes, performance, UI — bumps the **patch**
-  (`0.5.1` → `0.5.2`).
+- A **minor** (`0.5.1` → `0.6.0`) is the batched release cut on the regular
+  cadence, and also any release — whenever it ships — that touches a contracted
+  surface. Every minor is announced in its own release-notes file.
+- A **patch** (`0.5.1` → `0.5.2`) is an out-of-band fix that touches no
+  contracted surface. It can ship any time.
 
 `1.0.0` is not a quality milestone; it is the point at which the contract stops
 moving. It will be cut when the HTTP API and the database schema have settled,
@@ -41,17 +43,22 @@ The HTTP API is **unversioned** — routes are `/api/…`, with no `/v1` prefix.
 The release version _is_ the API version, which is why an API change is a
 release-level concern rather than something negotiated per request.
 
+A release **touches a contracted surface** when it changes any surface the table
+above marks _Yes_. That phrase is what separates a minor from a patch below: an
+optional env var or a capability behind an `is*Configured()` gate is not one
+(see [below](#declaring-a-breaking-change-in-a-pull-request)).
+
 ## What each field means
 
-| Field     | Post-1.0 meaning                            | Pre-1.0 (today)            |
-| --------- | ------------------------------------------- | -------------------------- |
-| **MAJOR** | A breaking change to any contracted surface | Stays `0`                  |
-| **MINOR** | Backwards-compatible functionality          | Breaking changes land here |
-| **PATCH** | Backwards-compatible fixes                  | Everything else lands here |
+| Field     | Post-1.0 meaning                            | Pre-1.0 (today)                                                                |
+| --------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
+| **MAJOR** | A breaking change to any contracted surface | Stays `0`                                                                      |
+| **MINOR** | Backwards-compatible functionality          | The batched cadence release, and any release that touches a contracted surface |
+| **PATCH** | Backwards-compatible fixes                  | An out-of-band fix that touches no contracted surface                          |
 
-The bump for a release is the **most significant change in the batch**. Twenty
-fixes plus one breaking change is one breaking release, not twenty-one
-releases.
+A batch that includes **any contracted-surface change is a minor**, whatever
+else it carries. Twenty fixes plus one contracted-surface change is one minor
+release, not twenty-one releases.
 
 ## Schema changes are usually not breaking
 
@@ -71,15 +78,20 @@ new schema. What a release _does_ cost is downgrade range:
 
 ## Release cadence
 
-Releases are **batched, not continuous**. A merged pull request is not a
-release, and merging does not imply a version bump.
+Releases run on two tracks.
 
-- Cut a release every **2–4 weeks**, or whenever `main` accumulates something a
-  self-hoster would actually want to pull. In practice that is tens of commits,
-  not one.
-- **Skip empty cycles.** If nothing meaningful landed, don't cut a release.
-- **Security fixes ship out of band**, immediately, as their own patch release.
-  They do not wait for the next batch.
+- **The batched track** cuts a **minor** every **2–4 weeks**, or whenever `main`
+  accumulates something a self-hoster would actually want to pull — in practice
+  tens of commits, not one. A merged pull request is not a release, and merging
+  does not imply a version bump. Skip empty cycles: if nothing meaningful
+  landed, don't cut a release.
+- **The out-of-band track** ships a fix the moment it is ready, without waiting
+  for the next batch. It is a **patch** when it touches no contracted surface,
+  and a **minor** when it does.
+
+A security fix that invalidates sessions touches the auth & sessions contract,
+so it is cut as a **minor**; other security fixes are patches. Either ships out
+of band, immediately.
 
 Release notes are user-facing: the GitHub Release feed is what the in-app
 changelog renders. A release should read as a coherent set of changes, which is
@@ -101,9 +113,10 @@ fails to boot instead of disabling email. Set EMAIL_FROM or unset SMTP_HOST.
 ```
 
 Use the `!` marker and a `BREAKING CHANGE:` footer whenever the change touches a
-contracted surface from the table above. At release time the maintainer takes
-the highest declared severity across everything merged since the last tag, and
-that determines the bump.
+contracted surface from the table above. That declaration forces the release
+carrying it to be a **minor**. At release time the maintainer takes the highest
+declared severity across everything merged since the last tag, and that
+determines the bump.
 
 Enabling a capability behind an `is*Configured()` gate is **not** breaking. A
 capability that is inert until an operator configures it changes nothing for an
@@ -114,8 +127,10 @@ instance that hasn't.
 - **Pin `:X.Y.Z`** to control when you move. `:latest` always points at the most
   recent release and moves on every one — fine for tracking head, unsuitable if
   you want to choose your upgrade window.
-- **Read the release notes before a minor bump** while Tradr is pre-1.0; that is
-  where breaking changes are announced.
+- **Track minor versions, and read each minor's notes before you upgrade.**
+  While Tradr is pre-1.0 the minor is the release that can touch the contract, and
+  its release-notes file is where any breaking change is announced. A patch is a
+  safe out-of-band fix.
 - **Recovering from a bad upgrade** means redeploying the previous image tag.
   That works as long as no contract release sits between the two versions —
   see the note above.
