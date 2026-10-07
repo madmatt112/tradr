@@ -24,13 +24,15 @@ let registry: Record<ProviderId, ProviderAdapter> | null = null;
 /**
  * Construct the adapter singletons once with the shared cache. Called exactly
  * once at bootstrap. Calling again replaces the registry (adapters rebuilt) —
- * the bootstrap contract is a single call. Gemini/OpenRouter base URLs come
- * from config (production defaults; overridable as an E2E/stub seam).
+ * the bootstrap contract is a single call. All four base URLs come from config:
+ * Claude/OpenAI from the optional ANTHROPIC_BASE_URL / OPENAI_BASE_URL (unset →
+ * each SDK's own host), Gemini/OpenRouter from their production defaults
+ * (overridable as an E2E/stub seam).
  */
 export function initProviderRegistry(cache: ListModelsCache): void {
   registry = {
-    claude: new ClaudeAdapter(cache),
-    openai: new OpenAIAdapter(cache),
+    claude: new ClaudeAdapter(cache, config.ANTHROPIC_BASE_URL),
+    openai: new OpenAIAdapter(cache, config.OPENAI_BASE_URL),
     gemini: new GeminiAdapter(cache, config.GEMINI_BASE_URL),
     openrouter: new OpenRouterAdapter(cache, config.OPENROUTER_BASE_URL),
   };

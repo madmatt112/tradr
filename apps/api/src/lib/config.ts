@@ -1,3 +1,5 @@
+import { BlockList, isIP } from 'node:net';
+
 import { z } from 'zod';
 
 import type { ProviderId } from '@tradr/shared';
@@ -61,16 +63,41 @@ export const envSchema = z.object({
   // (NOT process.env): bare process.env is ESLint-banned in apps/api and the
   // non-strict envSchema parse would otherwise silently strip an unknown key.
   UNUSUAL_WHALES_BASE_URL: z.string().url().default('https://api.unusualwhales.com'),
-  // OpenAI-compatible base URLs for the Gemini / OpenRouter adapters (v6).
-  // Optional with production defaults — no new required env vars. E2E points
-  // them at local stubs, mirroring UNUSUAL_WHALES_BASE_URL. (Claude and OpenAI
-  // need no config entry: their SDKs read ANTHROPIC_BASE_URL / OPENAI_BASE_URL
-  // from the env themselves.)
+  // OpenAI-compatible base URLs for the Gemini / OpenRouter adapters (v6), plus
+  // the Claude and OpenAI base URLs (OPENAI_BASE_URL / ANTHROPIC_BASE_URL below)
+  // — all four come from config so a self-hoster can point the OpenAI and Claude
+  // adapters at a local OpenAI-compatible server (Ollama, LM Studio). Gemini and
+  // OpenRouter keep production defaults; the two below are optional with no
+  // default, so unset the SDKs fall back to their own hosts.
   GEMINI_BASE_URL: z
     .string()
     .url()
     .default('https://generativelanguage.googleapis.com/v1beta/openai/'),
   OPENROUTER_BASE_URL: z.string().url().default('https://openrouter.ai/api/v1'),
+  // OpenAI / Claude base URLs (self-host advisor against a local OpenAI-compatible
+  // server). Optional, no default — unset or '' leaves the SDK on its own host.
+  // Empty-tolerant preprocess ('' → undefined, the compose `${VAR:-}` idiom) and
+  // an http(s)-only refine, as WEB_BASE_URL does below (REQ-3.1, 3.2).
+  OPENAI_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .url()
+      .refine((v) => providerBaseUrlSchemeOk(v), {
+        message: 'OPENAI_BASE_URL must use http:// or https://',
+      })
+      .optional(),
+  ),
+  ANTHROPIC_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .url()
+      .refine((v) => providerBaseUrlSchemeOk(v), {
+        message: 'ANTHROPIC_BASE_URL must use http:// or https://',
+      })
+      .optional(),
+  ),
   // CSV import (api container). All optional with defaults — the feature works
   // out of the box. Operator constraints (hand-synced across containers):
   //   - MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (nginx, web container)
@@ -476,10 +503,88 @@ export function assertEmailConfigCoherence(cfg: Config): void {
   }
 }
 
+/**
+ * True when `v` is an absolute http: or https: URL. Zod v3 still runs a refine
+ * after `.url()` has failed (dirty status), so `new URL` must not throw here —
+ * the WEB_BASE_URL refine idiom (C5).
+ */
+function providerBaseUrlSchemeOk(v: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(v);
+  } catch {
+    return false;
+  }
+  return url.protocol === 'http:' || url.protocol === 'https:';
+}
+
+// Local/private host ranges, built once at module load (C5). A provider base URL
+// on one of these over plain http: is a deliberate self-host setup (Ollama, a
+// container on the compose network), not an accidental cleartext link to the
+// internet — so it draws no plaintext warning.
+const localProviderHostBlockList = new BlockList();
+localProviderHostBlockList.addSubnet('127.0.0.0', 8, 'ipv4'); // loopback
+localProviderHostBlockList.addSubnet('10.0.0.0', 8, 'ipv4'); // RFC 1918
+localProviderHostBlockList.addSubnet('172.16.0.0', 12, 'ipv4'); // RFC 1918
+localProviderHostBlockList.addSubnet('192.168.0.0', 16, 'ipv4'); // RFC 1918
+localProviderHostBlockList.addAddress('::1', 'ipv6'); // loopback
+localProviderHostBlockList.addSubnet('fc00::', 7, 'ipv6'); // unique local
+localProviderHostBlockList.addSubnet('fe80::', 10, 'ipv6'); // link local
+
+/**
+ * True when `hostname` (a WHATWG `URL.hostname`) is local or private: `localhost`,
+ * `host.docker.internal`, any single-label name (no dot, not an IP), or any
+ * address in the loopback / private / unique-local / link-local ranges. IPv6
+ * literals arrive bracketed from `URL.hostname`, so brackets are stripped before
+ * the check (C5, REQ-3.3).
+ */
+export function isLocalProviderHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[/, '').replace(/\]$/, '');
+  if (host === 'localhost' || host === 'host.docker.internal') return true;
+  const family = isIP(host);
+  if (family === 4) return localProviderHostBlockList.check(host, 'ipv4');
+  if (family === 6) return localProviderHostBlockList.check(host, 'ipv6');
+  // Not an IP literal — a single-label name (no dot) is a container/service name
+  // on the local network; anything with a dot is a real remote host.
+  return !host.includes('.');
+}
+
+/**
+ * Warns once per set provider base URL that uses plain http: to a non-local host
+ * — the provider key and conversation would travel unencrypted (C5, D6, REQ-3.3).
+ * Never throws. The `warn` parameter is optional so tests inject a spy (D8).
+ */
+export function warnPlaintextProviderBaseUrls(
+  cfg: Pick<Config, 'OPENAI_BASE_URL' | 'ANTHROPIC_BASE_URL'>,
+  warn: (message: string, extra?: Record<string, unknown>) => void = logger.warn,
+): void {
+  for (const key of ['OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL'] as const) {
+    const value = cfg[key];
+    if (!value) continue;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      continue;
+    }
+    if (url.protocol === 'http:' && !isLocalProviderHost(url.hostname)) {
+      warn(
+        `${key} points at a non-local host over plain http:// — your provider key ` +
+          'and conversations travel unencrypted. Use https:// unless the provider ' +
+          'runs on your local network.',
+      );
+    }
+  }
+}
+
 // Invoked at module scope immediately after envSchema.parse (D2): a partial
 // email config crashes boot — api and CLI alike — naming the vars, instead of
 // silently degrading to email-off (REQ-7.6).
 assertEmailConfigCoherence(config);
+
+// Non-fatal boot warning (D9): plain-http provider base URLs to a non-local host
+// log once that the connection is unencrypted. Never throws (REQ-3.3).
+warnPlaintextProviderBaseUrls(config);
 
 /** True when Stripe is fully configured for the purchase + webhook path (REQ-10.1). */
 export function isStripeConfigured(): boolean {

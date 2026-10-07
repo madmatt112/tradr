@@ -72,7 +72,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
   {
     target: '#entryPrice',
     route: '/calculator',
-    docs: 'gettingStarted',
+    docs: 'tradeCalculator',
     // The set is entered COLD, from the checklist on another route, so the first
     // step waits for the calculator to mount rather than assuming the
     // navigation has already landed.
@@ -86,7 +86,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
   {
     target: '#stopLoss',
     route: '/calculator',
-    docs: 'gettingStarted',
+    docs: 'tradeCalculator',
     side: 'right',
     title: 'Stop loss',
     body:
@@ -97,7 +97,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
   {
     target: '#targetPrice',
     route: '/calculator',
-    docs: 'gettingStarted',
+    docs: 'tradeCalculator',
     side: 'right',
     title: 'Target price (optional)',
     body:
@@ -107,7 +107,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
   {
     target: '[data-tour="calculator-risk"]',
     route: '/calculator',
-    docs: 'gettingStarted',
+    docs: 'tradeCalculator',
     side: 'right',
     actionHint: 'Choose the Percent basis',
     advanceOnAction: true,
@@ -120,7 +120,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
   {
     target: '[data-tour="calculator-account"]',
     route: '/calculator',
-    docs: 'gettingStarted',
+    docs: 'tradeCalculator',
     waitForMs: 3000,
     side: 'right',
     actionHint: 'Pick an account',
@@ -138,7 +138,7 @@ export const calculatorSteps: readonly WalkthroughStepSource[] = [
     // two is on screen at a time, so the selector list resolves unambiguously.
     target: '#riskPercent, #dollarRisk',
     route: '/calculator',
-    docs: 'gettingStarted',
+    docs: 'tradeCalculator',
     waitForMs: 3000,
     side: 'right',
     title: 'The amount at risk',

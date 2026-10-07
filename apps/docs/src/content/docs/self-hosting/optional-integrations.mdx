@@ -1,18 +1,158 @@
 ---
-title: 'Configure email, Stripe, and LLM keys'
-description: 'Turn on transactional email, wallet billing with Stripe, platform LLM keys, analytics, and the coupled cross-container settings.'
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+title: Optional integrations
+description: Turn on transactional email, Stripe wallet billing and Pro subscriptions, PostHog analytics, and the AI advisor (including a local model), and keep the cross-container limits in step.
 ---
 
-Turn on transactional email, wallet billing with Stripe, platform LLM keys, analytics, and the coupled cross-container settings.
+import HostedOnly from '@/components/HostedOnly.astro';
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+Every integration on this page is optional. When its config is absent the feature
+is **absent, not broken** — a fresh clone with none of these set runs identically,
+makes no outbound calls, and logs no errors. Configure only what you want, then
+restart the `api` container (`docker compose up -d`) to pick up the change.
+
+<HostedOnly>
+  On `app.tradr.cloud` email, billing, feature gating and analytics are already configured and
+  managed for you. This page is for running your own instance.
+</HostedOnly>
+
+Every variable named here lives in `.env.example`, which carries the full inline
+notes for each one. The [environment variable
+reference](/self-hosting/reference/env-vars/) lists them in one place.
+
+## Transactional email
+
+Self-service password reset and email verification turn on **only when all three
+of** `SMTP_HOST`, `EMAIL_FROM`, and `WEB_BASE_URL` are set — it is all-or-nothing.
+A **partial** set fails loudly at startup, naming the missing variable, rather
+than silently degrading to "email off": any email variable set while that trio is
+incomplete, or `SMTP_USER` set without `SMTP_PASS` (or the reverse), stops the
+`api` from booting.
+
+Without email, a user who forgets a password relies on the operator CLI
+(`tradr reset-password`), and verification is not required.
+
+```
+# SMTP_HOST=                     # presence anchor of the required trio
+# SMTP_PORT=587                  # optional; default 587
+# SMTP_TLS_MODE=starttls         # implicit | starttls | none
+# SMTP_USER=                     # optional pair — set both or neither
+# SMTP_PASS=
+# EMAIL_FROM=                    # part of the required trio
+# EMAIL_FROM_NAME=Tradr          # optional display name for the From header
+# WEB_BASE_URL=                  # part of the required trio
+```
+
+`WEB_BASE_URL` is the public web origin that emailed links land on — scheme and
+host only, no path. Set it to your instance's HTTPS origin once you serve over TLS
+(see [Put TLS in front of the stack](/self-hosting/tls-reverse-proxy/)).
+
+## Wallet billing and Pro subscriptions (Stripe)
+
+Buying credits and subscribing to Pro are hosted capabilities that stay **off
+until configured** — with the Stripe keys unset there is no purchase UI at all.
+**Both** `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are required to enable the
+purchase and webhook path.
+
+```
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PUBLISHABLE_KEY=   # reserved; unused by the redirect checkout flow
+STRIPE_PRO_PRICE_ID=      # the Stripe Price id the Pro subscription sells
+```
+
+The Pro subscription is purchasable only when `STRIPE_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, **and** `STRIPE_PRO_PRICE_ID` are all set. The full
+webhook-endpoint and Customer-Portal setup is documented inline in `.env.example`.
+
+Feature gating is a separate posture and is **off by default** (`FEATURE_GATING`),
+so self-hosters are unrestricted unless you turn it on.
+
+## Analytics (PostHog)
+
+Off by default. Set a key to send **product analytics only** — no personal data
+and no trade data; users are identified by an opaque surrogate id and payloads are
+scrubbed of secrets and email addresses.
+
+```
+# POSTHOG_API_KEY=         # backend product events (api container)
+# POSTHOG_HOST=            # optional; default https://us.i.posthog.com
+# POSTHOG_PUBLIC_KEY=      # frontend UI events (read by the web container)
+# POSTHOG_PUBLIC_HOST=     # optional; default https://us.i.posthog.com
+```
+
+Each surface is independent: set only the backend key, only the frontend key, or
+both. The full privacy posture — what is and is not sent, and the required
+project-side "Discard client IP data" setting — is documented inline in
+`.env.example`.
+
+## The AI advisor
+
+The advisor ships **off**. While off, every advisor route refuses the request and
+the app hides the Advisor navigation, pages, and settings tab. To opt in on your
+own instance, set `DISABLE_ADVISOR=false` and restart the `api`:
+
+```
+DISABLE_ADVISOR=false
+```
+
+Nothing is deleted either way — stored conversations and keys are untouched while
+the advisor is off.
+
+### Bring your own keys
+
+Once the advisor is on, each user adds their own provider API key under **Settings
+→ Advisor**. There is a card per provider (**Claude**, **OpenAI**, **Gemini**,
+**OpenRouter**): paste the key in the **API key** field and press **Save key**. A
+default model is picked for you on the first save; change it anytime in the
+**Default model** selector on the same card.
+
+### Use a local model
+
+To point the advisor at a local OpenAI-compatible model server — such as Ollama or
+LM Studio — set `OPENAI_BASE_URL` to the server's `/v1` endpoint. Enable the
+advisor first; the base URL is ignored while the advisor is off.
+
+```
+OPENAI_BASE_URL=http://host.docker.internal:11434/v1
+```
+
+Then, in **Settings → Advisor**, open the **OpenAI** card, paste **any key of at
+least eight characters** in the **API key** field (a local server usually ignores
+it, but the field requires a value), and press **Save key**. Pick your local model
+in the **Default model** selector.
+
+`ANTHROPIC_BASE_URL` does the same for an Anthropic-compatible endpoint, applied to
+the **Claude** card. A base URL applies to every call the advisor makes through
+that adapter.
+
+A base URL that uses plain `http://` to a **non-local** host boots with a warning
+that the provider key and conversations travel unencrypted; use `https://` unless
+the server runs on your local network. A `localhost` address, a private LAN
+address, or a bare container name on the compose network is treated as local and
+draws no warning.
+
+### Local-model limits
+
+When you pick a model whose id the OpenAI adapter does not recognise — which a
+local model's id normally is not — the adapter applies conservative fallbacks:
+
+- **Conversation-only.** The model is given no tools, so it has no market-data
+  lookup, no trade-data access, and no chart fetch.
+- **No image upload.** Vision is treated as unsupported.
+- **An 8,000-token context window.** Long conversations are summarised sooner than
+  with a model whose larger window is known.
+
+The app shows no "conversation-only" label today, so these limits are not called
+out in the UI — this page is the reference for them.
+
+## Cross-container settings to keep in sync
+
+A few limits live in different containers and are **hand-synced** — the compose
+stack does not couple them for you:
+
+- `MAX_UPLOAD_SIZE` (web/nginx) must be **≥** `CSV_IMPORT_MAX_FILE_BYTES` (api),
+  or oversized CSV imports are rejected by nginx before the api can size them.
+- `CSV_IMPORT_CLAIM_TIMEOUT_SECONDS` (api) must be **≥ 2 ×**
+  `CSV_IMPORT_NGINX_PROXY_TIMEOUT` (web).
+
+The defaults already satisfy both; only revisit them if you change one side.

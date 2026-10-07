@@ -58,6 +58,56 @@ describe('ClaudeAdapter', () => {
     expect(ctorOptions).toHaveBeenCalledWith({ apiKey: 'sk-test', timeout: 600_000 });
   });
 
+  // Contract (Req 3.5, 3.6):
+  //   Pre-condition: a ClaudeAdapter constructed with a configured baseURL.
+  //   Test: adapter.listModels(apiKey) — the path through the seam the
+  //     adapter's own client() build goes through for model listing.
+  //   Observable: the mocked Anthropic constructor's recorded options include
+  //     the configured baseURL.
+  //   Expected-value source: design C6 — "`client()` passes `{ apiKey, timeout:
+  //     SDK_TIMEOUT_MS }` plus `baseURL` only when set, in the same form as
+  //     openai.ts" (design.md §C6; requirements.md 3.5, 3.6).
+  it('listModels passes a configured baseURL through to the SDK constructor', async () => {
+    const adapter = new ClaudeAdapter(new ListModelsCache(), 'http://localhost:11434/v1');
+    modelsListMock.mockResolvedValue(asyncIterable([]));
+
+    await adapter.listModels('sk-test');
+
+    expect(ctorOptions).toHaveBeenCalledWith({
+      apiKey: 'sk-test',
+      timeout: 600_000,
+      baseURL: 'http://localhost:11434/v1',
+    });
+  });
+
+  // Contract (Req 3.5, 3.6):
+  //   Pre-condition: a ClaudeAdapter constructed with a configured baseURL.
+  //   Test: adapter.streamChat(args) — the path through the seam the adapter's
+  //     own client() build goes through for streaming.
+  //   Observable: the mocked Anthropic constructor's recorded options include
+  //     the configured baseURL.
+  //   Expected-value source: design C6 (same citation as above).
+  it('streamChat passes a configured baseURL through to the SDK constructor', async () => {
+    const adapter = new ClaudeAdapter(new ListModelsCache(), 'http://localhost:11434/v1');
+    streamMock.mockReturnValue(asyncIterable([]));
+
+    await adapter
+      .streamChat({
+        apiKey: 'sk-test',
+        modelId: 'claude-opus-4-7',
+        messages: { system: '', messages: [] },
+        signal: new AbortController().signal,
+      })
+      [Symbol.asyncIterator]()
+      .next();
+
+    expect(ctorOptions).toHaveBeenCalledWith({
+      apiKey: 'sk-test',
+      timeout: 600_000,
+      baseURL: 'http://localhost:11434/v1',
+    });
+  });
+
   it('translates canonical messages into Anthropic MessageParam + system', () => {
     const adapter = new ClaudeAdapter(new ListModelsCache());
     const list: CanonicalMessage[] = [

@@ -6,6 +6,16 @@ import type { CanonicalMessage, ProviderAdapter } from './providers/adapter';
 import { ListModelsCache } from './providers/list-models-cache';
 import { OpenAIAdapter } from './providers/openai';
 
+// --- config mock -------------------------------------------------------------
+// estimateTokens's Claude countTokens client must follow config.ANTHROPIC_BASE_URL
+// (design.md D10; requirements.md 3.6).
+
+const mockConfig = vi.hoisted(() => ({
+  ANTHROPIC_BASE_URL: undefined as string | undefined,
+}));
+
+vi.mock('@/lib/config', () => ({ config: mockConfig }));
+
 // --- tiktoken mock -----------------------------------------------------------
 // get_encoding(name) returns an encoder whose encode() length is the token count.
 // freeMock tracks that the encoder is released. The dynamic import() in cap-check
@@ -20,10 +30,14 @@ vi.mock('tiktoken', () => ({ get_encoding: getEncodingMock }));
 // --- @anthropic-ai/sdk mock --------------------------------------------------
 
 const countTokensMock = vi.fn();
+const anthropicCtorOptions = vi.fn();
 
 vi.mock('@anthropic-ai/sdk', () => {
   class Anthropic {
     messages = { countTokens: countTokensMock };
+    constructor(opts: unknown) {
+      anthropicCtorOptions(opts);
+    }
   }
   return { default: Anthropic };
 });
@@ -71,6 +85,7 @@ const TOOL_HEAVY_LIST: CanonicalMessage[] = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockConfig.ANTHROPIC_BASE_URL = undefined;
 });
 
 describe('resolveEncoder', () => {
@@ -334,5 +349,30 @@ describe('estimateTokens — Claude', () => {
     });
 
     expect(result).toEqual({ tokens: 11, source: 'fallback' });
+  });
+
+  // Contract (Req 3.6, D10):
+  //   Pre-condition: config.ANTHROPIC_BASE_URL is set.
+  //   Test: estimateTokens({ adapter: claudeAdapter(), ... }) — the only seam
+  //     a caller has into the Claude countTokens client this function builds.
+  //   Observable: the mocked Anthropic constructor's recorded options include
+  //     the configured baseURL.
+  //   Expected-value source: design.md D10 — "the Claude token-count client in
+  //     cap-check also takes the configured base URL" (requirements.md 3.6).
+  it('passes config.ANTHROPIC_BASE_URL to the countTokens client when set', async () => {
+    mockConfig.ANTHROPIC_BASE_URL = 'http://localhost:11434/v1';
+    countTokensMock.mockResolvedValue({ input_tokens: 1234 });
+
+    await estimateTokens({
+      adapter: claudeAdapter(),
+      list: TEXT_LIST,
+      modelId: 'claude-opus-4-7',
+      apiKey: 'sk-ant',
+      imageCount: 0,
+    });
+
+    expect(anthropicCtorOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'http://localhost:11434/v1' }),
+    );
   });
 });

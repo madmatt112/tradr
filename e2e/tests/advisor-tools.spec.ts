@@ -1,5 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
+import { STUB_MODEL_ID, STUB_REPLY_TEXT } from '../support/openai-stub-server';
+
 /**
  * advisor-tools e2e suite (Task 38).
  *
@@ -24,31 +26,33 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * Four of the five design §Testing-Strategy flows ("ask about a stock → tool
  * cards → grounded answer", "positions question → trade-data card", "non-tool
  * model → conversation-only", "long conversation → summarized notice") drive
- * the advisor STREAM, which calls a real LLM provider. There is NO
- * out-of-process stub seam for the provider:
+ * the advisor STREAM, which calls a real LLM provider. The out-of-process seam
+ * that makes those streams deterministic without a live key now EXISTS:
  *
- *   - The Claude/OpenAI adapters construct their SDK clients with only
- *     `{ apiKey, timeout }` and no `baseURL`
- *     (apps/api/.../providers/{claude,openai}.ts `client()`), and the registry
- *     (providers/registry.ts) builds those adapters once at bootstrap with no
- *     runtime injection point. The unit/integration tests reach a fake
- *     provider ONLY by `vi.mock('./providers/registry')` in-process
- *     (see __fixtures__/scriptable-provider.ts) — unreachable from an
- *     out-of-process Playwright run.
- *   - The task-37 harness stubs UNUSUAL_WHALES_BASE_URL but adds no LLM stub.
+ *   - `apps/api/src/lib/config.ts` reads `OPENAI_BASE_URL`, and the registry
+ *     (providers/registry.ts) passes it to the `OpenAIAdapter` as its SDK
+ *     `baseURL`. Booting the e2e API with `OPENAI_BASE_URL` pointed at a local
+ *     OpenAI-shaped stub (e2e/support/openai-stub-server.ts, a sibling to the UW
+ *     stub) therefore routes BOTH the save-time `listModels` probe and the
+ *     advisor stream to the stub.
+ *   - The harness boots that stub as a `webServer` entry and sets
+ *     `apiEnv.OPENAI_BASE_URL` (e2e/playwright.config.ts), so the
+ *     conversation-only flow (flow 3) runs on every e2e run.
  *
- * The seam that WOULD close the gap (and keep these flows deterministic without
- * a live key): the OpenAI Node SDK falls back to `process.env.OPENAI_BASE_URL`
- * when no `baseURL` is passed, so booting the API with `OPENAI_BASE_URL` →
- * a local OpenAI-shaped SSE stub (a sibling to the UW stub, scripting
- * tool_call + token deltas) plus a seeded BYOK `openai` provider key would make
- * the streaming flows deterministic end-to-end. That stub is NOT part of the
- * task-37 harness and building it is out of this task's scope. Per the task
- * brief, those four flows are therefore implemented as `test.fixme` with the
- * exact seam documented inline — they are NOT faked as passing.
+ * What the stub does NOT do is script `tool_call` sequences: it streams a fixed
+ * text reply and never emits a `tool_calls` delta. The three flows that assert a
+ * streamed tool_call → tool-card → grounded-answer sequence (flows 1, 2 and 5
+ * below) therefore stay `test.fixme`; scripting those deltas belongs to the next
+ * spec that touches the advisor's streaming or tool path (deferral d-84c66d2c),
+ * and they are NOT faked as passing.
  *
- * What IS deterministically reachable through the task-37 harness (UW stub +
- * real DB, no LLM) is implemented and asserted below:
+ * Flow 3 (non-tool model → conversation-only) IS a running test: the stub's one
+ * model id (`stub-local-model`) matches no OpenAI tool-use prefix
+ * (apps/api/.../providers/openai.ts TOOL_USE_PREFIXES), so the advisor resolves
+ * it conversation-only and sends no tools — exactly what the flow asserts.
+ *
+ * What IS deterministically reachable through the UW stub + real DB (no LLM
+ * scripting needed) is also implemented and asserted below:
  *   - Flow 1/2 precondition: with no provider key the advisor refuses to chat
  *     (no-key banner, composer absent) — the "no access" surface.
  *   - The UW market-data key save+verify round-trip against the stub
@@ -61,6 +65,14 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  */
 
 const PASSWORD = 'test-password-1234';
+
+// Standalone Playwright CLI context — same `process.env` carve-out as the other
+// specs (no `@/lib/config` in scope here). The OpenAI-shaped stub's test-only
+// `/__last-request` route lives on the LLM stub port, not the app origin; its
+// default matches e2e/playwright.config.ts (LLM_STUB_PORT ?? 4605).
+/* eslint-disable no-restricted-syntax */
+const LLM_STUB_URL = `http://localhost:${Number(process.env.LLM_STUB_PORT ?? 4605)}`;
+/* eslint-enable no-restricted-syntax */
 
 function uniqueEmail(label: string): string {
   return `e2e-advisor-${label}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
@@ -364,19 +376,19 @@ test.describe('advisor-tools', () => {
   });
 
   // -------------------------------------------------------------------------
-  // LLM-dependent flows — documented as fixme (NOT faked).
+  // tool-call-dependent flows — documented as fixme (NOT faked).
   //
-  // Each of these drives the advisor stream, which calls a real LLM provider.
-  // The task-37 harness has no LLM stub and the provider adapters expose no
-  // out-of-process baseURL seam, so these cannot be made deterministic from
-  // Playwright today. They are recorded here so the coverage gap is explicit
-  // and the closing seam is captured in one place.
+  // The base-URL seam and the OpenAI-shaped stub now EXIST (see the suite
+  // header): the e2e API boots with `OPENAI_BASE_URL` pointed at
+  // e2e/support/openai-stub-server.ts, and flow 3 (conversation-only) runs
+  // against it below. What is still missing is `tool_call` scripting in the
+  // stub — it streams a fixed text reply and never emits a `tool_calls` delta.
   //
-  // To enable (the documented seam): add an OpenAI-shaped SSE stub server as a
-  // sibling `webServer` entry, boot the API with `OPENAI_BASE_URL` pointed at
-  // it (the OpenAI Node SDK reads OPENAI_BASE_URL when no baseURL is passed),
-  // and seed a BYOK `openai` provider key for the test user. The stub scripts
-  // the tool_call → token-delta sequences these flows assert.
+  // The three flows below assert a streamed tool_call → tool-card →
+  // grounded-answer sequence, so they need the stub to script `tool_call` +
+  // token deltas (and, for flow 5, a `prepare()` summarization crossing). That
+  // work belongs to the next spec that touches the advisor's streaming or tool
+  // path (deferral d-84c66d2c). They stay `test.fixme` until then — NOT faked.
   // -------------------------------------------------------------------------
 
   // Flow 1: UW key → ask about a stock → tool cards → grounded answer.
@@ -399,12 +411,63 @@ test.describe('advisor-tools', () => {
     // tool-card + answer half is blocked.
   });
 
-  // Flow 3: non-tool model → "conversation-only"; tools absent.
-  // Needs: a seeded provider key whose default model is NOT in the tool-use
-  // prefix set (so capability resolves conversation-only) + a scripted text
-  // stream; asserts no tool cards render and tools are not offered.
-  test.fixme('non-tool model → conversation-only; tool cards absent', async () => {
-    // Blocked: no out-of-process LLM stub (see suite header).
+  // Flow 3: non-tool model → "conversation-only"; tool cards absent.
+  //
+  // Runs end-to-end against the OpenAI-shaped stub: the e2e API boots with
+  // `OPENAI_BASE_URL` → e2e/support/openai-stub-server.ts, so the save-time
+  // `listModels` probe and the advisor stream both resolve there. The stub's one
+  // model (`stub-local-model`) matches no OpenAI tool-use prefix, so the advisor
+  // resolves it conversation-only and sends no tools — proving the gate through
+  // the app's own code path, never injected from the test.
+  test('non-tool model → conversation-only; tool cards absent', async ({ page }) => {
+    await registerAndAuthenticate(page, 'flow3');
+
+    // Save a BYOK OpenAI key through the Settings UI. The save-time probe calls
+    // listModels against the stub (which returns stub-local-model), so the key
+    // verifies. The key only has to be ≥ 8 characters (shared advisor schema).
+    await page.goto('/settings/advisor');
+    const card = page.getByTestId('provider-key-card-openai');
+    await expect(card).toBeVisible();
+    await card.getByLabel('API key').fill('sk-e2e-stub-local-key');
+    await card.getByRole('button', { name: 'Save key' }).click();
+    await expect(card.getByText('Key verified')).toBeVisible();
+
+    // Pick the stub's conversation-only model in the default-model selector. The
+    // initial REQ-6.4 default is a nominal tool-capable id; selecting the stub
+    // model is what makes the "sends no tools" assertion load-bearing (a
+    // tool-capable default would send tools). Wait for the PATCH so the server's
+    // persisted default is stub-local-model before the message is sent.
+    await card.locator('#openai-default-model').click();
+    const modelPatched = page.waitForResponse(
+      (res) =>
+        new URL(res.url()).pathname === '/api/advisor/provider-keys/openai' &&
+        res.request().method() === 'PATCH',
+    );
+    await page.getByRole('option', { name: STUB_MODEL_ID }).click();
+    await modelPatched;
+    await expect(card.locator('#openai-default-model')).toContainText(STUB_MODEL_ID);
+
+    // Send one advisor message. The stream resolves to the stub, which replies
+    // with the fixed text and never a `tool_calls` delta.
+    await page.goto('/advisor');
+    const composer = page.getByTestId('composer');
+    await expect(composer).toBeVisible();
+    await composer.getByRole('textbox', { name: 'Message' }).fill('Give me a one-line summary.');
+    await composer.getByRole('button', { name: 'Send message' }).click();
+
+    // The fixed stub reply renders in the transcript.
+    await expect(page.getByText(STUB_REPLY_TEXT)).toBeVisible();
+
+    // Conversation-only: no tool card renders.
+    await expect(page.getByTestId('market-data-card')).toHaveCount(0);
+    await expect(page.getByTestId('trade-data-card')).toHaveCount(0);
+
+    // The stub recorded the chat-completions body; a conversation-only model
+    // means the advisor sent no `tools`.
+    const recorded = await page.request.get(`${LLM_STUB_URL}/__last-request`);
+    expect(recorded.ok()).toBe(true);
+    const recordedBody = (await recorded.json()) as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(recordedBody, 'tools')).toBe(false);
   });
 
   // Flow 5: long conversation → summarized notice; keeps working.

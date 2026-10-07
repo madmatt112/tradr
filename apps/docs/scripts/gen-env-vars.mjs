@@ -122,11 +122,7 @@ function parse(source) {
  * to a space.
  */
 function cell(value) {
-  return String(value)
-    .replace(/\\/g, '\\\\')
-    .replace(/\|/g, '\\|')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -186,14 +182,18 @@ function render(sections, required) {
   out.push('');
   out.push('{/* GENERATED FILE — do not edit.');
   out.push('    Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs');
-  out.push('    Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}');
+  out.push(
+    '    Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}',
+  );
   out.push('');
   out.push(
     `Tradr reads **${total} environment variables**, of which **${required.size} are required** —`,
   );
   out.push('everything else has a working default or turns a feature off when unset.');
   out.push('');
-  out.push('This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),');
+  out.push(
+    'This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),',
+  );
   out.push('the file you copy to `.env`. CI regenerates it and fails if the two disagree, so it');
   out.push('cannot fall behind the template.');
   out.push('');
@@ -204,9 +204,15 @@ function render(sections, required) {
   out.push('');
   out.push('| Variable | How to generate one |');
   out.push('| --- | --- |');
-  out.push('| `POSTGRES_PASSWORD` | `openssl rand -hex 24` — hex avoids the URL-reserved characters that would corrupt the connection string |');
-  out.push('| `SESSION_SECRET` | `openssl rand -base64 24` — signs session cookies, minimum 32 characters |');
-  out.push('| `ENCRYPTION_KEY` | `openssl rand -hex 32` — a 32-byte key that encrypts stored provider API keys |');
+  out.push(
+    '| `POSTGRES_PASSWORD` | `openssl rand -hex 24` — hex avoids the URL-reserved characters that would corrupt the connection string |',
+  );
+  out.push(
+    '| `SESSION_SECRET` | `openssl rand -base64 24` — signs session cookies, minimum 32 characters |',
+  );
+  out.push(
+    '| `ENCRYPTION_KEY` | `openssl rand -hex 32` — a 32-byte key that encrypts stored provider API keys |',
+  );
   out.push('');
   out.push(':::danger[Keep `ENCRYPTION_KEY` with your backups]');
   out.push('A restored database still holds the provider API keys it encrypted. Without the');
@@ -241,24 +247,35 @@ function render(sections, required) {
   out.push('## Next steps');
   out.push('');
   out.push('- [Install with Docker Compose](/self-hosting/docker-compose/) — where these are set.');
-  out.push('- [Configure email, Stripe, and LLM keys](/self-hosting/optional-integrations/) — the opt-in integrations.');
+  out.push(
+    '- [Configure email, Stripe, and LLM keys](/self-hosting/optional-integrations/) — the opt-in integrations.',
+  );
   out.push('- [Upgrade an instance](/self-hosting/upgrades/) — what changes between releases.');
   out.push('');
   return out.join('\n');
 }
 
 const required = requiredSecrets();
-// The advisor is withdrawn while it is reworked (DISABLE_ADVISOR defaults to
-// true) and the docs no longer describe it, so its settings are left out of the
-// reference: every key named ADVISOR (the switch itself included — it is
-// documented inline in .env.example for an operator who opts back in) and the
-// section that exists only for it. They are still read by the api. Drop this
-// filter when the advisor returns.
+// The advisor is mostly withdrawn while it is reworked (DISABLE_ADVISOR defaults
+// to true), so its streaming/limit settings and the platform API keys stay out of
+// the reference. Three names are surfaced anyway: the two self-host base URLs that
+// point the OpenAI and Claude adapters at a local server, and the DISABLE_ADVISOR
+// switch that turns the advisor back on. A key survives when it is one of those
+// three (SURFACED_KEY), OR when its section is not the advisor section and the key
+// is not a hidden advisor/platform-key name. The surface check runs first because
+// OPENAI_BASE_URL and ANTHROPIC_BASE_URL live in the hidden Advisor section.
+// Sections left with no keys drop out. The hidden keys are still read by the api.
+const SURFACED_KEY = /^(OPENAI_BASE_URL|ANTHROPIC_BASE_URL|DISABLE_ADVISOR)$/;
 const HIDDEN_KEY = /ADVISOR|^(ANTHROPIC|OPENAI)_API_KEY$/;
 const HIDDEN_SECTION = /^Advisor\b/;
 const sections = parse(readFileSync(ENV_EXAMPLE, 'utf8'))
-  .filter((s) => !HIDDEN_SECTION.test(s.name))
-  .map((s) => ({ ...s, keys: s.keys.filter((k) => !HIDDEN_KEY.test(k.name)) }))
+  .map((s) => ({
+    ...s,
+    keys: s.keys.filter(
+      (k) =>
+        SURFACED_KEY.test(k.name) || (!HIDDEN_SECTION.test(s.name) && !HIDDEN_KEY.test(k.name)),
+    ),
+  }))
   .filter((s) => s.keys.length > 0);
 const keyCount = sections.reduce((n, s) => n + s.keys.length, 0);
 

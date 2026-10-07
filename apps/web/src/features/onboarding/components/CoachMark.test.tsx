@@ -261,6 +261,14 @@ describe('CoachMark', () => {
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noreferrer');
   });
+
+  it('carries the dashboard docs deep link through docsUrl(), in a new tab (self-host-experience task 14)', () => {
+    render(<CoachMark surface="dashboard-widgets" />);
+    const link = screen.getByRole('link', { name: 'Read more' });
+    expect(link.getAttribute('href')).toBe(docsUrl('dashboard'));
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noreferrer');
+  });
 });
 
 // ---------------------------------------------------------------------------

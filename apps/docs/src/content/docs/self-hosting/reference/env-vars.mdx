@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **74 environment variables**, of which **3 are required** —
+Tradr reads **80 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 74 variables, **46 ship unset** — either commented out in the
+Of the 80 variables, **51 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -61,6 +61,7 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | --- | --- | --- |
 | `SESSION_SECRET` | **Required** | Generate (≥32 chars): `openssl rand -base64 24` |
 | `DISABLE_REGISTRATION` | `false` | Close public sign-up. `true` makes POST /api/auth/register refuse with 403 REGISTRATION_DISABLED, whatever the client. Sign-in, password reset and every existing account are unaffected — only account creation is gated. Use it to run a private instance once your own accounts exist. Reopening sign-up is this variable plus an api restart; nothing is rebuilt. The SPA reads the same posture and shows a closed-signups notice on /register instead of a form it cannot submit; NEWSLETTER_URL (Web section) optionally adds a link to it. |
+| `DISABLE_ADVISOR` | `true` | The AI advisor is switched off by default while it is reworked. While `true` (the default) every /api/advisor route refuses with 403 ADVISOR_DISABLED — conversations, provider and market-data keys, personas, trade-data consent and the options-chain lookup — and the app hides the Advisor navigation, pages and settings tab. Set `false` to opt back in on your own instance; the ADVISOR_* settings further down only matter then. Nothing is deleted either way: stored conversations and keys are untouched. Like DISABLE_REGISTRATION it is an operator posture plus an api restart; nothing is rebuilt. |
 
 ## Server
 
@@ -83,6 +84,14 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `CSV_IMPORT_NGINX_PROXY_TIMEOUT` | `300s` | nginx proxy read timeout for the dedicated /api/csv-import/ AND /api/account-data/ routes (both reuse this one value). A large within-cap synchronous CSV import, account export or account import can exceed nginx's default 60s; this raises the timeout for those routes only (others unchanged). Keep CSV_IMPORT_CLAIM_TIMEOUT_SECONDS (api) ≥ 2 × this value — the two live in different containers and are hand-synced. |
 | `MAX_UPLOAD_SIZE` | `20m` | nginx client_max_body_size for uploads. Must accommodate the largest upload a single request can carry, or large uploads 413. OPERATOR CONSTRAINT: keep MAX_UPLOAD_SIZE ≥ CSV_IMPORT_MAX_FILE_BYTES (below), or oversized CSV imports are rejected by nginx before the api can size them. OPERATOR CONSTRAINT: also keep MAX_UPLOAD_SIZE ≥ the position-screenshot request (one image, at most 4,504,096 bytes), or screenshot uploads are rejected by nginx before the api can size them. It ALSO caps uploaded account-import archives (/api/account-data/import*): an archive larger than this is refused by nginx with 413 before the api can size it, and the app tells the user the operator can raise this value. |
 
+## TLS reverse proxy (compose overrides)
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `TRADR_DOMAIN` | Optional | Read only by the Caddy/Traefik compose overrides (docker-compose.caddy.yml, docker-compose.traefik.yml); the base stack ignores them. See the TLS reverse proxy docs page. Domain the proxy serves and requests a certificate for; a DNS record must point it at this host. Required by both overrides — the render fails and names it when unset. |
+| `ACME_EMAIL` | Optional | Contact email the certificate authority needs (Traefik override only; Caddy needs none). Required by the Traefik override — its render fails and names it when unset. |
+| `COMPOSE_FILE` | Optional | Compose's own variable. Set it so a plain `docker compose up -d` loads an override without typing both -f flags each time. Pick Caddy OR Traefik, not both. |
+
 ## Metrics (Prometheus exposition)
 
 | Variable | Default | Notes |
@@ -98,6 +107,13 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `ENCRYPTION_KEY` | **Required** | Generate the active key: `openssl rand -hex 32` |
 | `ENCRYPTION_KEY_PREVIOUS` | Optional | Previous key, kept during rotation so existing ciphertext can still decrypt. |
 | `ENCRYPTION_KEY_FINGERPRINT` | Optional | Safety check: sha256 of the raw key bytes. If set, the app aborts on startup if it doesn't match the loaded ENCRYPTION_KEY — guards against deploying with the wrong key. Generate from your key: `openssl rand -hex 32 \| xxd -r -p \| openssl dgst -sha256 -binary \| xxd -p -c 32` |
+
+## Advisor — streaming/limits
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `OPENAI_BASE_URL` | Optional | Optional: point the OpenAI adapter at a local OpenAI-compatible server such as Ollama, LM Studio or any other OpenAI-compatible endpoint. Use the /v1 form, for example http://host.docker.internal:11434/v1. Enable the advisor first (set DISABLE_ADVISOR=false); this is ignored while the advisor is off. |
+| `ANTHROPIC_BASE_URL` | Optional | Optional: point the Claude adapter at a local Anthropic-compatible server, in the same /v1 form, for example http://host.docker.internal:11434/v1. Local runners like Ollama and LM Studio expose OpenAI-compatible endpoints; use OPENAI_BASE_URL for those. Enable the advisor first (set DISABLE_ADVISOR=false); this is ignored while the advisor is off. |
 
 ## CSV import (api container)
 

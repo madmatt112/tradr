@@ -857,6 +857,76 @@ jobs:
             exit 1
           }
 
+      # (o) The web container must itself reach a healthy state, proving its own
+      # /healthz healthcheck answers and that `up -d` returned with web gated
+      # behind a healthy api (C4 / probe P3, Req 1.6). Same fail-fast shape as
+      # the api wait above.
+      - name: Assert web becomes healthy (o)
+        run: |
+          for i in $(seq 1 60); do
+            state=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml ps web --format '{{.State}}')
+            health=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml ps web --format '{{.Health}}')
+            echo "web state: ${state:-<none>} health: ${health:-<none>}"
+            if [ "$health" = "healthy" ]; then exit 0; fi
+            # Fail fast on a crash-loop / exit rather than waiting out the full
+            # timeout (a broken image reports state=restarting|exited and an
+            # empty Health field while it relaunches).
+            if [ "$state" = "restarting" ] || [ "$state" = "exited" ] || [ "$health" = "unhealthy" ]; then
+              echo "web is not coming up (state=$state health=$health)"
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "web did not become healthy in time"
+          exit 1
+
+      # (p) The start-order contract itself: web depends_on api with condition
+      # service_healthy, in BOTH the base compose and the base+CI overlay merge
+      # (C4, Req 1.6). Render the resolved config and read the condition with jq.
+      - name: Assert web depends_on api is service_healthy (p)
+        run: |
+          base=$(docker compose -f docker-compose.yml config --format json \
+            | jq -r '.services.web.depends_on.api.condition')
+          echo "base web.depends_on.api.condition: $base"
+          overlay=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml config --format json \
+            | jq -r '.services.web.depends_on.api.condition')
+          echo "overlay web.depends_on.api.condition: $overlay"
+          if [ "$base" != "service_healthy" ] || [ "$overlay" != "service_healthy" ]; then
+            echo "expected web.depends_on.api.condition=service_healthy in base AND base+CI overlay"
+            exit 1
+          fi
+
+      # (q) Both optional TLS overrides must render cleanly and close the
+      # plaintext path: web's host port reset to none and the proxy publishing
+      # exactly 80 and 443 (C3, Req 2.6). Placeholder domain/email satisfy the
+      # overrides' `:?` guards. config is captured to a variable first so a
+      # non-zero render fails the step even though the default shell has no
+      # pipefail.
+      - name: Assert TLS overrides render and publish only 80 and 443 (q)
+        env:
+          TRADR_DOMAIN: tradr.example.com
+          ACME_EMAIL: ops@example.com
+        run: |
+          docker compose version
+          for f in docker-compose.caddy.yml docker-compose.traefik.yml; do
+            echo "=== rendering docker-compose.yml + $f ==="
+            json=$(docker compose -f docker-compose.yml -f "$f" config --format json)
+            web_ports=$(echo "$json" | jq '(.services.web.ports // []) | length')
+            echo "$f: web.ports entries = $web_ports"
+            if [ "$web_ports" != "0" ]; then
+              echo "expected web host ports reset to none in $f (plaintext path still bound)"
+              exit 1
+            fi
+            proxy=$(echo "$json" | jq -r '.services | keys[] | select(. != "postgres" and . != "api" and . != "web")')
+            published=$(echo "$json" | jq -r --arg p "$proxy" \
+              '[.services[$p].ports[].published | tonumber] | sort | unique | join(",")')
+            echo "$f: proxy '$proxy' publishes $published"
+            if [ "$published" != "80,443" ]; then
+              echo "expected proxy '$proxy' to publish exactly 80 and 443 in $f (got $published)"
+              exit 1
+            fi
+          done
+
       # Dump container logs on ANY failure above (Req 8.6).
       - name: Dump container logs on failure
         if: failure()

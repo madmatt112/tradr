@@ -1,18 +1,93 @@
 ---
 title: 'Use the trade calculator'
 description: 'From entry, target, and stop, get position size, R:R, dollar risk, and estimated fees, sized against a chosen account balance before you enter.'
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
 ---
 
-From entry, target, and stop, get position size, R:R, dollar risk, and estimated fees, sized against a chosen account balance before you enter.
+The trade calculator sizes a trade before you take it. Open it from the
+**Calculator** link in the sidebar.
 
-:::note
-This page is not written yet. It is listed so the shape of the documentation is
-visible. It stays out of search and out of search-engine indexes until it has
-content.
-:::
+Nothing on this page is submitted or saved. The calculator recomputes as you
+type, so you can try a setup, change a number, and read the new result straight
+away. The form is on the left, the results are on the right.
+
+## Direction and mode
+
+**Direction** is a two-tab choice: **Long** or **Short**.
+
+**Mode** is a two-tab choice: **Stock** or **Options**. The field below the mode
+changes with it.
+
+## Pick the instrument
+
+Under **Stock**, the **Symbol** field takes a ticker. When your instance has a
+stock-quote provider configured, a **Pull last price** button appears once you
+have typed a symbol. It fills **Entry price** with the last price, which is about
+15 minutes delayed.
+
+Under **Options**, **Select from options chain** opens the chain. Pick a contract
+to use its premium as the entry price. When the contract has no last trade, you
+enter the premium by hand instead.
+
+## The trade prices
+
+Three price fields drive the size:
+
+- **Entry price** - the price you plan to get in at.
+- **Stop loss** - the price at which you accept the trade is wrong. The distance
+  from entry to stop is the **Per-unit risk** in the results, and the position
+  size comes from it: a wider stop buys fewer units for the same money at risk.
+- **Target price (optional)** - leave it out and you still get a size. Add it and
+  the results also show the **Per-unit reward** and the **Risk/Reward ratio**.
+
+## Risk
+
+**Risk** is a two-tab choice for how you say the amount you are willing to lose:
+
+- **Dollar** shows one field, **Dollar risk**, which is a figure you type.
+- **Percent** shows **Balance** and **Risk percent**, and sizes the risk from the
+  balance and the percentage.
+
+## Account
+
+**Account** picks the account you are trading. Under **Percent** it supplies the
+balance to size against, and in either basis it supplies the display currency and
+caps the position at the buying power the account has.
+
+When the account carries a default risk rule, choosing it prefills
+**Risk percent**. The change applies to this calculation only: the account keeps its
+rule. An account with a brokerage attached also brings that brokerage's fee
+schedule into the estimate, which you can still change or clear under **Fees**.
+
+## Fees
+
+**Fees** is a three-tab choice:
+
+- **None** adds no fees.
+- **Brokerage** sizes fees from a selected brokerage's schedule.
+- **Manual** shows a **Manual fees** field you type.
+
+## Results
+
+The results panel stays empty until the prices and one risk basis are complete.
+
+**Position Sizing** gives you:
+
+- **Position size** - whole units, rounded down.
+- **Per-unit risk** - the entry-to-stop distance per unit.
+- **Actual dollar risk** - the risk once the size is rounded down, so it lands at
+  or under your budget.
+- **Total position value**.
+
+When the account's buying power is the limit, the panel marks the size with a
+**Buying power** note.
+
+**Risk / Reward** appears only with a target. It adds the **Per-unit reward** and
+the **Risk/Reward ratio** - what the plan pays if it works, per unit of what it
+costs if it does not.
+
+**Fee Impact** appears when fees are on. It shows the **Estimated fees**, the
+**Fee-to-risk %**, the **Adjusted dollar risk**, and the **Breakeven**.
+**Adjusted Risk / Reward** then restates the ratio after fees.
+
+In **Percent** mode, **Derived Dollar Risk** shows the dollar figure the
+percentage worked out to.

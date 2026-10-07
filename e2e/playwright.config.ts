@@ -46,6 +46,9 @@ const uwStubPort = Number(process.env.UW_STUB_PORT ?? 4599);
 const githubStubPort = Number(process.env.GITHUB_STUB_PORT ?? 4601);
 const secStubPort = Number(process.env.SEC_STUB_PORT ?? 4602);
 const quoteStubPort = Number(process.env.QUOTE_STUB_PORT ?? 4603);
+// OpenAI-shaped LLM stub (self-host-experience C8). 4604 is the PWA harness
+// (e2e/support/pwa-build-server.ts), so this defaults to 4605.
+const llmStubPort = Number(process.env.LLM_STUB_PORT ?? 4605);
 const webPort = new URL(baseURL).port || '5173';
 
 // Env forwarded to the booted API. Defaults are CI-safe; real secrets/DB come
@@ -104,6 +107,12 @@ const apiEnv: Record<string, string> = {
   // it is reworked. The advisor specs exercise code that is still shipped, so
   // the suite opts back in exactly as an operator would.
   DISABLE_ADVISOR: 'false',
+  // self-host-experience C8: point the OpenAI-compatible seam at the local
+  // OpenAI-shaped stub (e2e/support/openai-stub-server.ts). The registry passes
+  // config.OPENAI_BASE_URL to the OpenAIAdapter, so the save-time listModels
+  // probe and the advisor stream both resolve to the stub — advisor-tools flow 3
+  // runs deterministically with no live key. The stub serves under a `/v1` path.
+  OPENAI_BASE_URL: `http://localhost:${llmStubPort}/v1`,
   // ─── Transactional email pass-through (transactional-email Task 17) ──────
   // Mailpit being reachable does NOT configure the API — these exports do.
   // Every default is '' (config.ts's empty-tolerant preprocess: all-empty ⇒
@@ -192,6 +201,16 @@ export default defineConfig({
           reuseExistingServer,
           timeout: 30_000,
           env: { QUOTE_STUB_PORT: String(quoteStubPort) },
+        },
+        {
+          // OpenAI-shaped LLM stub — the API's OPENAI_BASE_URL points here so the
+          // conversation-only advisor flow (advisor-tools flow 3) is deterministic
+          // and never hits a live LLM host. Serves /v1/models + /v1/chat/completions.
+          command: 'pnpm --filter @tradr/e2e exec tsx support/openai-stub-server.ts',
+          url: `http://localhost:${llmStubPort}/__health`,
+          reuseExistingServer,
+          timeout: 30_000,
+          env: { LLM_STUB_PORT: String(llmStubPort) },
         },
         {
           command: 'pnpm --filter @tradr/api exec tsx src/index.ts',

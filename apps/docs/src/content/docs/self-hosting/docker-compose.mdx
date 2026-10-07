@@ -86,7 +86,7 @@ Compose derives the api's connection string from these three values as
 
 ### Session secret
 
-Signs auth session cookies. Generate at least 32 characters:
+The api requires `SESSION_SECRET`, at least 32 characters. Generate one:
 
 ```bash
 openssl rand -base64 24    # -> SESSION_SECRET
@@ -214,7 +214,9 @@ docker compose up -d
 ```
 
 Compose builds the images, starts `postgres`, waits for it to pass its
-healthcheck, then starts `api`, then `web`.
+healthcheck, then starts `api`. It starts `web` only after `api` reports healthy
+— up to the api's 180s `start_period` on a first boot. If `api` never becomes
+healthy, `web` is not started; `docker compose logs api` is the next step.
 
 **Using pre-built images instead of building locally:** the release workflow
 publishes multi-arch images to GHCR. In `docker-compose.yml`, replace each
@@ -239,9 +241,11 @@ implemented in `apps/api/src/db/migrate.ts` and runs inside the api's
 The api healthcheck has a **`start_period` of 180s**. A first-run
 `CREATE INDEX CONCURRENTLY` post-migration on a large table can take a while; the
 grace window keeps the container from being killed mid-migration. During this
-window `api` shows `health: starting` and the SPA's API calls may briefly 502 —
-this is expected on first boot. `restart: unless-stopped` will not interrupt an
-in-flight migration.
+window `api` shows `health: starting`, and because `web` starts only after `api`
+is healthy, the app is not yet reachable — the `web` container is simply not
+started, so this is not a 502. This is expected on a first boot. If `api` never
+becomes healthy, `web` stays unstarted; check `docker compose logs api`.
+`restart: unless-stopped` will not interrupt an in-flight migration.
 
 ## Step 6 — Verify it's healthy
 
@@ -263,10 +267,11 @@ docker compose exec api tradr migrate --status
 # exit 0 = schema current, 1 = pending migrations, 2 = cannot connect
 ```
 
-**TLS is your responsibility.** The shipped compose file does **not** terminate
-HTTPS. Put your own reverse proxy / edge (Caddy, Traefik, nginx, Cloudflare) in
-front of the `web` container. If you do, add that edge's address to
-`TRUSTED_PROXIES` in `.env` so per-IP rate limiting stays accurate.
+**Serve HTTPS.** Two shipped compose overrides put TLS in front of the stack —
+one for Caddy, one for Traefik — each obtaining and renewing a certificate
+automatically. See [Put TLS in front of the stack](/self-hosting/tls-reverse-proxy/)
+for both recipes, the existing-edge path (your own proxy or Cloudflare), and the
+`TRUSTED_PROXIES` change each needs.
 
 ## Bootstrap the first admin (optional)
 
@@ -359,7 +364,7 @@ destroys it.
 - `api` — fetches `http://127.0.0.1:3100/api/health`, every 15s, with a **180s
   `start_period`** so a long first-run migration does not mark it unhealthy.
 - `api` waits for `postgres` to pass its health check (`condition: service_healthy`);
-  `web` waits for `api` to start.
+  `web` waits for `api` to pass its health check (`condition: service_healthy`).
 
 ### Where `DATABASE_URL` comes from
 

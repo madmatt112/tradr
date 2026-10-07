@@ -194,10 +194,26 @@ function toolResultContent(content: unknown): string {
 export class ClaudeAdapter implements ProviderAdapter {
   readonly id = 'claude' as const;
 
-  constructor(private readonly cache: ListModelsCache) {}
+  /**
+   * Base URL for the Anthropic endpoint. `undefined` = the SDK default
+   * (api.anthropic.com). `initProviderRegistry` passes `config.ANTHROPIC_BASE_URL`
+   * so a self-hoster can point Claude at a local Anthropic-compatible server.
+   */
+  private readonly baseURL: string | undefined;
+
+  constructor(
+    private readonly cache: ListModelsCache,
+    baseURL?: string,
+  ) {
+    this.baseURL = baseURL;
+  }
 
   private client(apiKey: string): Anthropic {
-    return new Anthropic({ apiKey, timeout: SDK_TIMEOUT_MS });
+    return new Anthropic({
+      apiKey,
+      timeout: SDK_TIMEOUT_MS,
+      ...(this.baseURL ? { baseURL: this.baseURL } : {}),
+    });
   }
 
   async listModels(apiKey: string): Promise<ProviderModel[]> {

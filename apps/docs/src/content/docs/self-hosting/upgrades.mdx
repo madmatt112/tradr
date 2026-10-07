@@ -90,10 +90,10 @@ configuration of the proxy. For a proxy in front of the stack, see
 
 Tradr is pre-1.0, so the usual semver reading is inverted:
 
-| Bump      | Example           | What it means today                                         |
-| --------- | ----------------- | ----------------------------------------------------------- |
-| **Minor** | `0.5.4` → `0.6.0` | A breaking change. Read the release notes before upgrading. |
-| **Patch** | `0.5.3` → `0.5.4` | Everything else — features, fixes, UI.                      |
+| Bump      | Example           | What it means today                                                                                      |
+| --------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
+| **Minor** | `0.5.4` → `0.6.0` | The batched release, and any release that touches a contracted surface. Read its notes before upgrading. |
+| **Patch** | `0.5.3` → `0.5.4` | An out-of-band fix that touches no contracted surface — safe to pull.                                    |
 
 The full policy, and what counts as a breaking change, is in
 [`docs/versioning.md`](https://github.com/madmatt112/tradr/blob/main/docs/versioning.md).
