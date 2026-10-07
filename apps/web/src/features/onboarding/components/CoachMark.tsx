@@ -185,7 +185,7 @@ const COACH_MARKS: Record<CoachMarkSurface, CoachMarkCopy> = {
       "Add Widget puts another card on the grid and each card's menu removes it. On a pointer " +
       'device you can drag a card by its header and resize it from an edge; Reset layout puts ' +
       'everything back.',
-    docs: 'gettingStarted',
+    docs: 'dashboard',
   },
 };
 

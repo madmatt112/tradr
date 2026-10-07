@@ -22,6 +22,8 @@ export const DOCS = {
   metricsGlossary: '/user-guide/reference/metrics-glossary/',
   accounts: '/user-guide/accounts/',
   optionsTools: '/user-guide/options-tools/',
+  tradeCalculator: '/user-guide/trade-calculator/',
+  dashboard: '/user-guide/dashboard/',
   selfHosting: '/self-hosting/docker-compose/',
   envVars: '/self-hosting/reference/env-vars/',
   backupRestore: '/self-hosting/backup-restore/',
