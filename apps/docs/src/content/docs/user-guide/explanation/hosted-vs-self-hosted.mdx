@@ -37,6 +37,23 @@ page where a step only applies to one deployment.
 | Feature gating | On (plan limits apply)         | Off by default               |
 | Migrations     | Run for you                    | Auto-run on API startup      |
 
-:::note
-This page is a stub — the table above is the placeholder for the full map.
-:::
+## How each row maps to the code
+
+- **Backups.** A self-run instance owns its database, so you run and restore your
+  own backups — see [Back up and restore](/self-hosting/backup-restore/). The
+  managed app runs them for you.
+- **LLM access and the advisor.** The AI advisor ships **off on every instance**,
+  hosted or self-hosted — `DISABLE_ADVISOR` defaults to on. Turn it on for your own
+  instance with `DISABLE_ADVISOR=false`. Once it is on, a self-run instance is
+  bring-your-own-key — each user adds a provider key under **Settings → Advisor** —
+  while the managed app meters platform keys against wallet credits. See
+  [Configure email, Stripe, and LLM keys](/self-hosting/optional-integrations/) for
+  setup and the local-model option.
+- **Billing.** Wallet purchases and the Pro subscription stay **off until
+  configured**: with the Stripe keys unset a self-run instance has no purchase UI at
+  all. See [Configure email, Stripe, and LLM keys](/self-hosting/optional-integrations/).
+- **Feature gating.** Plan limits are **off by default** (`FEATURE_GATING`), so a
+  self-run instance is unrestricted unless you turn gating on.
+- **Migrations.** A self-run instance applies schema migrations automatically when
+  the `api` container starts; the managed app runs them for you. See
+  [Upgrade an instance](/self-hosting/upgrades/).
