@@ -10,7 +10,7 @@ import { encrypt, loadEncryptionKeyMaterial } from '@/lib/encryption';
 import { logger } from '@/lib/logger';
 
 import { lockoutKey } from './lockout';
-import { base32Encode, generateTotpSecret, hashBackupCode, totpAt } from './totp';
+import { base32Decode, base32Encode, generateTotpSecret, hashBackupCode, totpAt } from './totp';
 import * as twoFactorQuery from './two-factor.query';
 
 // Design C4 step two (task 7): `POST /api/auth/login/two-factor` turns a live
@@ -464,5 +464,384 @@ describe('POST /api/auth/login/two-factor (task 7)', () => {
     const res = await twoFactorLogin('a'.repeat(64), '123456', ip);
     expect(res.status).toBe(429);
     expect(res.headers.get('Retry-After')).toBeDefined();
+  });
+});
+
+// Design C5 (task 8): the five authenticated two-factor management routes on
+// the same router task 7 created — status, enrol, confirm, regenerate and
+// disable. Every test drives the real HTTP seam (`app.request`) with a real
+// session cookie against the real database inside the per-test rolled-back
+// transaction; no collaborator of the route/service is mocked.
+
+function authHeaders(cookie: string): Record<string, string> {
+  return { Cookie: `session=${cookie}`, 'Content-Type': 'application/json' };
+}
+
+async function twoFactorStatus(cookie: string) {
+  return app.request('/api/auth/two-factor', { headers: authHeaders(cookie) });
+}
+
+async function enrol(cookie: string) {
+  return app.request('/api/auth/two-factor/enrol', {
+    method: 'POST',
+    headers: authHeaders(cookie),
+  });
+}
+
+async function confirmEnrol(cookie: string, code: string) {
+  return app.request('/api/auth/two-factor/enrol/confirm', {
+    method: 'POST',
+    headers: authHeaders(cookie),
+    body: JSON.stringify({ code }),
+  });
+}
+
+async function regenerateBackupCodes(cookie: string, code: string) {
+  return app.request('/api/auth/two-factor/backup-codes', {
+    method: 'POST',
+    headers: authHeaders(cookie),
+    body: JSON.stringify({ code }),
+  });
+}
+
+async function disableTwoFactor(cookie: string, password: string, code: string) {
+  return app.request('/api/auth/two-factor/disable', {
+    method: 'POST',
+    headers: authHeaders(cookie),
+    body: JSON.stringify({ password, code }),
+  });
+}
+
+/** Register a fresh user and sign in (no two-factor yet, so a plain 200 with
+ * a session cookie), the shared starting point for every management case. */
+async function registerAndLogin(): Promise<{
+  email: string;
+  password: string;
+  userId: string;
+  cookie: string;
+}> {
+  const email = uniqueEmail();
+  const password = 'password123';
+  const registerRes = await registerUser(email, password);
+  const { user } = await registerRes.json();
+
+  const loginRes = await passwordLogin(email, password);
+  expect(loginRes.status).toBe(200);
+  const cookie = getCookieValue(loginRes, 'session');
+  if (!cookie) throw new Error('expected a session cookie from password login');
+
+  return { email, password, userId: user.id, cookie };
+}
+
+describe('Two-factor management endpoints (task 8)', () => {
+  /**
+   * Contract:
+   * - Pre-condition: a freshly registered, signed-in user with no two-factor
+   *   enrolment (Req 1.1: off until turned on).
+   * - Test: `twoFactorStatus(cookie)` before enrolling, then again after a
+   *   full enrol + confirm with the current TOTP code.
+   * - Observable result: `{ enabled: false }` first, `{ enabled: true }`
+   *   after confirm.
+   * - Source of expected value: design C5 (`GET /two-factor → { enabled:
+   *   boolean }`) and Req 1.10 ("the settings page SHALL show whether
+   *   two-factor is on").
+   */
+  it('status reads false before enrolment and true once confirmed (Req 1.1, 1.10)', async () => {
+    const { cookie } = await registerAndLogin();
+
+    const before = await twoFactorStatus(cookie);
+    expect(before.status).toBe(200);
+    expect(await before.json()).toEqual({ enabled: false });
+
+    const enrolRes = await enrol(cookie);
+    const { secret } = await enrolRes.json();
+    const code = totpAt(base32Decode(secret), Math.floor(Date.now() / 30000));
+    const confirmRes = await confirmEnrol(cookie, code);
+    expect(confirmRes.status).toBe(200);
+
+    const after = await twoFactorStatus(cookie);
+    expect(await after.json()).toEqual({ enabled: true });
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a signed-in user with no pending enrolment.
+   * - Test: `enrol(cookie)`.
+   * - Observable result: 200 with a `secret` string and an `otpauthUri`
+   *   containing that same secret; the RAW `secret_envelope` row this writes
+   *   does not contain the secret as a substring.
+   * - Source of expected value: Req 1.5 ("store the secret only as an
+   *   envelope ... a test SHALL read the raw stored value and assert it does
+   *   not contain the secret") and design C5 (`POST /enrol → { secret,
+   *   otpauthUri }`).
+   */
+  it('enrol returns the secret and URI but stores only an encrypted envelope (Req 1.5)', async () => {
+    const { userId, cookie } = await registerAndLogin();
+
+    const res = await enrol(cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.secret).toBe('string');
+    expect(typeof body.otpauthUri).toBe('string');
+    expect(body.otpauthUri).toContain(body.secret);
+
+    const [row] = await db.select().from(userTwoFactor).where(eq(userTwoFactor.userId, userId));
+    expect(row.secretEnvelope).not.toContain(body.secret);
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a signed-in user who started enrolment but never
+   *   confirmed it.
+   * - Test: `passwordLogin(email, password)` after `enrol(cookie)` alone.
+   * - Observable result: 200 (the password-only shape), not the 202
+   *   two-factor challenge.
+   * - Source of expected value: Req 1.4 ("SHALL NOT turn two-factor on until
+   *   the user submits a valid code ... an abandoned enrolment SHALL leave
+   *   sign-in unchanged").
+   */
+  it('an abandoned enrolment (no confirm) leaves login answering 200 (Req 1.4)', async () => {
+    const { email, password, cookie } = await registerAndLogin();
+    const enrolRes = await enrol(cookie);
+    expect(enrolRes.status).toBe(200);
+
+    const loginRes = await passwordLogin(email, password);
+    expect(loginRes.status).toBe(200);
+    const body = await loginRes.json();
+    expect(body.user).toBeDefined();
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a signed-in user with a pending (unconfirmed) enrolment.
+   * - Test: `confirmEnrol(cookie, '000000')` — a wrong code.
+   * - Observable result: 400 `INVALID_TWO_FACTOR_CODE`, and the status
+   *   afterwards still reads `{ enabled: false }`.
+   * - Source of expected value: design C5 ("400 INVALID_TWO_FACTOR_CODE")
+   *   and Req 1.4 (two-factor stays off until a valid code confirms it).
+   */
+  it('confirm with a wrong code is 400 and enables nothing', async () => {
+    const { cookie } = await registerAndLogin();
+    await enrol(cookie);
+
+    const res = await confirmEnrol(cookie, '000000');
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe('INVALID_TWO_FACTOR_CODE');
+
+    const status = await twoFactorStatus(cookie);
+    expect(await status.json()).toEqual({ enabled: false });
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a signed-in user with no pending enrolment at all.
+   * - Test: `confirmEnrol(cookie, '123456')`.
+   * - Observable result: 409 `TWO_FACTOR_NOT_PENDING`.
+   * - Source of expected value: design C5 ("`POST /enrol/confirm` ... → 409
+   *   `TWO_FACTOR_NOT_PENDING`").
+   */
+  it('confirm with no pending enrolment is 409 TWO_FACTOR_NOT_PENDING', async () => {
+    const { cookie } = await registerAndLogin();
+
+    const res = await confirmEnrol(cookie, '123456');
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.code).toBe('TWO_FACTOR_NOT_PENDING');
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a user signed in twice (session A from the first login,
+   *   session B from a second), with a pending enrolment confirmed USING
+   *   session B's cookie.
+   * - Test: `confirmEnrol(cookieB, code)`, then `/api/auth/me` with each of
+   *   cookie A and cookie B.
+   * - Observable result: confirm returns exactly 10 distinct `backupCodes`;
+   *   afterwards cookie A no longer authenticates (401) and cookie B still
+   *   does (200).
+   * - Source of expected value: Req 1.6 ("show 10 single-use backup codes
+   *   once") and Req 1.9 ("end every other session of that user and keep the
+   *   current one"), with design C5's confirm step ("deleting the user's
+   *   sessions except the one matching the request cookie").
+   */
+  it('confirm returns 10 backup codes and ends every other session but the current one (Req 1.6, 1.9)', async () => {
+    const { email, password, cookie: cookieA } = await registerAndLogin();
+    const secondLoginRes = await passwordLogin(email, password);
+    expect(secondLoginRes.status).toBe(200);
+    const cookieB = getCookieValue(secondLoginRes, 'session');
+    if (!cookieB) throw new Error('expected a second session cookie');
+
+    const enrolRes = await enrol(cookieB);
+    const { secret } = await enrolRes.json();
+    const code = totpAt(base32Decode(secret), Math.floor(Date.now() / 30000));
+
+    const confirmRes = await confirmEnrol(cookieB, code);
+    expect(confirmRes.status).toBe(200);
+    const body = await confirmRes.json();
+    expect(body.backupCodes).toHaveLength(10);
+    expect(new Set(body.backupCodes).size).toBe(10);
+
+    const meA = await app.request('/api/auth/me', {
+      headers: { Cookie: `session=${cookieA}` },
+    });
+    expect(meA.status).toBe(401);
+
+    const meB = await app.request('/api/auth/me', {
+      headers: { Cookie: `session=${cookieB}` },
+    });
+    expect(meB.status).toBe(200);
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a user already enrolled (enabled) with one backup code
+   *   inserted directly as the fixture (`enrollTotp` + `insertBackupCode`,
+   *   same precedent as the task-7 tests above).
+   * - Test: `regenerateBackupCodes(cookie, currentTotpCode(secret))`, then a
+   *   real two-factor login attempt with the OLD code and with the first NEW
+   *   code.
+   * - Observable result: regenerate answers 200 with 10 new codes that do
+   *   not include the old one; the old code is then refused
+   *   `INVALID_TWO_FACTOR_CODE` on a fresh challenge, and a new code signs in
+   *   (200).
+   * - Source of expected value: Req 1.7 ("every earlier code SHALL stop
+   *   working and 10 new codes SHALL be shown once").
+   */
+  it('regenerating backup codes voids every earlier code (Req 1.7)', async () => {
+    const secret = generateTotpSecret();
+    const { email, password, userId, cookie } = await registerAndLogin();
+    await enrollTotp(userId, secret);
+    const oldRawCode = 'aaaaa-bbbbb';
+    await insertBackupCode(userId, oldRawCode);
+
+    const regenRes = await regenerateBackupCodes(cookie, currentTotpCode(secret));
+    expect(regenRes.status).toBe(200);
+    const { backupCodes: newCodes } = await regenRes.json();
+    expect(newCodes).toHaveLength(10);
+    expect(newCodes).not.toContain(oldRawCode);
+
+    const firstLogin = await passwordLogin(email, password);
+    expect(firstLogin.status).toBe(202);
+    const { challenge: firstChallenge } = await firstLogin.json();
+    const oldAttempt = await twoFactorLogin(firstChallenge, oldRawCode);
+    expect(oldAttempt.status).toBe(400);
+    expect((await oldAttempt.json()).error.code).toBe('INVALID_TWO_FACTOR_CODE');
+
+    const secondLogin = await passwordLogin(email, password);
+    const { challenge: secondChallenge } = await secondLogin.json();
+    const newAttempt = await twoFactorLogin(secondChallenge, newCodes[0]);
+    expect(newAttempt.status).toBe(200);
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a user already enrolled (enabled) via the `enrollTotp`
+   *   fixture.
+   * - Test: `disableTwoFactor` with a wrong password AND a wrong code, then
+   *   with the right password but a wrong code, then with both right.
+   * - Observable result: the first two calls are each 400
+   *   `INVALID_CREDENTIALS`; the third is 200, and a subsequent
+   *   `passwordLogin` then answers 200 (password alone signs in again).
+   * - Source of expected value: Req 1.8 ("require the password and a valid
+   *   TOTP or backup code, then delete the secret and all backup codes") and
+   *   design C5 ("failure → 400 INVALID_CREDENTIALS").
+   */
+  it('disable requires both password and code, then password alone signs in (Req 1.8)', async () => {
+    const secret = generateTotpSecret();
+    const { email, password, userId, cookie } = await registerAndLogin();
+    await enrollTotp(userId, secret);
+
+    const bothWrong = await disableTwoFactor(cookie, 'wrong-password', '000000');
+    expect(bothWrong.status).toBe(400);
+    expect((await bothWrong.json()).error.code).toBe('INVALID_CREDENTIALS');
+
+    const wrongCodeOnly = await disableTwoFactor(cookie, password, '000000');
+    expect(wrongCodeOnly.status).toBe(400);
+    expect((await wrongCodeOnly.json()).error.code).toBe('INVALID_CREDENTIALS');
+
+    const ok = await disableTwoFactor(cookie, password, currentTotpCode(secret));
+    expect(ok.status).toBe(200);
+
+    const loginRes = await passwordLogin(email, password);
+    expect(loginRes.status).toBe(200);
+    const body = await loginRes.json();
+    expect(body.user).toBeDefined();
+    expect(getCookieValue(loginRes, 'session')).toBeDefined();
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a user already enrolled (enabled) via the `enrollTotp`
+   *   fixture.
+   * - Test: `enrol(cookie)`.
+   * - Observable result: 409 `TWO_FACTOR_ALREADY_ENABLED`.
+   * - Source of expected value: design C5 ("`POST /enrol` → 409
+   *   `TWO_FACTOR_ALREADY_ENABLED` when on").
+   */
+  it('enrol while two-factor is already enabled is 409 TWO_FACTOR_ALREADY_ENABLED', async () => {
+    const { userId, cookie } = await registerAndLogin();
+    await enrollTotp(userId, generateTotpSecret());
+
+    const res = await enrol(cookie);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.code).toBe('TWO_FACTOR_ALREADY_ENABLED');
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a single signed-in user, no prior management requests.
+   * - Test: 10 `enrol(cookie)` POSTs from that user, then an 11th.
+   * - Observable result: none of the first 10 is 429; the 11th is 429 with
+   *   `Retry-After`.
+   * - Source of expected value: design D19 ("Management endpoints carry a
+   *   per-user limit of 10 per 15 minutes") and C5 (`keyGenerator: (c) =>
+   *   c.get('userId')`).
+   */
+  it('the 11th management POST from one user in the window is 429', async () => {
+    const { cookie } = await registerAndLogin();
+
+    for (let i = 0; i < 10; i++) {
+      const res = await enrol(cookie);
+      expect(res.status).not.toBe(429);
+    }
+
+    const res = await enrol(cookie);
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBeDefined();
+  });
+
+  /**
+   * Contract:
+   * - Pre-condition: a signed-in user driving each of the four management
+   *   POST routes, success and failure alike.
+   * - Test: `enrol`, `confirmEnrol`, `regenerateBackupCodes` and
+   *   `disableTwoFactor`, one call each.
+   * - Observable result: every one of the four responses carries
+   *   `Cache-Control: no-store`.
+   * - Source of expected value: design C5 ("the POSTs add ... `Cache-Control:
+   *   no-store`").
+   */
+  it('every two-factor management POST sets Cache-Control: no-store', async () => {
+    const { cookie } = await registerAndLogin();
+
+    const enrolRes = await enrol(cookie);
+    expect(enrolRes.status).toBe(200);
+    expect(enrolRes.headers.get('Cache-Control')).toBe('no-store');
+    const { secret } = await enrolRes.json();
+
+    const confirmRes = await confirmEnrol(
+      cookie,
+      totpAt(base32Decode(secret), Math.floor(Date.now() / 30000)),
+    );
+    expect(confirmRes.status).toBe(200);
+    expect(confirmRes.headers.get('Cache-Control')).toBe('no-store');
+
+    const regenRes = await regenerateBackupCodes(cookie, '000000');
+    expect(regenRes.headers.get('Cache-Control')).toBe('no-store');
+
+    const disableRes = await disableTwoFactor(cookie, 'wrong', '000000');
+    expect(disableRes.headers.get('Cache-Control')).toBe('no-store');
   });
 });
