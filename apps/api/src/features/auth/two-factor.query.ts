@@ -1,7 +1,7 @@
-import { and, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 
 import type { Database, Transaction } from '@/db';
-import { loginChallenges, userBackupCodes, userTwoFactor } from '@/db/schema';
+import { loginChallenges, sessions, userBackupCodes, userTwoFactor } from '@/db/schema';
 
 // Design C1/C4 — the statements login step one and the second step run against
 // the two-factor, challenge and backup-code tables. Statement-level only
@@ -177,4 +177,145 @@ export function consumeBackupCode(
     )
     .returning({ id: userBackupCodes.id })
     .then((rows) => rows[0] ?? null);
+}
+
+// --- Design C5 — two-factor management statements ---
+
+/**
+ * Upsert a PENDING (unconfirmed) enrolment (design C5). A fresh secret envelope
+ * with `enabled_at` NULL and the replay guard cleared, so re-enrolling before
+ * confirming simply replaces the old pending secret. Does NOT turn two-factor on
+ * — only a confirmed code does that (Req 1.4). The enrol route gates on an
+ * already-enabled row first, so the conflict only ever updates a pending row.
+ */
+export async function upsertPendingTwoFactor(
+  db: Database | Transaction,
+  userId: string,
+  secretEnvelope: string,
+): Promise<void> {
+  await db
+    .insert(userTwoFactor)
+    .values({ userId, secretEnvelope })
+    .onConflictDoUpdate({
+      target: userTwoFactor.userId,
+      set: { secretEnvelope, enabledAt: null, lastUsedStep: null },
+    });
+}
+
+/**
+ * The user's PENDING enrolment secret (design C5 confirm). `enabled_at` NULL
+ * only — a confirmed row is not pending, so confirm answers 409
+ * `TWO_FACTOR_NOT_PENDING` when this is null.
+ */
+export async function selectPendingTwoFactor(
+  db: Database | Transaction,
+  userId: string,
+): Promise<{ secretEnvelope: string } | null> {
+  const rows = await db
+    .select({ secretEnvelope: userTwoFactor.secretEnvelope })
+    .from(userTwoFactor)
+    .where(and(eq(userTwoFactor.userId, userId), isNull(userTwoFactor.enabledAt)))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+/**
+ * The ENABLED two-factor secret and last accepted step (design C5 regenerate /
+ * disable). `enabled_at` NOT NULL only — management TOTP checks run against a
+ * live enrolment, never a pending one.
+ */
+export async function selectEnabledTwoFactorSecret(
+  db: Database | Transaction,
+  userId: string,
+): Promise<{ secretEnvelope: string; lastUsedStep: number | null } | null> {
+  const rows = await db
+    .select({
+      secretEnvelope: userTwoFactor.secretEnvelope,
+      lastUsedStep: userTwoFactor.lastUsedStep,
+    })
+    .from(userTwoFactor)
+    .where(and(eq(userTwoFactor.userId, userId), isNotNull(userTwoFactor.enabledAt)))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+/**
+ * Turn two-factor on (design C5 confirm). Sets `enabled_at` now and records the
+ * confirming TOTP step so that exact code cannot be replayed at the login step
+ * (Req 1.3). Runs inside the confirm transaction.
+ */
+export async function enableTwoFactor(
+  tx: Transaction,
+  userId: string,
+  step: number,
+): Promise<void> {
+  await tx
+    .update(userTwoFactor)
+    .set({ enabledAt: sql`now()`, lastUsedStep: step })
+    .where(eq(userTwoFactor.userId, userId));
+}
+
+/** Delete all of the user's backup codes (design C5 confirm / regenerate / disable). */
+export async function deleteBackupCodes(db: Database | Transaction, userId: string): Promise<void> {
+  await db.delete(userBackupCodes).where(eq(userBackupCodes.userId, userId));
+}
+
+/** Insert the fresh set of one-way backup-code hashes (design C5, D9). */
+export async function insertBackupCodes(
+  db: Database | Transaction,
+  userId: string,
+  codeHashes: string[],
+): Promise<void> {
+  if (codeHashes.length === 0) return;
+  await db.insert(userBackupCodes).values(codeHashes.map((codeHash) => ({ userId, codeHash })));
+}
+
+/**
+ * An UNUSED backup code matching the hash, or null (design C5 disable). A
+ * read-only existence check — disable deletes every code wholesale, so it never
+ * marks one spent.
+ */
+export async function selectUnusedBackupCode(
+  db: Database | Transaction,
+  userId: string,
+  codeHash: string,
+): Promise<{ id: string } | null> {
+  const rows = await db
+    .select({ id: userBackupCodes.id })
+    .from(userBackupCodes)
+    .where(
+      and(
+        eq(userBackupCodes.userId, userId),
+        eq(userBackupCodes.codeHash, codeHash),
+        isNull(userBackupCodes.usedAt),
+      ),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+/**
+ * End every session of the user EXCEPT the one whose token hash is `keepTokenHash`
+ * (design C5 confirm, Req 1.9 / D11). Runs inside the confirm transaction so the
+ * turned-on second factor and the session purge commit together.
+ */
+export async function deleteSessionsExcept(
+  tx: Transaction,
+  userId: string,
+  keepTokenHash: string,
+): Promise<void> {
+  await tx
+    .delete(sessions)
+    .where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, keepTokenHash)));
+}
+
+/**
+ * Delete the user's two-factor row (design C5 disable). Backup codes are removed
+ * separately in the same transaction — they key off the user, not this row.
+ */
+export async function deleteTwoFactor(db: Database | Transaction, userId: string): Promise<void> {
+  await db.delete(userTwoFactor).where(eq(userTwoFactor.userId, userId));
 }

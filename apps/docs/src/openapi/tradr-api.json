@@ -1319,6 +1319,255 @@
         ]
       }
     },
+    "/api/auth/two-factor": {
+      "get": {
+        "description": "Returns `{ enabled }` — `true` once an enrolment has been confirmed, `false` otherwise (including a started-but-unconfirmed enrolment). Requires an authenticated session. Read-only and side-effect-free.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The two-factor status."
+          },
+          "401": {
+            "description": "No authenticated session."
+          }
+        },
+        "summary": "Whether two-factor is enabled for the signed-in user.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/backup-codes": {
+      "post": {
+        "description": "Validates a current authenticator `code` (a backup code is NOT accepted here), then replaces every earlier backup code with 10 fresh single-use ones, shown once and stored only as one-way hashes. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "backupCodes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The 10 new single-use backup codes, shown once."
+          },
+          "400": {
+            "description": "Validation error, or the code is wrong (`INVALID_TWO_FACTOR_CODE`)."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Regenerate backup codes.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/disable": {
+      "post": {
+        "description": "Requires the account `password` AND a valid authenticator `code` or an unused backup code. On success deletes the secret and every backup code, so the account signs in with the password alone again. A wrong password or code is a single `400 INVALID_CREDENTIALS` that does not reveal which failed. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  },
+                  "password": {
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "password",
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Two-factor is now off."
+          },
+          "400": {
+            "description": "Validation error, or the password or code is wrong (`INVALID_CREDENTIALS`)."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Turn two-factor off.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/enrol": {
+      "post": {
+        "description": "Generates a fresh TOTP secret (at least 160 bits), stores it only as an encryption envelope in a pending row and returns the base32 `secret` and its `otpauth://` URI once, for display as a text key and a QR code. Nothing turns on until `POST /two-factor/enrol/confirm` accepts a code. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "otpauthUri": {
+                      "description": "The otpauth:// provisioning URI for a QR code.",
+                      "type": "string"
+                    },
+                    "secret": {
+                      "description": "The base32 TOTP secret (text key).",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The enrolment secret and provisioning URI."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "409": {
+            "description": "Two-factor is already enabled (`TWO_FACTOR_ALREADY_ENABLED`)."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Begin two-factor enrolment.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/enrol/confirm": {
+      "post": {
+        "description": "Validates the submitted authenticator `code` against the pending secret, then turns two-factor on, shows 10 single-use backup codes once (stored only as one-way hashes) and ends every other session of the user, keeping the current one. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "backupCodes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The 10 single-use backup codes, shown once."
+          },
+          "400": {
+            "description": "Validation error, or the code is wrong (`INVALID_TWO_FACTOR_CODE`)."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "409": {
+            "description": "No pending enrolment to confirm (`TWO_FACTOR_NOT_PENDING`)."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Confirm two-factor enrolment with a code.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/api/auth/verify-email": {
       "post": {
         "description": "Public. Rate limited by client IP (10 / 15 min, the login posture; token guessing is primarily throttled by the token's 256-bit entropy + 24 h TTL). Atomically consumes the single-use verification token and marks the account email-verified in one transaction. Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (the frontend then offers the resend path). Consumption is THIS POST — fetching the emailed GET link never mutates, so prefetchers and link scanners burn nothing. Fully functional when the instance has no email configured (consuming an existing token sends nothing).\n",
