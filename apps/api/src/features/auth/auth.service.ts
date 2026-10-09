@@ -6,6 +6,7 @@ import { DEFAULT_REPORTING_TIMEZONE, OnboardingStateSchema } from '@tradr/shared
 import type { OnboardingPatch, OnboardingState } from '@tradr/shared';
 
 import { db } from '@/db';
+import type { Database, Transaction } from '@/db';
 import { isEmailConfigured } from '@/lib/config';
 import { ConflictError, UnauthorizedError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -196,19 +197,22 @@ export async function loginUser(email: string, password: string): Promise<LoginR
 /**
  * Establish a session for an authenticated user — the tail of the login path
  * (session eviction, token mint, PostHog identify/capture), extracted so the
- * two-factor second step (task 7) reaches the same code.
+ * two-factor second step (task 7) reaches the same code. The optional `executor`
+ * lets the second step run the session start inside its success transaction
+ * (design C4); login step one calls it with the default pool.
  */
-async function startSession(
+export async function startSession(
   user: LoggedInUser,
+  executor: Database | Transaction = db,
 ): Promise<{ kind: 'session'; user: LoggedInUser; token: string }> {
-  const sessionCount = await countUserSessions(db, user.id);
+  const sessionCount = await countUserSessions(executor, user.id);
   if (sessionCount >= MAX_SESSIONS) {
-    await deleteOldestSession(db, user.id);
+    await deleteOldestSession(executor, user.id);
   }
 
   const { token, tokenHash } = generateSessionToken();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await insertSession(db, { userId: user.id, tokenHash, expiresAt });
+  await insertSession(executor, { userId: user.id, tokenHash, expiresAt });
 
   // Refresh the person profile on each login and capture the sign-in event
   // (fire-and-forget). email_verified can change between logins (verify flow).

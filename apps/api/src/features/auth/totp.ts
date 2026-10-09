@@ -40,6 +40,29 @@ export function base32Encode(bytes: Buffer): string {
 }
 
 /**
+ * RFC 4648 base32 decode (no padding, case-insensitive): the inverse of
+ * `base32Encode`, turning a stored secret string back into the raw bytes the
+ * TOTP HMAC keys on (design C2). Non-alphabet characters are skipped, so a
+ * hyphen- or space-separated secret still decodes.
+ */
+export function base32Decode(encoded: string): Buffer {
+  let bits = 0;
+  let value = 0;
+  const output: number[] = [];
+  for (const char of encoded.toUpperCase()) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index === -1) continue;
+    value = (value << 5) | index;
+    bits += 5;
+    if (bits >= 8) {
+      output.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(output);
+}
+
+/**
  * The TOTP value for a counter step: HMAC-SHA-1 of the step with RFC 4226
  * dynamic truncation, reduced to 6 decimal digits (left-padded).
  */

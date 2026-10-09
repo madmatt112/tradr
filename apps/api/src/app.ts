@@ -18,6 +18,7 @@ import { initProviderRegistry } from '@/features/advisor/providers/registry';
 import { applyBuiltinPersonaOverrides, runDecryptCanary } from '@/features/advisor/startup';
 import auth, { userPreferencesRouter } from '@/features/auth/auth.route';
 import passwordResetRouter from '@/features/auth/password-reset.route';
+import twoFactorLoginRouter from '@/features/auth/two-factor.route';
 import verificationRouter from '@/features/auth/verification.route';
 import { billingRouter, billingWebhookRouter } from '@/features/billing/billing.route';
 import brokeragesRouter from '@/features/brokerages/brokerages.route';
@@ -117,6 +118,10 @@ app.route('/api/auth', passwordResetRouter);
 // Email verification: a THIRD router on the same /api/auth base (same
 // precedent) — verify-email is public, verify-email/resend is authed (D11).
 app.route('/api/auth', verificationRouter);
+// Two-factor second step: a FOURTH router on the same /api/auth base (same
+// precedent) — POST /login/two-factor is public and turns a login challenge
+// into a session (design C4). Mounted after verification per the task order.
+app.route('/api/auth', twoFactorLoginRouter);
 app.route('/api/accounts', accounts);
 // Admin: gating (auth → admin → rate limit) is router-level inside adminRouter
 // (admin-platform design Component 1, REQ-1.4).

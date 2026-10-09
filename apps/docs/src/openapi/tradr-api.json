@@ -1001,6 +1001,84 @@
         ]
       }
     },
+    "/api/auth/login/two-factor": {
+      "post": {
+        "description": "Public. Answers the single-use `challenge` from a `202` login response with the current authenticator code or an unused backup code. On success the `session` cookie is set, exactly as a password-only login, and the body carries the signed-in user. Rate limited to 10 requests per 15 minutes per client, tightening to 5 while the shared rate-limit store is unavailable. A valid TOTP code and a backup code are each single-use. A wrong code is refused `400 INVALID_TWO_FACTOR_CODE` and counts toward the per-address lock; an expired, already-used or over-attempted challenge is `400 CHALLENGE_EXPIRED`; a locked address is refused `429 ACCOUNT_LOCKED` with `Retry-After`. If the stored secret cannot be decrypted the step fails closed with `500 TWO_FACTOR_UNAVAILABLE` and never falls back to the password alone.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "description": "The single-use challenge from the login `202` response.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "code": {
+                    "description": "A 6-digit authenticator code or a backup code.",
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "challenge",
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "user": {
+                      "properties": {
+                        "email": {
+                          "format": "email",
+                          "type": "string"
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "isAdmin": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The signed-in user. The `session` cookie is set."
+          },
+          "400": {
+            "description": "Validation error, CHALLENGE_EXPIRED (dead challenge), or INVALID_TWO_FACTOR_CODE (wrong code)."
+          },
+          "429": {
+            "description": "Rate limit exceeded, or the address is temporarily locked (`ACCOUNT_LOCKED`)."
+          },
+          "500": {
+            "description": "The stored two-factor secret could not be decrypted (`TWO_FACTOR_UNAVAILABLE`); sign-in fails closed."
+          }
+        },
+        "summary": "Finish signing in with a two-factor code.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/api/auth/logout": {
       "post": {
         "description": "Revokes the session server-side and clears the `session` cookie. Idempotent: calling it without a session still returns 200, so a client can always reach a signed-out state.\n",

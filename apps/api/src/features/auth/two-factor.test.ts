@@ -139,7 +139,11 @@ describe('POST /api/auth/login/two-factor (task 7)', () => {
     expect(sessionCookie).toBeDefined();
 
     const body = await res.json();
-    expect(body.user).toMatchObject({ email, isAdmin: false, emailVerified: false });
+    // Email is unconfigured in the test env, so a freshly registered account is
+    // emailVerified: true (the auth.test.ts unconfigured-register precedent at
+    // :423/:508); the second step carries that live login-shape flag (design C4
+    // "200 { user } in the login shape").
+    expect(body.user).toMatchObject({ email, isAdmin: false, emailVerified: true });
     expect(body.user.id).toBeDefined();
 
     const meRes = await app.request('/api/auth/me', {
