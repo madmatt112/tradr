@@ -3,17 +3,27 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcrypt';
 import { and, eq } from 'drizzle-orm';
 import type { Transporter } from 'nodemailer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
-import { emailTokens, sessions, users } from '@/db/schema';
+import {
+  emailTokens,
+  loginChallenges,
+  loginLockouts,
+  sessions,
+  userTwoFactor,
+  users,
+} from '@/db/schema';
 import { config } from '@/lib/config';
+import { encrypt, loadEncryptionKeyMaterial } from '@/lib/encryption';
 import { logger } from '@/lib/logger';
 import { initMailer } from '@/lib/mailer';
 
 import { hashPassword } from './auth.service';
 import * as emailTokensService from './email-tokens.service';
+import { lockoutKey } from './lockout';
+import { base32Encode, generateTotpSecret } from './totp';
 
 let testCounter = 0;
 function uniqueEmail() {
@@ -119,6 +129,22 @@ function userByEmail(email: string) {
     .from(users)
     .where(eq(users.email, email))
     .then((rows) => rows[0]);
+}
+
+// Task 6 — seeds an enabled two-factor row directly (design C4 step 4 reads
+// only `enabled_at`; no real secret/code is needed to reach the 202 branch).
+beforeAll(() => {
+  // enableTwoFactor below calls encrypt() directly (the advisor suites'
+  // precedent for driving the encryption module outside bootstrap()).
+  loadEncryptionKeyMaterial();
+});
+
+async function enableTwoFactor(userId: string) {
+  await db.insert(userTwoFactor).values({
+    userId,
+    secretEnvelope: encrypt(base32Encode(generateTotpSecret())),
+    enabledAt: new Date(),
+  });
 }
 
 describe('auth', () => {
@@ -587,5 +613,205 @@ describe('registration gate (DISABLE_REGISTRATION)', () => {
     const res = await registerUser(uniqueEmail(), 'password123', ip);
     expect(res.status).toBe(429);
     expect(res.headers.get('Retry-After')).toBeDefined();
+  });
+});
+
+// Task 6 (design C4, step one of the two-step login exchange). These tests
+// drive POST /api/auth/login only — the step-two route (POST
+// /api/auth/login/two-factor) is task 7's and does not exist yet, so the
+// second-step and replay-count parts of Req 2.3/3.2 stay out of scope here.
+describe('login step one — lockout and the two-factor challenge (task 6)', () => {
+  // Req 2.2, 2.3 (challenge shape): a user with two-factor enabled gets a 202
+  // with a 64-hex challenge in the body and no session cookie — the opposite
+  // of the password-only 200 + cookie shape.
+  it('answers 202 with a 64-hex challenge and no session cookie for a two-factor user', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    const registerRes = await registerUser(email, password);
+    const { user } = await registerRes.json();
+    await enableTwoFactor(user.id);
+
+    const res = await loginUser(email, password);
+    expect(res.status).toBe(202);
+
+    const body = await res.json();
+    expect(body.twoFactorRequired).toBe(true);
+    expect(body.challenge).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.user).toBeUndefined();
+
+    expect(res.headers.getSetCookie()).toHaveLength(0);
+  });
+
+  // Req 2.3 (expiry): the challenge the 202 body carries is stored as its
+  // SHA-256 hash with an expiry five minutes after issue.
+  it('stores the challenge row with a five-minute expiry', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    const registerRes = await registerUser(email, password);
+    const { user } = await registerRes.json();
+    await enableTwoFactor(user.id);
+
+    const before = Date.now();
+    const res = await loginUser(email, password);
+    const after = Date.now();
+    expect(res.status).toBe(202);
+    const { challenge } = await res.json();
+
+    const rows = await db
+      .select()
+      .from(loginChallenges)
+      .where(eq(loginChallenges.tokenHash, sha256(challenge)));
+    expect(rows).toHaveLength(1);
+
+    const expiresAt = rows[0].expiresAt.getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 5 * 60 * 1000 - 2000);
+    expect(expiresAt).toBeLessThanOrEqual(after + 5 * 60 * 1000 + 2000);
+  });
+
+  // Req 3.3, 3.4, 3.5 (partial), 3.7: ten wrong-password failures against a
+  // known account lock it; the eleventh attempt, even with the RIGHT
+  // password, is refused 429 ACCOUNT_LOCKED with Retry-After, spending
+  // exactly one bcrypt comparison (the dummy compare of the active-lock
+  // branch, not a real check of the correct password).
+  it('locks a known account after ten failures; a correct password while locked is 429 with one bcrypt call', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    await registerUser(email, password);
+
+    for (let i = 0; i < 10; i++) {
+      const res = await loginUser(email, 'wrongpassword');
+      expect(res.status).toBe(401);
+    }
+
+    const compareSpy = vi.spyOn(bcrypt, 'compare');
+    const res = await loginUser(email, password);
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body.error.code).toBe('ACCOUNT_LOCKED');
+    expect(res.headers.get('Retry-After')).toBeDefined();
+    expect(compareSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // Req 3.1, 3.4, 3.5: an address with no account locks the same way an
+  // address with one does, and the two locked answers are indistinguishable
+  // in status, body (bar requestId) and headers — each spending one bcrypt
+  // comparison.
+  it('a locked unknown address answers identically to a locked known address, bar requestId', async () => {
+    const knownEmail = uniqueEmail();
+    const password = 'password123';
+    await registerUser(knownEmail, password);
+    for (let i = 0; i < 10; i++) {
+      expect((await loginUser(knownEmail, 'wrongpassword')).status).toBe(401);
+    }
+
+    const unknownEmail = uniqueEmail();
+    for (let i = 0; i < 10; i++) {
+      expect((await loginUser(unknownEmail, 'irrelevant1')).status).toBe(401);
+    }
+
+    const compareSpy = vi.spyOn(bcrypt, 'compare');
+    const knownRes = await loginUser(knownEmail, password);
+    expect(knownRes.status).toBe(429);
+    expect(compareSpy).toHaveBeenCalledTimes(1);
+
+    compareSpy.mockClear();
+    const unknownRes = await loginUser(unknownEmail, password);
+    expect(unknownRes.status).toBe(429);
+    expect(compareSpy).toHaveBeenCalledTimes(1);
+
+    const knownBody = await knownRes.json();
+    const unknownBody = await unknownRes.json();
+    expect(unknownBody.error.code).toBe(knownBody.error.code);
+    expect(unknownBody.error.message).toBe(knownBody.error.message);
+    expect(unknownRes.headers.get('Retry-After')).toBe(knownRes.headers.get('Retry-After'));
+    expect(unknownRes.headers.get('Content-Type')).toBe(knownRes.headers.get('Content-Type'));
+  });
+
+  // Req 3.7: moving a lock into the past (the sweeper/expiry path) lifts it —
+  // a subsequent correct-password sign-in succeeds normally again.
+  it('a lock moved into the past no longer blocks sign-in', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    await registerUser(email, password);
+    for (let i = 0; i < 10; i++) {
+      await loginUser(email, 'wrongpassword');
+    }
+    expect((await loginUser(email, password)).status).toBe(429);
+
+    await db
+      .update(loginLockouts)
+      .set({ lockedUntil: new Date(Date.now() - 60 * 1000) })
+      .where(eq(loginLockouts.keyHash, lockoutKey(email)));
+
+    const res = await loginUser(email, password);
+    expect(res.status).toBe(200);
+    expect(getCookieValue(res, 'session')).toBeDefined();
+  });
+
+  // Req 3.7: a successful sign-in clears the counter and lock outright — the
+  // row for that address is gone afterwards, not merely inactive.
+  it('a successful sign-in clears the lockout row for that address', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    await registerUser(email, password);
+    for (let i = 0; i < 3; i++) {
+      await loginUser(email, 'wrongpassword');
+    }
+    const key = lockoutKey(email);
+    expect(
+      await db.select().from(loginLockouts).where(eq(loginLockouts.keyHash, key)),
+    ).toHaveLength(1);
+
+    expect((await loginUser(email, password)).status).toBe(200);
+
+    expect(
+      await db.select().from(loginLockouts).where(eq(loginLockouts.keyHash, key)),
+    ).toHaveLength(0);
+  });
+
+  // Req 4.7: locking a known address while email is configured sends exactly
+  // one unlock email (D14's fire-and-forget dispatch, awaited here via
+  // vi.waitFor since loginUser itself does not await it).
+  it('sends exactly one unlock email when a known address locks with email configured', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    await registerUser(email, password); // default test env is unconfigured — no noise here
+
+    configureEmail();
+    const sendMail = stubTransport();
+
+    for (let i = 0; i < 10; i++) {
+      await loginUser(email, 'wrongpassword');
+    }
+
+    await vi.waitFor(() => {
+      expect(sendMail).toHaveBeenCalledTimes(1);
+    });
+    const mail = sendMail.mock.calls[0][0] as SentMail;
+    expect(mail.to).toBe(email);
+    expect(mail.text).toContain('/unlock-account#token=');
+  });
+
+  // Req 3.3, 4.10: with email unconfigured the address still locks (429 on
+  // the next attempt) but produces no account_unlock token row — the lock
+  // itself never depends on email being configured.
+  it('locks an address with no unlock token when email is unconfigured', async () => {
+    const email = uniqueEmail();
+    const password = 'password123';
+    const registerRes = await registerUser(email, password);
+    const { user } = await registerRes.json();
+
+    for (let i = 0; i < 10; i++) {
+      await loginUser(email, 'wrongpassword');
+    }
+
+    const res = await loginUser(email, password);
+    expect(res.status).toBe(429);
+
+    const unlockRows = await db
+      .select()
+      .from(emailTokens)
+      .where(and(eq(emailTokens.userId, user.id), eq(emailTokens.purpose, 'account_unlock')));
+    expect(unlockRows).toHaveLength(0);
   });
 });
