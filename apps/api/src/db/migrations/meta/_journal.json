@@ -267,6 +267,13 @@
       "when": 1790607645644,
       "tag": "0037_trading_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791561406063,
+      "tag": "0038_auth_security",
+      "breakpoints": true
     }
   ]
 }

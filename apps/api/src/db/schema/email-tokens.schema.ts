@@ -19,7 +19,10 @@ export const emailTokens = pgTable(
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
   },
   (t) => [
-    check('email_tokens_purpose_chk', sql`${t.purpose} IN ('password_reset','email_verification')`),
+    check(
+      'email_tokens_purpose_chk',
+      sql`${t.purpose} IN ('password_reset','email_verification','account_unlock')`,
+    ),
     // Newest-wins delete + invalidation path.
     index('email_tokens_user_purpose_idx').on(t.userId, t.purpose),
     // ENFORCES at-most-one-live per (user, purpose) (D4/SF-1) — the delete-then-insert

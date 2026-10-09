@@ -57,6 +57,13 @@ export const EXCLUDED_TABLES = [
   '_post_migrations_journal',
   'account_deletions',
   'account_deletion_schedules',
+  // Two-factor and lockout state (security-hardening): credentials and abuse
+  // counters are never exported (Req 12.5) — the TOTP secret envelope, the
+  // backup-code hashes, the challenge hashes and the per-address lockout rows.
+  'user_two_factor',
+  'user_backup_codes',
+  'login_challenges',
+  'login_lockouts',
 ] as const;
 
 export type ExportedTable = (typeof EXPORTED_TABLES)[number];

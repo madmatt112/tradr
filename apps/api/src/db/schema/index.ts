@@ -16,3 +16,4 @@ export * from './tags.schema';
 export * from './trading-rules.schema';
 export * from './position-images.schema';
 export * from './account-deletion.schema';
+export * from './auth-security.schema';
