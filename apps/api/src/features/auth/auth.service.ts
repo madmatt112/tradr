@@ -26,11 +26,29 @@ import {
   updateUserOnboarding,
 } from './auth.query';
 import { issueEmailToken, VERIFY_TOKEN_TTL_MS } from './email-tokens.service';
+import { AccountLockedError, lockoutKey, LOCKOUT_DURATION_MS } from './lockout';
+import { clearLockout, recordLoginFailure, selectActiveLock } from './lockout.query';
+import { sendUnlockEmail } from './lockout.service';
+import { insertLoginChallenge, selectEnabledTwoFactor } from './two-factor.query';
 
 const BCRYPT_COST = 10;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_SESSIONS = 5;
 const DUMMY_HASH = '$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWX.YZ';
+// The second-step challenge lives five minutes (Req 2.3, design C4 step 4).
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
+/** The persisted user row `selectUserByEmail` returns for a real account. */
+type LoggedInUser = NonNullable<Awaited<ReturnType<typeof selectUserByEmail>>>;
+
+/**
+ * The outcome of login step one (design C4): either a started session (the
+ * password-only path) or a single-use challenge a two-factor user must answer
+ * with a second step before any session exists.
+ */
+export type LoginResult =
+  | { kind: 'session'; user: LoggedInUser; token: string }
+  | { kind: 'challenge'; challenge: string };
 
 function generateSessionToken(): { token: string; tokenHash: string } {
   const token = crypto.randomBytes(32).toString('hex');
@@ -101,11 +119,33 @@ export async function registerUser(email: string, password: string, timezone?: s
   return { user, token };
 }
 
-export async function loginUser(email: string, password: string) {
+/**
+ * Login step one (design C4). Resolves to a `session` for a password-only
+ * account or a `challenge` for a two-factor one; a locked address throws
+ * `AccountLockedError`, and a wrong email or password throws the same
+ * `UnauthorizedError` as before. The lockout counter is keyed to the address
+ * hash, so it counts failures for unknown addresses too (Req 3.1, D3).
+ */
+export async function loginUser(email: string, password: string): Promise<LoginResult> {
+  const key = lockoutKey(email);
+
+  // (1) Active lock. Spend one dummy comparison so a locked answer costs the
+  // same bcrypt work as the other failure paths, then refuse. `retryAfter` is
+  // the full lock duration, not the live remainder, so a locked known address
+  // and a locked unknown one answer with an identical Retry-After (Req 3.5).
+  const lock = await selectActiveLock(db, key);
+  if (lock) {
+    await bcrypt.compare('', DUMMY_HASH);
+    throw new AccountLockedError(LOCKOUT_DURATION_MS / 1000);
+  }
+
   const user = await selectUserByEmail(db, email);
 
   if (!user) {
     await bcrypt.compare('', DUMMY_HASH);
+    // Count the failure against the address so an unknown address locks the
+    // same way a known one does (Req 3.1). No user ⇒ no unlock email.
+    await recordLoginFailure(db, key);
     // No account for this email — key the failure to a non-PII 'anonymous'
     // bucket (the email is never a distinctId or a property). reason lets an
     // enumeration probe be told apart from a legitimate typo. Fire-and-forget;
@@ -119,6 +159,13 @@ export async function loginUser(email: string, password: string) {
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
+    const { lockedNow } = await recordLoginFailure(db, key);
+    if (lockedNow) {
+      // D14 fire-and-forget: the failure the lock-triggering attempt gets back
+      // must not wait on SMTP, and sendUnlockEmail is a no-op when email is
+      // unconfigured (Req 4.7, 4.10).
+      void sendUnlockEmail(user.id, user.email);
+    }
     // Wrong password for a real account — key to the user's opaque id so a
     // targeted attempt is visible on their profile (never the email).
     captureServerEvent('login_failed', {
@@ -128,6 +175,32 @@ export async function loginUser(email: string, password: string) {
     throw new UnauthorizedError('Invalid email or password');
   }
 
+  // (4) Correct password, two-factor on. Issue a single-use challenge and hand
+  // back the raw value for the 202; no session and no cleared lock yet — the
+  // second step does that (Req 2.2-2.3).
+  const twoFactor = await selectEnabledTwoFactor(db, user.id);
+  if (twoFactor) {
+    const challenge = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(challenge).digest('hex');
+    const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS);
+    await insertLoginChallenge(db, { userId: user.id, tokenHash, expiresAt });
+    return { kind: 'challenge', challenge };
+  }
+
+  // (5) Correct password, no second factor. Clear the counter and lock, then
+  // start the session (Req 3.7).
+  await clearLockout(db, key);
+  return startSession(user);
+}
+
+/**
+ * Establish a session for an authenticated user — the tail of the login path
+ * (session eviction, token mint, PostHog identify/capture), extracted so the
+ * two-factor second step (task 7) reaches the same code.
+ */
+async function startSession(
+  user: LoggedInUser,
+): Promise<{ kind: 'session'; user: LoggedInUser; token: string }> {
   const sessionCount = await countUserSessions(db, user.id);
   if (sessionCount >= MAX_SESSIONS) {
     await deleteOldestSession(db, user.id);
@@ -142,7 +215,7 @@ export async function loginUser(email: string, password: string) {
   identifyServerUser(user.id, { email_verified: user.emailVerified });
   captureServerEvent('user_logged_in', { distinctId: user.id });
 
-  return { user, token };
+  return { kind: 'session', user, token };
 }
 
 export async function logoutUser(tokenHash: string) {

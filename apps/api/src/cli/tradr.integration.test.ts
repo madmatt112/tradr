@@ -516,7 +516,10 @@ describe('REQ-8.3 — create-user makes an account that logs in through the real
       // clears it after, so nothing leaks to a sibling test.
       (dbModule as Record<string, unknown>).db = scratchDb;
 
-      const { user, token } = await loginUser(email, 'a-real-password-123');
+      const result = await loginUser(email, 'a-real-password-123');
+      // A CLI-created account has no two-factor, so login step one is a session.
+      if (result.kind !== 'session') throw new Error('expected a session');
+      const { user, token } = result;
       expect(user.email).toBe(email);
       expect(token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -683,7 +686,9 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
       expect(await run([email, '--password', 'a-real-password-123'])).toBe(0);
 
       (dbModule as Record<string, unknown>).db = scratchDb;
-      const { user, token } = await loginUser(email, 'a-real-password-123');
+      const result = await loginUser(email, 'a-real-password-123');
+      if (result.kind !== 'session') throw new Error('expected a session');
+      const { user, token } = result;
       expect(user.email).toBe(email);
       expect(token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -714,7 +719,9 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
       expect(password).toMatch(/^[A-Za-z0-9_-]+$/);
 
       (dbModule as Record<string, unknown>).db = scratchDb;
-      const { user } = await loginUser(email, password);
+      const result = await loginUser(email, password);
+      if (result.kind !== 'session') throw new Error('expected a session');
+      const { user } = result;
       expect(user.email).toBe(email);
     } finally {
       log.mockRestore();
