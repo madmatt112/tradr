@@ -27,18 +27,16 @@ ENV_ONLY=false
 docker compose version >/dev/null 2>&1 || { echo "need Docker with Compose v2"; exit 1; }
 command -v openssl >/dev/null || { echo "need openssl"; exit 1; }
 
-# 2. Generate the three required secrets and write .env.
+# 2. Generate the two required secrets and write .env.
 #    POSTGRES_PASSWORD is hex so the URL compose builds stays parseable — a
 #    base64 password can contain @ : / ? and silently corrupt DATABASE_URL.
 if [ ! -f .env ]; then
   cp .env.example .env
   POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 24)}"
-  SESSION_SECRET="${SESSION_SECRET:-$(openssl rand -base64 24)}"
   ENCRYPTION_KEY="${ENCRYPTION_KEY:-$(openssl rand -hex 32)}"
 
   sed -i.bak \
     -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${POSTGRES_PASSWORD}|" \
-    -e "s|^SESSION_SECRET=.*|SESSION_SECRET=${SESSION_SECRET}|" \
     -e "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
     .env && rm -f .env.bak
 

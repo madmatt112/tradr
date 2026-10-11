@@ -84,14 +84,6 @@ openssl rand -hex 24    # -> POSTGRES_PASSWORD
 Compose derives the api's connection string from these three values as
 `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}`.
 
-### Session secret
-
-The api requires `SESSION_SECRET`, at least 32 characters. Generate one:
-
-```bash
-openssl rand -base64 24    # -> SESSION_SECRET
-```
-
 ### Encryption key
 
 A 32-byte hex key used to encrypt provider API keys at rest (AES-256-GCM):

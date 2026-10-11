@@ -8,9 +8,6 @@ import { logger } from './logger';
 
 export const envSchema = z.object({
   DATABASE_URL: z.string(),
-  SESSION_SECRET: z
-    .string()
-    .min(32, 'must be at least 32 characters — generate with: openssl rand -base64 24'),
   PORT: z.coerce.number().default(3100),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   // Deployed-version string surfaced by GET /api/health (e.g. "v0.2.0-f51f9f5").
@@ -35,9 +32,9 @@ export const envSchema = z.object({
   // documented `cp .env.example .env` path hands the schema '' — and `.optional()`
   // only tolerates *undefined*, not ''. Without the empty-tolerant preprocess
   // (the CHANGELOG_GITHUB_REPO / SEC_USER_AGENT idiom used throughout this file)
-  // a blank line here is a boot crash-loop on a stock install. ENCRYPTION_KEY and
-  // SESSION_SECRET deliberately do NOT get this treatment: they are required, and
-  // an empty value there SHOULD fail fast.
+  // a blank line here is a boot crash-loop on a stock install. ENCRYPTION_KEY
+  // deliberately does NOT get this treatment: it is required, and an empty value
+  // there SHOULD fail fast.
   ENCRYPTION_KEY_PREVIOUS: z.preprocess(
     (v) => (v === '' ? undefined : v),
     z

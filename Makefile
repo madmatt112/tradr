@@ -10,8 +10,8 @@ API_URL ?= http://localhost:3100
 # Known-good local-dev .env. This is a real file target (NOT .PHONY), so Make
 # only runs the recipe when .env is missing — an existing .env is never
 # clobbered. Values match docker-compose.dev.yml (postgres/postgres @ :5433,
-# db tradr_dev) and satisfy the api config schema's three required vars
-# (DATABASE_URL, SESSION_SECRET >=32 chars, ENCRYPTION_KEY 64 hex chars). These
+# db tradr_dev) and satisfy the api config schema's two required vars
+# (DATABASE_URL, ENCRYPTION_KEY 64 hex chars). These
 # are throwaway local secrets — never used outside local development.
 .env:
 	@printf '%s\n' \
@@ -19,7 +19,6 @@ API_URL ?= http://localhost:3100
 	  'PORT=3100' \
 	  'DATABASE_URL=postgresql://postgres:postgres@localhost:5433/tradr_dev' \
 	  'DB_POOL_SIZE=10' \
-	  'SESSION_SECRET=local-dev-session-secret-change-me-at-least-32-chars' \
 	  'ENCRYPTION_KEY=0000000000000000000000000000000000000000000000000000000000000000' \
 	  > .env
 	@echo "Created a local-dev .env (git-ignored). See .env.example for optional vars."

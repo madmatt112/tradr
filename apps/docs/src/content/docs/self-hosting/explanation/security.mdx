@@ -30,8 +30,13 @@ timing does not reveal which emails are registered.
 `SameSite=Lax` and expires after 24 hours. `Secure` is set whenever the api runs
 in production mode.
 
-The cookie is signed with `SESSION_SECRET`. Changing that value invalidates every
-session at once, which is the lever to pull if you think one has leaked.
+The cookie carries a random token; the database stores only its SHA-256 hash, never
+the token itself, and there is no signing secret. To end every session at once — the
+lever to pull if you think one has leaked — delete the session rows:
+
+```bash
+docker compose exec postgres psql -U tradr -d tradr -c 'DELETE FROM sessions;'
+```
 
 ## Separation between users
 
@@ -129,7 +134,7 @@ If any of those is disqualifying for your situation, better to know now.
 1. Run a released version, and upgrade when one ships. See
    [Upgrade an instance](/self-hosting/upgrades/).
 2. Put TLS in front of it.
-3. Generate the three secrets rather than inventing them — `docker/quickstart.sh`
+3. Generate the two secrets rather than inventing them — `docker/quickstart.sh`
    does this.
 4. Set `ENCRYPTION_KEY_FINGERPRINT`.
 5. Keep `.env` with your backups, and keep both somewhere the server cannot reach.
