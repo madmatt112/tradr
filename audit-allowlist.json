@@ -1,0 +1,72 @@
+[
+  {
+    "id": "GHSA-23hp-3jrh-7fpw",
+    "reason": "critical advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-34x7-hfp2-rc4v",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-83g3-92jg-28cx",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-8qq5-rm4j-mr97",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-8x88-c5mf-7j5w",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-9ppj-qmqm-q256",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-gpj5-g38j-94v9",
+    "reason": "high advisory in drizzle-orm: the fix is in drizzle-orm >=0.45.2, a major-version bump outside the declared ^0.38 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-hmw2-7cc7-3qxx",
+    "reason": "high advisory in form-data: this instance is pinned to exactly 4.0.4 by the transitive dependency httpsnippet@3.0.10; the patched >=4.0.6 needs a dependency override, a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-prgh-xp8r-p3m5",
+    "reason": "high advisory in nodemailer: the fix is in nodemailer >=10.0.5, a major-version bump outside the declared ^9.0.3 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-qffp-2rhf-9h96",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-r292-9mhp-454m",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-r6q2-hw4h-h46w",
+    "reason": "high advisory in tar: the fix is in tar >=7.5.x, a major-version bump outside the in-tree ^6 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-v53p-9fqp-m79j",
+    "reason": "high advisory in nodemailer: the fix is in nodemailer >=10.0.5, a major-version bump outside the declared ^9.0.3 range; a range change is a separately reviewed change (D11).",
+    "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-vfj7-8cjw-p6xm",
+    "reason": "high advisory in braces: no patched release exists upstream for this advisory (pnpm reports patched=<0.0.0), so there is nothing to upgrade to within any range.",
+    "reviewBy": "2027-01-06"
+  }
+]
