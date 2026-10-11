@@ -216,6 +216,11 @@ services:
       # and injecting '' would erase it — turning the drift-detection metric
       # into a drift source.
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      # HSTS opt-in for the nginx security headers (REQ-6.7, 6.8). Bare ${VAR:-}
+      # is safe: the web entrypoint sends Strict-Transport-Security only when the
+      # value is exactly "true", so an empty value reads as OFF. Default OFF; set
+      # only once this instance truly serves over HTTPS.
+      HSTS_ENABLED: ${HSTS_ENABLED:-}
     networks:
       - tradr
     restart: unless-stopped

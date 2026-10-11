@@ -80,4 +80,8 @@ COPY docker/conf.d/stream-proxy.inc /etc/nginx/templates/stream-proxy.inc.templa
 # Runtime-config entrypoint: writes /usr/share/nginx/html/config.js at start (Req 3).
 COPY docker/docker-entrypoint.d/10-runtime-config.sh /docker-entrypoint.d/10-runtime-config.sh
 
+# Security-headers entrypoint: renders conf.d/security-headers.inc at start,
+# filling the CSP origins outside NGINX_ENVSUBST_FILTER (Req 6).
+COPY docker/docker-entrypoint.d/15-security-headers.sh /docker-entrypoint.d/15-security-headers.sh
+
 EXPOSE 80
