@@ -61,6 +61,7 @@ import { csrfMiddleware } from '@/middleware/csrf.middleware';
 import { errorHandler } from '@/middleware/error.middleware';
 import { loggingMiddleware } from '@/middleware/logging.middleware';
 import { metricsMiddleware } from '@/middleware/metrics.middleware';
+import { securityHeadersMiddleware } from '@/middleware/security-headers.middleware';
 
 const app = new Hono();
 
@@ -99,6 +100,11 @@ if (isMetricsConfigured()) app.use(metricsMiddleware);
 // mutating route (stream POST, auth, accounts, admin, …); the Stripe webhook is
 // path-exempt inside csrfMiddleware. CORS runs first so a rejected cross-origin
 // request can still be read by the browser.
+// Security headers (REQ-5, design C9) on every response. Mounted before CORS so
+// the pinned header set covers a rejected cross-origin request too; hono sets
+// them after next(), so a 200, a 404, a thrown AppError and the CSRF 403 all
+// carry them.
+app.use(securityHeadersMiddleware());
 app.use(corsMiddleware);
 app.use(csrfMiddleware);
 

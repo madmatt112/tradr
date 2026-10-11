@@ -7,7 +7,7 @@ description: Every environment variable Tradr reads, its default, and what it do
     Source: .env.example · Generator: apps/docs/scripts/gen-env-vars.mjs
     Run `pnpm --filter @tradr/docs env-vars:generate` after changing .env.example. */}
 
-Tradr reads **80 environment variables**, of which **3 are required** —
+Tradr reads **81 environment variables**, of which **3 are required** —
 everything else has a working default or turns a feature off when unset.
 
 This page is generated from [`.env.example`](https://github.com/madmatt112/tradr/blob/main/.env.example),
@@ -33,7 +33,7 @@ original `ENCRYPTION_KEY` nothing can decrypt them. See
 
 ## Reading the tables
 
-Of the 80 variables, **51 ship unset** — either commented out in the
+Of the 81 variables, **52 ship unset** — either commented out in the
 template or present with an empty value. An unset optional variable means the feature
 is **absent, not broken**: nothing logs an error and no outbound call is made.
 
@@ -72,6 +72,12 @@ is **absent, not broken**: nothing logs an error and no outbound call is made.
 | `TRUSTED_PROXIES` | `172.28.0.0/24` | Rate limiting behind the reverse proxy. Keep in sync with the compose network subnet (TRADR_SUBNET, default 172.28.0.0/24 in docker-compose.yml). |
 | `WEEK_START_DAY` | `0` | Performance charts — 0 = Sunday, 1 = Monday (week-start bucket boundary) |
 | `SKIP_POST_MIGRATIONS` | `false` | Opt-out for hosted operators with large `positions` tables (run `pnpm migrate:post` out-of-band instead) |
+
+## Security headers
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `HSTS_ENABLED` | Optional | Send Strict-Transport-Security from the API and nginx. Default OFF. HSTS tells the browser to force HTTPS for a year, so turn it on ONLY once this instance truly serves over HTTPS behind your TLS reverse proxy — on an HTTP-only or mixed instance it locks users out. The other security headers (nosniff, X-Frame-Options: DENY, Referrer-Policy, CSP) are always on and need no setting. |
 
 ## Web (consumed by docker-compose.yml / nginx, NOT the api)
 

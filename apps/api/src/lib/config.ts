@@ -431,6 +431,21 @@ export const envSchema = z.object({
   // 9464 collides with neither PORT (3100), WEB_PORT (8080), nor Fly's internal_port.
   METRICS_PORT: z.coerce.number().default(9464),
   METRICS_HOST: z.string().default('0.0.0.0'),
+  // ─── Security headers (REQ-5, D8) ─────────────────────────────────────────
+  // HSTS opt-in, read by securityHeadersMiddleware. Default OFF — the header
+  // tells the browser to force HTTPS for a year, which locks users out of an
+  // HTTP-only or mixed self-host, so it is only safe once the instance truly
+  // serves over TLS. Empty-tolerant preprocess ('' → undefined, the compose
+  // `${HSTS_ENABLED:-}` idiom) feeding the enum-default-transform idiom
+  // (DISABLE_REGISTRATION:175-178) — NOT z.coerce.boolean(), which maps the
+  // string 'false' to true. Set it to 'true' only behind HTTPS (REQ-6.8).
+  HSTS_ENABLED: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+  ),
 });
 
 /** Where an operator can look up every variable, its default, and its format. */

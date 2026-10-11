@@ -153,6 +153,11 @@ services:
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
       METRICS_PORT: ${METRICS_PORT:-9464}
       METRICS_HOST: ${METRICS_HOST:-0.0.0.0}
+      # HSTS opt-in for the API security headers (REQ-6.8). Bare ${VAR:-} is SAFE
+      # here — unlike METRICS_ENABLED above — because HSTS_ENABLED's schema is
+      # ''-preprocess-tolerant ('' ≡ unset), so an empty value reads as OFF
+      # rather than crash-looping the enum. Default OFF; set only behind HTTPS.
+      HSTS_ENABLED: ${HSTS_ENABLED:-}
     depends_on:
       postgres:
         condition: service_healthy
