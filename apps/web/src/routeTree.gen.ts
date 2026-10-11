@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
+import { Route as UnlockAccountRouteImport } from './routes/unlock-account'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as LoginRouteImport } from './routes/login'
@@ -48,6 +49,11 @@ import { Route as AuthAccountingExpensesRouteImport } from './routes/_auth/accou
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: '/verify-email',
   path: '/verify-email',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UnlockAccountRoute = UnlockAccountRouteImport.update({
+  id: '/unlock-account',
+  path: '/unlock-account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -227,6 +233,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/unlock-account': typeof UnlockAccountRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accounting': typeof AuthAccountingRouteWithChildren
   '/admin': typeof AuthAdminRoute
@@ -263,6 +270,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/unlock-account': typeof UnlockAccountRoute
   '/verify-email': typeof VerifyEmailRoute
   '/accounting': typeof AuthAccountingRouteWithChildren
   '/admin': typeof AuthAdminRoute
@@ -301,6 +309,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/unlock-account': typeof UnlockAccountRoute
   '/verify-email': typeof VerifyEmailRoute
   '/_auth/accounting': typeof AuthAccountingRouteWithChildren
   '/_auth/admin': typeof AuthAdminRoute
@@ -339,6 +348,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/unlock-account'
     | '/verify-email'
     | '/accounting'
     | '/admin'
@@ -375,6 +385,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/unlock-account'
     | '/verify-email'
     | '/accounting'
     | '/admin'
@@ -412,6 +423,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/unlock-account'
     | '/verify-email'
     | '/_auth/accounting'
     | '/_auth/admin'
@@ -450,6 +462,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   RegisterRoute: typeof RegisterRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  UnlockAccountRoute: typeof UnlockAccountRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
 }
 
@@ -460,6 +473,13 @@ declare module '@tanstack/react-router' {
       path: '/verify-email'
       fullPath: '/verify-email'
       preLoaderRoute: typeof VerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/unlock-account': {
+      id: '/unlock-account'
+      path: '/unlock-account'
+      fullPath: '/unlock-account'
+      preLoaderRoute: typeof UnlockAccountRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reset-password': {
@@ -794,6 +814,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  UnlockAccountRoute: UnlockAccountRoute,
   VerifyEmailRoute: VerifyEmailRoute,
 }
 export const routeTree = rootRouteImport
