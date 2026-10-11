@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 
 import type { Database, Transaction } from '@/db';
 import { loginChallenges, sessions, userBackupCodes, userTwoFactor } from '@/db/schema';
@@ -128,6 +128,17 @@ export async function incrementChallengeAttempts(
     .update(loginChallenges)
     .set({ attempts: sql`${loginChallenges.attempts} + 1` })
     .where(eq(loginChallenges.tokenHash, tokenHash));
+}
+
+/**
+ * Delete every dead login challenge — one already consumed or past its expiry
+ * (design C16/D15). `selectLiveLoginChallenge` already treats these as gone;
+ * the auth sweeper reclaims the rows on its tick.
+ */
+export async function deleteDeadLoginChallenges(db: Database | Transaction): Promise<void> {
+  await db
+    .delete(loginChallenges)
+    .where(or(isNotNull(loginChallenges.consumedAt), lte(loginChallenges.expiresAt, sql`now()`)));
 }
 
 /**
