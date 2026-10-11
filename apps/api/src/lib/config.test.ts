@@ -889,6 +889,43 @@ describe('isMetricsConfigured predicate', () => {
   });
 });
 
+describe('envSchema.HSTS_ENABLED', () => {
+  it('parses "true" to boolean true', () => {
+    const parsed = envSchema.parse({ ...baseEnv, HSTS_ENABLED: 'true' });
+    expect(parsed.HSTS_ENABLED).toBe(true);
+  });
+
+  it('parses "false" to boolean false', () => {
+    const parsed = envSchema.parse({ ...baseEnv, HSTS_ENABLED: 'false' });
+    expect(parsed.HSTS_ENABLED).toBe(false);
+  });
+
+  it('defaults to false when unset', () => {
+    const parsed = envSchema.parse(baseEnv);
+    expect(parsed.HSTS_ENABLED).toBe(false);
+  });
+
+  // Req 6.8: a blank .env line / compose `${HSTS_ENABLED:-}` must read as
+  // "unset" rather than crash the enum parse — the ENCRYPTION_KEY_PREVIOUS /
+  // SEED_ADMIN_EMAIL empty-tolerant preprocess idiom, feeding the
+  // enum-default-transform idiom (config.ts:175-178) used by every other
+  // boolean flag in this file.
+  it('treats an empty string the same as unset — reads false, not a boot crash', () => {
+    const parsed = envSchema.parse({ ...baseEnv, HSTS_ENABLED: '' });
+    expect(parsed.HSTS_ENABLED).toBe(false);
+  });
+
+  it('rejects an unrecognized value, naming the key in the issue path', () => {
+    const result = envSchema.safeParse({ ...baseEnv, HSTS_ENABLED: 'yes' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join('.') === 'HSTS_ENABLED')).toBe(
+        true,
+      );
+    }
+  });
+});
+
 describe.each(['OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL'] as const)('envSchema.%s', (key) => {
   // Req 3.1: unset and '' both read as undefined (compose `${VAR:-}` safety —
   // the ENCRYPTION_KEY_PREVIOUS / WEB_BASE_URL empty-tolerant idiom). Folded
