@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { cspTemplate, inlineScriptHashes, posthogOrigins, renderCsp } from '../csp.mjs';
+import { cspTemplate, inlineScriptHashes, posthogOrigins, renderCsp } from './csp.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const indexHtmlPath = resolve(here, '../index.html');
