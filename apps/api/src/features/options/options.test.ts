@@ -324,4 +324,53 @@ describe('options API', () => {
       strike: '150.000',
     });
   });
+
+  // Task 17 contract (Req 10.1-10.3, design C14 — options.route.ts gains a
+  // router-level per-user limiter of 120/60s, in the form of
+  // symbols.route.ts:39-45):
+  //
+  // - Req 10.1 + 10.2 (first half): pre-condition is a fresh authenticated
+  //   user who has made no prior /api/options calls. Call: 120 sequential
+  //   POST /api/options/occ/parse through this user's cookie. Observable
+  //   result: all 120 are 200 — the limiter's own cap (Req 10.1) must not
+  //   refuse a request inside the window. Source of the expected count: Req
+  //   10.1's "120 requests per 60 seconds".
+  // - Req 10.2 (second half, same call sequence continued): the 121st
+  //   request from the same user is refused. Observable result: 429 with
+  //   body.error.code RATE_LIMITED and a numeric Retry-After header — the
+  //   shape every other limiter in this codebase produces
+  //   (rate-limit.middleware.ts's throwIfBlocked -> RateLimitError ->
+  //   error.middleware.ts's Retry-After header). Source: Req 10.2 verbatim.
+  // - Req 10.2 (third clause): a second, unrelated user's request made right
+  //   after the first user is blocked is unaffected. Observable result: 200
+  //   — the limiter is keyed on userId (Req 10.1), so one account's flood
+  //   never touches another account's budget. Source: Req 10.2's "a second
+  //   user unaffected".
+  // - Req 10.3 (resolve deferral d-26f32221) is bookkeeping done through the
+  //   deferrals tool/record, not an HTTP-observable behaviour; no assertion
+  //   in this suite can cover it.
+  it('limits /api/options to 120 requests per user per 60s: 429 with Retry-After past the cap, a second user unaffected', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const occParseBody = { input: 'AAPL  250620C00150000' };
+
+    for (let i = 0; i < 120; i++) {
+      const res = await authedRequest('POST', '/api/options/occ/parse', cookie, occParseBody);
+      expect(res.status).toBe(200);
+    }
+
+    const blocked = await authedRequest('POST', '/api/options/occ/parse', cookie, occParseBody);
+    expect(blocked.status).toBe(429);
+    const blockedBody = await blocked.json();
+    expect(blockedBody.error.code).toBe('RATE_LIMITED');
+    expect(blocked.headers.get('Retry-After')).toMatch(/^\d+$/);
+
+    const { cookie: otherCookie } = await registerAndGetCookie();
+    const otherRes = await authedRequest(
+      'POST',
+      '/api/options/occ/parse',
+      otherCookie,
+      occParseBody,
+    );
+    expect(otherRes.status).toBe(200);
+  }, 20000);
 });
