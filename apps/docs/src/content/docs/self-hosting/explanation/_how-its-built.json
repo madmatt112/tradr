@@ -3,11 +3,11 @@
   "vitestProjects": [
     {
       "name": "shared",
-      "testFiles": 26
+      "testFiles": 27
     },
     {
       "name": "api",
-      "testFiles": 177
+      "testFiles": 184
     },
     {
       "name": "migrations",
@@ -15,18 +15,18 @@
     },
     {
       "name": "web",
-      "testFiles": 216
+      "testFiles": 218
     },
     {
       "name": "web-scripts",
-      "testFiles": 5
+      "testFiles": 6
     },
     {
       "name": "docs-scripts",
       "testFiles": 3
     }
   ],
-  "testFilesTotal": 430,
+  "testFilesTotal": 441,
   "e2eSpecFiles": 37,
   "migrations": 39,
   "ciJobs": [
@@ -37,5 +37,5 @@
     "e2e-pwa-upgrade",
     "docker-smoke"
   ],
-  "dockerSmokeAssertions": 17
+  "dockerSmokeAssertions": 19
 }

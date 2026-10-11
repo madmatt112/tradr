@@ -927,6 +927,110 @@ jobs:
             fi
           done
 
+      # (r) Every self-header SPA location carries the CSP and the four static
+      # headers (design C11, Req 6.9). Runs against the already-booted stack —
+      # the documented self-host default (API_BASE_URL unset, no PostHog key,
+      # HSTS off) — so the CSP is the same-origin baseline. The build-shipped
+      # /usr/share/nginx/html/csp-policy.txt holds the inline-script hash the
+      # entrypoint fills origins into; read that hash from the RUNNING container
+      # and assert every path's CSP still carries it, has no unfilled `__`
+      # placeholder, and that no Strict-Transport-Security header appears on the
+      # plaintext stack (Req 6.9). `curl -sD -` dumps headers; the body is
+      # discarded. `curl -fsS` on /index.html fails the step if it is missing.
+      - name: Assert nginx serves the security headers on every SPA path (r)
+        run: |
+          hash=$(docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T web \
+            cat /usr/share/nginx/html/csp-policy.txt | grep -o "sha256-[A-Za-z0-9+/=]*" | head -n1)
+          echo "csp-policy.txt inline-script hash: $hash"
+          if [ -z "$hash" ]; then
+            echo "no sha256 inline-script hash in the container's csp-policy.txt"
+            exit 1
+          fi
+
+          # The first /assets/ file index.html references (a content-hashed JS or CSS).
+          index=$(curl -fsS "http://localhost:${WEB_PORT}/index.html")
+          asset=$(printf '%s' "$index" | grep -o "/assets/[^\"']*" | head -n1)
+          echo "first /assets/ reference: $asset"
+          if [ -z "$asset" ]; then
+            echo "no /assets/ reference in index.html"
+            exit 1
+          fi
+
+          for path in / /index.html "$asset" /config.js /sw.js /manifest.webmanifest /healthz; do
+            echo "=== $path ==="
+            h=$(curl -sD - -o /dev/null "http://localhost:${WEB_PORT}${path}" | tr -d '\r')
+            echo "$h"
+            csp=$(printf '%s\n' "$h" | grep -i '^Content-Security-Policy:' || true)
+            if [ -z "$csp" ]; then echo "no Content-Security-Policy header on $path"; exit 1; fi
+            printf '%s' "$csp" | grep -qF "$hash" || { echo "CSP on $path is missing the inline-script hash"; exit 1; }
+            case "$csp" in *__*) echo "CSP on $path still has an unfilled __ placeholder"; exit 1 ;; esac
+            printf '%s\n' "$h" | grep -iq '^X-Content-Type-Options: nosniff' || { echo "no X-Content-Type-Options on $path"; exit 1; }
+            printf '%s\n' "$h" | grep -iq '^X-Frame-Options: DENY' || { echo "no X-Frame-Options on $path"; exit 1; }
+            printf '%s\n' "$h" | grep -iq '^Referrer-Policy: strict-origin-when-cross-origin' || { echo "no Referrer-Policy: strict-origin-when-cross-origin on $path"; exit 1; }
+            printf '%s\n' "$h" | grep -iq '^Permissions-Policy:' || { echo "no Permissions-Policy on $path"; exit 1; }
+            if printf '%s\n' "$h" | grep -iq '^Strict-Transport-Security:'; then
+              echo "unexpected Strict-Transport-Security on $path (HSTS must be off on the plaintext stack)"
+              exit 1
+            fi
+          done
+
+      # (s) The per-deploy PostHog origins the entrypoint derives from
+      # POSTHOG_PUBLIC_HOST must match C10's posthogOrigins (design C11, R1-3):
+      # a shell/JS divergence is what this catches. Recreate ONLY `web` (the
+      # --no-deps reasoning is (l)'s) with METRICS_ENABLED=true so /metrics
+      # exists to read the headers from, POSTHOG_PUBLIC_KEY set so the origins
+      # are emitted at all, and the host varied across the unset (-> us pair),
+      # eu (-> eu pair) and a custom host (-> its own origin) cases. Assert
+      # /metrics carries the CSP and the four static headers, and that the CSP
+      # names exactly the origins C10 gives for the host. Restore `web` to the
+      # default self-host env afterwards.
+      - name: Assert /metrics headers and per-host PostHog CSP origins (s)
+        run: |
+          wait_web_ready() {
+            for i in $(seq 1 30); do
+              probe=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${WEB_PORT}/config.js" || true)
+              echo "web readiness attempt $i (/config.js): $probe"
+              if [ "$probe" = "200" ]; then return 0; fi
+              sleep 2
+            done
+            echo "web did not come back up after recreate"
+            exit 1
+          }
+
+          assert_metrics_csp() {
+            # $1: the PostHog origins substring the CSP must name for this host.
+            wait_web_ready
+            h=$(curl -sD - -o /dev/null "http://localhost:${WEB_PORT}/metrics" | tr -d '\r')
+            echo "$h"
+            csp=$(printf '%s\n' "$h" | grep -i '^Content-Security-Policy:' || true)
+            if [ -z "$csp" ]; then echo "no Content-Security-Policy header on /metrics"; exit 1; fi
+            printf '%s\n' "$h" | grep -iq '^X-Content-Type-Options: nosniff' || { echo "no X-Content-Type-Options on /metrics"; exit 1; }
+            printf '%s\n' "$h" | grep -iq '^X-Frame-Options: DENY' || { echo "no X-Frame-Options on /metrics"; exit 1; }
+            printf '%s\n' "$h" | grep -iq '^Referrer-Policy: strict-origin-when-cross-origin' || { echo "no Referrer-Policy on /metrics"; exit 1; }
+            printf '%s\n' "$h" | grep -iq '^Permissions-Policy:' || { echo "no Permissions-Policy on /metrics"; exit 1; }
+            printf '%s' "$csp" | grep -qF "$1" || { echo "CSP on /metrics is missing the PostHog origins '$1'"; exit 1; }
+          }
+
+          echo "=== POSTHOG_PUBLIC_HOST unset -> us pair ==="
+          METRICS_ENABLED=true POSTHOG_PUBLIC_KEY=phc_smoke POSTHOG_PUBLIC_HOST= \
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-deps --force-recreate web
+          assert_metrics_csp "https://us.i.posthog.com https://us-assets.i.posthog.com"
+
+          echo "=== POSTHOG_PUBLIC_HOST=https://eu.i.posthog.com -> eu pair ==="
+          METRICS_ENABLED=true POSTHOG_PUBLIC_KEY=phc_smoke POSTHOG_PUBLIC_HOST=https://eu.i.posthog.com \
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-deps --force-recreate web
+          assert_metrics_csp "https://eu.i.posthog.com https://eu-assets.i.posthog.com"
+
+          echo "=== POSTHOG_PUBLIC_HOST=https://ph.example.com -> own origin ==="
+          METRICS_ENABLED=true POSTHOG_PUBLIC_KEY=phc_smoke POSTHOG_PUBLIC_HOST=https://ph.example.com \
+            docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-deps --force-recreate web
+          assert_metrics_csp "https://ph.example.com"
+
+          # Restore web to the documented self-host default (no PostHog, metrics off).
+          echo "=== restore web to the default self-host env ==="
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-deps --force-recreate web
+          wait_web_ready
+
       # Dump container logs on ANY failure above (Req 8.6).
       - name: Dump container logs on failure
         if: failure()
