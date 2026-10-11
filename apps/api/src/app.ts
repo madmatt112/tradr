@@ -19,6 +19,7 @@ import { applyBuiltinPersonaOverrides, runDecryptCanary } from '@/features/advis
 import auth, { userPreferencesRouter } from '@/features/auth/auth.route';
 import passwordResetRouter from '@/features/auth/password-reset.route';
 import twoFactorLoginRouter from '@/features/auth/two-factor.route';
+import unlockRouter from '@/features/auth/unlock.route';
 import verificationRouter from '@/features/auth/verification.route';
 import { billingRouter, billingWebhookRouter } from '@/features/billing/billing.route';
 import brokeragesRouter from '@/features/brokerages/brokerages.route';
@@ -122,6 +123,10 @@ app.route('/api/auth', verificationRouter);
 // precedent) — POST /login/two-factor is public and turns a login challenge
 // into a session (design C4). Mounted after verification per the task order.
 app.route('/api/auth', twoFactorLoginRouter);
+// Account unlock: a FIFTH router on the same /api/auth base (same precedent) —
+// POST /unlock is public and clears a lock from the emailed link (design C6).
+// Mounted after the two-factor router per the task order.
+app.route('/api/auth', unlockRouter);
 app.route('/api/accounts', accounts);
 // Admin: gating (auth → admin → rate limit) is router-level inside adminRouter
 // (admin-platform design Component 1, REQ-1.4).

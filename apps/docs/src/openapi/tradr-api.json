@@ -1568,6 +1568,46 @@
         ]
       }
     },
+    "/api/auth/unlock": {
+      "post": {
+        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture — token guessing is primarily throttled by the token's 256-bit entropy + 15 min TTL), tightening to 5 while the shared rate-limit store is unavailable. Atomically consumes the single-use `account_unlock` token and clears the per-address lock for its owner. Expired, already-consumed, unrecognized, and wrong-purpose tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN. An unlock for an address that is no longer locked still returns 200 — the token was spent. Sends no mail and stays functional when the instance has no email configured.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "description": "The raw token from the emailed link's URL fragment.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ success: true } — the lock (if any) was cleared."
+          },
+          "400": {
+            "description": "Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown / wrong purpose — one generic body)."
+          },
+          "429": {
+            "description": "Rate limit reached (IP-keyed)."
+          }
+        },
+        "summary": "Clear an account lockout with an emailed unlock token.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/api/auth/verify-email": {
       "post": {
         "description": "Public. Rate limited by client IP (10 / 15 min, the login posture; token guessing is primarily throttled by the token's 256-bit entropy + 24 h TTL). Atomically consumes the single-use verification token and marks the account email-verified in one transaction. Expired, already-consumed, and unrecognized tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN (the frontend then offers the resend path). Consumption is THIS POST — fetching the emailed GET link never mutates, so prefetchers and link scanners burn nothing. Fully functional when the instance has no email configured (consuming an existing token sends nothing).\n",
