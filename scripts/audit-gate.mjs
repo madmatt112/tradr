@@ -1,36 +1,17 @@
 #!/usr/bin/env node
-// Dependency audit gate (security-hardening, design C13, requirement 8).
-//
-// A dated allow-list gate over pnpm's own advisory report. It keeps only
-// `high` and `critical` production advisories, matches each one's
-// `github_advisory_id` against a committed allow-list, and fails CI on any
-// advisory that is neither upgraded away nor listed with a future review-by
-// date.
+// Dependency audit gate (design C13, requirement 8). Node builtins only.
 //
 //   node scripts/audit-gate.mjs [--report FILE --lockfile FILE] \
 //                               [--allowlist FILE] [--today YYYY-MM-DD]
 //
-// Without `--report` it runs `pnpm audit --prod --json` and parses stdout,
-// ignoring pnpm's own (non-zero) exit code. With `--report` it reads the
-// report from the file instead, so the test suite runs offline against a
-// pinned snapshot (requirement 8.3).
+// Without --report it runs `pnpm audit --prod --json` and ignores pnpm's exit
+// code. It keeps high and critical advisories and matches github_advisory_id
+// against the allow-list: [{ "id": "GHSA-…", "reason": "…", "reviewBy":
+// "YYYY-MM-DD" }]. A listed advisory fails again after its reviewBy date.
 //
-// Allow-list (`audit-allowlist.json` at the repo root):
-//   [{ "id": "GHSA-…", "reason": "…", "reviewBy": "YYYY-MM-DD" }]
-// A listed advisory stops failing the job until its `reviewBy` date passes;
-// on and after that date it fails again (requirement 8.2). `--today` pins the
-// comparison date (default: the system date) so the behaviour is testable.
-//
-// Exit codes:
-//   0  no blocking high/critical production advisory
-//   1  one or more blocking advisories (each named on stdout): an advisory not
-//      in the allow-list, or a listed advisory whose reviewBy has passed
-//   2  unparsable input, bad usage, or — with --report and --lockfile — a
-//      report finding `name@version` that is absent from the lockfile (the
-//      report does not match the lockfile it was paired with)
-//
-// Dependency-free ESM (Node builtins only, design D9/D10) so it runs from the
-// repo root with no workspace module resolution.
+// Exit 0: nothing blocking. Exit 1: an unlisted advisory or one past reviewBy,
+// each named on stdout. Exit 2: bad usage, unparsable input, or a --report
+// finding whose name@version is absent from --lockfile.
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
