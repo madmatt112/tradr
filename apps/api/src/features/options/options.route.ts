@@ -12,12 +12,29 @@ import {
 import { ValidationError } from '@/lib/errors';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
+import { createRateLimiter } from '@/middleware/rate-limit.middleware';
 
 type AuthEnv = { Variables: { userId: string; isAdmin: boolean } };
 
 const optionsRouter = new Hono<AuthEnv>();
 
 optionsRouter.use(authMiddleware);
+
+// Per-user options rate limiter (symbols quote precedent): 120 requests per
+// 60 s, keyed on the authenticated userId so the cap is per-account — NAT'd
+// users do not collide and one user across multiple IPs cannot double it. The
+// Redis-outage fallback keeps the same per-container budget (these are
+// pure-function compute endpoints, a userId-keyed cost limiter not a
+// brute-force surface).
+const optionsRateLimit = createRateLimiter({
+  name: 'options',
+  max: 120,
+  windowMs: 60_000,
+  keyGenerator: (c) => c.get('userId'),
+  fallbackMax: 120,
+});
+
+optionsRouter.use(optionsRateLimit);
 
 /**
  * @swagger-example occ-parse-form1 {"input":"AAPL  250620C00150000"} → {"underlying":"AAPL","expiration":"2025-06-20","type":"call","strike":"150.000"}
