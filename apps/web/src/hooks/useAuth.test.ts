@@ -8,7 +8,7 @@ import { api, markSessionConfirmed, markSessionEnded, markSessionStarted } from 
 import { DRAWER_STORAGE_KEY, useDrawerStore } from '@/stores/drawer.store';
 import { eventBus } from '@/stores/event-bus.store';
 
-import { useAuth, useLogin } from './useAuth';
+import { useAuth, useLogin, useLoginTwoFactor } from './useAuth';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -198,5 +198,54 @@ describe('useLogin — a login begins from clean client state', () => {
     // And the teardown ran BEFORE the seeding, or the clear would have taken
     // the incoming user out with the departing one.
     expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u-2' });
+  });
+});
+
+// Req 2.7 / 2.8 (security-hardening, design C8): the second sign-in step. A
+// two-factor account's correct password answers 202 with a challenge and NO
+// session, so useLogin's post-login steps (teardown, markSessionStarted, the
+// ['auth','me'] seed) must not run for that answer — only the code step that
+// follows may begin the session, through a new useLoginTwoFactor() sharing the
+// same three steps.
+describe('useLogin / useLoginTwoFactor — the second sign-in step', () => {
+  it('a 202 two-factor challenge answer marks no session started (Req 2.7)', async () => {
+    vi.mocked(api.post).mockResolvedValue({
+      twoFactorRequired: true,
+      challenge: 'a'.repeat(64),
+    });
+    const qc = makeClient();
+    const onLogout = vi.fn();
+    eventBus.subscribe('auth:logout', onLogout);
+
+    const { result } = renderHook(() => useLogin(), { wrapper: makeWrapper(qc) });
+    const answer = await result.current.mutateAsync({ email: 'a@example.com', password: 'pw' });
+
+    // The hook hands the raw challenge answer back to the caller (login.tsx
+    // reads `twoFactorRequired`/`challenge` off it) rather than swallowing it.
+    expect(answer).toEqual({ twoFactorRequired: true, challenge: 'a'.repeat(64) });
+    // Until the second step succeeds the client holds no authenticated session
+    // state: no seed, no session-start declaration, no teardown announcement.
+    expect(qc.getQueryData(['auth', 'me'])).toBeUndefined();
+    expect(markSessionStarted).not.toHaveBeenCalled();
+    expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  it('useLoginTwoFactor on a valid code runs the post-login steps once (Req 2.8)', async () => {
+    vi.mocked(api.post).mockResolvedValue({
+      user: { id: 'u-9', email: 'c@example.com' },
+    });
+    const qc = makeClient();
+
+    const { result } = renderHook(() => useLoginTwoFactor(), { wrapper: makeWrapper(qc) });
+    await act(async () => {
+      await result.current.mutateAsync({ challenge: 'a'.repeat(64), code: '123456' });
+    });
+
+    expect(api.post).toHaveBeenCalledWith('/auth/login/two-factor', {
+      challenge: 'a'.repeat(64),
+      code: '123456',
+    });
+    expect(markSessionStarted).toHaveBeenCalledOnce();
+    expect(qc.getQueryData(['auth', 'me'])).toMatchObject({ id: 'u-9' });
   });
 });
