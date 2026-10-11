@@ -143,6 +143,28 @@ describe('envSchema.ENCRYPTION_KEY_FINGERPRINT', () => {
   });
 });
 
+describe('envSchema.SESSION_SECRET removal (Req 9.1, 9.2)', () => {
+  // Req 9.1: SESSION_SECRET is deleted from envSchema (and the comment beside
+  // ENCRYPTION_KEY_PREVIOUS that names it as required) — the config no longer
+  // reads a secret nothing uses. A base env that never sets it must parse: a
+  // schema that still requires it fails this exact call.
+  it('parses a base env with no SESSION_SECRET set at all', () => {
+    const { SESSION_SECRET: _omit, ...withoutSecret } = baseEnv;
+    void _omit;
+    const result = envSchema.safeParse(withoutSecret);
+    expect(result.success).toBe(true);
+  });
+
+  // Req 9.2: an operator who still has SESSION_SECRET set in their environment
+  // (an old .env left over from before this change) must boot with no error —
+  // the key is no longer validated at all, so even a value the old min(32)
+  // rule would have rejected must pass once the field is gone.
+  it('parses with no error when SESSION_SECRET is still set, even to a value too short for the old rule', () => {
+    const result = envSchema.safeParse({ ...baseEnv, SESSION_SECRET: 'short' });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('envSchema.ADVISOR_STREAM_TIMEOUT_MS', () => {
   it('defaults to 120000 when unset', () => {
     const parsed = envSchema.parse(baseEnv);
