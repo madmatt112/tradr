@@ -17,6 +17,7 @@ import { Route as ForgotPasswordRoute } from '../forgot-password';
 import { Route as LoginRoute } from '../login';
 import { Route as RegisterRoute } from '../register';
 import { Route as ResetPasswordRoute } from '../reset-password';
+import { Route as UnlockAccountRoute } from '../unlock-account';
 import { Route as VerifyEmailRoute } from '../verify-email';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -52,6 +53,11 @@ const PUBLIC_ROUTES = [
     options: ResetPasswordRoute.options as any,
   },
   { path: '/verify-email', title: 'Verify your email', options: VerifyEmailRoute.options as any },
+  {
+    path: '/unlock-account',
+    title: 'Unlock your account',
+    options: UnlockAccountRoute.options as any,
+  },
 ];
 
 // Re-host the real route components under a fresh root (the reset-password /
@@ -61,7 +67,7 @@ const PUBLIC_ROUTES = [
 // does not have to mount the me-query itself to be redirected away by it —
 // anything rendered ABOVE it on a public route does just as well, and a
 // synthetic empty root would render none of that and see none of it. __root is
-// the only layout above these five (they are top-level; _auth is a sibling), so
+// the only layout above these six (they are top-level; _auth is a sibling), so
 // hosting it here covers the whole chain a cold load actually mounts.
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({ component: (RootRoute.options as any).component });
