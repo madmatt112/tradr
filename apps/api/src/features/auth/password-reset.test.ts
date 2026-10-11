@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
-import { emailTokens, sessions, users } from '@/db/schema';
+import { emailTokens, sessions, userTwoFactor, users } from '@/db/schema';
 import { config } from '@/lib/config';
 import { initMailer } from '@/lib/mailer';
 import { withTransaction } from '@/lib/transaction';
@@ -24,6 +24,8 @@ import { withTransaction } from '@/lib/transaction';
 import { insertUser } from './auth.query';
 import { consumeEmailToken } from './email-tokens.query';
 import * as emailTokensService from './email-tokens.service';
+import { lockoutKey } from './lockout';
+import { recordLoginFailure, selectActiveLock } from './lockout.query';
 
 let emailCounter = 0;
 function uniqueEmail() {
@@ -487,5 +489,48 @@ describe('POST /api/auth/password-reset/complete', () => {
     expect(await resetRowsFor(user.id)).toHaveLength(0);
     // Consumption sent nothing: the only dispatch is the request's.
     expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  // 7. Lockout lifecycle (REQ-2.10, REQ-4.5, design C16): completing an emailed
+  //    reset clears the counter/lock for the account's address, the same way
+  //    `tradr reset-password` does — but touches no two-factor row.
+  //
+  // Contract:
+  // - Pre-condition: the address is locked (ten recorded failures through the
+  //   task-4 query) and the account has two-factor enabled.
+  // - Test: `completeReset(raw, newPassword)` — the route that drives
+  //   `completePasswordReset`.
+  // - Observable result: `selectActiveLock` for the address's key is null
+  //   afterwards; the `user_two_factor` row still exists with `enabledAt` set.
+  // - Source of expected value: REQ-2.10 ("A password reset ... SHALL NOT turn
+  //   two-factor off"), REQ-4.5 ("Completing an emailed password reset ...
+  //   SHALL also clear the counter and lock").
+  it('clears the lockout for the address and leaves two-factor enabled', async () => {
+    const email = uniqueEmail();
+    const user = await createUser(email);
+    await db.insert(userTwoFactor).values({
+      userId: user.id,
+      secretEnvelope: 'envelope',
+      enabledAt: new Date(),
+    });
+
+    const key = lockoutKey(email);
+    for (let i = 0; i < 10; i++) {
+      await recordLoginFailure(db, key);
+    }
+    expect(await selectActiveLock(db, key)).not.toBeNull();
+
+    const raw = await issueResetToken(user.id);
+    const res = await completeReset(raw, 'new-password-123');
+    expect(res.status).toBe(200);
+
+    expect(await selectActiveLock(db, key)).toBeNull();
+
+    const [twoFactorRow] = await db
+      .select()
+      .from(userTwoFactor)
+      .where(eq(userTwoFactor.userId, user.id));
+    expect(twoFactorRow).toBeDefined();
+    expect(twoFactorRow.enabledAt).not.toBeNull();
   });
 });
