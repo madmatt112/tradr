@@ -8,10 +8,10 @@
 // once per Enter / Send click; the parent's mutation is `retry: 0` (REQ-1.16),
 // so no double-firing of the billable stream.
 //
-// Vision gating (REQ-1.14): the paperclip and clipboard-paste image paths are
-// active only when `visionEnabled` is true (parent resolves this from the
-// selected provider/model). For non-vision models the paperclip is hidden and
-// pasted images are ignored.
+// Vision gating (REQ-1.14): the paperclip, clipboard-paste and drag-and-drop
+// image paths are active only when `visionEnabled` is true (parent resolves this
+// from the model the next message will use). For non-vision models the
+// paperclip is hidden and pasted or dropped images are ignored.
 //
 // Hard-cap preservation (REQ-1.15): when the parent reports
 // `errorCode === 'CONVERSATION_TOO_LONG'`, the composer keeps the typed text and
@@ -305,6 +305,27 @@ export function Composer({
     }
   };
 
+  const imageFilesOf = (transfer: DataTransfer | null) =>
+    Array.from(transfer?.files ?? []).filter((f) => f.type.startsWith('image/'));
+
+  // Drag-and-drop onto the composer. dragover must preventDefault for the drop
+  // to fire at all; without vision the browser keeps its default behaviour.
+  const onDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!visionEnabled || disabled) return;
+    if (Array.from(event.dataTransfer?.types ?? []).includes('Files')) {
+      event.preventDefault();
+    }
+  };
+
+  const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!visionEnabled || disabled) return;
+    const imageFiles = imageFilesOf(event.dataTransfer);
+    if (imageFiles.length > 0) {
+      event.preventDefault();
+      void addFiles(imageFiles);
+    }
+  };
+
   const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files ? Array.from(event.target.files) : [];
     void addFiles(files);
@@ -355,7 +376,12 @@ export function Composer({
   };
 
   return (
-    <div data-testid="composer" className="flex flex-col gap-2 border-t p-3">
+    <div
+      data-testid="composer"
+      className="flex flex-col gap-2 border-t p-3"
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
       {hardCapped && (
         <div
           data-testid="hard-cap-block"

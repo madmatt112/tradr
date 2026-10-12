@@ -35,6 +35,7 @@ vi.mock('../../hooks/useConversations', () => ({
 let providerKeysValue: { data: { items: unknown[] } | undefined };
 vi.mock('../../hooks/useProviderKeys', () => ({
   useProviderKeys: () => providerKeysValue,
+  useProviderModels: () => ({ data: { items: [] } }),
 }));
 
 // Billing config — drives platform-enablement (the no-BYOK platform entry path)

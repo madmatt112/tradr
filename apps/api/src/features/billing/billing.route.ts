@@ -1,9 +1,15 @@
 import { Hono } from 'hono';
 import Stripe from 'stripe';
 
-import { ProviderIdSchema, type BillingModel, CheckoutRequestSchema } from '@tradr/shared';
+import {
+  ProviderIdSchema,
+  type BillingModel,
+  CheckoutRequestSchema,
+  type ProviderId,
+} from '@tradr/shared';
 
 import { db } from '@/db';
+import { getProvider } from '@/features/advisor/providers/registry';
 import {
   config,
   getPlatformApiKey,
@@ -110,6 +116,33 @@ function pricedConfiguredModels(): BillingModel[] {
     }
   }
   return models;
+}
+
+/**
+ * Add each priced model's `vision` flag from the provider's own model list,
+ * read with the platform key (cached by the shared ListModelsCache). Fail
+ * closed: a provider whose list cannot be read reports `vision: false`, which
+ * keeps the composer's image paths hidden exactly as before.
+ */
+async function withVision(models: BillingModel[]): Promise<BillingModel[]> {
+  const visionByProvider = new Map<ProviderId, Map<string, boolean>>();
+  for (const providerId of new Set(models.map((m) => m.providerId))) {
+    try {
+      const list = await getProvider(providerId).listModels(
+        getPlatformApiKey(providerId) as string,
+      );
+      visionByProvider.set(providerId, new Map(list.map((m) => [m.id, m.vision])));
+    } catch (err) {
+      logger.warn('platform listModels failed; reporting vision false', {
+        providerId,
+        error: (err as Error).message,
+      });
+    }
+  }
+  return models.map((m) => ({
+    ...m,
+    vision: visionByProvider.get(m.providerId)?.get(m.model) ?? false,
+  }));
 }
 
 /**
@@ -284,19 +317,21 @@ billingRouter.get('/usage', async (c) => {
  *       platform key — the authoritative picker source, so the UI never offers an
  *       unpriced or unspendable model. Each provider's allowance model carries
  *       `allowance: true` ONLY when feature gating is enabled (self-host pickers must
- *       never advertise free monthly turns); `subscription.purchasable` is
+ *       never advertise free monthly turns). Each model carries `vision`, the
+ *       provider's image-input flag read with the platform key; it is `false` when
+ *       the provider's model list cannot be read. `subscription.purchasable` is
  *       `isProSubscriptionConfigured`. When `enabled` is false the frontend hides the
  *       purchase UI (graceful absence).
  *     tags: [Billing]
  *     responses:
  *       200: { description: '{ enabled, packs, models, subscription: { purchasable } }.' }
  */
-billingRouter.get('/config', (c) => {
+billingRouter.get('/config', async (c) => {
   return c.json(
     {
       enabled: isStripeConfigured(),
       packs: CREDIT_PACKS,
-      models: pricedConfiguredModels(),
+      models: await withVision(pricedConfiguredModels()),
       subscription: { purchasable: isProSubscriptionConfigured() },
     },
     200,

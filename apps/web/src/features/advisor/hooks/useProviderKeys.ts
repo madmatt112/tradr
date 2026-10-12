@@ -9,7 +9,12 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { ProviderId, ProviderKeyInput, ProviderKeyListItem } from '@tradr/shared';
+import type {
+  ProviderId,
+  ProviderKeyInput,
+  ProviderKeyListItem,
+  ProviderModel,
+} from '@tradr/shared';
 
 import { api } from '@/lib/api';
 
@@ -33,6 +38,20 @@ export function useProviderKeys() {
   return useQuery<ProviderKeyListResponse>({
     queryKey: providerKeyKeys.list(),
     queryFn: () => api.get<ProviderKeyListResponse>('/advisor/provider-keys'),
+  });
+}
+
+/**
+ * GET /advisor/models — every model the user's saved keys can reach, tagged with
+ * its provider. Empty until a key is saved. Long stale time, no polling.
+ */
+export function useProviderModels(enabled = true) {
+  return useQuery<{ items: (ProviderModel & { providerId: ProviderId })[] }>({
+    queryKey: providerKeyKeys.models(),
+    queryFn: () =>
+      api.get<{ items: (ProviderModel & { providerId: ProviderId })[] }>('/advisor/models'),
+    staleTime: 10 * 60 * 1000,
+    enabled,
   });
 }
 
