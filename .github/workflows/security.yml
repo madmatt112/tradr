@@ -132,10 +132,11 @@ jobs:
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
+      # No `cache: pnpm`: this job never installs, so the pnpm store path does
+      # not exist and the cache post-step fails the job.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
 
       # The gate's own unit tests run first, against offline fixtures.
       - name: Test the audit gate
