@@ -53,7 +53,7 @@ const POSTHOG_EU_RE = /https:\/\/(eu|eu-assets)(\.i)?\.posthog\.com/i;
  */
 export function inlineScriptHashes(html) {
   const hashes = [];
-  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
     const [, attrs, body] = match;
     if (/\bsrc\s*=/i.test(attrs)) continue;
     const digest = createHash('sha256').update(body, 'utf8').digest('base64');
