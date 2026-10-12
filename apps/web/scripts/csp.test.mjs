@@ -87,6 +87,15 @@ describe('inlineScriptHashes', () => {
 
     expect(inlineScriptHashes(`<script>${body}</script >`)).toEqual([`'sha256-${expectedDigest}'`]);
   });
+
+  it('hashes an inline script whose end tag carries junk before the >', () => {
+    const body = 'window.x = 1;';
+    const expectedDigest = createHash('sha256').update(body, 'utf8').digest('base64');
+
+    expect(inlineScriptHashes(`<script>${body}</script foo>`)).toEqual([
+      `'sha256-${expectedDigest}'`,
+    ]);
+  });
 });
 
 describe('cspTemplate', () => {
