@@ -41,7 +41,8 @@ import { Transcript } from '../components/Transcript';
 import { useAdvisorStream } from '../hooks/useAdvisorStream';
 import { useConversations } from '../hooks/useConversations';
 import { useListPersonas } from '../hooks/usePersonas';
-import { useProviderKeys } from '../hooks/useProviderKeys';
+import { useProviderKeys, useProviderModels } from '../hooks/useProviderKeys';
+import { nextTurnVisionEnabled } from '../lib/next-turn-vision';
 import { NEW_CONVERSATION_ID, useStreamStore } from '../stores/stream.store';
 
 // System fallback persona id (REQ-7 default-resolution order). Used only when the
@@ -82,6 +83,7 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
 
   const personas = personasQuery.data?.items ?? [];
   const hasProviderKey = (providerKeys.data?.items.length ?? 0) > 0;
+  const providerModels = useProviderModels(hasProviderKey);
 
   // Platform billing is enabled for this instance (wallet-billing REQ-4.3). The
   // flag is authoritative — sourced from GET /api/billing/config, never guessed.
@@ -245,6 +247,18 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
 
   const hasConversations = (conversations.data?.items.length ?? 0) > 0;
 
+  // Image attachments follow the model the next message will run on.
+  const visionEnabled = nextTurnVisionEnabled({
+    conversation:
+      activeId !== null ? (conversations.data?.items.find((c) => c.id === activeId) ?? null) : null,
+    existingConversation: activeId !== null,
+    showPlatformPicker,
+    platformOverride,
+    providerKeys: providerKeys.data?.items ?? [],
+    byokModels: providerModels.data?.items ?? [],
+    platformModels,
+  });
+
   return (
     <div data-slot="advisor-page" className="flex h-[calc(100vh-3rem)] flex-col">
       <header className="flex items-center gap-2 border-b px-4 py-2">
@@ -350,7 +364,7 @@ export function AdvisorPage({ conversationId, isNew = false }: AdvisorPageProps)
               <Composer
                 personas={personas}
                 defaultPersonaId={defaultPersonaId}
-                visionEnabled={false}
+                visionEnabled={visionEnabled}
                 disabled={composerDisabled}
                 pending={stream.isPending}
                 errorCode={errorCode}

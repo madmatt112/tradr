@@ -267,6 +267,45 @@ describe('Composer', () => {
     expect(document.querySelector('[data-testid="attachment-previews"]')).toBeNull();
   });
 
+  function dropImage(target: Element, file: File) {
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { files: [file], types: ['Files'] } });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it('attaches an image dropped on the composer when vision is enabled', async () => {
+    mount(<Composer personas={PERSONAS} visionEnabled onSubmit={vi.fn()} />);
+
+    let event!: Event;
+    await act(async () => {
+      event = dropImage(
+        document.querySelector('[data-testid="composer"]')!,
+        new File(['x'], 'chart.png', { type: 'image/png' }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.querySelectorAll('[data-testid="attachment-previews"] li').length).toBe(1);
+  });
+
+  it('ignores a dropped image when vision is disabled', async () => {
+    mount(<Composer personas={PERSONAS} visionEnabled={false} onSubmit={vi.fn()} />);
+
+    let event!: Event;
+    await act(async () => {
+      event = dropImage(
+        document.querySelector('[data-testid="composer"]')!,
+        new File(['x'], 'chart.png', { type: 'image/png' }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector('[data-testid="attachment-previews"]')).toBeNull();
+  });
+
   it('shows the paperclip when vision is enabled and never exceeds 4 attachments', async () => {
     mount(<Composer personas={PERSONAS} visionEnabled onSubmit={vi.fn()} />);
 

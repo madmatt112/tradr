@@ -1729,7 +1729,7 @@
     },
     "/api/billing/config": {
       "get": {
-        "description": "Drives the billing settings tab and the no-BYOK model picker. Authed, unthrottled read, never behind the spend budget. `enabled` is `isStripeConfigured`; `packs` is `CREDIT_PACKS`; `models` is the platform-priced provider/model set restricted to providers with a configured platform key — the authoritative picker source, so the UI never offers an unpriced or unspendable model. Each provider's allowance model carries `allowance: true` ONLY when feature gating is enabled (self-host pickers must never advertise free monthly turns); `subscription.purchasable` is `isProSubscriptionConfigured`. When `enabled` is false the frontend hides the purchase UI (graceful absence).\n",
+        "description": "Drives the billing settings tab and the no-BYOK model picker. Authed, unthrottled read, never behind the spend budget. `enabled` is `isStripeConfigured`; `packs` is `CREDIT_PACKS`; `models` is the platform-priced provider/model set restricted to providers with a configured platform key — the authoritative picker source, so the UI never offers an unpriced or unspendable model. Each provider's allowance model carries `allowance: true` ONLY when feature gating is enabled (self-host pickers must never advertise free monthly turns). Each model carries `vision`, the provider's image-input flag read with the platform key; it is `false` when the provider's model list cannot be read. `subscription.purchasable` is `isProSubscriptionConfigured`. When `enabled` is false the frontend hides the purchase UI (graceful absence).\n",
         "responses": {
           "200": {
             "description": "{ enabled, packs, models, subscription: { purchasable } }."

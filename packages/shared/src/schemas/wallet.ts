@@ -56,11 +56,13 @@ export type WalletHistoryItem = z.infer<typeof WalletHistoryItemSchema>;
 // A platform-priced provider/model entry driving the web model picker.
 // `allowance` marks the provider's free-tier allowance model (REQ-8.9a);
 // emitted only when feature gating is enabled — absent means not the
-// allowance model.
+// allowance model. `vision` is the provider's image-input flag for the model;
+// absent or false means the composer offers no image attachment.
 export const BillingModelSchema = z.object({
   providerId: ProviderIdSchema,
   model: z.string().min(1),
   allowance: z.boolean().optional(),
+  vision: z.boolean().optional(),
 });
 export type BillingModel = z.infer<typeof BillingModelSchema>;
 
