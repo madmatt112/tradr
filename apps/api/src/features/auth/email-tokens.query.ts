@@ -3,7 +3,7 @@ import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Database, Transaction } from '@/db';
 import { emailTokens } from '@/db/schema';
 
-export type EmailTokenPurpose = 'password_reset' | 'email_verification';
+export type EmailTokenPurpose = 'password_reset' | 'email_verification' | 'account_unlock';
 
 /**
  * Statement-level functions ONLY (structure.md): these never create their own

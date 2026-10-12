@@ -33,7 +33,7 @@ restored database still holds those encrypted keys. Without the original
 paste their key again.
 
 Copy `.env` to the same place you keep your backups. Treat it as a secret. It
-contains `POSTGRES_PASSWORD`, `SESSION_SECRET`, and `ENCRYPTION_KEY`.
+contains `POSTGRES_PASSWORD` and `ENCRYPTION_KEY`.
 
 <HostedOnly>
   Backups on `app.tradr.cloud` are managed for you. This page is for operators who run their own
@@ -246,7 +246,7 @@ It needs `pg_dump`, `pg_restore`, `psql`, and Node on the machine you run it fro
 provider API keys still work.
 
 Change `WEB_PORT`, `TRUSTED_PROXIES`, or `WEB_BASE_URL` afterwards if the new
-server needs different values. Leave the three secrets alone.
+server needs different values. Leave the two secrets alone.
 
 ## Troubleshooting
 

@@ -83,6 +83,9 @@ beforeEach(() => {
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes('/auth/verify-email/resend')) return resendResponse();
+    // The two-factor section reads its status on mount; off here, so it settles
+    // on the "Set up two-factor" entry point and asserts nothing in these cases.
+    if (url.includes('/auth/two-factor')) return jsonResponse(200, { enabled: false });
     if (url.includes('/auth/me')) return jsonResponse(200, meUser);
     // The delete-account section reads the deletion status on mount; no schedule
     // exists here, so it settles on the destructive delete button (the dialog,

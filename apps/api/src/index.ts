@@ -4,6 +4,7 @@ import { sql } from '@/db';
 import { runPostMigrations } from '@/db/migrate';
 import { startDeletionSweeper } from '@/features/account-deletion/account-deletion.sweeper';
 import { bootstrapFirstAdmin } from '@/features/admin/admin.service';
+import { startAuthSweeper } from '@/features/auth/auth.sweeper';
 import { startMetricsServer } from '@/features/metrics/metrics.server';
 import { config } from '@/lib/config';
 import { logger } from '@/lib/logger';
@@ -108,6 +109,12 @@ async function main() {
   // clears it during shutdown, before the pool is torn down.
   const deletionSweeper = startDeletionSweeper();
 
+  // The auth lockout/challenge sweeper (security-hardening design C16/D15): a
+  // 15-minute in-process timer that removes stale `login_lockouts` rows and
+  // dead `login_challenges`. Same shape as the deletion sweeper — immediate
+  // first run, unref'd timer — and stopped alongside it before pool teardown.
+  const authSweeper = startAuthSweeper();
+
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return; // REQ-7.5 double-signal guard (SIGTERM then SIGINT)
@@ -122,6 +129,8 @@ async function main() {
     // Stop the deletion sweeper's timer before the pool is torn down: a sweep
     // tick runs database work, so it must not fire against a closed pool.
     deletionSweeper.stop();
+    // Same for the auth lockout/challenge sweeper.
+    authSweeper.stop();
     // Concurrent bounded drains — telemetry 3 s, mailer 5 s (worst case 5 s,
     // inside the ~10 s Docker grace, D9). Neither ever rejects, so Promise.all
     // is safe. Does NOT await in-flight/SSE request drain.

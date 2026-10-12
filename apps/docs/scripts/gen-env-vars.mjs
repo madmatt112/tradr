@@ -199,16 +199,13 @@ function render(sections, required) {
   out.push('');
   out.push('## Required');
   out.push('');
-  out.push('An instance does not start without these three. `docker/quickstart.sh` generates all');
+  out.push('An instance does not start without these two. `docker/quickstart.sh` generates all');
   out.push('of them for you — see [Install with Docker Compose](/self-hosting/docker-compose/).');
   out.push('');
   out.push('| Variable | How to generate one |');
   out.push('| --- | --- |');
   out.push(
     '| `POSTGRES_PASSWORD` | `openssl rand -hex 24` — hex avoids the URL-reserved characters that would corrupt the connection string |',
-  );
-  out.push(
-    '| `SESSION_SECRET` | `openssl rand -base64 24` — signs session cookies, minimum 32 characters |',
   );
   out.push(
     '| `ENCRYPTION_KEY` | `openssl rand -hex 32` — a 32-byte key that encrypts stored provider API keys |',

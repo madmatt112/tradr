@@ -7,9 +7,11 @@ name: Security
 #   OSV-Scanner   dependency advisories resolved against pnpm-lock.yaml
 #   zizmor        GitHub Actions workflow misconfiguration audit
 #
-# All three are ADVISORY: findings are reported but never fail the job, so
-# none of these are merge gates yet. Promote them to required checks in branch
-# protection once the existing backlog is triaged.
+# Those three are ADVISORY: findings are reported but never fail the job, so
+# none of them is a merge gate yet. Promote them to required checks in branch
+# protection once the existing backlog is triaged. The `audit` job below is the
+# exception — it is a BLOCKING gate that fails CI on any high or critical
+# production advisory absent from audit-allowlist.json (Requirement 8).
 #
 # None of them need a secret, so unlike the AI reviewer this replaces, they all
 # run on pull requests from forks too.
@@ -110,3 +112,37 @@ jobs:
           # Emits SARIF and uploads it. zizmor always exits 0 in this mode,
           # which is what keeps the job advisory.
           advanced-security: true
+
+  # The one blocking gate in this workflow (Requirement 8, design C13). Reads
+  # pnpm-lock.yaml and fails on any high or critical production advisory that is
+  # not in audit-allowlist.json; a listed advisory starts failing again once its
+  # review-by date passes. The gate is a Node-builtins-only CLI in scripts/, so
+  # the job needs no `pnpm install` — `pnpm audit` resolves the lockfile itself.
+  audit:
+    name: Dependency audit gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      # No `cache: pnpm`: this job never installs, so the pnpm store path does
+      # not exist and the cache post-step fails the job.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      # The gate's own unit tests run first, against offline fixtures.
+      - name: Test the audit gate
+        run: node --test scripts/audit-gate.test.mjs
+
+      # Then the gate runs live against this repo's lockfile; a non-zero exit
+      # (an unlisted or past-due advisory) fails the job.
+      - name: Audit production dependencies
+        run: node scripts/audit-gate.mjs --allowlist audit-allowlist.json

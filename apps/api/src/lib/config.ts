@@ -8,9 +8,6 @@ import { logger } from './logger';
 
 export const envSchema = z.object({
   DATABASE_URL: z.string(),
-  SESSION_SECRET: z
-    .string()
-    .min(32, 'must be at least 32 characters — generate with: openssl rand -base64 24'),
   PORT: z.coerce.number().default(3100),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   // Deployed-version string surfaced by GET /api/health (e.g. "v0.2.0-f51f9f5").
@@ -35,9 +32,9 @@ export const envSchema = z.object({
   // documented `cp .env.example .env` path hands the schema '' — and `.optional()`
   // only tolerates *undefined*, not ''. Without the empty-tolerant preprocess
   // (the CHANGELOG_GITHUB_REPO / SEC_USER_AGENT idiom used throughout this file)
-  // a blank line here is a boot crash-loop on a stock install. ENCRYPTION_KEY and
-  // SESSION_SECRET deliberately do NOT get this treatment: they are required, and
-  // an empty value there SHOULD fail fast.
+  // a blank line here is a boot crash-loop on a stock install. ENCRYPTION_KEY
+  // deliberately does NOT get this treatment: it is required, and an empty value
+  // there SHOULD fail fast.
   ENCRYPTION_KEY_PREVIOUS: z.preprocess(
     (v) => (v === '' ? undefined : v),
     z
@@ -431,6 +428,21 @@ export const envSchema = z.object({
   // 9464 collides with neither PORT (3100), WEB_PORT (8080), nor Fly's internal_port.
   METRICS_PORT: z.coerce.number().default(9464),
   METRICS_HOST: z.string().default('0.0.0.0'),
+  // ─── Security headers (REQ-5, D8) ─────────────────────────────────────────
+  // HSTS opt-in, read by securityHeadersMiddleware. Default OFF — the header
+  // tells the browser to force HTTPS for a year, which locks users out of an
+  // HTTP-only or mixed self-host, so it is only safe once the instance truly
+  // serves over TLS. Empty-tolerant preprocess ('' → undefined, the compose
+  // `${HSTS_ENABLED:-}` idiom) feeding the enum-default-transform idiom
+  // (DISABLE_REGISTRATION:175-178) — NOT z.coerce.boolean(), which maps the
+  // string 'false' to true. Set it to 'true' only behind HTTPS (REQ-6.8).
+  HSTS_ENABLED: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+  ),
 });
 
 /** Where an operator can look up every variable, its default, and its format. */

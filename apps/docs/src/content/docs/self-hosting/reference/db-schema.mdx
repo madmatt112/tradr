@@ -6,9 +6,9 @@ description: Every table Tradr creates, its columns, and how they reference each
 {/* GENERATED FILE — do not edit.
     Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}
 
-Tradr's schema is **38 tables**, created by **38 migrations** that run
+Tradr's schema is **42 tables**, created by **39 migrations** that run
 automatically when the api boots. This page is generated from the Drizzle snapshot
-for the latest schema-changing migration (`0037_trading_rules`), so it describes the schema the migrations
+for the latest schema-changing migration (`0038_auth_security`), so it describes the schema the migrations
 actually produce.
 
 You do not need any of this to run Tradr. It is here for writing queries against
@@ -548,6 +548,59 @@ a query you write against these tables may need updating on any release.
 | `deleted_at` | `timestamp with time zone` | not null, default `now()` |
 | `initiator` | `text` | not null |
 | `purge_outcome` | `text` | not null, default `'pending'` |
+
+### `login_challenges`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `token_hash` | `varchar(64)` | not null |
+| `expires_at` | `timestamp with time zone` | not null |
+| `attempts` | `smallint` | not null, default `0` |
+| `consumed_at` | `timestamp with time zone` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `login_lockouts`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `key_hash` | `varchar(64)` | primary key |
+| `failure_count` | `integer` | not null |
+| `window_started_at` | `timestamp with time zone` | not null |
+| `locked_until` | `timestamp with time zone` | — |
+
+### `user_backup_codes`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `code_hash` | `varchar(64)` | not null |
+| `used_at` | `timestamp with time zone` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+
+### `user_two_factor`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `user_id` | `uuid` | primary key |
+| `secret_envelope` | `text` | not null |
+| `enabled_at` | `timestamp with time zone` | — |
+| `last_used_step` | `bigint` | — |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
 
 ## Next steps
 

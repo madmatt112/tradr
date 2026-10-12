@@ -17,6 +17,7 @@ import {
   decodeLockKey,
   selectExitCode,
   parseEmailPasswordArgs,
+  parseEmailArg,
   normalizeEmail,
   generatePassword,
   validatePassword,
@@ -241,6 +242,30 @@ describe('validatePassword', () => {
         );
       }
     }
+  });
+});
+
+/**
+ * `tradr unlock <email>` and `tradr disable-2fa <email>` share this grammar
+ * (design C7): exactly one positional address, normalised through
+ * `normalizeEmail` — no `--password` or any other flag applies to either
+ * command (Req 4.1, 4.2).
+ */
+describe('parseEmailArg (unlock / disable-2fa share the grammar)', () => {
+  it('normalises the single address argument', () => {
+    expect(parseEmailArg(['  Owner@Example.COM '])).toEqual({ email: 'owner@example.com' });
+  });
+
+  it('errors when no argument is given', () => {
+    expect(parseEmailArg([]).error).toBeDefined();
+  });
+
+  it('errors when two arguments are given', () => {
+    expect(parseEmailArg(['a@example.com', 'b@example.com']).error).toBeDefined();
+  });
+
+  it('errors when the argument is a flag rather than an address', () => {
+    expect(parseEmailArg(['--password']).error).toBeDefined();
   });
 });
 

@@ -22,6 +22,7 @@ import { config } from './config';
 export type EmailMessage =
   | { kind: 'password_reset'; rawToken: string }
   | { kind: 'email_verification'; rawToken: string }
+  | { kind: 'account_unlock'; rawToken: string }
   | { kind: 'data_export'; exportedAt: Date };
 
 export type EmailContent = {
@@ -177,6 +178,19 @@ export function buildEmail(message: EmailMessage): EmailContent {
       cta: 'Verify email address',
       expiry: 'This link expires in 24 hours.',
       notice: "If you didn't request this, you can ignore this email.",
+    });
+  }
+  if (message.kind === 'account_unlock') {
+    return render({
+      subject: 'Unlock your Tradr account',
+      preheader: 'Unlock your Tradr account — this link expires in 15 minutes.',
+      heading: 'Unlock your account',
+      intro:
+        'Your Tradr account was locked after too many failed sign-ins. Open the link below to unlock it.',
+      link: `${base}/unlock-account#token=${message.rawToken}`,
+      cta: 'Unlock account',
+      expiry: 'This link expires in 15 minutes.',
+      notice: "If you didn't request this, you can ignore this email — your account stays locked.",
     });
   }
   // data_export — no link, token, expiry or marketing (Req 10.6). The export

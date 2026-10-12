@@ -28,8 +28,9 @@ than silently degrading to "email off": any email variable set while that trio i
 incomplete, or `SMTP_USER` set without `SMTP_PASS` (or the reverse), stops the
 `api` from booting.
 
-Without email, a user who forgets a password relies on the operator CLI
-(`tradr reset-password`), and verification is not required.
+Without email, the operator CLI is the recovery path: `tradr reset-password`
+sets a password, `tradr unlock` clears a sign-in lock, and `tradr disable-2fa`
+removes a lost second factor. Verification is not required.
 
 ```
 # SMTP_HOST=                     # presence anchor of the required trio

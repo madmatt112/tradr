@@ -30,8 +30,13 @@ timing does not reveal which emails are registered.
 `SameSite=Lax` and expires after 24 hours. `Secure` is set whenever the api runs
 in production mode.
 
-The cookie is signed with `SESSION_SECRET`. Changing that value invalidates every
-session at once, which is the lever to pull if you think one has leaked.
+The cookie carries a random token; the database stores only its SHA-256 hash, never
+the token itself, and there is no signing secret. To end every session at once — the
+lever to pull if you think one has leaked — delete the session rows:
+
+```bash
+docker compose exec postgres psql -U tradr -d tradr -c 'DELETE FROM sessions;'
+```
 
 ## Separation between users
 
@@ -83,6 +88,10 @@ proxy in front of it — see
 [Put TLS in front of the stack](/self-hosting/tls-reverse-proxy/). Without one,
 session cookies cross the network in the clear.
 
+If your proxy terminates TLS, set `HSTS_ENABLED=true` so the api sends a
+`Strict-Transport-Security` header. It is off by default, because the shipped
+stack does not terminate HTTPS itself.
+
 If you do put a proxy in front, set `TRUSTED_PROXIES` to its address. Rate
 limiting is per-IP, and behind an untrusted proxy every request appears to come
 from the proxy — so the limit applies to everyone at once instead of per client.
@@ -93,11 +102,26 @@ Authentication endpoints are rate limited per IP, which blunts credential
 stuffing and brute force. On a single instance the counters are in memory, so
 they reset when the api restarts.
 
+On top of that, an address is **locked for 15 minutes after 10 failed sign-ins
+within 15 minutes**. The count is kept per address, including addresses with no
+account, so the locked response is identical whether or not the address is
+registered — it does not reveal which emails exist. When email is configured, a
+locked account is also sent a one-time unlock link; without email, the operator
+clears the lock with `tradr unlock <email>`.
+
 <SelfHosted>
-  There is no lockout after N failed attempts, and no CAPTCHA. For an instance with a handful of
-  known users that is a reasonable trade; if yours is exposed to the internet with open
+  There is no CAPTCHA. For an instance with a handful of known users the per-IP limit and the
+  per-address lock are a reasonable trade; if yours is exposed to the internet with open
   registration, put an authenticating proxy in front.
 </SelfHosted>
+
+## Two-factor authentication
+
+A user can turn on **TOTP two-factor** — any authenticator app — from their
+settings. Enrolment shows **10 single-use backup codes** once, for signing in
+when the authenticator is unavailable. If a user loses both the app and the
+codes, the operator removes the second factor with `tradr disable-2fa <email>`,
+which also ends that user's sessions.
 
 ## What is off by default
 
@@ -113,9 +137,7 @@ disabled**. It makes no outbound calls and logs no errors.
 
 Stated plainly, because a security page that only lists strengths is not useful:
 
-- **No two-factor authentication.** A password is the only factor.
 - **No audit log of user actions.** Admin actions are recorded; ordinary ones are not.
-- **No account lockout** after repeated failures — only rate limiting.
 - **No encryption of trade data at rest** beyond whatever your disk provides.
   Provider keys are encrypted; positions and notes are not.
 - **No row-level security** in the database, as above.
@@ -129,7 +151,7 @@ If any of those is disqualifying for your situation, better to know now.
 1. Run a released version, and upgrade when one ships. See
    [Upgrade an instance](/self-hosting/upgrades/).
 2. Put TLS in front of it.
-3. Generate the three secrets rather than inventing them — `docker/quickstart.sh`
+3. Generate the two secrets rather than inventing them — `docker/quickstart.sh`
    does this.
 4. Set `ENCRYPTION_KEY_FINGERPRINT`.
 5. Keep `.env` with your backups, and keep both somewhere the server cannot reach.

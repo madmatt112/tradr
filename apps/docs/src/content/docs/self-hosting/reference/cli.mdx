@@ -14,7 +14,7 @@ browser. Run it inside the running container:
 docker compose exec api tradr --help
 ```
 
-**Expected result:** exit code 0, and the 5 commands below.
+**Expected result:** exit code 0, and the 7 commands below.
 
 | Command | Does |
 | --- | --- |
@@ -23,6 +23,8 @@ docker compose exec api tradr --help
 | `tradr storage gc` | Delete bucket objects no position or conversation references any more. |
 | `tradr create-user <email> [--password <value>]` | Create an account from the server, without opening registration. |
 | `tradr reset-password <email> [--password <value>]` | Set a user's password from the server. |
+| `tradr unlock <email>` | Clear a sign-in lockout for an address from the server. |
+| `tradr disable-2fa <email>` | Remove a lost second factor so the password alone signs in. |
 
 Every command exits **2** when it cannot reach the database, so a wrapper script
 can tell "it failed" from "it could not run".
@@ -129,6 +131,42 @@ form applies, or the command exits 2 and changes nothing.
 
 The command does **not** mark the account verified — running a command proves
 nothing about the mailbox. It does not sign existing sessions out either.
+
+It exits 1 when no account matches the email, and 2 when it cannot reach the
+database.
+
+## `unlock <email>`
+
+Clears the failed-sign-in counter and any active lock for one address, so a
+user locked out by repeated bad passwords can sign in again at once. On an
+instance with no email configured there is no unlock link, so the operator
+clears the lock directly.
+
+```bash
+docker compose exec api tradr unlock someone@example.com
+```
+
+**Expected result:** exit code 0, reporting either that the lockout was cleared
+or that there was none to clear.
+
+It touches nothing but the lockout state — no password, no session and no
+second factor. It exits 1 only when the address has neither an account nor a
+lock, and 2 when it cannot reach the database.
+
+## `disable-2fa <email>`
+
+Removes the two-factor secret and backup codes for an account, clears any
+lock, and ends every session the user has open, all in one transaction.
+Afterwards the password alone signs in — this is the recovery path when a user
+loses their authenticator and there is no email to send a reset to.
+
+```bash
+docker compose exec api tradr disable-2fa someone@example.com
+```
+
+**Expected result:** exit code 0, reporting that two-factor was disabled and
+all sessions ended. If the account has no two-factor enabled it changes nothing
+and says so.
 
 It exits 1 when no account matches the email, and 2 when it cannot reach the
 database.

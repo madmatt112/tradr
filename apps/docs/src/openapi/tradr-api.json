@@ -909,7 +909,7 @@
     },
     "/api/auth/login": {
       "post": {
-        "description": "Public. On success sets the `session` cookie; every authenticated endpoint reads it. Rate limited to 10 requests per 15 minutes per client, tightening to 5 while the shared rate-limit store is unavailable. A wrong email and a wrong password are answered identically, so the response does not reveal whether an address is registered. A user may hold 5 concurrent sessions; signing in a sixth time ends the oldest one.\n",
+        "description": "Public. On a password-only account a correct sign-in sets the `session` cookie; every authenticated endpoint reads it. When two-factor is enabled the correct password instead returns `202` with a single-use `challenge` and NO cookie — the caller answers that challenge with the current code to finish signing in. Rate limited to 10 requests per 15 minutes per client, tightening to 5 while the shared rate-limit store is unavailable. A wrong email and a wrong password are answered identically, so the response does not reveal whether an address is registered. After too many failed sign-ins the address is temporarily locked and every attempt — even with the correct password — is refused `429 ACCOUNT_LOCKED` with `Retry-After`, whether or not an account exists for it. A user may hold 5 concurrent sessions; signing in a sixth time ends the oldest one.\n",
         "requestBody": {
           "content": {
             "application/json": {
@@ -967,6 +967,24 @@
             },
             "description": "The signed-in user. The `session` cookie is set."
           },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "challenge": {
+                      "type": "string"
+                    },
+                    "twoFactorRequired": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Two-factor is enabled on the account. No session is started and no cookie is set; the body carries a single-use challenge to answer with the current two-factor code.\n"
+          },
           "400": {
             "description": "Validation error."
           },
@@ -974,10 +992,88 @@
             "description": "Invalid email or password."
           },
           "429": {
-            "description": "Rate limit exceeded."
+            "description": "Rate limit exceeded, or the address is temporarily locked after too many failed sign-ins (`ACCOUNT_LOCKED`)."
           }
         },
         "summary": "Sign in and start a session.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/login/two-factor": {
+      "post": {
+        "description": "Public. Answers the single-use `challenge` from a `202` login response with the current authenticator code or an unused backup code. On success the `session` cookie is set, exactly as a password-only login, and the body carries the signed-in user. Rate limited to 10 requests per 15 minutes per client, tightening to 5 while the shared rate-limit store is unavailable. A valid TOTP code and a backup code are each single-use. A wrong code is refused `400 INVALID_TWO_FACTOR_CODE` and counts toward the per-address lock; an expired, already-used or over-attempted challenge is `400 CHALLENGE_EXPIRED`; a locked address is refused `429 ACCOUNT_LOCKED` with `Retry-After`. If the stored secret cannot be decrypted the step fails closed with `500 TWO_FACTOR_UNAVAILABLE` and never falls back to the password alone.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "challenge": {
+                    "description": "The single-use challenge from the login `202` response.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "code": {
+                    "description": "A 6-digit authenticator code or a backup code.",
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "challenge",
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "user": {
+                      "properties": {
+                        "email": {
+                          "format": "email",
+                          "type": "string"
+                        },
+                        "emailVerified": {
+                          "type": "boolean"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "isAdmin": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The signed-in user. The `session` cookie is set."
+          },
+          "400": {
+            "description": "Validation error, CHALLENGE_EXPIRED (dead challenge), or INVALID_TWO_FACTOR_CODE (wrong code)."
+          },
+          "429": {
+            "description": "Rate limit exceeded, or the address is temporarily locked (`ACCOUNT_LOCKED`)."
+          },
+          "500": {
+            "description": "The stored two-factor secret could not be decrypted (`TWO_FACTOR_UNAVAILABLE`); sign-in fails closed."
+          }
+        },
+        "summary": "Finish signing in with a two-factor code.",
         "tags": [
           "Auth"
         ]
@@ -1218,6 +1314,295 @@
           }
         },
         "summary": "Create an account and start a session.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor": {
+      "get": {
+        "description": "Returns `{ enabled }` — `true` once an enrolment has been confirmed, `false` otherwise (including a started-but-unconfirmed enrolment). Requires an authenticated session. Read-only and side-effect-free.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The two-factor status."
+          },
+          "401": {
+            "description": "No authenticated session."
+          }
+        },
+        "summary": "Whether two-factor is enabled for the signed-in user.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/backup-codes": {
+      "post": {
+        "description": "Validates a current authenticator `code` (a backup code is NOT accepted here), then replaces every earlier backup code with 10 fresh single-use ones, shown once and stored only as one-way hashes. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "backupCodes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The 10 new single-use backup codes, shown once."
+          },
+          "400": {
+            "description": "Validation error, or the code is wrong (`INVALID_TWO_FACTOR_CODE`)."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Regenerate backup codes.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/disable": {
+      "post": {
+        "description": "Requires the account `password` AND a valid authenticator `code` or an unused backup code. On success deletes the secret and every backup code, so the account signs in with the password alone again. A wrong password or code is a single `400 INVALID_CREDENTIALS` that does not reveal which failed. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  },
+                  "password": {
+                    "maxLength": 72,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "password",
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Two-factor is now off."
+          },
+          "400": {
+            "description": "Validation error, or the password or code is wrong (`INVALID_CREDENTIALS`)."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Turn two-factor off.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/enrol": {
+      "post": {
+        "description": "Generates a fresh TOTP secret (at least 160 bits), stores it only as an encryption envelope in a pending row and returns the base32 `secret` and its `otpauth://` URI once, for display as a text key and a QR code. Nothing turns on until `POST /two-factor/enrol/confirm` accepts a code. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "otpauthUri": {
+                      "description": "The otpauth:// provisioning URI for a QR code.",
+                      "type": "string"
+                    },
+                    "secret": {
+                      "description": "The base32 TOTP secret (text key).",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The enrolment secret and provisioning URI."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "409": {
+            "description": "Two-factor is already enabled (`TWO_FACTOR_ALREADY_ENABLED`)."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Begin two-factor enrolment.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/two-factor/enrol/confirm": {
+      "post": {
+        "description": "Validates the submitted authenticator `code` against the pending secret, then turns two-factor on, shows 10 single-use backup codes once (stored only as one-way hashes) and ends every other session of the user, keeping the current one. Requires an authenticated session; rate limited to 10 management writes per 15 minutes per user; never cached.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "code": {
+                    "maxLength": 20,
+                    "minLength": 6,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "backupCodes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The 10 single-use backup codes, shown once."
+          },
+          "400": {
+            "description": "Validation error, or the code is wrong (`INVALID_TWO_FACTOR_CODE`)."
+          },
+          "401": {
+            "description": "No authenticated session."
+          },
+          "409": {
+            "description": "No pending enrolment to confirm (`TWO_FACTOR_NOT_PENDING`)."
+          },
+          "429": {
+            "description": "Rate limit exceeded."
+          }
+        },
+        "summary": "Confirm two-factor enrolment with a code.",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/api/auth/unlock": {
+      "post": {
+        "description": "Public. Rate limited by client IP (10 / 15 min, the login posture — token guessing is primarily throttled by the token's 256-bit entropy + 15 min TTL), tightening to 5 while the shared rate-limit store is unavailable. Atomically consumes the single-use `account_unlock` token and clears the per-address lock for its owner. Expired, already-consumed, unrecognized, and wrong-purpose tokens are indistinguishable: one generic 400 INVALID_OR_EXPIRED_TOKEN. An unlock for an address that is no longer locked still returns 200 — the token was spent. Sends no mail and stays functional when the instance has no email configured.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "token": {
+                    "description": "The raw token from the emailed link's URL fragment.",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ success: true } — the lock (if any) was cleared."
+          },
+          "400": {
+            "description": "Validation error, or INVALID_OR_EXPIRED_TOKEN (expired / consumed / unknown / wrong purpose — one generic body)."
+          },
+          "429": {
+            "description": "Rate limit reached (IP-keyed)."
+          }
+        },
+        "summary": "Clear an account lockout with an emailed unlock token.",
         "tags": [
           "Auth"
         ]

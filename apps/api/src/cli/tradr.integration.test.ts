@@ -38,9 +38,17 @@ import * as dbModule from '@/db';
 import { MIGRATIONS_LOCK_KEY, POST_MIGRATIONS_LOCK_KEY } from '@/db/migrate';
 import * as schema from '@/db/schema';
 import { loginUser } from '@/features/auth/auth.service';
+import { lockoutKey } from '@/features/auth/lockout';
 import { config } from '@/lib/config';
 
-import { createUser, gatherStatus, resetPassword, runCreateUser } from './tradr';
+import {
+  createUser,
+  disableTwoFactor,
+  gatherStatus,
+  resetPassword,
+  runCreateUser,
+  unlockAddress,
+} from './tradr';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_FOLDER = path.resolve(__dirname, '../db/migrations');
@@ -516,7 +524,10 @@ describe('REQ-8.3 — create-user makes an account that logs in through the real
       // clears it after, so nothing leaks to a sibling test.
       (dbModule as Record<string, unknown>).db = scratchDb;
 
-      const { user, token } = await loginUser(email, 'a-real-password-123');
+      const result = await loginUser(email, 'a-real-password-123');
+      // A CLI-created account has no two-factor, so login step one is a session.
+      if (result.kind !== 'session') throw new Error('expected a session');
+      const { user, token } = result;
       expect(user.email).toBe(email);
       expect(token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -683,7 +694,9 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
       expect(await run([email, '--password', 'a-real-password-123'])).toBe(0);
 
       (dbModule as Record<string, unknown>).db = scratchDb;
-      const { user, token } = await loginUser(email, 'a-real-password-123');
+      const result = await loginUser(email, 'a-real-password-123');
+      if (result.kind !== 'session') throw new Error('expected a session');
+      const { user, token } = result;
       expect(user.email).toBe(email);
       expect(token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -714,10 +727,298 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
       expect(password).toMatch(/^[A-Za-z0-9_-]+$/);
 
       (dbModule as Record<string, unknown>).db = scratchDb;
-      const { user } = await loginUser(email, password);
+      const result = await loginUser(email, password);
+      if (result.kind !== 'session') throw new Error('expected a session');
+      const { user } = result;
       expect(user.email).toBe(email);
     } finally {
       log.mockRestore();
+      await sql.end();
+    }
+  });
+});
+
+/**
+ * Req 4.1, 4.3 — `unlockAddress` clears the counter and lock for an address and
+ * nothing else, exiting 0 whether it found something to clear or not, 1 only
+ * when neither an account nor a lock exists for the address, and letting a
+ * connection failure propagate (mapped to exit 2 by the CLI entry point).
+ */
+describe('Req 4.1 / 4.3 — tradr unlock clears the counter and lock for an address', () => {
+  const DB = `tradr_test_cli_unlock_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  async function insertUser(sql: postgres.Sql, email: string): Promise<void> {
+    const hash = await bcrypt.hash('whatever-123', 10);
+    await sql`INSERT INTO users (email, password_hash) VALUES (${email}, ${hash})`;
+  }
+
+  async function insertLockRow(sql: postgres.Sql, email: string): Promise<string> {
+    const keyHash = lockoutKey(email);
+    const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+    await sql`
+      INSERT INTO login_lockouts (key_hash, failure_count, window_started_at, locked_until)
+      VALUES (${keyHash}, 10, now(), ${lockedUntil})
+    `;
+    return keyHash;
+  }
+
+  async function lockRowCount(sql: postgres.Sql, keyHash: string): Promise<string> {
+    const [row] = await sql<{ count: string }[]>`
+      SELECT count(*)::text AS count FROM login_lockouts WHERE key_hash = ${keyHash}
+    `;
+    return row.count;
+  }
+
+  it('clears an existing lock for an account that exists, reporting "cleared"', async () => {
+    const sql = client(url);
+    try {
+      const email = 'locked-account@example.com';
+      await insertUser(sql, email);
+      const keyHash = await insertLockRow(sql, email);
+
+      const result = await unlockAddress(sql, email);
+
+      expect(result).toBe('cleared');
+      expect(await lockRowCount(sql, keyHash)).toBe('0');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('reports "no-lock" for an account that exists but has no lock', async () => {
+    const sql = client(url);
+    try {
+      const email = 'unlocked-account@example.com';
+      await insertUser(sql, email);
+
+      const result = await unlockAddress(sql, email);
+
+      expect(result).toBe('no-lock');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('clears the lock for an address with no account, reporting "cleared"', async () => {
+    const sql = client(url);
+    try {
+      const email = 'no-account-but-locked@example.com';
+      const keyHash = await insertLockRow(sql, email);
+
+      const result = await unlockAddress(sql, email);
+
+      expect(result).toBe('cleared');
+      expect(await lockRowCount(sql, keyHash)).toBe('0');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('reports "unknown" when neither an account nor a lock exists for the address', async () => {
+    const sql = client(url);
+    try {
+      const result = await unlockAddress(sql, 'never-seen@example.com');
+      expect(result).toBe('unknown');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('propagates a connection failure rather than swallowing it (the CLI entry point maps this to exit 2)', async () => {
+    const badSql = postgres('postgresql://postgres:postgres@127.0.0.1:1/doesnotexist', {
+      max: 1,
+      connect_timeout: 2,
+      onnotice: () => {},
+    });
+    try {
+      await expect(unlockAddress(badSql, 'anyone@example.com')).rejects.toThrow();
+    } finally {
+      await badSql.end({ timeout: 1 });
+    }
+  }, 10_000);
+});
+
+/**
+ * Req 4.2, 4.3, D17 — `disableTwoFactor` removes the second factor and ends
+ * every session for the user in one transaction, exiting 0 whether it found
+ * something to disable or not, and 1 only when no account exists. The
+ * "not-enabled" branch changes nothing (D17: "nothing to do" means no side
+ * effect) — proven here by a session row left untouched.
+ */
+describe('Req 4.2 / 4.3 / D17 — tradr disable-2fa removes the second factor and ends sessions', () => {
+  const DB = `tradr_test_cli_disable2fa_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  async function insertUser(sql: postgres.Sql, email: string): Promise<string> {
+    const hash = await bcrypt.hash('whatever-123', 10);
+    const [row] = await sql<{ id: string }[]>`
+      INSERT INTO users (email, password_hash) VALUES (${email}, ${hash}) RETURNING id
+    `;
+    return row.id;
+  }
+
+  async function enableTwoFactor(sql: postgres.Sql, userId: string): Promise<void> {
+    await sql`
+      INSERT INTO user_two_factor (user_id, secret_envelope, enabled_at)
+      VALUES (${userId}, 'envelope', now())
+    `;
+    await sql`
+      INSERT INTO user_backup_codes (user_id, code_hash) VALUES (${userId}, ${'a'.repeat(64)})
+    `;
+  }
+
+  async function insertSession(
+    sql: postgres.Sql,
+    userId: string,
+    tokenHash: string,
+  ): Promise<void> {
+    await sql`
+      INSERT INTO sessions (user_id, token_hash, expires_at)
+      VALUES (${userId}, ${tokenHash}, now() + interval '1 day')
+    `;
+  }
+
+  async function rowCounts(
+    sql: postgres.Sql,
+    userId: string,
+  ): Promise<{ twoFactor: string; codes: string; sessions: string }> {
+    const [row] = await sql<{ two_factor: string; codes: string; sessions: string }[]>`
+      SELECT
+        (SELECT count(*) FROM user_two_factor WHERE user_id = ${userId})::text AS two_factor,
+        (SELECT count(*) FROM user_backup_codes WHERE user_id = ${userId})::text AS codes,
+        (SELECT count(*) FROM sessions WHERE user_id = ${userId})::text AS sessions
+    `;
+    return { twoFactor: row.two_factor, codes: row.codes, sessions: row.sessions };
+  }
+
+  it('deletes the two-factor row, backup codes, lock and every session, reporting "disabled"', async () => {
+    const sql = client(url);
+    try {
+      const email = 'two-factor-on@example.com';
+      const userId = await insertUser(sql, email);
+      await enableTwoFactor(sql, userId);
+      await insertSession(sql, userId, 'a'.repeat(128));
+      await insertSession(sql, userId, 'b'.repeat(128));
+      const keyHash = lockoutKey(email);
+      await sql`
+        INSERT INTO login_lockouts (key_hash, failure_count, window_started_at, locked_until)
+        VALUES (${keyHash}, 10, now(), now() + interval '15 minutes')
+      `;
+
+      const result = await disableTwoFactor(sql, email);
+
+      expect(result).toBe('disabled');
+      const counts = await rowCounts(sql, userId);
+      expect(counts.twoFactor).toBe('0');
+      expect(counts.codes).toBe('0');
+      expect(counts.sessions).toBe('0');
+      const [lockRow] = await sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM login_lockouts WHERE key_hash = ${keyHash}
+      `;
+      expect(lockRow.count).toBe('0');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('changes nothing and reports "not-enabled" when two-factor is off', async () => {
+    const sql = client(url);
+    try {
+      const email = 'two-factor-off@example.com';
+      const userId = await insertUser(sql, email);
+      await insertSession(sql, userId, 'c'.repeat(128));
+
+      const result = await disableTwoFactor(sql, email);
+
+      expect(result).toBe('not-enabled');
+      // The pre-existing session survives untouched — the "no side effect" half
+      // of D17, not just the label on the return value.
+      const counts = await rowCounts(sql, userId);
+      expect(counts.sessions).toBe('1');
+    } finally {
+      await sql.end();
+    }
+  });
+
+  it('reports "no-account" for an email with no account', async () => {
+    const sql = client(url);
+    try {
+      const result = await disableTwoFactor(sql, 'never-registered@example.com');
+      expect(result).toBe('no-account');
+    } finally {
+      await sql.end();
+    }
+  });
+});
+
+/**
+ * Req 4.4, 2.10 — `resetPassword`'s transaction also clears the counter and
+ * lock (4.4), and never turns two-factor off (2.10): a password reset is not
+ * a second-factor removal.
+ */
+describe('Req 4.4 / 2.10 — reset-password clears the lock and keeps two-factor on', () => {
+  const DB = `tradr_test_cli_resetpw_2fa_${Date.now()}`;
+  let url: string;
+
+  beforeAll(async () => {
+    url = await createScratchDb(DB);
+    await applyStandardMigrations(url);
+  });
+
+  afterAll(async () => {
+    await dropScratchDb(DB);
+  });
+
+  it('clears the lockout row and leaves two-factor enabled', async () => {
+    const sql = client(url);
+    try {
+      const email = 'reset-with-2fa@example.com';
+      const oldHash = await bcrypt.hash('old-password-123', 10);
+      const [user] = await sql<{ id: string }[]>`
+        INSERT INTO users (email, password_hash) VALUES (${email}, ${oldHash}) RETURNING id
+      `;
+      await sql`
+        INSERT INTO user_two_factor (user_id, secret_envelope, enabled_at)
+        VALUES (${user.id}, 'envelope', now())
+      `;
+      const keyHash = lockoutKey(email);
+      await sql`
+        INSERT INTO login_lockouts (key_hash, failure_count, window_started_at, locked_until)
+        VALUES (${keyHash}, 10, now(), now() + interval '15 minutes')
+      `;
+
+      const found = await resetPassword(sql, email, 'brand-new-password');
+      expect(found).toBe(true);
+
+      const [lockRow] = await sql<{ count: string }[]>`
+        SELECT count(*)::text AS count FROM login_lockouts WHERE key_hash = ${keyHash}
+      `;
+      expect(lockRow.count).toBe('0');
+
+      const [tf] = await sql<{ enabled_at: Date | null }[]>`
+        SELECT enabled_at FROM user_two_factor WHERE user_id = ${user.id}
+      `;
+      expect(tf.enabled_at).not.toBeNull();
+    } finally {
       await sql.end();
     }
   });

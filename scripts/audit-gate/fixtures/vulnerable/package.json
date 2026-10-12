@@ -1,0 +1,8 @@
+{
+  "name": "audit-gate-fixture-vulnerable",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "tar": "6.2.1"
+  }
+}

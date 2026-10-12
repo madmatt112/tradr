@@ -59,9 +59,44 @@ export const UserSchema = z.object({
   emailVerified: z.boolean(),
 });
 
+// A two-factor code, in ONE place: a 6-digit TOTP or a longer backup recovery
+// code. Trimmed so a value pasted with surrounding whitespace still validates;
+// the 6-20 range spans both the TOTP and the backup codes.
+export const TwoFactorCodeField = z.string().trim().min(6).max(20);
+
+// Second step of login: the server-issued challenge token plus the code.
+export const LoginTwoFactorSchema = z.object({
+  challenge: TokenField,
+  code: TwoFactorCodeField,
+});
+
+// Confirm or regenerate from an already-authenticated session: code only.
+export const TwoFactorCodeSchema = z.object({
+  code: TwoFactorCodeField,
+});
+
+// Turning two-factor off re-checks the password alongside a current code.
+export const TwoFactorDisableSchema = z.object({
+  password: PasswordField,
+  code: TwoFactorCodeField,
+});
+
+// Clearing an account lockout from the emailed unlock link.
+export const UnlockAccountSchema = z.object({
+  token: TokenField,
+});
+
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type PasswordResetRequestInput = z.infer<typeof PasswordResetRequestSchema>;
 export type PasswordResetCompleteInput = z.infer<typeof PasswordResetCompleteSchema>;
 export type VerifyEmailInput = z.infer<typeof VerifyEmailSchema>;
 export type User = z.infer<typeof UserSchema>;
+export type LoginTwoFactorInput = z.infer<typeof LoginTwoFactorSchema>;
+export type TwoFactorCodeInput = z.infer<typeof TwoFactorCodeSchema>;
+export type TwoFactorDisableInput = z.infer<typeof TwoFactorDisableSchema>;
+export type UnlockAccountInput = z.infer<typeof UnlockAccountSchema>;
+
+// Login either completes (returns the user) or demands a second factor, in
+// which case the server returns a challenge the client echoes to /login/two-factor.
+export type LoginResponse = { user: User } | { twoFactorRequired: true; challenge: string };

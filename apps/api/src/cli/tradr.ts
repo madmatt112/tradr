@@ -20,6 +20,7 @@ import {
   POST_MIGRATIONS_LOCK_KEY,
 } from '@/db/migrate';
 import { hashPassword } from '@/features/auth/auth.service';
+import { lockoutKey } from '@/features/auth/lockout';
 import { config, isEmailConfigured } from '@/lib/config';
 
 import { runStorageGc, runStorageMigrateToInline } from './storage-maintenance.service';
@@ -363,13 +364,17 @@ export function validatePassword(password: string): string | undefined {
  * caller-supplied connection so it is real-Postgres testable (like gatherStatus).
  *
  * ONE transaction (D15): plain SELECT id (deliberately no FOR UPDATE — keeps
- * the lock order clean) → DELETE outstanding `password_reset` tokens → UPDATE
- * password_hash. Atomic, so no window exists in which a live emailed reset
- * token can overwrite the operator's just-set password (REQ-4.4). Lock order
- * email_tokens → users (alphabetical) matches D8's completion transaction — no
- * AB/BA pair. Deliberately does NOT mark the account verified (REQ-6.5 pinned
- * NO — a command proves nothing about the mailbox) and does NOT revoke
- * sessions (pre-existing asymmetry with D8).
+ * the lock order clean) → DELETE outstanding `password_reset` tokens → DELETE
+ * the lockout row → UPDATE password_hash. Atomic, so no window exists in which a
+ * live emailed reset token can overwrite the operator's just-set password
+ * (REQ-4.4). The same transaction clears the sign-in counter and lock for the
+ * address (REQ-4.4), so a reset also releases a locked account; `lockoutKey`
+ * normalises the address itself, so a mixed-case argument still hits the right
+ * row. Lock order email_tokens → login_lockouts → users (alphabetical) matches
+ * D8's completion transaction — no AB/BA pair. Deliberately does NOT turn
+ * two-factor off (REQ-2.10 — a reset is not a second-factor removal), does NOT
+ * mark the account verified (REQ-6.5 pinned NO — a command proves nothing about
+ * the mailbox) and does NOT revoke sessions (pre-existing asymmetry with D8).
  */
 export async function resetPassword(
   sql: postgres.Sql,
@@ -390,6 +395,9 @@ export async function resetPassword(
     if (userId === undefined) return false;
     await tx`
       DELETE FROM email_tokens WHERE user_id = ${userId} AND purpose = 'password_reset'
+    `;
+    await tx`
+      DELETE FROM login_lockouts WHERE key_hash = ${lockoutKey(email)}
     `;
     const updated = await tx<{ id: string }[]>`
       UPDATE users SET password_hash = ${passwordHash} WHERE id = ${userId} RETURNING id
@@ -564,6 +572,164 @@ export async function runCreateUser(argv: string[]): Promise<number> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Email-free recovery (REQ-4, design C7): unlock an address and remove a lost
+// second factor from the server shell, no delivery channel required.
+// ---------------------------------------------------------------------------
+
+export interface EmailArg {
+  email?: string;
+  error?: string;
+}
+
+/**
+ * Parse the one-argument grammar `unlock` and `disable-2fa` share (design C7):
+ * exactly one positional address, normalised through `normalizeEmail`. No
+ * `--password` or any other flag applies to either command, so a flag — or a
+ * second argument — is an error. Pure (no IO) so the dispatch is unit-testable.
+ */
+export function parseEmailArg(args: string[]): EmailArg {
+  if (args.length === 0) return { error: 'An email is required' };
+  if (args.length > 1) return { error: 'Expected exactly one email argument' };
+  const raw = args[0];
+  if (raw.startsWith('-')) return { error: `Unexpected argument: ${raw}` };
+  const email = normalizeEmail(raw);
+  if (email === undefined) return { error: `Not a valid email address: ${raw}` };
+  return { email };
+}
+
+/**
+ * Clear the sign-in counter and lock for `email` and nothing else (REQ-4.1).
+ * The `login_lockouts` row holds both the failure count and the lock, so one
+ * DELETE clears both; `lockoutKey` normalises the address, so the row is found
+ * whatever the argument's case. Returns which of the three states applied:
+ *   - `cleared`  — a lock row existed (with or without an account) and is gone,
+ *   - `no-lock`  — an account exists but had no lock,
+ *   - `unknown`  — neither an account nor a lock exists (REQ-4.3 exit 1).
+ * Takes a caller-supplied connection so it is real-Postgres testable, and lets
+ * a connection failure propagate (the entry point maps it to exit 2).
+ */
+export async function unlockAddress(
+  sql: postgres.Sql,
+  email: string,
+): Promise<'cleared' | 'no-lock' | 'unknown'> {
+  const cleared = await sql<{ key_hash: string }[]>`
+    DELETE FROM login_lockouts WHERE key_hash = ${lockoutKey(email)} RETURNING key_hash
+  `;
+  if (cleared.length > 0) return 'cleared';
+  const users = await sql<{ id: string }[]>`
+    SELECT id FROM users WHERE email = ${email}
+  `;
+  return users.length > 0 ? 'no-lock' : 'unknown';
+}
+
+/**
+ * Remove a lost second factor so the password alone signs in again (REQ-4.2).
+ * In ONE transaction: look up the account, and when two-factor is enabled
+ * (`enabled_at IS NOT NULL` — the codebase's definition of enabled, so a bare
+ * pending enrolment never gates login and counts as off) delete the two-factor
+ * row, the backup codes, the lock and every session for the user. Returns:
+ *   - `disabled`     — an enabled second factor was removed and sessions ended,
+ *   - `not-enabled`  — the account exists but two-factor is off; nothing is
+ *                      changed (D17: "nothing to do" means no side effect),
+ *   - `no-account`   — no account for the address (REQ-4.3 exit 1).
+ * Takes a caller-supplied connection; a connection failure propagates (exit 2).
+ */
+export async function disableTwoFactor(
+  sql: postgres.Sql,
+  email: string,
+): Promise<'disabled' | 'not-enabled' | 'no-account'> {
+  return sql.begin(async (txRaw) => {
+    // Same postgres.js 3.4 TransactionSql cast as resetPassword.
+    const tx = txRaw as unknown as postgres.Sql;
+    const users = await tx<{ id: string }[]>`
+      SELECT id FROM users WHERE email = ${email}
+    `;
+    const userId = users[0]?.id;
+    if (userId === undefined) return 'no-account';
+    const enabled = await tx<{ user_id: string }[]>`
+      SELECT user_id FROM user_two_factor
+      WHERE user_id = ${userId} AND enabled_at IS NOT NULL
+    `;
+    if (enabled.length === 0) return 'not-enabled';
+    // Alphabetical write order (login_lockouts → sessions → user_backup_codes →
+    // user_two_factor) keeps the lock acquisition clean.
+    await tx`DELETE FROM login_lockouts WHERE key_hash = ${lockoutKey(email)}`;
+    await tx`DELETE FROM sessions WHERE user_id = ${userId}`;
+    await tx`DELETE FROM user_backup_codes WHERE user_id = ${userId}`;
+    await tx`DELETE FROM user_two_factor WHERE user_id = ${userId}`;
+    return 'disabled';
+  });
+}
+
+export async function runUnlock(argv: string[]): Promise<number> {
+  const parsed = parseEmailArg(argv);
+  if (parsed.error || !parsed.email) {
+    console.error(parsed.error ?? 'An email is required');
+    console.error('Usage: tradr unlock <email>');
+    return 2;
+  }
+  // Pooler-safe one-shot connection, matching runResetPassword.
+  const sql = postgres(config.DIRECT_DATABASE_URL ?? config.DATABASE_URL, {
+    max: 1,
+    prepare: false,
+    onnotice: () => {},
+  });
+  try {
+    const result = await unlockAddress(sql, parsed.email);
+    if (result === 'unknown') {
+      console.error(`No account or lockout found for ${parsed.email}.`);
+      return 1;
+    }
+    if (result === 'cleared') {
+      console.log(`Cleared the lockout for ${parsed.email}.`);
+    } else {
+      console.log(`No lockout for ${parsed.email}.`);
+    }
+    return 0;
+  } catch (err) {
+    console.error('Cannot connect to the database.');
+    console.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  } finally {
+    await sql.end();
+  }
+}
+
+export async function runDisableTwoFactor(argv: string[]): Promise<number> {
+  const parsed = parseEmailArg(argv);
+  if (parsed.error || !parsed.email) {
+    console.error(parsed.error ?? 'An email is required');
+    console.error('Usage: tradr disable-2fa <email>');
+    return 2;
+  }
+  // Pooler-safe one-shot connection, matching runResetPassword.
+  const sql = postgres(config.DIRECT_DATABASE_URL ?? config.DATABASE_URL, {
+    max: 1,
+    prepare: false,
+    onnotice: () => {},
+  });
+  try {
+    const result = await disableTwoFactor(sql, parsed.email);
+    if (result === 'no-account') {
+      console.error(`No account found for ${parsed.email}.`);
+      return 1;
+    }
+    if (result === 'disabled') {
+      console.log(`Two-factor disabled for ${parsed.email}. All sessions ended.`);
+    } else {
+      console.log(`Two-factor is not enabled for ${parsed.email}. Nothing changed.`);
+    }
+    return 0;
+  } catch (err) {
+    console.error('Cannot connect to the database.');
+    console.error(err instanceof Error ? err.message : String(err));
+    return 2;
+  } finally {
+    await sql.end();
+  }
+}
+
 const USAGE = [
   'Usage:',
   '  tradr migrate --status',
@@ -571,6 +737,8 @@ const USAGE = [
   '  tradr storage gc',
   '  tradr create-user <email> [--password <value>]',
   '  tradr reset-password <email> [--password <value>]',
+  '  tradr unlock <email>',
+  '  tradr disable-2fa <email>',
 ];
 
 /**
@@ -609,6 +777,14 @@ async function main(): Promise<number> {
   }
   if (args[0] === 'reset-password') {
     return runResetPassword(args.slice(1));
+  }
+  // Ungated like create-user/reset-password (REQ-4.6): recovery from the shell
+  // must work on an instance with registration closed.
+  if (args[0] === 'unlock') {
+    return runUnlock(args.slice(1));
+  }
+  if (args[0] === 'disable-2fa') {
+    return runDisableTwoFactor(args.slice(1));
   }
   usage();
   return 2;

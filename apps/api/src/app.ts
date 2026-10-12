@@ -18,6 +18,8 @@ import { initProviderRegistry } from '@/features/advisor/providers/registry';
 import { applyBuiltinPersonaOverrides, runDecryptCanary } from '@/features/advisor/startup';
 import auth, { userPreferencesRouter } from '@/features/auth/auth.route';
 import passwordResetRouter from '@/features/auth/password-reset.route';
+import twoFactorLoginRouter from '@/features/auth/two-factor.route';
+import unlockRouter from '@/features/auth/unlock.route';
 import verificationRouter from '@/features/auth/verification.route';
 import { billingRouter, billingWebhookRouter } from '@/features/billing/billing.route';
 import brokeragesRouter from '@/features/brokerages/brokerages.route';
@@ -59,6 +61,7 @@ import { csrfMiddleware } from '@/middleware/csrf.middleware';
 import { errorHandler } from '@/middleware/error.middleware';
 import { loggingMiddleware } from '@/middleware/logging.middleware';
 import { metricsMiddleware } from '@/middleware/metrics.middleware';
+import { securityHeadersMiddleware } from '@/middleware/security-headers.middleware';
 
 const app = new Hono();
 
@@ -97,6 +100,11 @@ if (isMetricsConfigured()) app.use(metricsMiddleware);
 // mutating route (stream POST, auth, accounts, admin, …); the Stripe webhook is
 // path-exempt inside csrfMiddleware. CORS runs first so a rejected cross-origin
 // request can still be read by the browser.
+// Security headers (REQ-5, design C9) on every response. Mounted before CORS so
+// the pinned header set covers a rejected cross-origin request too; hono sets
+// them after next(), so a 200, a 404, a thrown AppError and the CSRF 403 all
+// carry them.
+app.use(securityHeadersMiddleware());
 app.use(corsMiddleware);
 app.use(csrfMiddleware);
 
@@ -117,6 +125,14 @@ app.route('/api/auth', passwordResetRouter);
 // Email verification: a THIRD router on the same /api/auth base (same
 // precedent) — verify-email is public, verify-email/resend is authed (D11).
 app.route('/api/auth', verificationRouter);
+// Two-factor second step: a FOURTH router on the same /api/auth base (same
+// precedent) — POST /login/two-factor is public and turns a login challenge
+// into a session (design C4). Mounted after verification per the task order.
+app.route('/api/auth', twoFactorLoginRouter);
+// Account unlock: a FIFTH router on the same /api/auth base (same precedent) —
+// POST /unlock is public and clears a lock from the emailed link (design C6).
+// Mounted after the two-factor router per the task order.
+app.route('/api/auth', unlockRouter);
 app.route('/api/accounts', accounts);
 // Admin: gating (auth → admin → rate limit) is router-level inside adminRouter
 // (admin-platform design Component 1, REQ-1.4).

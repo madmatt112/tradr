@@ -101,6 +101,42 @@ it('reads config.WEB_BASE_URL at call time, never captured at module load (Task 
   );
 });
 
+// account_unlock (Task 5, design C6, Req 4.7, 4.8, 4.10): the unlock email —
+// one link to /unlock-account#token=, stating the 15-minute TTL (D14), with
+// no commercial content. Kept as its own block rather than a PINS entry: the
+// requirements fix the link shape and the 15-minute expiry but not an exact
+// subject/notice wording, so only the sourced facts are pinned here.
+describe('buildEmail(account_unlock)', () => {
+  const message: EmailMessage = { kind: 'account_unlock', rawToken: TOKEN };
+  const LINK = `${BASE}/unlock-account#token=${TOKEN}`;
+
+  it('text and html carry exactly one link, to /unlock-account#token= with the raw token in the fragment', () => {
+    const { text, html } = buildEmail(message);
+    expect(text).toContain(LINK);
+    expect(html).toContain(`href="${LINK}"`);
+  });
+
+  it('states the 15-minute expiry (D14)', () => {
+    const { text, html } = buildEmail(message);
+    expect(text).toMatch(/15\s*minutes?/i);
+    expect(html).toMatch(/15\s*minutes?/i);
+  });
+
+  it('raw token appears nowhere but the link (REQ-3.9 invariant)', () => {
+    const { subject, text, html } = buildEmail(message);
+    expect(subject).not.toContain(TOKEN);
+    expect(text.split(LINK).join('')).not.toContain(TOKEN);
+    expect(html.split(LINK).join('')).not.toContain(TOKEN);
+  });
+
+  it('carries no commercial content: no images, no tracking, no URL other than the link', () => {
+    const { html } = buildEmail(message);
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<script');
+    expect(html.split(LINK).join('')).not.toContain('http');
+  });
+});
+
 // data_export (Req 10.6): the token-free export notice — subject, the export
 // instant in UTC and the change-password notice, with no token, link or image.
 describe('buildEmail(data_export)', () => {

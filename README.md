@@ -54,7 +54,7 @@ cd tradr
 ./docker/quickstart.sh
 ```
 
-The script generates the three required secrets, writes your `.env`, starts the stack,
+The script generates the two required secrets, writes your `.env`, starts the stack,
 and waits for the API to report healthy. It never overwrites an existing `.env`. When it
 finishes, Tradr is on <http://localhost:8080> (override with `WEB_PORT`).
 
@@ -99,13 +99,12 @@ in-product.
 
 ## Configuration
 
-Three values must be set; everything else has a working default. `./docker/quickstart.sh`
-generates all three:
+Two values must be set; everything else has a working default. `./docker/quickstart.sh`
+generates both:
 
 | Variable            | What it is                                                                                                                    |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `POSTGRES_PASSWORD` | Database password. Compose builds the API's `DATABASE_URL` from the `POSTGRES_*` values — do not set `DATABASE_URL` yourself. |
-| `SESSION_SECRET`    | Signs auth session cookies (≥32 chars).                                                                                       |
 | `ENCRYPTION_KEY`    | 32-byte hex key encrypting stored API keys at rest (AES-256-GCM).                                                             |
 
 `ENCRYPTION_KEY_FINGERPRINT` is optional but recommended — it makes a wrong-key boot fail

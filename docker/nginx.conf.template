@@ -25,12 +25,14 @@ server {
         access_log off;
         default_type text/plain;
         add_header Cache-Control "no-store" always;
+        include conf.d/security-headers.inc;
         return 200 "ok\n";
     }
 
     # Runtime config: regenerated each container start, never cached (Req 3.4).
     location = /config.js {
         add_header Cache-Control "no-store" always;
+        include conf.d/security-headers.inc;
     }
 
     # SPA build identity for Prometheus (observability REQ-7.5). Unlike
@@ -45,11 +47,13 @@ server {
     location = /metrics {
         default_type "text/plain; version=0.0.4";
         add_header Cache-Control "no-store" always;
+        include conf.d/security-headers.inc;
     }
 
     # Cloudflare Pages cache policy, shipped in the SPA bundle for hosted deploys.
     # Inert here — nginx has its own rules above — and not served as a file.
     location = /_headers {
+        include conf.d/security-headers.inc;
         return 404;
     }
 
@@ -58,10 +62,12 @@ server {
         types { }
         default_type application/manifest+json;
         add_header Cache-Control "no-cache" always;
+        include conf.d/security-headers.inc;
     }
     # Service worker: must revalidate every load so a new worker is picked up (C4 / Req 4.3).
     location = /sw.js {
         add_header Cache-Control "no-cache" always;
+        include conf.d/security-headers.inc;
     }
 
     # SSE streaming: matches both advisor stream routes
@@ -115,15 +121,18 @@ server {
     # Long-lived, content-hashed build assets (Req 2.4).
     location ~* ^/assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable" always;
+        include conf.d/security-headers.inc;
     }
 
     # SPA fallback (Req 2.3). index.html itself must not be cached so a new
     # deploy is picked up immediately.
     location / {
+        include conf.d/security-headers.inc;
         try_files $uri $uri/ /index.html;
     }
 
     location = /index.html {
         add_header Cache-Control "no-cache" always;
+        include conf.d/security-headers.inc;
     }
 }

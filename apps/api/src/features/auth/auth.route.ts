@@ -155,13 +155,19 @@ auth.post(
  *   post:
  *     summary: Sign in and start a session.
  *     description: >
- *       Public. On success sets the `session` cookie; every authenticated
- *       endpoint reads it. Rate limited to 10 requests per 15 minutes per
- *       client, tightening to 5 while the shared rate-limit store is
+ *       Public. On a password-only account a correct sign-in sets the `session`
+ *       cookie; every authenticated endpoint reads it. When two-factor is
+ *       enabled the correct password instead returns `202` with a single-use
+ *       `challenge` and NO cookie — the caller answers that challenge with the
+ *       current code to finish signing in. Rate limited to 10 requests per 15
+ *       minutes per client, tightening to 5 while the shared rate-limit store is
  *       unavailable. A wrong email and a wrong password are answered
  *       identically, so the response does not reveal whether an address is
- *       registered. A user may hold 5 concurrent sessions; signing in a sixth
- *       time ends the oldest one.
+ *       registered. After too many failed sign-ins the address is temporarily
+ *       locked and every attempt — even with the correct password — is refused
+ *       `429 ACCOUNT_LOCKED` with `Retry-After`, whether or not an account
+ *       exists for it. A user may hold 5 concurrent sessions; signing in a
+ *       sixth time ends the oldest one.
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -188,9 +194,21 @@ auth.post(
  *                     email: { type: string, format: email }
  *                     isAdmin: { type: boolean }
  *                     emailVerified: { type: boolean }
+ *       202:
+ *         description: >
+ *           Two-factor is enabled on the account. No session is started and no
+ *           cookie is set; the body carries a single-use challenge to answer
+ *           with the current two-factor code.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 twoFactorRequired: { type: boolean }
+ *                 challenge: { type: string }
  *       400: { description: Validation error. }
  *       401: { description: Invalid email or password. }
- *       429: { description: Rate limit exceeded. }
+ *       429: { description: "Rate limit exceeded, or the address is temporarily locked after too many failed sign-ins (`ACCOUNT_LOCKED`)." }
  */
 auth.post(
   '/login',
@@ -201,7 +219,16 @@ auth.post(
   validate('json', LoginSchema),
   async (c) => {
     const { email, password } = c.req.valid('json');
-    const { user, token } = await loginUser(email, password);
+    const result = await loginUser(email, password);
+
+    // Two-factor account: no session is started. The body carries a single-use
+    // challenge the client answers with the current code to finish signing in,
+    // and no cookie is set (design D2).
+    if (result.kind === 'challenge') {
+      return c.json({ twoFactorRequired: true, challenge: result.challenge }, 202);
+    }
+
+    const { user, token } = result;
 
     setCookie(c, 'session', token, sessionCookieOptions());
 

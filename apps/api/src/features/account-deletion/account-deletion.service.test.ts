@@ -42,6 +42,8 @@ import {
   walletTransactions,
   wallets,
 } from '@/db/schema';
+import { lockoutKey } from '@/features/auth/lockout';
+import { recordLoginFailure } from '@/features/auth/lockout.query';
 import { logger } from '@/lib/logger';
 
 import * as accountDeletionQuery from './account-deletion.query';
@@ -487,6 +489,29 @@ describe('executeDeletion — cascade', () => {
     expect(tombstone.initiator).toBe('self');
     expect(['free', 'pro']).toContain(tombstone.tier);
     expect(tombstone.purgeOutcome).toBe('not_applicable');
+  });
+
+  // Lockout lifecycle (REQ-3.10, design C16): `login_lockouts` has no FK to
+  // `users` (D3 — it counts failures for unknown addresses too), so the
+  // dynamic FK walk above never reaches this row; it is asserted directly.
+  //
+  // Contract:
+  // - Pre-condition: a `login_lockouts` row exists, keyed to the deleted
+  //   account's address (one recorded failure through the task-4 query).
+  // - Test: `executeDeletion({ userId: user.id, initiator: 'self' })`.
+  // - Observable result: zero `login_lockouts` rows remain for that address's
+  //   key.
+  // - Source of expected value: REQ-3.10 ("remove ... the row for an address
+  //   whose account is deleted").
+  it("removes the lockout row for the deleted account's address", async () => {
+    const user = await seedUser();
+    const key = lockoutKey(user.email);
+    await recordLoginFailure(db, key);
+    expect(await countWhere('login_lockouts', 'key_hash', key)).toBe(1);
+
+    await executeDeletion({ userId: user.id, initiator: 'self' });
+
+    expect(await countWhere('login_lockouts', 'key_hash', key)).toBe(0);
   });
 
   it('answers 404 on a second run and leaves exactly one tombstone', async () => {

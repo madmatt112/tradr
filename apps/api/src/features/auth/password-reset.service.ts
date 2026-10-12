@@ -18,11 +18,14 @@ import { withTransaction } from '@/lib/transaction';
 import {
   deleteAllUserSessions,
   selectUserByEmail,
+  selectUserById,
   updateUserPasswordAndVerify,
 } from './auth.query';
 import { hashPassword } from './auth.service';
 import { consumeEmailToken, deleteEmailTokens } from './email-tokens.query';
 import { IssuanceConflictError, issueEmailToken, RESET_TOKEN_TTL_MS } from './email-tokens.service';
+import { lockoutKey } from './lockout';
+import { clearLockout } from './lockout.query';
 
 /**
  * Handle a reset request for a (schema-normalized) email. Resolves without
@@ -84,6 +87,14 @@ export async function completePasswordReset(token: string, newPassword: string):
     await deleteAllUserSessions(tx, consumed.userId);
     await updateUserPasswordAndVerify(tx, consumed.userId, passwordHash);
     await deleteEmailTokens(tx, consumed.userId, 'password_reset');
+    // Clear the sign-in counter and lock for the account's address (REQ-4.5,
+    // design C16) — a completed reset ends the lock exactly as `tradr
+    // reset-password` does. Two-factor is left untouched (REQ-2.10): this
+    // deletes only the `login_lockouts` row, which has no FK to users.
+    const user = await selectUserById(tx, consumed.userId);
+    if (user) {
+      await clearLockout(tx, lockoutKey(user.email));
+    }
     captureServerEvent('password_reset_completed', { distinctId: consumed.userId });
   });
 }

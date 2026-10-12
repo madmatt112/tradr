@@ -17,6 +17,8 @@ import {
   selectUserEmailById,
 } from '@/features/admin/admin.query';
 import { selectUserById } from '@/features/auth/auth.query';
+import { lockoutKey } from '@/features/auth/lockout';
+import { clearLockout } from '@/features/auth/lockout.query';
 import { getStripeClient } from '@/features/billing/stripe-client';
 import {
   selectBillingCustomerByUser,
@@ -135,6 +137,11 @@ export async function executeDeletion(
         targetEmail: marker,
       });
     }
+    // 8b. Remove the sign-in lockout row for this address (Req 3.10, design
+    //     C16). `login_lockouts` has no FK to users (D3 — it counts failures
+    //     for unknown addresses too), so the cascade below never reaches it;
+    //     the two-factor rows do cascade.
+    await clearLockout(tx, lockoutKey(user.email));
     // 9. The single `DELETE FROM users`; the FK cascade removes every user-keyed
     //    row (rolled-back probe acct-del-cascade-probe3.sh, Postgres 16.15).
     await deleteUserRow(tx, userId);

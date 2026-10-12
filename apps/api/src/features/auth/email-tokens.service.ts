@@ -9,6 +9,7 @@ import { deleteEmailTokens, insertEmailToken, type EmailTokenPurpose } from './e
 // TTLs are code constants, not env vars (D5).
 export const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 60 min
 export const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 h
+export const UNLOCK_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 min (D14)
 
 /**
  * Thrown when issuance loses two consecutive 23505 races on the partial unique

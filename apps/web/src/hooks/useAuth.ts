@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 
-import type { User } from '@tradr/shared';
+import type { LoginResponse, User } from '@tradr/shared';
 
 import {
   api,
@@ -44,6 +44,31 @@ async function fetchMe(opts?: RequestOptions): Promise<User> {
 }
 
 /**
+ * The three steps that BEGIN a client session, shared by every caller that
+ * creates one (`useLogin`'s password-only answer, `useLoginTwoFactor`'s code
+ * answer, and `useRegister`). Order matters: the teardown clears whatever the
+ * tab held for a previous user, the mark re-arms the 401 interception, and the
+ * seed must follow the clear or it would be taken out with the old user's rows.
+ */
+function startClientSession(queryClient: QueryClient, user: User) {
+  // A LOGIN BEGINS FROM CLEAN CLIENT STATE, whatever was on the tab before it.
+  // /login no longer bounces an authenticated visitor to /dashboard — that
+  // guard is what made a public page mount the me-query and redirect itself
+  // away on a cold load — so a signed-in user can reach this form and sign in
+  // as somebody else. Without the teardown the second user inherits the first
+  // one's cached rows, drawer state and walkthrough. This is the same teardown
+  // the logout and expiry paths run; the seeding below has to follow it, or the
+  // clear would take the new user with it.
+  clearClientSessionState(queryClient);
+  // The one answer that means a session BEGAN rather than merely exists, so this
+  // is where the 401 interception is re-armed. Seeding the query below means its
+  // `queryFn` may not run again for this session, so the session start is
+  // declared from the answer that established it.
+  markSessionStarted();
+  queryClient.setQueryData(['auth', 'me'], user);
+}
+
+/**
  * The login mutation ALONE, without the `['auth','me']` query `useAuth` mounts
  * beside it.
  *
@@ -55,29 +80,43 @@ async function fetchMe(opts?: RequestOptions): Promise<User> {
  * begin one; it must not also ask whether one already exists.
  *
  * routes/__tests__/public-routes-cold-load.test.tsx enforces this.
+ *
+ * TWO-FACTOR: a 2FA account's correct password answers with a challenge and NO
+ * session (`{ twoFactorRequired: true }`, 202), so the post-login steps run only
+ * when the answer carries a `user`. The challenge answer is handed straight back
+ * to the caller (login.tsx reads it to show the code field); only the code step
+ * that follows, through `useLoginTwoFactor`, may begin the session (Req 2.7).
  */
 export function useLogin() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (credentials: { email: string; password: string }) =>
-      api.post<{ user: User }>('/auth/login', credentials),
+      api.post<LoginResponse>('/auth/login', credentials),
     onSuccess: (data) => {
-      // A LOGIN BEGINS FROM CLEAN CLIENT STATE, whatever was on the tab before
-      // it. /login no longer bounces an authenticated visitor to /dashboard —
-      // that guard is what made a public page mount the me-query and redirect
-      // itself away on a cold load — so a signed-in user can reach this form
-      // and sign in as somebody else. Without the teardown the second user
-      // inherits the first one's cached rows, drawer state and walkthrough.
-      // This is the same teardown the logout and expiry paths run; the seeding
-      // below has to follow it, or the clear would take the new user with it.
-      clearClientSessionState(queryClient);
-      // The one answer that means a session BEGAN rather than merely exists, so
-      // this is where the 401 interception is re-armed. Seeding the query below
-      // means its `queryFn` may not run again for this session, so the session
-      // start is declared from the answer that established it.
-      markSessionStarted();
-      queryClient.setQueryData(['auth', 'me'], data.user);
+      if ('user' in data) {
+        startClientSession(queryClient, data.user);
+      }
+    },
+  });
+}
+
+/**
+ * The second sign-in step: echo the login challenge with a TOTP or backup code.
+ *
+ * Like `useLogin` it mounts no `['auth','me']` query (SF-3), and it begins the
+ * client session through the SAME three steps — the code answer is the one that
+ * created a session, so this is where the teardown, re-arm and seed run for a
+ * two-factor account (Req 2.8).
+ */
+export function useLoginTwoFactor() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { challenge: string; code: string }) =>
+      api.post<{ user: User }>('/auth/login/two-factor', input),
+    onSuccess: (data) => {
+      startClientSession(queryClient, data.user);
     },
   });
 }
@@ -109,10 +148,7 @@ export function useRegister() {
     mutationFn: (input: { email: string; password: string; timezone?: string }) =>
       api.post<{ user: User }>('/auth/register', input),
     onSuccess: (data) => {
-      clearClientSessionState(queryClient);
-      markSessionStarted();
-      // After the teardown, or the clear takes the new user out with the old.
-      queryClient.setQueryData(['auth', 'me'], data.user);
+      startClientSession(queryClient, data.user);
     },
   });
 }
