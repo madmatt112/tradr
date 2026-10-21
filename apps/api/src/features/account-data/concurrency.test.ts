@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -13,8 +16,12 @@ import * as dbModule from '@/db';
 import * as schema from '@/db/schema';
 import { accounts, users } from '@/db/schema';
 
-import { ImportBusyError, ImportTargetNotEmptyError } from './account-data.errors';
-import { confirmImport } from './import.service';
+import {
+  ImportBusyError,
+  ImportCapacityError,
+  ImportTargetNotEmptyError,
+} from './account-data.errors';
+import { confirmArchive, confirmImport } from './import.service';
 
 // Req 5.3 — two confirms for one committed user, exactly one restores. The guard
 // is the import slot plus the in-transaction emptiness re-check: the loser reaches
@@ -137,23 +144,52 @@ function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-describe('confirmImport concurrency (Req 5.3)', () => {
-  it('lets exactly one of two concurrent confirms restore; the other is refused and writes nothing', async () => {
+// Spooled archive files for the admission-free core race below (design C2's
+// confirmArchive takes an already-spooled path, not a body stream).
+let coreDir: string;
+let coreFileCounter = 0;
+
+beforeAll(async () => {
+  coreDir = await mkdtemp(path.join(os.tmpdir(), 'import-concurrency-core-'));
+});
+
+async function saveArchive(bytes: Uint8Array): Promise<string> {
+  const p = path.join(coreDir, `archive-${coreFileCounter++}.zip`);
+  await writeFile(p, bytes);
+  return p;
+}
+
+/**
+ * Contract — confirmArchive(userId, archivePath) concurrency (design C2 task 4;
+ * design Testing Strategy "§40 two-transaction race"; task 7 Prompt Success "the
+ * core race still restores exactly once and refuses the loser with 409 or
+ * IMPORT_BUSY")
+ *
+ * | Pre-condition | Call (seam) | Observable result | Expected-value source |
+ * | --- | --- | --- | --- |
+ * | one committed user, two archives each describing one default account for that user, no import admission held (confirmArchive never takes it) | `Promise.allSettled([confirmArchive(userId, pathA), confirmArchive(userId, pathB)])` | exactly one settles fulfilled and one rejected; the rejected reason is `ImportTargetNotEmptyError` (409) or `ImportBusyError` (503); exactly one account row committed | design C2 (confirmArchive: "lockUserForAccountChange", in-tx "assertTargetEmpty", 55P03 → ImportBusyError); task 7 Prompt Success |
+ *
+ * This is an invariant carried over from task 4 (confirmArchive's own restore
+ * semantics are unchanged by task 7): regression guard, not a red test — it
+ * already passes before task 7's orchestrator rewrite.
+ */
+describe('confirmArchive concurrency, admission-free core (design C2, task 7 "two core confirms")', () => {
+  it('lets exactly one of two concurrent core confirms restore; the other is refused and writes nothing', async () => {
     const [u] = await dedicatedDb
       .insert(users)
       .values({ email: `import-race-${randomUUID()}@example.com`, passwordHash: 'x'.repeat(60) })
       .returning({ id: users.id });
     const userId = u.id;
 
-    const bytes = makeArchive();
-    const digest = createHash('sha256').update(bytes).digest('hex');
+    const pathA = await saveArchive(makeArchive());
+    const pathB = await saveArchive(makeArchive());
 
     const harnessDb = dbModule.db;
     (dbModule as Record<string, unknown>).db = dedicatedDb;
     try {
       const settled = await Promise.allSettled([
-        confirmImport(userId, streamOf(bytes), digest),
-        confirmImport(userId, streamOf(bytes), digest),
+        confirmArchive(userId, pathA),
+        confirmArchive(userId, pathB),
       ]);
 
       const fulfilled = settled.filter((r) => r.status === 'fulfilled');
@@ -173,6 +209,74 @@ describe('confirmImport concurrency (Req 5.3)', () => {
       (dbModule as Record<string, unknown>).db = harnessDb;
       await dedicatedDb.delete(accounts).where(eq(accounts.userId, userId));
       await dedicatedDb.delete(users).where(eq(users.id, userId));
+    }
+  });
+});
+
+/**
+ * Contract — confirmImport(userId, body, digest) under the per-process import
+ * admission (task 2's tryAcquire, wired into confirmImport by task 7 design C8;
+ * Requirements 3.1, 3.2)
+ *
+ * | Pre-condition | Call (seam) | Observable result | Expected-value source |
+ * | --- | --- | --- | --- |
+ * | two different committed users, each with their own valid single-account archive, no import admission held | `Promise.allSettled([confirmImport(userA, bodyA, digestA), confirmImport(userB, bodyB, digestB)])` | exactly one settles fulfilled and one rejected; the rejected reason is `instanceof ImportCapacityError` (503, code `IMPORT_CAPACITY_REACHED`); exactly one account row committed across both users | design C8 Sequence ("tryAcquire (C1) or throw ImportCapacityError" before any body byte); task 7 Prompt Success ("two concurrent confirmImport calls restore once and refuse the other with 503 IMPORT_CAPACITY_REACHED before any transaction") |
+ *
+ * Two different users prove the bound is process-wide, not account-scoped
+ * (Requirement 3.2): a same-user race would also be refused by the in-transaction
+ * emptiness re-check, which would not distinguish the two causes.
+ */
+describe('confirmImport concurrency, process-wide admission (design C8, Requirements 3.1, 3.2)', () => {
+  it('lets one of two concurrent confirmImport calls restore; the other is refused 503 IMPORT_CAPACITY_REACHED before any transaction', async () => {
+    const [ua] = await dedicatedDb
+      .insert(users)
+      .values({
+        email: `import-capacity-a-${randomUUID()}@example.com`,
+        passwordHash: 'x'.repeat(60),
+      })
+      .returning({ id: users.id });
+    const [ub] = await dedicatedDb
+      .insert(users)
+      .values({
+        email: `import-capacity-b-${randomUUID()}@example.com`,
+        passwordHash: 'x'.repeat(60),
+      })
+      .returning({ id: users.id });
+
+    const bytesA = makeArchive();
+    const digestA = createHash('sha256').update(bytesA).digest('hex');
+    const bytesB = makeArchive();
+    const digestB = createHash('sha256').update(bytesB).digest('hex');
+
+    const harnessDb = dbModule.db;
+    (dbModule as Record<string, unknown>).db = dedicatedDb;
+    try {
+      const settled = await Promise.allSettled([
+        confirmImport(ua.id, streamOf(bytesA), digestA),
+        confirmImport(ub.id, streamOf(bytesB), digestB),
+      ]);
+
+      const fulfilled = settled.filter((r) => r.status === 'fulfilled');
+      const rejected = settled.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const err = (rejected[0] as PromiseRejectedResult).reason;
+      expect(err).toBeInstanceOf(ImportCapacityError);
+      expect((err as { statusCode: number }).statusCode).toBe(503);
+      expect((err as { code: string }).code).toBe('IMPORT_CAPACITY_REACHED');
+
+      // Exactly one restore committed across the two users: the loser never
+      // reached its transaction.
+      const rowsA = await dedicatedDb.select().from(accounts).where(eq(accounts.userId, ua.id));
+      const rowsB = await dedicatedDb.select().from(accounts).where(eq(accounts.userId, ub.id));
+      expect(rowsA.length + rowsB.length).toBe(1);
+    } finally {
+      (dbModule as Record<string, unknown>).db = harnessDb;
+      await dedicatedDb.delete(accounts).where(eq(accounts.userId, ua.id));
+      await dedicatedDb.delete(accounts).where(eq(accounts.userId, ub.id));
+      await dedicatedDb.delete(users).where(eq(users.id, ua.id));
+      await dedicatedDb.delete(users).where(eq(users.id, ub.id));
     }
   });
 });

@@ -20,6 +20,17 @@ vi.mock('@/db', async () => {
   return { ...actual, db: undefined }; // replaced per-test in beforeEach
 });
 
+// Every database suite runs `previewImport`/`confirmImport` against a mocked or
+// per-test-transaction `db` above; a worker thread re-instantiates the whole
+// module graph and would see neither, so the default executor is the in-thread
+// one (design C3 D9, task 7) everywhere except the worker's own integration test.
+vi.mock('@/features/account-data/import.executor', async () => {
+  const actual = await vi.importActual<typeof import('@/features/account-data/import.executor')>(
+    '@/features/account-data/import.executor',
+  );
+  return { ...actual, defaultImportExecutor: actual.runImportJobInThread };
+});
+
 // eslint-disable-next-line import-x/order
 import * as dbModule from '@/db';
 
