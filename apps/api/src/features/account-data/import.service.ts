@@ -13,6 +13,7 @@ import {
   type ArchiveCaps,
   type ArchiveContentPart,
   type ArchiveConversation,
+  type ArchiveCounts,
   type ArchiveDashboardLayout,
   type ArchiveExchangeRate,
   type ArchiveExpense,
@@ -96,11 +97,15 @@ import {
 } from './import.query';
 import { newSalt, orderedMessageIds, remapId, createCoveredThroughResolver } from './remap';
 
-// Design C6 — the import service. Two entry points: `previewImport` validates an
-// uploaded archive and reports what a restore would create (Req 4.6, 4.7);
-// `confirmImport` performs the whole-or-nothing restore (Req 5–7). Both spool the
-// upload into their own `os.tmpdir()` directory (task 5's `spoolUpload`) and delete
-// it on any close, mirroring the export service's teardown (C3).
+// The import service. The archive job core (design C2) is `previewArchive` and
+// `confirmArchive`: they take an already-spooled archive path and do the validation
+// and restore, nothing else. The orchestrators `previewImport` and `confirmImport`
+// (design C8) own the request-side work: they spool the upload into their own
+// `os.tmpdir()` directory (task 5's `spoolUpload`), delete it on any close (mirroring
+// the export service's teardown), and — for confirm — hold the admission and emit the
+// event. `previewImport` validates an uploaded archive and reports what a restore
+// would create (Req 4.6, 4.7); `confirmImport` performs the whole-or-nothing restore
+// (Req 5–7).
 //
 // The restore writes the archived rows DIRECTLY through task 11's per-category
 // inserts: no tier check, no close/fill/reverse hook, no gating counter, no ledger
@@ -138,12 +143,33 @@ interface ConfirmOptions {
 }
 
 /**
- * Validate an uploaded archive and return its preview (design C6, Req 4.6, 4.7).
- * Spools the body into a fresh temp directory, validates it (task 9), checks the
- * target is empty (task 11) and returns the server's own counts, the source app
- * version, the export instant, the degradations and the upload's sha256 hex as the
- * `digest` the confirm must echo. Writes nothing. The temp directory is deleted on
- * any exit.
+ * The preview half of the archive job core (design C2, Req 4.6, 4.7). Validates an
+ * already-spooled archive (task 9), checks the target is empty (task 11) and returns
+ * the server's own counts, the source app version, the export instant and the
+ * degradations — the preview fields minus the `digest`, which only the spooling
+ * caller holds. Writes nothing. A `signal` cancels the validating read at its next
+ * push; the caller creates and removes the temp directory.
+ */
+export async function previewArchive(
+  userId: string,
+  archivePath: string,
+  opts?: { caps?: Partial<ArchiveCaps>; signal?: AbortSignal },
+): Promise<Omit<ImportPreview, 'digest'>> {
+  const validated = await validateArchive(archivePath, opts?.caps, opts?.signal);
+  await assertTargetEmpty(db, userId);
+  return {
+    counts: validated.counts,
+    sourceAppVersion: validated.manifest.sourceAppVersion,
+    exportedAt: validated.manifest.exportedAt,
+    degradations: validated.degradations,
+  };
+}
+
+/**
+ * Validate an uploaded archive and return its preview (design C8, Req 4.6, 4.7).
+ * Spools the body into a fresh temp directory, runs the core {@link previewArchive}
+ * and reattaches the upload's sha256 hex as the `digest` the confirm must echo.
+ * Writes nothing. The temp directory is deleted on any exit.
  */
 export async function previewImport(
   userId: string,
@@ -154,33 +180,84 @@ export async function previewImport(
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
   try {
     const { path: archivePath, sha256 } = await spoolUpload(body, dir, caps.maxUploadBytes);
-    const validated = await validateArchive(archivePath, opts?.caps);
-    await assertTargetEmpty(db, userId);
-    return {
-      counts: validated.counts,
-      sourceAppVersion: validated.manifest.sourceAppVersion,
-      exportedAt: validated.manifest.exportedAt,
-      degradations: validated.degradations,
-      digest: sha256,
-    };
+    const preview = await previewArchive(userId, archivePath, { caps: opts?.caps });
+    return { ...preview, digest: sha256 };
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
 /**
- * Perform a confirmed whole-or-nothing restore (design C6, Req 5–7). Follows C6
- * steps 1–6: re-spool and digest-check the body; acquire the import slot and
- * validate; then one transaction that sets `lock_timeout`, takes the gc fence (only
- * with storage configured), the per-user guard and the in-transaction emptiness
- * re-check, streams the archive a second time to write objects then rows in FK
- * order with fresh ids and resolved platform references, overwrites preferences
- * (bar `advisor_trade_data_consent`) and replaces the dashboard layout, and commits.
- * A lock-wait expiry becomes the 503 busy error; an object-write failure the 503
- * unreachable error before any row is inserted; any other non-`AppError` the 500
- * import-failed error, with the objects the failed run wrote deleted best-effort.
- * Emits `account_imported` after commit. The temp directory is deleted and the slot
- * released on any exit.
+ * The restore half of the archive job core (design C2, Req 5–7). Validates an
+ * already-spooled archive, then runs one transaction that sets `lock_timeout`, takes
+ * the gc fence (only with storage configured), the per-user guard and the
+ * in-transaction emptiness re-check, streams the archive a second time to write
+ * objects then rows in FK order with fresh ids and resolved platform references,
+ * overwrites preferences (bar `advisor_trade_data_consent`) and replaces the
+ * dashboard layout, and commits. A lock-wait expiry becomes the 503 busy error; an
+ * object-write failure the 503 unreachable error before any row is inserted; any
+ * other non-`AppError` the 500 import-failed error, with the objects the failed run
+ * wrote deleted best-effort. A `signal` cancels the archive read at its next push;
+ * `onReadDone` fires once the read is done, before the commit. Returns the restore
+ * result and the validated `counts` for the caller to emit on. Never spools, takes
+ * the admission, touches the temp directory, or emits the event.
+ */
+export async function confirmArchive(
+  userId: string,
+  archivePath: string,
+  opts?: {
+    caps?: Partial<ArchiveCaps>;
+    lockTimeout?: string;
+    signal?: AbortSignal;
+    onReadDone?: () => void;
+  },
+): Promise<{ result: ImportResult; counts: ArchiveCounts }> {
+  const lockTimeout = opts?.lockTimeout ?? DEFAULT_LOCK_TIMEOUT;
+  const storage = getObjectStorage();
+
+  // Objects written by this run; deleted best-effort if the transaction rolls back
+  // (Req 7.4). The fence (task 4) protects them until then.
+  const writtenKeys: string[] = [];
+
+  try {
+    const validated = await validateArchive(archivePath, opts?.caps, opts?.signal);
+
+    const result = await withTransaction(db, async (tx) => {
+      // Bound the lock waits below; an expiry raises 55P03 → the busy error.
+      await tx.execute(sql`SELECT set_config('lock_timeout', ${lockTimeout}, true)`);
+      // The gc fence is only meaningful when objects are written (Req 7.3).
+      if (storage) await holdImportFence(tx);
+      await lockUserForAccountChange(tx, userId);
+      await assertTargetEmpty(tx, userId);
+      return restore(
+        tx,
+        userId,
+        archivePath,
+        opts?.caps,
+        validated,
+        storage,
+        writtenKeys,
+        opts?.signal,
+        opts?.onReadDone,
+      );
+    });
+
+    return { result, counts: validated.counts };
+  } catch (err) {
+    if (storage && writtenKeys.length > 0) {
+      await Promise.all(writtenKeys.map((key) => storage.delete(key).catch(() => {})));
+    }
+    if (err instanceof AppError) throw err;
+    if ((err as { code?: unknown }).code === PG_LOCK_TIMEOUT_CODE) throw new ImportBusyError();
+    throw new ImportFailedError();
+  }
+}
+
+/**
+ * Perform a confirmed whole-or-nothing restore (design C8, Req 5–7). Acquires the
+ * import slot, spools and digest-checks the body, runs the core {@link confirmArchive}
+ * inline and emits `account_imported` after commit on the core's validated `counts`.
+ * The temp directory is deleted and the slot released on any exit.
  */
 export async function confirmImport(
   userId: string,
@@ -190,8 +267,6 @@ export async function confirmImport(
 ): Promise<ImportResult> {
   const startedAt = Date.now();
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...opts?.caps };
-  const lockTimeout = opts?.lockTimeout ?? DEFAULT_LOCK_TIMEOUT;
-  const storage = getObjectStorage();
 
   const release = await accountDataSlot('import').acquire();
   let dir: string;
@@ -202,44 +277,26 @@ export async function confirmImport(
     throw err;
   }
 
-  // Objects written by this run; deleted best-effort if the transaction rolls back
-  // (Req 7.4). The fence (task 4) protects them until then.
-  const writtenKeys: string[] = [];
-
   try {
     const { path: archivePath, sha256 } = await spoolUpload(body, dir, caps.maxUploadBytes);
     if (sha256 !== digest) throw new ArchiveDigestMismatchError();
 
-    const validated = await validateArchive(archivePath, opts?.caps);
-
-    const result = await withTransaction(db, async (tx) => {
-      // Bound the lock waits below; an expiry raises 55P03 → the busy error.
-      await tx.execute(sql`SELECT set_config('lock_timeout', ${lockTimeout}, true)`);
-      // The gc fence is only meaningful when objects are written (Req 7.3).
-      if (storage) await holdImportFence(tx);
-      await lockUserForAccountChange(tx, userId);
-      await assertTargetEmpty(tx, userId);
-      return restore(tx, userId, archivePath, opts?.caps, validated, storage, writtenKeys);
+    const { result, counts } = await confirmArchive(userId, archivePath, {
+      caps: opts?.caps,
+      lockTimeout: opts?.lockTimeout,
     });
 
-    emitImported(userId, validated, startedAt);
+    emitImported(userId, counts, startedAt);
     return result;
-  } catch (err) {
-    if (storage && writtenKeys.length > 0) {
-      await Promise.all(writtenKeys.map((key) => storage.delete(key).catch(() => {})));
-    }
-    if (err instanceof AppError) throw err;
-    if ((err as { code?: unknown }).code === PG_LOCK_TIMEOUT_CODE) throw new ImportBusyError();
-    throw new ImportFailedError();
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
     release();
   }
 }
 
-function emitImported(userId: string, validated: ValidatedArchive, startedAt: number): void {
+function emitImported(userId: string, counts: ArchiveCounts, startedAt: number): void {
   const properties: Record<string, number> = { durationMs: Date.now() - startedAt };
-  for (const [key, value] of Object.entries(validated.counts)) properties[`count_${key}`] = value;
+  for (const [key, value] of Object.entries(counts)) properties[`count_${key}`] = value;
   captureServerEvent('account_imported', { distinctId: userId, properties });
 }
 
@@ -278,6 +335,9 @@ function makeFlusher<T>(flush: (rows: T[]) => Promise<void>): {
 }
 
 // Restore the archive's rows in one pass and one transaction (design C6 steps 4–5).
+// A `signal` cancels the archive read at its next push; `onReadDone` fires once, after
+// the read loop ends and before the drains, preference and layout writes, and commit
+// (design C2), so once it has run no cancel can stop the restore.
 async function restore(
   tx: Transaction,
   userId: string,
@@ -286,6 +346,8 @@ async function restore(
   validated: ValidatedArchive,
   storage: ObjectStorage | null,
   writtenKeys: string[],
+  signal?: AbortSignal,
+  onReadDone?: () => void,
 ): Promise<ImportResult> {
   const salt = newSalt();
   const nowTs = new Date().toISOString();
@@ -475,7 +537,7 @@ async function restore(
   };
 
   try {
-    for await (const event of readArchive(archivePath, capsOverride)) {
+    for await (const event of readArchive(archivePath, capsOverride, signal)) {
       if (event.kind === 'image') {
         await handleImage(event.entry, event.bytes);
         continue;
@@ -498,6 +560,9 @@ async function restore(
   } finally {
     await stopHeartbeat();
   }
+
+  // The read completed without a cancel; past here no signal can stop the restore.
+  onReadDone?.();
 
   // Defensive final pass: flush anything an absent entry-end left behind, in FK
   // order. Each drain is a no-op once its entry-end already flushed it.
