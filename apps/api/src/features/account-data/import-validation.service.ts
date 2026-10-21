@@ -134,10 +134,14 @@ export interface ValidatedArchive {
  * every check passes. Throws {@link ArchiveInvalidError} (up to 50 faults),
  * {@link ArchiveEmptyError}, or — from {@link readArchive} — a container, version or
  * cap error. Writes nothing and never touches the database.
+ *
+ * A `signal`, when given, is passed to {@link readArchive} so a cancel stops the
+ * validating read at the next chunk boundary (design C5).
  */
 export async function validateArchive(
   path: string,
   capsOverride?: Partial<ArchiveCaps>,
+  signal?: AbortSignal,
 ): Promise<ValidatedArchive> {
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...capsOverride };
 
@@ -620,7 +624,7 @@ export async function validateArchive(
     }
   };
 
-  for await (const event of readArchive(path, capsOverride)) {
+  for await (const event of readArchive(path, capsOverride, signal)) {
     if (event.kind === 'image') {
       counts.images += 1;
       imageEntries.add(event.entry);

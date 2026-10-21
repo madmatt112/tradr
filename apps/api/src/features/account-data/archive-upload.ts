@@ -16,6 +16,10 @@ import { ArchiveTooLargeError } from './account-data.errors';
  * failure, including exceeding `maxBytes`, the reader is cancelled, the partial
  * file deleted, and the error rethrown (`ArchiveTooLargeError` over the cap).
  *
+ * When a `signal` is given it is checked before each read, so a deadline or an
+ * abandoned request stops an in-progress spool at the next chunk boundary,
+ * throwing the signal's own reason and deleting the partial file (design C5).
+ *
  * Mirrors the byte-counted, cap-aborting read of `csv-import.upload.ts:35-77`
  * but writes to a file sink instead of buffering.
  */
@@ -23,6 +27,7 @@ export async function spoolUpload(
   body: ReadableStream<Uint8Array> | null,
   dir: string,
   maxBytes: number = ARCHIVE_CAPS.maxUploadBytes,
+  signal?: AbortSignal,
 ): Promise<{ path: string; bytes: number; sha256: string }> {
   const filePath = path.join(dir, 'upload.zip');
   const hash = createHash('sha256');
@@ -38,6 +43,7 @@ export async function spoolUpload(
   const reader = body.getReader();
   try {
     for (;;) {
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) break;
       if (!value || value.byteLength === 0) continue;
