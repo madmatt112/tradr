@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { asc, eq, sql } from 'drizzle-orm';
@@ -45,8 +48,12 @@ import * as configModule from '@/lib/config';
 import { ObjectUnreachableError } from '@/lib/object-storage';
 import * as objectStorage from '@/lib/object-storage';
 
-import { ArchiveDigestMismatchError, ImportBusyError } from './account-data.errors';
-import { confirmImport, previewImport } from './import.service';
+import {
+  ArchiveDigestMismatchError,
+  ImportBusyError,
+  ImportTimedOutError,
+} from './account-data.errors';
+import { confirmArchive, confirmImport, previewArchive, previewImport } from './import.service';
 
 // Design C6 import service, against real tradr_test rolled back per test by the
 // single-connection harness (test-setup.ts) — `db` is that per-test transaction and
@@ -737,5 +744,95 @@ describe('confirmImport lock contention (committed data)', () => {
       await holderDone;
       await dedicatedDb.delete(users).where(eq(users.id, userId));
     }
+  });
+});
+
+// --- Archive job core: previewArchive / confirmArchive (design C2, task 4) ---
+
+describe('previewArchive and confirmArchive (design C2 archive job core)', () => {
+  let coreDir: string;
+  let coreFileCounter = 0;
+
+  beforeAll(async () => {
+    coreDir = await mkdtemp(path.join(os.tmpdir(), 'import-core-test-'));
+  });
+
+  async function saveArchive(bytes: Uint8Array): Promise<string> {
+    const p = path.join(coreDir, `archive-${coreFileCounter++}.zip`);
+    await writeFile(p, bytes);
+    return p;
+  }
+
+  // Abort immediately with `reason` so any `signal?.throwIfAborted()` inside the
+  // core's `validateArchive` call throws this exact object (design C5).
+  function abortedWith(reason: Error): AbortSignal {
+    const controller = new AbortController();
+    controller.abort(reason);
+    return controller.signal;
+  }
+
+  it('previewArchive returns the preview fields with no digest (design C2)', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })], tags: [tag()] });
+    const archivePath = await saveArchive(bytes);
+
+    const preview = await previewArchive(userId, archivePath);
+
+    expect(preview.counts.accounts).toBe(1);
+    expect(preview.counts.tags).toBe(1);
+    expect(preview.sourceAppVersion).toBe('1.2.3');
+    expect(preview.exportedAt).toBe(TS);
+    expect(preview).not.toHaveProperty('digest');
+    expect(Object.keys(preview).sort()).toEqual([
+      'counts',
+      'degradations',
+      'exportedAt',
+      'sourceAppVersion',
+    ]);
+  });
+
+  it('confirmArchive calls onReadDone exactly once on a successful restore (design C2)', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+    const archivePath = await saveArchive(bytes);
+    const onReadDone = vi.fn();
+
+    const { result, counts } = await confirmArchive(userId, archivePath, { onReadDone });
+
+    expect(onReadDone).toHaveBeenCalledTimes(1);
+    expect(counts.accounts).toBe(1);
+    expect(result.counts.accounts).toBe(1);
+  });
+
+  it('previewArchive rejects with a pre-aborted signal before its validation finishes a full read (design C2)', async () => {
+    const userId = await seedUser();
+    // Target already holds data: if the abort were ignored, validateArchive would
+    // finish its read and assertTargetEmpty would then throw a 409 conflict
+    // instead — a different error from the abort reason.
+    await db.insert(accounts).values({ userId, name: 'existing', currency: 'USD' });
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+    const archivePath = await saveArchive(bytes);
+    const reason = new ImportTimedOutError();
+
+    const err = await previewArchive(userId, archivePath, {
+      signal: abortedWith(reason),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBe(reason);
+  });
+
+  it('confirmArchive rejects with a pre-aborted signal and writes no row for the user (design C2)', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+    const archivePath = await saveArchive(bytes);
+    const reason = new ImportTimedOutError();
+
+    const err = await confirmArchive(userId, archivePath, {
+      signal: abortedWith(reason),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBe(reason);
+    const rows = await db.select().from(accounts).where(eq(accounts.userId, userId));
+    expect(rows).toHaveLength(0);
   });
 });
