@@ -97,6 +97,29 @@ async function rejection(p: string, caps?: Parameters<typeof readArchive>[1]): P
   );
 }
 
+// Drain the reader with a cancel signal and return whatever it throws, along with
+// however many events were yielded before the throw (design C5). When
+// `abortAfterFirstEvent` is set, the signal aborts only once the first event has
+// been yielded, inside the loop body, so the abort lands between two `next()` pulls
+// rather than before the reader starts.
+async function rejectionWithSignal(
+  p: string,
+  controller: AbortController,
+  reason: Error,
+  opts: { abortAfterFirstEvent?: boolean } = {},
+): Promise<{ err: unknown; events: ArchiveEvent[] }> {
+  const events: ArchiveEvent[] = [];
+  try {
+    for await (const ev of readArchive(p, undefined, controller.signal)) {
+      events.push(ev);
+      if (opts.abortAfterFirstEvent && events.length === 1) controller.abort(reason);
+    }
+    throw new Error('expected readArchive to reject');
+  } catch (err) {
+    return { err, events };
+  }
+}
+
 beforeAll(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), 'archive-reader-test-'));
 });
@@ -226,5 +249,34 @@ describe('readArchive (design C5 reader)', () => {
     await expect(collect(await save(Buffer.from(truncated)))).rejects.toBeInstanceOf(
       ArchiveInvalidError,
     );
+  });
+
+  it('rejects with the abort reason when the signal is already aborted (design C5)', async () => {
+    const buf = buildZip([manifest(1), { name: 'accounts.ndjson', data: '{"id":"a"}\n' }]);
+    const p = await save(buf);
+    const reason = new Error('cancelled');
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    const { err, events } = await rejectionWithSignal(p, controller, reason);
+    expect(err).toBe(reason);
+    expect(events).toEqual([]);
+  });
+
+  it('stops with the abort reason at the next push once the signal aborts after the first event (design C5)', async () => {
+    // A large stored (uncompressed) entry forces the raw file past one 8 KiB
+    // push, so a push boundary exists after the first event is yielded.
+    const rows = Array.from({ length: 2000 }, (_, i) => `{"id":"a${i}"}`).join('\n') + '\n';
+    const buf = buildZip([manifest(1), { name: 'accounts.ndjson', data: rows, method: 'store' }]);
+    const p = await save(buf);
+    const reason = new Error('cancelled');
+    const controller = new AbortController();
+
+    const { err, events } = await rejectionWithSignal(p, controller, reason, {
+      abortAfterFirstEvent: true,
+    });
+    expect(err).toBe(reason);
+    // It stopped before every row was read; it did not run to completion.
+    expect(events.length).toBeLessThan(2001);
   });
 });
