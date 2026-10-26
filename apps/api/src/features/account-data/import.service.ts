@@ -54,12 +54,15 @@ import { withTransaction } from '@/lib/transaction';
 import {
   ArchiveDigestMismatchError,
   ImportBusyError,
+  ImportCapacityError,
   ImportFailedError,
+  ImportTimedOutError,
 } from './account-data.errors';
 import { accountDataSlot } from './account-data.slots';
 import { readArchive } from './archive-reader';
 import { spoolUpload } from './archive-upload';
 import { validateArchive, type ValidatedArchive } from './import-validation.service';
+import { defaultImportExecutor, type ImportExecutor } from './import.executor';
 import {
   assertTargetEmpty,
   findExistingBuiltinPersonaIds,
@@ -95,17 +98,22 @@ import {
   type SummaryInsert,
   type TagInsert,
 } from './import.query';
+import type { ImportJob } from './import.worker';
 import { newSalt, orderedMessageIds, remapId, createCoveredThroughResolver } from './remap';
 
 // The import service. The archive job core (design C2) is `previewArchive` and
 // `confirmArchive`: they take an already-spooled archive path and do the validation
 // and restore, nothing else. The orchestrators `previewImport` and `confirmImport`
-// (design C8) own the request-side work: they spool the upload into their own
-// `os.tmpdir()` directory (task 5's `spoolUpload`), delete it on any close (mirroring
-// the export service's teardown), and — for confirm — hold the admission and emit the
-// event. `previewImport` validates an uploaded archive and reports what a restore
-// would create (Req 4.6, 4.7); `confirmImport` performs the whole-or-nothing restore
-// (Req 5–7).
+// (design C8) own the request-side work: each takes the one-at-a-time import
+// admission (`tryAcquire`, C1) or refuses with `ImportCapacityError` before any body
+// byte, starts a 240 s deadline (D4) that aborts the work with `ImportTimedOutError`,
+// spools the upload into its own `os.tmpdir()` directory (task 5's `spoolUpload`),
+// runs the archive-job core off the main thread through the executor (task 6, the
+// worker by default), and in a `finally` clears the timer, deletes the directory and
+// releases the admission. `previewImport` validates an uploaded archive and reports
+// what a restore would create (Req 4.6, 4.7), reattaching the spool digest only the
+// main thread holds; `confirmImport` performs the whole-or-nothing restore (Req 5–7)
+// and emits `account_imported` after a successful commit (Req 4.5).
 //
 // The restore writes the archived rows DIRECTLY through task 11's per-category
 // inserts: no tier check, no close/fill/reverse hook, no gating counter, no ledger
@@ -132,12 +140,28 @@ const HEARTBEAT_MS = 15_000;
 const FLUSH_MAX_ROWS = 500;
 const FLUSH_MAX_BYTES = 1024 * 1024;
 
-interface PreviewOptions {
+// The processing deadline from handler entry (design D4): the orchestrator aborts
+// the spool and the archive-job core with `ImportTimedOutError` this long after
+// `startedAt`, leaving the executor's 20 s cancel grace inside the 300 s proxy budget.
+const IMPORT_DEADLINE_MS = 240_000;
+
+// The trailing options both orchestrators share (design C8): the caller's signal
+// (a client disconnect), the deadline clock origin and length, the executor cancel
+// grace, and the executor itself (defaults to the worker one). `holdMs` is a
+// test-only synchronous CPU hold passed through to the job.
+interface OrchestrationOptions {
   caps?: Partial<ArchiveCaps>;
+  signal?: AbortSignal;
+  startedAt?: number;
+  deadlineMs?: number;
+  cancelGraceMs?: number;
+  executor?: ImportExecutor;
+  holdMs?: number;
 }
 
-interface ConfirmOptions {
-  caps?: Partial<ArchiveCaps>;
+type PreviewOptions = OrchestrationOptions;
+
+interface ConfirmOptions extends OrchestrationOptions {
   /** Overrides the restore transaction's `lock_timeout` (tests only). */
   lockTimeout?: string;
 }
@@ -165,11 +189,77 @@ export async function previewArchive(
   };
 }
 
+// What the admission scaffold hands the job callback.
+interface ImportJobContext {
+  archivePath: string;
+  sha256: string;
+  signal: AbortSignal;
+  executor: ImportExecutor;
+  cancelGraceMs: number | undefined;
+  startedAt: number;
+}
+
+/**
+ * The shared C8 scaffold both orchestrators run inside. Takes the one-at-a-time
+ * import admission (`tryAcquire`, C1) or throws `ImportCapacityError` before any
+ * body byte; starts the deadline timer at `startedAt` + `deadlineMs` and builds the
+ * signal that aborts the work with `ImportTimedOutError` when that timer fires or the
+ * caller's signal aborts (D4); makes the temp directory; spools the body into it
+ * (C5); runs `job` with the spool result and that signal; and in a `finally` clears
+ * the timer, removes the directory and releases the admission — in that order, so
+ * the slot frees only after the job has settled and the directory is gone.
+ */
+async function withImportAdmission<T>(
+  body: ReadableStream<Uint8Array> | null,
+  caps: ArchiveCaps,
+  opts: OrchestrationOptions | undefined,
+  job: (ctx: ImportJobContext) => Promise<T>,
+): Promise<T> {
+  const release = accountDataSlot('import').tryAcquire();
+  if (!release) throw new ImportCapacityError();
+
+  const startedAt = opts?.startedAt ?? Date.now();
+  const deadlineMs = opts?.deadlineMs ?? IMPORT_DEADLINE_MS;
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(new ImportTimedOutError());
+  const timer = setTimeout(abort, Math.max(0, startedAt + deadlineMs - Date.now()));
+  const callerSignal = opts?.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) abort();
+    else callerSignal.addEventListener('abort', abort, { once: true });
+  }
+
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
+    const { path: archivePath, sha256 } = await spoolUpload(
+      body,
+      dir,
+      caps.maxUploadBytes,
+      controller.signal,
+    );
+    return await job({
+      archivePath,
+      sha256,
+      signal: controller.signal,
+      executor: opts?.executor ?? defaultImportExecutor,
+      cancelGraceMs: opts?.cancelGraceMs,
+      startedAt,
+    });
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', abort);
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    release();
+  }
+}
+
 /**
  * Validate an uploaded archive and return its preview (design C8, Req 4.6, 4.7).
- * Spools the body into a fresh temp directory, runs the core {@link previewArchive}
- * and reattaches the upload's sha256 hex as the `digest` the confirm must echo.
- * Writes nothing. The temp directory is deleted on any exit.
+ * Inside the admission/deadline scaffold, spools the body into a fresh temp
+ * directory, runs the preview through the executor (task 6, off the main thread by
+ * default) and reattaches the upload's sha256 hex as the `digest` the confirm must
+ * echo — only the main thread holds it (the worker never spools). Writes nothing.
  */
 export async function previewImport(
   userId: string,
@@ -177,14 +267,25 @@ export async function previewImport(
   opts?: PreviewOptions,
 ): Promise<ImportPreview> {
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...opts?.caps };
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
-  try {
-    const { path: archivePath, sha256 } = await spoolUpload(body, dir, caps.maxUploadBytes);
-    const preview = await previewArchive(userId, archivePath, { caps: opts?.caps });
-    return { ...preview, digest: sha256 };
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  return withImportAdmission(
+    body,
+    caps,
+    opts,
+    async ({ archivePath, sha256, signal, executor, cancelGraceMs }) => {
+      const jobSpec: ImportJob = {
+        kind: 'preview',
+        userId,
+        archivePath,
+        caps: opts?.caps,
+        holdMs: opts?.holdMs,
+      };
+      const preview = (await executor(jobSpec, signal, { cancelGraceMs })) as Omit<
+        ImportPreview,
+        'digest'
+      >;
+      return { ...preview, digest: sha256 };
+    },
+  );
 }
 
 /**
@@ -254,10 +355,11 @@ export async function confirmArchive(
 }
 
 /**
- * Perform a confirmed whole-or-nothing restore (design C8, Req 5–7). Acquires the
- * import slot, spools and digest-checks the body, runs the core {@link confirmArchive}
- * inline and emits `account_imported` after commit on the core's validated `counts`.
- * The temp directory is deleted and the slot released on any exit.
+ * Perform a confirmed whole-or-nothing restore (design C8, Req 5–7). Inside the
+ * admission/deadline scaffold, spools and digest-checks the body, runs the confirm
+ * through the executor (task 6, off the main thread by default) and emits
+ * `account_imported` after a successful commit on the core's validated `counts`
+ * (Req 4.5). The temp directory is deleted and the slot released on any exit.
  */
 export async function confirmImport(
   userId: string,
@@ -265,33 +367,31 @@ export async function confirmImport(
   digest: string,
   opts?: ConfirmOptions,
 ): Promise<ImportResult> {
-  const startedAt = Date.now();
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...opts?.caps };
+  return withImportAdmission(
+    body,
+    caps,
+    opts,
+    async ({ archivePath, sha256, signal, executor, cancelGraceMs, startedAt }) => {
+      if (sha256 !== digest) throw new ArchiveDigestMismatchError();
 
-  const release = await accountDataSlot('import').acquire();
-  let dir: string;
-  try {
-    dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
-  } catch (err) {
-    release();
-    throw err;
-  }
+      const jobSpec: ImportJob = {
+        kind: 'confirm',
+        userId,
+        archivePath,
+        caps: opts?.caps,
+        lockTimeout: opts?.lockTimeout,
+        holdMs: opts?.holdMs,
+      };
+      const { result, counts } = (await executor(jobSpec, signal, { cancelGraceMs })) as {
+        result: ImportResult;
+        counts: ArchiveCounts;
+      };
 
-  try {
-    const { path: archivePath, sha256 } = await spoolUpload(body, dir, caps.maxUploadBytes);
-    if (sha256 !== digest) throw new ArchiveDigestMismatchError();
-
-    const { result, counts } = await confirmArchive(userId, archivePath, {
-      caps: opts?.caps,
-      lockTimeout: opts?.lockTimeout,
-    });
-
-    emitImported(userId, counts, startedAt);
-    return result;
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-    release();
-  }
+      emitImported(userId, counts, startedAt);
+      return result;
+    },
+  );
 }
 
 function emitImported(userId: string, counts: ArchiveCounts, startedAt: number): void {
