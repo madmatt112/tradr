@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import app from '@/app';
 
+import { accountDataSlot } from './account-data.slots';
+
 // The account export/import routes (design C9) end to end through `app.request`,
 // each test rolled back by the single-connection harness (test-setup.ts). Nothing
 // optional is configured, so object storage is off (inline images) and the
@@ -166,5 +168,29 @@ describe('account-data routes', () => {
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('ARCHIVE_DIGEST_MISMATCH');
+  });
+
+  it('preview is refused 503 IMPORT_CAPACITY_REACHED while the import slot is held', async () => {
+    const cookie = await registerAndGetCookie();
+
+    // Hold the one-at-a-time import admission (task 2's tryAcquire); the next
+    // preview is refused before any body byte is spooled (design C1, C6).
+    const release = accountDataSlot('import').tryAcquire();
+    expect(release).toBeTruthy();
+    try {
+      const res = await importRequest(
+        '/api/account-data/import/preview',
+        cookie,
+        new Uint8Array([1]),
+      );
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body.error.code).toBe('IMPORT_CAPACITY_REACHED');
+      expect(body.error.message).toBe(
+        'The server is already processing another import. Your account is not affected; wait a few minutes and try again.',
+      );
+    } finally {
+      release!();
+    }
   });
 });

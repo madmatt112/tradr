@@ -133,9 +133,14 @@ async function run(): Promise<void> {
   }
 
   // Exactly one terminal message, then close this worker's own pool and exit (the
-  // shutdown precedent at apps/api/src/index.ts:138).
+  // shutdown precedent at apps/api/src/index.ts:138). The `process.exit(0)` is
+  // load-bearing: the `parentPort` cancel listener above keeps this worker's event
+  // loop ref'd, so once the message is delivered and the pool is closed the thread
+  // would otherwise never emit `'exit'` and the executor — which settles only on
+  // `'exit'` (design C4) — would hang the whole request.
   parentPort?.postMessage(message);
   await sql.end();
+  process.exit(0);
 }
 
 void run();

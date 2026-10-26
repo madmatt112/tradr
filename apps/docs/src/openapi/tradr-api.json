@@ -148,7 +148,7 @@
     },
     "/api/account-data/import": {
       "post": {
-        "description": "Authed. Re-uploads the raw `.zip` request body with the preview's `digest` in the query; a missing or malformed digest, or one that does not match the uploaded bytes, is refused. Restores whole-or-nothing in one transaction, giving every row a fresh identifier, resolving platform references and overwriting preferences and the dashboard layout (advisor trade-data consent keeps the target's value). Rate limited with preview (10 / hour per user, fallback 6, shared bucket). Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
+        "description": "Authed. Re-uploads the raw `.zip` request body with the preview's `digest` in the query; a missing or malformed digest, or one that does not match the uploaded bytes, is refused. Restores whole-or-nothing in one transaction, giving every row a fresh identifier, resolving platform references and overwriting preferences and the dashboard layout (advisor trade-data consent keeps the target's value). Rate limited with preview (10 / hour per user, fallback 6, shared bucket). The server bounds processing to a four-minute limit from handler entry; a longer run times out before the commit and imports nothing. Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
         "parameters": [
           {
             "description": "The sha256 hex digest the preview returned.",
@@ -188,6 +188,9 @@
           "413": {
             "description": "ARCHIVE_TOO_LARGE — the upload exceeded a cap; the message names the cap."
           },
+          "422": {
+            "description": "IMPORT_TIMED_OUT — processing exceeded the four-minute server limit; nothing was imported."
+          },
           "429": {
             "description": "Rate limit exceeded (10 / hour per user)."
           },
@@ -195,7 +198,7 @@
             "description": "IMPORT_FAILED — the restore rolled back; logged with the request id."
           },
           "503": {
-            "description": "IMPORT_BUSY (another data operation held the lock) or OBJECT_UNREACHABLE (an image write failed before any row)."
+            "description": "IMPORT_CAPACITY_REACHED (the server is already processing another import; nothing was spooled), IMPORT_BUSY (another data operation held the lock) or OBJECT_UNREACHABLE (an image write failed before any row)."
           }
         },
         "summary": "Restore a previewed archive into the empty signed-in account.",
@@ -206,7 +209,7 @@
     },
     "/api/account-data/import/preview": {
       "post": {
-        "description": "Authed. Reads the raw `.zip` request body, validating it before any write: manifest present and version supported, counts match, every row strict, references resolve, invariants hold and the target account is empty. Writes nothing. Returns the server's own per-category counts, the source app version, the export date, any degradations and a `digest` the confirm call must echo. Rate limited with import (10 / hour per user, fallback 6). Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
+        "description": "Authed. Reads the raw `.zip` request body, validating it before any write: manifest present and version supported, counts match, every row strict, references resolve, invariants hold and the target account is empty. Writes nothing. Returns the server's own per-category counts, the source app version, the export date, any degradations and a `digest` the confirm call must echo. Rate limited with import (10 / hour per user, fallback 6). The server bounds processing to a four-minute limit from handler entry; a longer run times out and previews nothing. Scripts sign in for a session cookie and, on split-origin deployments, send an allowed `Origin` header.\n",
         "requestBody": {
           "content": {
             "application/zip": {
@@ -234,8 +237,17 @@
           "413": {
             "description": "ARCHIVE_TOO_LARGE — the upload exceeded a cap; the message names the cap."
           },
+          "422": {
+            "description": "IMPORT_TIMED_OUT — processing exceeded the four-minute server limit; nothing was previewed."
+          },
           "429": {
             "description": "Rate limit exceeded (10 / hour per user)."
+          },
+          "500": {
+            "description": "IMPORT_FAILED — the import worker failed; logged with the request id."
+          },
+          "503": {
+            "description": "IMPORT_CAPACITY_REACHED — the server is already processing another import; nothing was spooled."
           }
         },
         "summary": "Validate an uploaded archive and preview what it would restore.",
