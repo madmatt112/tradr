@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -398,6 +398,40 @@ function emitImported(userId: string, counts: ArchiveCounts, startedAt: number):
   const properties: Record<string, number> = { durationMs: Date.now() - startedAt };
   for (const [key, value] of Object.entries(counts)) properties[`count_${key}`] = value;
   captureServerEvent('account_imported', { distinctId: userId, properties });
+}
+
+// An orphaned spool directory is swept once it is older than this. A killed
+// process leaves its `tradr-import-*` directory behind with no hook to remove it;
+// ten minutes keeps the sweep clear of another process's live operation, which
+// finishes well inside the 240 s deadline (design C9).
+const STALE_IMPORT_DIR_MS = 10 * 60 * 1000;
+
+/**
+ * Remove orphaned import spool directories a killed process left behind (design C9,
+ * Reliability NFR). Sweeps `tradr-import-*` directories under `os.tmpdir()` whose
+ * modification time is older than ten minutes and returns how many were removed.
+ * The worker-bundle build cache (`tradr-import-worker-*`, built once per process and
+ * reused) is left alone. Per-directory errors are swallowed so one unreadable entry
+ * never stops the sweep; `main()` calls this once at boot, logs the count and never
+ * fails boot on it.
+ */
+export async function sweepStaleImportDirs(now: number = Date.now()): Promise<number> {
+  const root = os.tmpdir();
+  const names = await readdir(root);
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith('tradr-import-') || name.startsWith('tradr-import-worker-')) continue;
+    const full = path.join(root, name);
+    try {
+      const info = await stat(full);
+      if (!info.isDirectory() || now - info.mtimeMs < STALE_IMPORT_DIR_MS) continue;
+      await rm(full, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      // Unreadable, or removed by a concurrent sweep between readdir and here.
+    }
+  }
+  return removed;
 }
 
 // --- The streaming restore ---------------------------------------------------
