@@ -104,13 +104,24 @@ after decompression, 10,000 images and 250,000 rows. If an archive exceeds a
 cap, the refusal names the cap. Export applies no such cap: a larger account
 still exports in full.
 
+Import also enforces a four-minute processing limit, timed from the moment the
+server receives the request. If the server cannot finish in that time, it
+stops the import and shows one of two messages:
+
+- **"The archive took too long"** — nothing was imported. Try the import
+  again. If this keeps happening, the archive is too large for this server.
+- **"The server is busy with another import"** — your account is not
+  affected. Wait a few minutes, then try the import again.
+
 ### The self-hosted upload ceiling
 
 A self-hosted instance runs behind a proxy that limits upload size. The default
 is `MAX_UPLOAD_SIZE=20m` (`docker/Dockerfile.web`). If the proxy refuses your
 import with a 413, the app tells you that the operator can raise
-`MAX_UPLOAD_SIZE`. A large import can also need a longer read timeout; raise
-`CSV_IMPORT_NGINX_PROXY_TIMEOUT` (`docker/nginx.conf.template`) for it.
+`MAX_UPLOAD_SIZE`. Keep `CSV_IMPORT_NGINX_PROXY_TIMEOUT`
+(`docker/nginx.conf.template`) at 270 seconds or more: the server answers
+within 260 seconds, and a lower proxy timeout can cut the connection before
+the server's own answer arrives.
 
 ### Larger accounts, and whole-database backups
 
