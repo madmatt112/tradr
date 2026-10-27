@@ -36,6 +36,7 @@ const ORIGIN = process.env.ORIGIN;
 
 const MIB = 1024 * 1024;
 const METRICS_INTERVAL_MS = 1_000;
+const METRICS_TIMEOUT_MS = 5_000;
 const STALE_GAP_MS = 5_000;
 const HEALTH_INTERVAL_MS = 5_000;
 const HEALTH_TIMEOUT_MS = 5_000;
@@ -64,6 +65,7 @@ function parseGauge(text: string, name: string): number | undefined {
 
 interface ScrapeAttempt {
   tMs: number;
+  durationMs: number;
   step: string;
   ok: boolean;
   rss?: number;
@@ -94,23 +96,37 @@ class MetricsSampler implements Steppable {
     this.step = step;
   }
 
+  // Records tMs as the attempt's COMPLETION time (not when the tick fired), so a
+  // scrape that hangs during a main-thread stall and resolves late lands late in
+  // trusted()'s gap check, instead of at its regular ~1s cadence (design C11,
+  // Requirement 6.2). A timeout matching the health sampler's bounds how long a
+  // hung scrape can delay that reckoning.
   start(): void {
     const tick = async (): Promise<void> => {
       const step = this.step;
-      const tMs = Date.now() - this.startMs;
+      const t0 = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), METRICS_TIMEOUT_MS);
+      const record = (ok: boolean, rss?: number, heap?: number): void => {
+        const now = Date.now();
+        this.attempts.push({ tMs: now - this.startMs, durationMs: now - t0, step, ok, rss, heap });
+      };
       try {
-        const res = await fetch(METRICS_URL);
+        const res = await fetch(METRICS_URL, { signal: controller.signal });
         if (!res.ok) {
-          this.attempts.push({ tMs, step, ok: false });
+          record(false);
           return;
         }
         const text = await res.text();
         const rss = parseGauge(text, 'process_resident_memory_bytes');
         const heap = parseGauge(text, 'nodejs_heap_size_used_bytes');
-        this.attempts.push({ tMs, step, ok: rss !== undefined, rss, heap });
+        record(rss !== undefined, rss, heap);
       } catch {
-        // A scrape can race a restart — recorded as a failed attempt, not dropped.
-        this.attempts.push({ tMs, step, ok: false });
+        // A scrape can race a restart or time out — recorded as a failed attempt,
+        // not dropped.
+        record(false);
+      } finally {
+        clearTimeout(timeout);
       }
     };
     void tick();
@@ -123,12 +139,12 @@ class MetricsSampler implements Steppable {
 
   peakRss(step?: string): number {
     const rows = step ? this.attempts.filter((a) => a.step === step) : this.attempts;
-    return rows.reduce((max, a) => Math.max(max, a.ok ? a.rss ?? 0 : 0), 0);
+    return rows.reduce((max, a) => Math.max(max, a.ok ? (a.rss ?? 0) : 0), 0);
   }
 
   peakHeap(step?: string): number {
     const rows = step ? this.attempts.filter((a) => a.step === step) : this.attempts;
-    return rows.reduce((max, a) => Math.max(max, a.ok ? a.heap ?? 0 : 0), 0);
+    return rows.reduce((max, a) => Math.max(max, a.ok ? (a.heap ?? 0) : 0), 0);
   }
 
   // A step's memory figure is untrustworthy when any scrape attempt during it
@@ -183,7 +199,12 @@ class HealthSampler implements Steppable {
       const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
       try {
         const res = await fetch(`${BASE_URL}/api/health`, { signal: controller.signal });
-        this.samples.push({ tMs: t0 - this.startMs, step, ok: res.status === 200, ms: Date.now() - t0 });
+        this.samples.push({
+          tMs: t0 - this.startMs,
+          step,
+          ok: res.status === 200,
+          ms: Date.now() - t0,
+        });
       } catch {
         this.samples.push({ tMs: t0 - this.startMs, step, ok: false, ms: Date.now() - t0 });
       } finally {
