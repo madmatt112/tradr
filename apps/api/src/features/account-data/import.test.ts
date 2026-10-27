@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, stat, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +53,13 @@ import {
   ImportBusyError,
   ImportTimedOutError,
 } from './account-data.errors';
-import { confirmArchive, confirmImport, previewArchive, previewImport } from './import.service';
+import {
+  confirmArchive,
+  confirmImport,
+  previewArchive,
+  previewImport,
+  sweepStaleImportDirs,
+} from './import.service';
 
 // Design C6 import service, against real tradr_test rolled back per test by the
 // single-connection harness (test-setup.ts) — `db` is that per-test transaction and
@@ -834,5 +840,24 @@ describe('previewArchive and confirmArchive (design C2 archive job core)', () =>
     expect(err).toBe(reason);
     const rows = await db.select().from(accounts).where(eq(accounts.userId, userId));
     expect(rows).toHaveLength(0);
+  });
+});
+
+// Design C9 boot sweep: a killed process leaves a `tradr-import-*` directory
+// behind with no hook to remove it, so the next boot removes anything of that
+// age instead (Reliability NFR, Requirements 2.3/2.4's no-orphaned-work intent).
+describe('sweepStaleImportDirs (design C9 boot sweep)', () => {
+  it('removes a tradr-import-* directory older than ten minutes, keeps a fresh one, and counts at least 1', async () => {
+    const now = Date.now();
+    const staleDir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
+    const freshDir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
+    const elevenMinutesAgo = new Date(now - 11 * 60 * 1000);
+    await utimes(staleDir, elevenMinutesAgo, elevenMinutesAgo);
+
+    const count = await sweepStaleImportDirs(now);
+
+    expect(count).toBeGreaterThanOrEqual(1);
+    await expect(stat(staleDir)).rejects.toThrow();
+    await expect(stat(freshDir)).resolves.toBeTruthy();
   });
 });
