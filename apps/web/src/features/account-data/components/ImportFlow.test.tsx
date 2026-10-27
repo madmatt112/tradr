@@ -253,6 +253,81 @@ describe('ImportFlow', () => {
     expect(screen.getAllByText(/busy/i).length).toBeGreaterThan(0);
   });
 
+  // ---- contract: task 11 (design C10, Requirement 5.2) --------------------
+  // Criterion: a 503 IMPORT_CAPACITY_REACHED at preview shows the title "The
+  //   server is busy with another import" with the server's own message.
+  //   Pre-condition: the preview POST resolves 503 with that code.
+  //   Call (seam): chooseFile() triggers the preview mutation.
+  //   Observable: the title text and the server message both render.
+  //   Source of expected value: design.md C10 (title) and the mocked
+  //   `error.message` (body).
+  it('capacity: a 503 at preview says the server is busy with another import', async () => {
+    mockFetch(() =>
+      json(
+        {
+          error: {
+            code: 'IMPORT_CAPACITY_REACHED',
+            message:
+              'The server is already processing another import. Your account is not affected; ' +
+              'wait a few minutes and try again.',
+          },
+        },
+        503,
+      ),
+    );
+    renderFlow();
+
+    chooseFile();
+
+    expect(await screen.findByText(/wait a few minutes/i)).toBeTruthy();
+    expect(
+      screen.getByText('The server is busy with another import', {
+        selector: '[data-slot="alert-title"]',
+      }),
+    ).toBeTruthy();
+  });
+
+  // Criterion: a 422 IMPORT_TIMED_OUT at confirm shows the title "The archive
+  //   took too long" with the server's own message.
+  //   Pre-condition: the preview POST resolves 200; the confirm POST resolves
+  //   422 with that code.
+  //   Call (seam): chooseFile(), click "Import this archive", click "Import
+  //   data".
+  //   Observable: the title text and the server message both render.
+  //   Source of expected value: design.md C10 (title) and the mocked
+  //   `error.message` (body).
+  it('timed out: a 422 at confirm says the archive took too long', async () => {
+    mockFetch((url) =>
+      url.includes('/import/preview')
+        ? json(previewBody())
+        : json(
+            {
+              error: {
+                code: 'IMPORT_TIMED_OUT',
+                message:
+                  'The archive took too long to process and nothing was imported. Try again ' +
+                  'later; if it keeps happening, the archive is too large for this server.',
+              },
+            },
+            422,
+          ),
+    );
+    renderFlow();
+
+    chooseFile();
+    fireEvent.click(await screen.findByRole('button', { name: /Import this archive/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Import data/i }));
+
+    expect(await screen.findByText(/nothing was imported/i)).toBeTruthy();
+    // The server message also contains "took too long", so pin the title to
+    // its own element rather than matching that phrase anywhere on the page.
+    expect(
+      screen.getByText('The archive took too long', {
+        selector: '[data-slot="alert-title"]',
+      }),
+    ).toBeTruthy();
+  });
+
   it('no response at confirm: shows the Requirement 10.3 notice', async () => {
     mockFetch((url) => {
       if (url.includes('/import/preview')) return json(previewBody());
