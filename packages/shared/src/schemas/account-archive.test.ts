@@ -306,7 +306,7 @@ describe('account-archive contract constants', () => {
     expect(ARCHIVE_CAPS.maxDecompressedBytes).toBe(2_147_483_648);
   });
 
-  it('exposes exactly the eight new error codes', () => {
+  it('exposes exactly the ten new error codes', () => {
     expect([...ACCOUNT_DATA_ERROR_CODES]).toEqual([
       'ARCHIVE_VERSION_UNSUPPORTED',
       'ARCHIVE_INVALID',
@@ -316,6 +316,8 @@ describe('account-archive contract constants', () => {
       'ARCHIVE_TOO_LARGE',
       'IMPORT_FAILED',
       'IMPORT_BUSY',
+      'IMPORT_TIMED_OUT',
+      'IMPORT_CAPACITY_REACHED',
     ]);
     expect(ACCOUNT_DATA_ERROR_CODES).not.toContain('OBJECT_UNREACHABLE');
     expect(ACCOUNT_DATA_ERROR_CODES).not.toContain('RATE_LIMITED');
