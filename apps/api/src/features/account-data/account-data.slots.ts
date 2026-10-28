@@ -1,9 +1,9 @@
 /**
- * Per-process, one-at-a-time slots for the export and import flows (design D8).
+ * Per-process, one-at-a-time slots for the export and import flows (design D5).
  * Each slot is a FIFO async mutex: `acquire`/`run` queue later requests behind
  * the current holder and run them in the order they arrived, while `tryAcquire`
  * takes a free slot without queueing. The export flow queues; the import flow
- * uses `tryAcquire` to refuse at once when its slot is held (design C1). The
+ * uses `tryAcquire` to refuse at once when its slot is held (design C2). The
  * whole memory envelope assumes exactly one export and one import in flight per
  * process.
  */
