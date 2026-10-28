@@ -35,5 +35,11 @@
     "typescript": "^5.8.2",
     "typescript-eslint": "^8.26.0",
     "vitest": "^3.0.9"
+  },
+  "pnpm": {
+    "overrides": {
+      "posthog-js>dompurify": "3.4.17",
+      "unifont>undici": "8.12.2"
+    }
   }
 }
