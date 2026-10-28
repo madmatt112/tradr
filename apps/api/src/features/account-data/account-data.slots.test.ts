@@ -83,6 +83,7 @@ describe('createSlot', () => {
  * | --------------------------------------------------------------------- | ------------------------------------------------- | ---------------------- | ------------------------------------------------ | ---------------------- |
  * | null while held by `acquire()`                                       | holder took the slot via `acquire()`              | `slot.tryAcquire()`    | returns `null`, no queueing                     | design C2: "returning `null` when there is a holder or waiter" |
  * | null while held by an earlier `tryAcquire()`                         | holder took the slot via `tryAcquire()`           | `slot.tryAcquire()`    | returns `null`                                  | design C2: same |
+ * | null while a queued `acquire()` still waits                          | holder released; a queued `acquire()` not yet run | `slot.tryAcquire()`    | returns `null` synchronously (no double-grant)  | design C2: "a holder or waiter" — `acquire()` reserves synchronously |
  * | returns a release after the holder releases                         | prior holder's release has run                    | `slot.tryAcquire()`    | returns a function, not `null`                  | design C2: "an idempotent release" |
  * | a second call of that release is a no-op                            | release already called once                       | `release()` again      | no further effect: the slot is not freed twice  | task 4 _Prompt Success: "a second call of that release is a no-op" |
  * | a queued `acquire()` still runs after a `tryAcquire` holder releases | `tryAcquire` holds; `acquire()` queued behind it  | holder's `release()`   | the queued `acquire()` promise resolves         | task 4 _Prompt Success + Requirement 4.3: `acquire`/`run` FIFO order unchanged |
@@ -105,6 +106,25 @@ describe('createSlot().tryAcquire()', () => {
     expect(slot.tryAcquire()).toBeNull();
 
     firstRelease!();
+  });
+
+  it('returns null while a queued acquire() is still waiting', async () => {
+    const slot = createSlot();
+    const release = await slot.acquire();
+
+    // A second acquire() queues behind the holder; acquire() reserves the slot
+    // synchronously, so the waiter is counted the moment it is called.
+    const queued = slot.acquire();
+
+    // Releasing the holder hands off to the waiter on a microtask, but the
+    // waiter still owns the slot right now. tryAcquire must refuse synchronously
+    // rather than grant a second holder in the release→handoff gap — a regression
+    // that deferred acquire's reservation would wrongly return a release here.
+    release();
+    expect(slot.tryAcquire()).toBeNull();
+
+    const queuedRelease = await queued;
+    queuedRelease();
   });
 
   it('returns a release after the holder releases', () => {
