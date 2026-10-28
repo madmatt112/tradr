@@ -122,3 +122,31 @@ export class ImportBusyError extends AppError {
     );
   }
 }
+
+/**
+ * The import exceeded its processing deadline and nothing was committed (design
+ * Error Handling, 422).
+ */
+export class ImportTimedOutError extends AppError {
+  constructor() {
+    super(
+      422,
+      'IMPORT_TIMED_OUT' satisfies AccountDataErrorCode,
+      'The archive took too long to process and nothing was imported. Try again later; if it keeps happening, the archive is too large for this server.',
+    );
+  }
+}
+
+/**
+ * The server is already processing another import and refused admission before
+ * any work began (design Error Handling, 503).
+ */
+export class ImportCapacityError extends AppError {
+  constructor() {
+    super(
+      503,
+      'IMPORT_CAPACITY_REACHED' satisfies AccountDataErrorCode,
+      'The server is already processing another import. Your account is not affected; wait a few minutes and try again.',
+    );
+  }
+}

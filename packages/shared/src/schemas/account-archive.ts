@@ -75,7 +75,7 @@ export const ARCHIVE_CAPS = {
 // literal value.
 export type ArchiveCaps = Record<keyof typeof ARCHIVE_CAPS, number>;
 
-// The eight new error codes (design Error Handling). `OBJECT_UNREACHABLE` (503)
+// The ten new error codes (design Error Handling). `OBJECT_UNREACHABLE` (503)
 // and `RATE_LIMITED` (429) are existing codes and are deliberately not listed.
 export const ACCOUNT_DATA_ERROR_CODES = [
   'ARCHIVE_VERSION_UNSUPPORTED',
@@ -86,6 +86,8 @@ export const ACCOUNT_DATA_ERROR_CODES = [
   'ARCHIVE_TOO_LARGE',
   'IMPORT_FAILED',
   'IMPORT_BUSY',
+  'IMPORT_TIMED_OUT',
+  'IMPORT_CAPACITY_REACHED',
 ] as const;
 export type AccountDataErrorCode = (typeof ACCOUNT_DATA_ERROR_CODES)[number];
 
