@@ -63,5 +63,10 @@
     "id": "GHSA-v53p-9fqp-m79j",
     "reason": "high advisory in nodemailer: the fix is in nodemailer >=10.0.5, a major-version bump outside the declared ^9.0.3 range; a range change is a separately reviewed change (D11).",
     "reviewBy": "2027-01-06"
+  },
+  {
+    "id": "GHSA-mrhx-c7xc-m3w5",
+    "reason": "high advisory in zod: the fix is in zod >=4.6.6, a major-version bump that changes the shared schemas; planned with a global API body limit in decomposition \u00a758 (zod-4-and-body-limit). The API sets no global body limit today, so an oversized body already costs its memory at JSON parse, before zod runs.",
+    "reviewBy": "2027-01-28"
   }
 ]
