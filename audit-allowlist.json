@@ -63,10 +63,5 @@
     "id": "GHSA-v53p-9fqp-m79j",
     "reason": "high advisory in nodemailer: the fix is in nodemailer >=10.0.5, a major-version bump outside the declared ^9.0.3 range; a range change is a separately reviewed change (D11).",
     "reviewBy": "2027-01-06"
-  },
-  {
-    "id": "GHSA-vfj7-8cjw-p6xm",
-    "reason": "high advisory in braces: no patched release exists upstream for this advisory (pnpm reports patched=<0.0.0), so there is nothing to upgrade to within any range.",
-    "reviewBy": "2027-01-06"
   }
 ]
