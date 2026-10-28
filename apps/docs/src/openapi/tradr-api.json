@@ -592,7 +592,7 @@
     },
     "/api/admin/users": {
       "get": {
-        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over `(created_at, id)` descending — new signups on page one. `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. `limit` defaults to 25, clamped to [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items, nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable, may be arbitrarily old); `emailVerified` is the stored verified flag — a read-only signal, nothing is gated on it in v1. No secret fields are returned.\n",
+        "description": "Admin-gated (403 `ADMIN_REQUIRED`). Cursor-paginated over `(created_at, id)` descending — new signups on page one. `cursor` is the opaque base64 cursor from a prior page; absent/invalid ⇒ first page. `limit` defaults to 25, clamped to [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items, nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable, may be arbitrarily old); `emailVerified` is the stored verified flag — a read-only signal, nothing is gated on it in v1; `tier` is `free` or `pro`, derived from the subscription mirror. No secret fields are returned.\n",
         "parameters": [
           {
             "in": "query",

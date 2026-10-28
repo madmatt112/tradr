@@ -94,7 +94,7 @@ function UserTableRows({
   if (isLoading) {
     return (
       <TableRow>
-        <TableCell colSpan={6}>
+        <TableCell colSpan={7}>
           <Skeleton className="h-5 w-full" data-testid="user-row-skeleton" />
         </TableCell>
       </TableRow>
@@ -104,7 +104,7 @@ function UserTableRows({
   if (isError) {
     return (
       <TableRow>
-        <TableCell colSpan={6} className="text-muted-foreground">
+        <TableCell colSpan={7} className="text-muted-foreground">
           Failed to load users.
         </TableCell>
       </TableRow>
@@ -116,7 +116,7 @@ function UserTableRows({
   if (cursor === undefined && data.items.length === 0) {
     return (
       <TableRow>
-        <TableCell colSpan={6} className="text-muted-foreground">
+        <TableCell colSpan={7} className="text-muted-foreground">
           No users found.
         </TableCell>
       </TableRow>
@@ -130,6 +130,11 @@ function UserTableRows({
           <TableCell>{u.email}</TableCell>
           <TableCell>{formatDate(u.createdAt)}</TableCell>
           <TableCell>{u.lastActiveAt === null ? '—' : formatDate(u.lastActiveAt)}</TableCell>
+          <TableCell>
+            <Badge variant={u.tier === 'pro' ? 'default' : 'secondary'}>
+              {u.tier === 'pro' ? 'Pro' : 'Free'}
+            </Badge>
+          </TableCell>
           <TableCell>
             {/* Read-only verified signal (REQ-5.7) — neutral, no action; v1 gates nothing. */}
             {u.emailVerified ? (
@@ -222,6 +227,8 @@ function UserDetailDialog({
             <dd>
               {detail.data.lastActiveAt === null ? '—' : formatDate(detail.data.lastActiveAt)}
             </dd>
+            <dt className="text-muted-foreground">Plan</dt>
+            <dd>{detail.data.tier === 'pro' ? 'Pro' : 'Free'}</dd>
             <dt className="text-muted-foreground">Positions</dt>
             <dd>{detail.data.positionCount}</dd>
             {/* Platform-key turns only from plan-tiers on (REQ-8.3) — BYOK
@@ -302,6 +309,7 @@ export function UserTable() {
                 <TooltipContent>{LAST_SEEN_CAVEAT}</TooltipContent>
               </Tooltip>
             </TableHead>
+            <TableHead>Plan</TableHead>
             <TableHead>Verified</TableHead>
             <TableHead>Admin</TableHead>
             <TableHead>
