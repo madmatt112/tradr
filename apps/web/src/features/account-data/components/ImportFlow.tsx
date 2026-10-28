@@ -118,6 +118,20 @@ export function importErrorView(err: AccountDataFetchError): ImportErrorView {
       body: serverMessage ?? 'Another data operation is running; retry shortly.',
     };
   }
+  if (code === 'IMPORT_TIMED_OUT') {
+    return {
+      title: 'The archive took too long',
+      body: serverMessage ?? 'The import exceeded its processing deadline; nothing was imported.',
+    };
+  }
+  if (code === 'IMPORT_CAPACITY_REACHED') {
+    return {
+      title: 'The server is busy with another import',
+      body:
+        serverMessage ??
+        'The server is already processing another import; your account is unaffected.',
+    };
+  }
   if (code === 'ARCHIVE_VERSION_UNSUPPORTED') {
     return {
       title: 'Unsupported archive version',
