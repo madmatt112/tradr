@@ -227,4 +227,23 @@ describe('readArchive (design C5 reader)', () => {
       ArchiveInvalidError,
     );
   });
+
+  it('rejects with the abort reason when the signal is already aborted, before the first push (design C3)', async () => {
+    const buf = buildZip([manifest(1), { name: 'accounts.ndjson', data: '{"id":"a"}\n' }]);
+    const p = await save(buf);
+    const reason = new Error('cancelled');
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    const events: ArchiveEvent[] = [];
+    let thrown: unknown;
+    try {
+      for await (const ev of readArchive(p, undefined, controller.signal)) events.push(ev);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBe(reason);
+    expect(events).toEqual([]);
+  });
 });
