@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -315,6 +315,39 @@ function emitImported(userId: string, validated: ValidatedArchive, startedAt: nu
   const properties: Record<string, number> = { durationMs: Date.now() - startedAt };
   for (const [key, value] of Object.entries(validated.counts)) properties[`count_${key}`] = value;
   captureServerEvent('account_imported', { distinctId: userId, properties });
+}
+
+// An orphaned spool directory is swept once it is older than this. A killed
+// process leaves its `tradr-import-*` directory behind with no hook to remove it;
+// ten minutes keeps the sweep clear of another process's live operation, which
+// finishes well inside the 240 s deadline (design C5).
+const STALE_IMPORT_DIR_MS = 10 * 60 * 1000;
+
+/**
+ * Remove orphaned import spool directories a killed process left behind (design C5,
+ * Reliability NFR). Sweeps `tradr-import-*` directories directly under `os.tmpdir()`
+ * whose modification time is older than ten minutes and returns how many were
+ * removed. Per-directory errors are swallowed so one unreadable entry never stops
+ * the sweep; `main()` calls this once at boot, logs the count and never fails boot
+ * on it.
+ */
+export async function sweepStaleImportDirs(now: number = Date.now()): Promise<number> {
+  const root = os.tmpdir();
+  const names = await readdir(root);
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith('tradr-import-')) continue;
+    const full = path.join(root, name);
+    try {
+      const info = await stat(full);
+      if (!info.isDirectory() || now - info.mtimeMs < STALE_IMPORT_DIR_MS) continue;
+      await rm(full, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      // Unreadable, or removed by a concurrent sweep between readdir and here.
+    }
+  }
+  return removed;
 }
 
 // --- The streaming restore ---------------------------------------------------

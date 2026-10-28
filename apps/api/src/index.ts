@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 
 import { sql } from '@/db';
 import { runPostMigrations } from '@/db/migrate';
+import { sweepStaleImportDirs } from '@/features/account-data/import.service';
 import { startDeletionSweeper } from '@/features/account-deletion/account-deletion.sweeper';
 import { bootstrapFirstAdmin } from '@/features/admin/admin.service';
 import { startAuthSweeper } from '@/features/auth/auth.sweeper';
@@ -68,6 +69,17 @@ async function main() {
   logger.info('Migrations complete');
 
   await bootPostMigrations();
+
+  // Sweep orphaned import spool directories a killed process left behind (design
+  // C5, Reliability NFR) — logged, NEVER fatal: a sweep failure must not fail boot.
+  try {
+    const sweptImportDirs = await sweepStaleImportDirs();
+    logger.info('Swept stale import directories', { count: sweptImportDirs });
+  } catch (err) {
+    logger.error('Import directory sweep failed; continuing startup', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Construct the PostHog backend client (design Component 4) — no-op when
   // unconfigured. Eager init removes the concurrent-first-capture race.
