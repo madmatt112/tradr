@@ -228,10 +228,15 @@ async function assertContainer(path: string, caps: ArchiveCaps): Promise<void> {
  * 1 throws {@link ArchiveVersionUnsupportedError}, otherwise the held names are
  * faults. A cap breach throws {@link ArchiveTooLargeError} naming the cap; any
  * other fault throws {@link ArchiveInvalidError}.
+ *
+ * When a `signal` is given it is checked before each push in the read loop, so a
+ * cancel stops the read at the next chunk boundary, throwing the signal's own
+ * reason (design C3).
  */
 export async function* readArchive(
   path: string,
   capsOverride?: Partial<ArchiveCaps>,
+  signal?: AbortSignal,
 ): AsyncGenerator<ArchiveEvent> {
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...capsOverride };
 
@@ -509,6 +514,7 @@ export async function* readArchive(
     for await (const chunk of input) {
       const bytes = chunk as Uint8Array;
       for (let offset = 0; offset < bytes.length; offset += PUSH_CHUNK) {
+        signal?.throwIfAborted();
         try {
           unzip.push(bytes.subarray(offset, offset + PUSH_CHUNK), false);
         } catch {
