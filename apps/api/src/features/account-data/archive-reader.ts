@@ -46,6 +46,14 @@ const PUSH_CHUNK = 8 * 1024;
 
 const EMPTY = new Uint8Array(0);
 
+// Design C4/D4 — the reader yields the event loop after each 20 ms of consumer
+// work (a time budget, not every N events), so other requests get event-loop
+// turns during a run of buffered events (Req 2.1, 2.5). The measured time spans
+// the consumer's work between `yield`s, so this one budget covers both the
+// validator and the restore. A time budget bounds event-loop lag at any
+// per-event cost or CPU share; every N events does not.
+const YIELD_BUDGET_MS = 20;
+
 // The two JSON (non-NDJSON) entries besides the manifest.
 const JSON_ENTRIES = new Set(['manifest.json', 'preferences.json', 'dashboard-layout.json']);
 const MESSAGES_ENTRY = 'messages.ndjson';
@@ -252,6 +260,19 @@ export async function* readArchive(
   let imageCount = 0;
   let runningInflated = 0;
   let runningRows = 0;
+
+  // Design C4 — give the event loop a turn before yielding the next event once
+  // 20 ms of wall time (including the consumer's work between yields) has passed
+  // since the last turn, then check the signal there (design C3's stop at each
+  // yield). `setImmediate` runs after I/O callbacks, so a queued request is served.
+  let lastTurn = Date.now();
+  const breathe = async (): Promise<void> => {
+    if (Date.now() - lastTurn >= YIELD_BUDGET_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      signal?.throwIfAborted();
+      lastTurn = Date.now();
+    }
+  };
 
   const fail = (err: Error): void => {
     if (!pendingError) pendingError = err;
@@ -520,7 +541,10 @@ export async function* readArchive(
         } catch {
           throw invalid('container', 'malformed', 'The archive is not a valid ZIP container.');
         }
-        while (events.length > 0) yield events.shift()!;
+        while (events.length > 0) {
+          await breathe();
+          yield events.shift()!;
+        }
         if (pendingError) throw pendingError;
       }
     }
@@ -533,7 +557,10 @@ export async function* readArchive(
         'The archive ends before its last entry is complete.',
       );
     }
-    while (events.length > 0) yield events.shift()!;
+    while (events.length > 0) {
+      await breathe();
+      yield events.shift()!;
+    }
     if (pendingError) throw pendingError;
     if (heldUnknown.length > 0) {
       throw new ArchiveInvalidError(
