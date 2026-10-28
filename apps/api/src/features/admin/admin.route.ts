@@ -115,7 +115,8 @@ adminRouter.get('/stats', async (c) => {
  *       [1, 100]; a non-numeric limit is a 400 `VALIDATION_ERROR`. Response `{ items,
  *       nextCursor }`; `lastActiveAt` is the last recorded session activity (nullable,
  *       may be arbitrarily old); `emailVerified` is the stored verified flag — a
- *       read-only signal, nothing is gated on it in v1. No secret fields are returned.
+ *       read-only signal, nothing is gated on it in v1; `tier` is `free` or `pro`,
+ *       derived from the subscription mirror. No secret fields are returned.
  *     tags: [Admin]
  *     parameters:
  *       - in: query

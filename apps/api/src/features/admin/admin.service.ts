@@ -9,6 +9,8 @@ import {
 } from '@tradr/shared';
 
 import { db } from '@/db';
+import { selectSubscriptionsByUsers } from '@/features/billing/subscription.query';
+import { deriveTier } from '@/features/billing/tier.query';
 import { config } from '@/lib/config';
 import { AppError, InvariantViolationError, NotFoundError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -106,7 +108,27 @@ export async function getPlatformStats(): Promise<AdminStats> {
 export async function listUsers(cursor?: string, limit?: number): Promise<AdminUserListResponse> {
   const pageSize = Math.min(Math.max(Math.trunc(limit ?? DEFAULT_USERS_LIMIT), 1), MAX_USERS_LIMIT);
   const decoded = cursor ? decodeAdminUserCursor(cursor) : null;
-  return selectAllUsersPage(db, decoded, pageSize);
+  // One transaction owns the cross-feature subscription read (structure.md):
+  // one read for the whole page, then the pure resolver per user (no N+1).
+  const { page, subs } = await withTransaction(db, async (tx) => {
+    const page = await selectAllUsersPage(tx, decoded, pageSize);
+    const subs = await selectSubscriptionsByUsers(
+      tx,
+      page.items.map((u) => u.id),
+    );
+    return { page, subs };
+  });
+  const now = new Date();
+  return {
+    ...page,
+    items: page.items.map((u) => ({
+      ...u,
+      tier: deriveTier(
+        subs.filter((s) => s.userId === u.id),
+        now,
+      ).tier,
+    })),
+  };
 }
 
 /**
@@ -118,8 +140,11 @@ export async function getUserDetail(userId: string): Promise<AdminUserDetail> {
   const row = await selectAdminUserById(db, userId);
   if (!row) throw new NotFoundError('User', userId);
   const aggregates = await selectUserDetailAggregates(db, userId);
+  const subs = await withTransaction(db, (tx) => selectSubscriptionsByUsers(tx, [userId]));
+  const { tier } = deriveTier(subs, new Date());
   return {
     ...row,
+    tier,
     positionCount: aggregates.positionCount,
     advisorTurns: aggregates.advisorTurns,
     usage: {

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { TierSchema } from './tier';
+
 // Wire-side validation contract for the admin-platform feature.
 //
 // Per design.md §Component 9 (REQ-9.2, REQ-7.7). Shape only — consumed by both
@@ -58,6 +60,9 @@ export const AdminUserListItemSchema = z.object({
     .string()
     .nullable()
     .describe('Last recorded session activity — may be arbitrarily old'),
+  // The plan-tiers resolver's answer over the subscription mirror; admins show
+  // their own subscription state, though gating passes them through.
+  tier: TierSchema.describe('Free or Pro, derived from the subscription mirror'),
 });
 export type AdminUserListItem = z.infer<typeof AdminUserListItemSchema>;
 
