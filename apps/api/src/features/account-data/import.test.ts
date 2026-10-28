@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { asc, eq, sql } from 'drizzle-orm';
@@ -45,7 +48,12 @@ import * as configModule from '@/lib/config';
 import { ObjectUnreachableError } from '@/lib/object-storage';
 import * as objectStorage from '@/lib/object-storage';
 
-import { ArchiveDigestMismatchError, ImportBusyError } from './account-data.errors';
+import {
+  ArchiveDigestMismatchError,
+  ImportBusyError,
+  ImportTargetNotEmptyError,
+  ImportTimedOutError,
+} from './account-data.errors';
 import { confirmImport, previewImport } from './import.service';
 
 // Design C6 import service, against real tradr_test rolled back per test by the
@@ -163,6 +171,46 @@ function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
       controller.close();
     },
   });
+}
+
+// Delivers the first byte at once, then the rest only after `delayMs` — long
+// enough that a short `deadlineMs` has always already fired by then, so the
+// timeout tests never race validation speed against the deadline (design C3).
+function slowStreamOf(bytes: Uint8Array, delayMs: number): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(bytes.subarray(0, 1));
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      controller.enqueue(bytes.subarray(1));
+      controller.close();
+    },
+  });
+}
+
+// Runs `previewImport` with `os.tmpdir()` pointed at a fresh, test-owned root
+// (via `TMPDIR`, which Node reads fresh on every call) so the `tradr-import-*`
+// directory it makes and removes can be observed without touching the shared
+// system temp dir other processes also write to.
+async function previewUnderTmpRoot(
+  userId: string,
+  body: ReadableStream<Uint8Array> | null,
+  opts?: Parameters<typeof previewImport>[2],
+): Promise<{ error: unknown; leftover: string[] }> {
+  const previousTmpdir = process.env.TMPDIR;
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ikau-test-root-'));
+  process.env.TMPDIR = root;
+  let error: unknown;
+  try {
+    await previewImport(userId, body, opts);
+  } catch (err) {
+    error = err;
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+  }
+  const leftover = await readdir(root);
+  await rm(root, { recursive: true, force: true }).catch(() => {});
+  return { error, leftover };
 }
 
 function digestOf(bytes: Uint8Array): string {
@@ -737,5 +785,159 @@ describe('confirmImport lock contention (committed data)', () => {
       await holderDone;
       await dedicatedDb.delete(users).where(eq(users.id, userId));
     }
+  });
+});
+
+// --- Deadline and cancel (design C3, Req 2.4, 3.1-3.4, 4.1, 4.2, 5.1, 5.2) ----
+
+describe('previewImport with signal, startedAt and deadlineMs (design C3)', () => {
+  it('rejects a pre-aborted signal with 422 IMPORT_TIMED_OUT and leaves no directory behind', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+    const controller = new AbortController();
+    controller.abort();
+
+    const { error, leftover } = await previewUnderTmpRoot(userId, bytesToStream(bytes), {
+      signal: controller.signal,
+    });
+
+    expect(error).toBeInstanceOf(ImportTimedOutError);
+    expect((error as { statusCode: number }).statusCode).toBe(422);
+    expect(leftover).toHaveLength(0);
+  });
+
+  it('gives 422 IMPORT_TIMED_OUT when deadlineMs passes before the body finishes, with the directory gone', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+
+    const { error, leftover } = await previewUnderTmpRoot(userId, slowStreamOf(bytes, 300), {
+      deadlineMs: 50,
+    });
+
+    expect(error).toBeInstanceOf(ImportTimedOutError);
+    expect((error as { statusCode: number }).statusCode).toBe(422);
+    expect(leftover).toHaveLength(0);
+  });
+
+  it('runs the deadline from the given startedAt, not from call time', async () => {
+    // Correct: deadline = startedAt (now-250) + 300 = now+50, already past by the
+    // time the slow body's second chunk lands at now+150. Using call time instead
+    // (now+300) would still be in the future at now+150 and this would wrongly
+    // succeed, so this distinguishes startedAt-honoring from call-time-only.
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+
+    const { error, leftover } = await previewUnderTmpRoot(userId, slowStreamOf(bytes, 150), {
+      startedAt: Date.now() - 250,
+      deadlineMs: 300,
+    });
+
+    expect(error).toBeInstanceOf(ImportTimedOutError);
+    expect((error as { statusCode: number }).statusCode).toBe(422);
+    expect(leftover).toHaveLength(0);
+  });
+});
+
+describe('confirmImport with signal, startedAt and deadlineMs (design C3)', () => {
+  it('rejects a pre-aborted signal with 422 IMPORT_TIMED_OUT and writes no row', async () => {
+    const userId = await seedUser();
+    const controller = new AbortController();
+    controller.abort();
+
+    const err = await runConfirm(
+      userId,
+      { accounts: [acct({ isDefault: true })] },
+      { signal: controller.signal },
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ImportTimedOutError);
+    expect((err as { statusCode: number }).statusCode).toBe(422);
+    const rows = await db.select().from(accounts).where(eq(accounts.userId, userId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('gives 422 IMPORT_TIMED_OUT when deadlineMs passes before the body finishes spooling, with no row', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive({ accounts: [acct({ isDefault: true })] });
+
+    const err = await confirmImport(userId, slowStreamOf(bytes, 300), digestOf(bytes), {
+      deadlineMs: 50,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ImportTimedOutError);
+    expect((err as { statusCode: number }).statusCode).toBe(422);
+    const rows = await db.select().from(accounts).where(eq(accounts.userId, userId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('aborts mid-restore after an object put; deletes the written key and frees the slot for the next confirm', async () => {
+    const controller = new AbortController();
+    const puts: string[] = [];
+    const deletes: string[] = [];
+    const fake: objectStorage.ObjectStorage = {
+      put: async (key) => {
+        puts.push(key);
+        controller.abort();
+      },
+      get: async () => ({ bytes: new Uint8Array(), contentType: 'image/png' }),
+      delete: async (key) => {
+        deletes.push(key);
+      },
+      list: async () => [],
+    };
+    vi.spyOn(objectStorage, 'getObjectStorage').mockReturnValue(fake);
+
+    const userId = await seedUser();
+    const a = acct({ isDefault: true });
+    // A large notes field pads the archive well past the reader's 8 KiB chunk, so
+    // there is still unread archive data (positions.ndjson's bulk) after the
+    // image is handled: the abort is certain to be noticed before the read loop
+    // (and the transaction) ends, never racing validation speed.
+    const p = pos(a.id, { notes: 'x'.repeat(50_000) });
+    const pi = {
+      id: randomUUID(),
+      positionId: p.id,
+      part: { type: 'image', format: 'png', entry: 'images/positions/000001.png' },
+      createdAt: TS,
+    };
+    const PNG = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    const err = await runConfirm(
+      userId,
+      {
+        accounts: [a],
+        positions: [p],
+        positionImages: [pi],
+        images: { 'images/positions/000001.png': PNG },
+      },
+      { signal: controller.signal },
+    ).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ImportTimedOutError);
+    expect((err as { statusCode: number }).statusCode).toBe(422);
+    expect(puts).toHaveLength(1);
+    expect(deletes).toEqual(puts);
+
+    const rows = await db.select().from(accounts).where(eq(accounts.userId, userId));
+    expect(rows).toHaveLength(0);
+
+    vi.restoreAllMocks();
+    const otherUserId = await seedUser();
+    const result = await runConfirm(otherUserId, { accounts: [acct({ isDefault: true })] });
+    expect(result.counts.accounts).toBe(1);
+  });
+
+  // Regression guard: already true at base (assertTargetEmpty runs unchanged
+  // inside the restore transaction), kept green by this task's refactor.
+  it('refuses a confirm into a target already holding data (409)', async () => {
+    const userId = await seedUser();
+    await db.insert(accounts).values({ userId, name: 'existing', currency: 'USD' });
+
+    const err = await runConfirm(userId, {
+      accounts: [acct({ isDefault: true })],
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ImportTargetNotEmptyError);
+    expect((err as { statusCode: number }).statusCode).toBe(409);
   });
 });
