@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, utimes } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +54,7 @@ import {
   ImportTargetNotEmptyError,
   ImportTimedOutError,
 } from './account-data.errors';
-import { confirmImport, previewImport } from './import.service';
+import { confirmImport, previewImport, sweepStaleImportDirs } from './import.service';
 
 // Design C6 import service, against real tradr_test rolled back per test by the
 // single-connection harness (test-setup.ts) — `db` is that per-test transaction and
@@ -939,5 +939,32 @@ describe('confirmImport with signal, startedAt and deadlineMs (design C3)', () =
 
     expect(err).toBeInstanceOf(ImportTargetNotEmptyError);
     expect((err as { statusCode: number }).statusCode).toBe(409);
+  });
+});
+
+// --- Boot sweep (design C5, Reliability NFR) ---------------------------------
+
+describe('sweepStaleImportDirs (design C5)', () => {
+  it('removes an eleven-minute-old tradr-import-* directory, keeps a fresh one, and counts at least 1', async () => {
+    const previousTmpdir = process.env.TMPDIR;
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ikau-sweep-root-'));
+    process.env.TMPDIR = root;
+    try {
+      const now = Date.now();
+      const stale = await mkdtemp(path.join(root, 'tradr-import-'));
+      const eleven = now - 11 * 60 * 1000;
+      await utimes(stale, eleven / 1000, eleven / 1000);
+      const fresh = await mkdtemp(path.join(root, 'tradr-import-'));
+
+      const removed = await sweepStaleImportDirs(now);
+
+      expect(removed).toBeGreaterThanOrEqual(1);
+      await expect(readdir(stale)).rejects.toThrow();
+      await expect(readdir(fresh)).resolves.toEqual([]);
+    } finally {
+      if (previousTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpdir;
+      await rm(root, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });
