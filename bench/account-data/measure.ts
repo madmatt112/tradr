@@ -1,18 +1,26 @@
 /**
- * Drive export + import against a running API and sample its memory while it runs
- * (spec account-export-import, task 19). Signs in to a base URL, then times each
- * step — export (empty), import preview, import confirm, and a second export of the
- * now-restored data — while polling the metrics endpoint every second for
- * `process_resident_memory_bytes` and `nodejs_heap_size_used_bytes`
- * (apps/api/src/features/metrics/metrics.registry.ts:176; armed on staging in
- * tradr-hosted fly.staging.toml). Prints a per-step wall time + peak RSS/heap table.
+ * Drive export + import against a running API, sampling its health and memory
+ * while it runs (spec account-export-import, task 19; this spec, task 12, for
+ * the trust marks and Origin header).
+ * Signs in to a base URL, then times each step — export (empty), import
+ * preview, import confirm, and a second export of the now-restored data —
+ * while polling `/api/health` every 5 s (5 s timeout) and the metrics endpoint
+ * every second for `process_resident_memory_bytes` and
+ * `nodejs_heap_size_used_bytes`
+ * (apps/api/src/features/metrics/metrics.registry.ts:176; armed on staging via
+ * the staging configuration). Prints a per-step wall time, peak RSS/heap
+ * with a trust mark, and health table.
  *
  * Portable to either target: the local `docker run --memory=256m` container and,
  * once Deploy Staging has shipped this branch, the 256 MB staging machine.
  *
  * Run with tsx:
  *   BASE_URL=http://localhost:3100 METRICS_URL=http://localhost:9464/metrics \
+ *     ORIGIN=http://localhost:3100 \
  *     tsx bench/account-data/measure.ts <archivePath> [label]
+ *
+ * ORIGIN, when set, is sent as the `Origin` header on every POST (register
+ * included) so the bench clears a split-origin CSRF check with no preload shim.
  */
 import { createReadStream, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -23,15 +31,18 @@ import { Readable } from 'node:stream';
 const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3100';
 const METRICS_URL = process.env.METRICS_URL ?? 'http://localhost:9464/metrics';
 const SKIP_EXPORT_AFTER = process.env.SKIP_EXPORT_AFTER === '1';
+const ORIGIN = process.env.ORIGIN;
 /* eslint-enable no-restricted-syntax */
 
 const MIB = 1024 * 1024;
+const METRICS_INTERVAL_MS = 1_000;
+const METRICS_TIMEOUT_MS = 5_000;
+const STALE_GAP_MS = 5_000;
+const HEALTH_INTERVAL_MS = 5_000;
+const HEALTH_TIMEOUT_MS = 5_000;
 
-interface Sample {
-  tMs: number;
-  step: string;
-  rss: number;
-  heap: number;
+interface Steppable {
+  setStep(step: string): void;
 }
 
 interface StepResult {
@@ -52,8 +63,126 @@ function parseGauge(text: string, name: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-class MetricsSampler {
-  readonly samples: Sample[] = [];
+interface ScrapeAttempt {
+  tMs: number;
+  durationMs: number;
+  step: string;
+  ok: boolean;
+  rss?: number;
+  heap?: number;
+}
+
+interface StepBound {
+  step: string;
+  startMs: number;
+  endMs?: number;
+}
+
+// Keeps one record per scrape attempt — failures included — so a step's memory
+// figure can be marked untrustworthy instead of silently reusing a stale or
+// missing reading (design C10, Requirement 9.2).
+class MetricsSampler implements Steppable {
+  readonly attempts: ScrapeAttempt[] = [];
+  private readonly bounds: StepBound[] = [];
+  private timer?: ReturnType<typeof setInterval>;
+  private step = 'idle';
+  private readonly startMs = Date.now();
+
+  setStep(step: string): void {
+    const now = Date.now() - this.startMs;
+    const prev = this.bounds[this.bounds.length - 1];
+    if (prev && prev.endMs === undefined) prev.endMs = now;
+    this.bounds.push({ step, startMs: now });
+    this.step = step;
+  }
+
+  // Records tMs as the attempt's COMPLETION time (not when the tick fired), so a
+  // scrape that hangs during a main-thread stall and resolves late lands late in
+  // trusted()'s gap check, instead of at its regular ~1s cadence (design C10,
+  // Requirement 9.2). A timeout matching the health sampler's bounds how long a
+  // hung scrape can delay that reckoning.
+  start(): void {
+    const tick = async (): Promise<void> => {
+      const step = this.step;
+      const t0 = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), METRICS_TIMEOUT_MS);
+      const record = (ok: boolean, rss?: number, heap?: number): void => {
+        const now = Date.now();
+        this.attempts.push({ tMs: now - this.startMs, durationMs: now - t0, step, ok, rss, heap });
+      };
+      try {
+        const res = await fetch(METRICS_URL, { signal: controller.signal });
+        if (!res.ok) {
+          record(false);
+          return;
+        }
+        const text = await res.text();
+        const rss = parseGauge(text, 'process_resident_memory_bytes');
+        const heap = parseGauge(text, 'nodejs_heap_size_used_bytes');
+        record(rss !== undefined, rss, heap);
+      } catch {
+        // A scrape can race a restart or time out — recorded as a failed attempt,
+        // not dropped.
+        record(false);
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+    void tick();
+    this.timer = setInterval(() => void tick(), METRICS_INTERVAL_MS);
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+  }
+
+  peakRss(step?: string): number {
+    const rows = step ? this.attempts.filter((a) => a.step === step) : this.attempts;
+    return rows.reduce((max, a) => Math.max(max, a.ok ? (a.rss ?? 0) : 0), 0);
+  }
+
+  peakHeap(step?: string): number {
+    const rows = step ? this.attempts.filter((a) => a.step === step) : this.attempts;
+    return rows.reduce((max, a) => Math.max(max, a.ok ? (a.heap ?? 0) : 0), 0);
+  }
+
+  // A step's memory figure is untrustworthy when any scrape attempt during it
+  // failed, or when the gap between the step's start, its successful scrapes
+  // and its end exceeds STALE_GAP_MS. No earlier reading is reused either way.
+  trusted(step: string): boolean {
+    const bound = this.bounds.find((b) => b.step === step);
+    if (!bound || bound.endMs === undefined) return false;
+    const rows = this.attempts.filter((a) => a.step === step);
+    if (rows.some((a) => !a.ok)) return false;
+    const points = [bound.startMs, ...rows.map((a) => a.tMs).sort((a, b) => a - b), bound.endMs];
+    for (let i = 1; i < points.length; i++) {
+      if (points[i] - points[i - 1] > STALE_GAP_MS) return false;
+    }
+    return true;
+  }
+}
+
+// --- health sampler ------------------------------------------------------------
+
+interface HealthSample {
+  tMs: number;
+  step: string;
+  ok: boolean;
+  ms: number;
+}
+
+interface HealthSummary {
+  count: number;
+  longestMs: number;
+  misses: { tMs: number; ms: number }[];
+}
+
+// Samples `GET /api/health` on its own clock (design C10, Requirement 9.1), so
+// a stalled event loop shows up as a miss here even when a metrics scrape —
+// served by the same listener but recorded separately — still succeeds.
+class HealthSampler implements Steppable {
+  readonly samples: HealthSample[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private step = 'idle';
   private readonly startMs = Date.now();
@@ -64,40 +193,39 @@ class MetricsSampler {
 
   start(): void {
     const tick = async (): Promise<void> => {
+      const step = this.step;
+      const t0 = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
       try {
-        const res = await fetch(METRICS_URL);
-        if (!res.ok) return;
-        const text = await res.text();
-        const rss = parseGauge(text, 'process_resident_memory_bytes');
-        const heap = parseGauge(text, 'nodejs_heap_size_used_bytes');
-        if (rss !== undefined) {
-          this.samples.push({
-            tMs: Date.now() - this.startMs,
-            step: this.step,
-            rss,
-            heap: heap ?? 0,
-          });
-        }
+        const res = await fetch(`${BASE_URL}/api/health`, { signal: controller.signal });
+        this.samples.push({
+          tMs: t0 - this.startMs,
+          step,
+          ok: res.status === 200,
+          ms: Date.now() - t0,
+        });
       } catch {
-        /* transient — a scrape can race a restart */
+        this.samples.push({ tMs: t0 - this.startMs, step, ok: false, ms: Date.now() - t0 });
+      } finally {
+        clearTimeout(timeout);
       }
     };
     void tick();
-    this.timer = setInterval(() => void tick(), 1_000);
+    this.timer = setInterval(() => void tick(), HEALTH_INTERVAL_MS);
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
   }
 
-  peakRss(step?: string): number {
+  summary(step?: string): HealthSummary {
     const rows = step ? this.samples.filter((s) => s.step === step) : this.samples;
-    return rows.reduce((max, s) => Math.max(max, s.rss), 0);
-  }
-
-  peakHeap(step?: string): number {
-    const rows = step ? this.samples.filter((s) => s.step === step) : this.samples;
-    return rows.reduce((max, s) => Math.max(max, s.heap), 0);
+    return {
+      count: rows.length,
+      longestMs: rows.reduce((max, s) => Math.max(max, s.ms), 0),
+      misses: rows.filter((s) => !s.ok).map((s) => ({ tMs: s.tMs, ms: s.ms })),
+    };
   }
 }
 
@@ -109,6 +237,11 @@ function uniqueIp(): string {
   return `10.99.19.${Math.floor(Math.random() * 254) + 1}`;
 }
 
+// Attach the Origin header to a POST when ORIGIN is set (Requirement 9.5).
+function withOrigin(headers: Record<string, string>): Record<string, string> {
+  return ORIGIN ? { ...headers, Origin: ORIGIN } : headers;
+}
+
 // Register a fresh user and capture the session cookie. A unique forwarded IP
 // keeps repeated runs out of the /register per-IP limiter (the container trusts
 // 127.0.0.1 via TRUSTED_PROXIES).
@@ -116,7 +249,7 @@ async function register(): Promise<string> {
   const email = `bench-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
   const res = await fetch(`${BASE_URL}/api/auth/register`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': uniqueIp() },
+    headers: withOrigin({ 'Content-Type': 'application/json', 'X-Forwarded-For': uniqueIp() }),
     body: JSON.stringify({ email, password: 'bench-password-1234' }),
   });
   if (res.status !== 201) {
@@ -139,11 +272,11 @@ function archiveBody(archivePath: string): { body: ReadableStream; contentLength
 }
 
 async function timed(
-  sampler: MetricsSampler,
+  steppables: Steppable[],
   step: string,
   fn: () => Promise<Partial<StepResult>>,
 ): Promise<StepResult> {
-  sampler.setStep(step);
+  for (const s of steppables) s.setStep(step);
   const start = Date.now();
   try {
     const extra = await fn();
@@ -153,7 +286,7 @@ async function timed(
     const seconds = (Date.now() - start) / 1000;
     return { step, seconds, ok: false, note: err instanceof Error ? err.message : String(err) };
   } finally {
-    sampler.setStep('idle');
+    for (const s of steppables) s.setStep('idle');
   }
 }
 
@@ -175,7 +308,7 @@ async function drain(res: Response): Promise<number> {
 async function exportStep(): Promise<Partial<StepResult>> {
   const res = await fetch(`${BASE_URL}/api/account-data/export`, {
     method: 'POST',
-    headers: { Cookie: sessionCookie },
+    headers: withOrigin({ Cookie: sessionCookie }),
   });
   if (!res.ok) throw new Error(`export ${res.status}: ${await res.text()}`);
   const bytes = await drain(res);
@@ -188,7 +321,7 @@ async function previewStep(
   const { body, contentLength } = archiveBody(archivePath);
   const res = await fetch(`${BASE_URL}/api/account-data/import/preview`, {
     method: 'POST',
-    headers: { Cookie: sessionCookie, 'Content-Type': 'application/zip' },
+    headers: withOrigin({ Cookie: sessionCookie, 'Content-Type': 'application/zip' }),
     body,
     // Streamed request body requires half-duplex.
     duplex: 'half',
@@ -207,7 +340,7 @@ async function confirmStep(archivePath: string, digest: string): Promise<Partial
   const { body } = archiveBody(archivePath);
   const res = await fetch(`${BASE_URL}/api/account-data/import?digest=${digest}`, {
     method: 'POST',
-    headers: { Cookie: sessionCookie, 'Content-Type': 'application/zip' },
+    headers: withOrigin({ Cookie: sessionCookie, 'Content-Type': 'application/zip' }),
     body,
     duplex: 'half',
   } as RequestInit);
@@ -224,33 +357,53 @@ function fmtMiB(bytes: number): string {
   return `${(bytes / MIB).toFixed(1)} MiB`;
 }
 
-function report(label: string, results: StepResult[], sampler: MetricsSampler): void {
+function report(
+  label: string,
+  results: StepResult[],
+  sampler: MetricsSampler,
+  health: HealthSampler,
+): void {
   const peakRss = sampler.peakRss();
+  const overallHealth = health.summary();
   console.log(`\n=== account-data measurement: ${label} ===`);
-  console.log(`base=${BASE_URL} metrics=${METRICS_URL} samples=${sampler.samples.length}`);
-  console.log('step            seconds   status   peakRSS     peakHeap    detail');
+  console.log(
+    `base=${BASE_URL} metrics=${METRICS_URL} origin=${ORIGIN ?? '(none)'} ` +
+      `samples=${sampler.attempts.length} health=${overallHealth.count}`,
+  );
+  console.log(
+    'step            seconds   status   peakRSS     peakHeap  mem        health(n/longest/miss)   detail',
+  );
   for (const r of results) {
     const stepPeakRss = sampler.peakRss(r.step);
     const stepPeakHeap = sampler.peakHeap(r.step);
+    const mem = sampler.trusted(r.step) ? 'trusted' : 'untrusted';
+    const h = health.summary(r.step);
+    const healthStr = `${h.count}/${h.longestMs}ms/${h.misses.length}`;
     const detail = [r.bytes !== undefined ? fmtMiB(r.bytes) : '', r.note ?? '']
       .filter(Boolean)
       .join(' ');
     console.log(
-      `${r.step.padEnd(15)} ${r.seconds.toFixed(1).padStart(7)}   ${(r.ok ? 'ok' : 'FAIL').padEnd(6)}  ${fmtMiB(stepPeakRss).padStart(10)}  ${fmtMiB(stepPeakHeap).padStart(10)}  ${detail}`,
+      `${r.step.padEnd(15)} ${r.seconds.toFixed(1).padStart(7)}   ${(r.ok ? 'ok' : 'FAIL').padEnd(6)}  ${fmtMiB(stepPeakRss).padStart(10)}  ${fmtMiB(stepPeakHeap).padStart(10)}  ${mem.padEnd(9)}  ${healthStr.padEnd(24)} ${detail}`,
     );
   }
   console.log(`\noverall peak RSS : ${fmtMiB(peakRss)} (192 MiB pass line)`);
   console.log(`overall peak heap: ${fmtMiB(sampler.peakHeap())}`);
   console.log(
+    `overall health   : ${overallHealth.count} samples, longest ${overallHealth.longestMs}ms, ${overallHealth.misses.length} misses`,
+  );
+  console.log(
     JSON.stringify({
       label,
       peakRssMiB: Number((peakRss / MIB).toFixed(1)),
       peakHeapMiB: Number((sampler.peakHeap() / MIB).toFixed(1)),
+      health: overallHealth,
       steps: results.map((r) => ({
         step: r.step,
         seconds: Number(r.seconds.toFixed(1)),
         ok: r.ok,
         peakRssMiB: Number((sampler.peakRss(r.step) / MIB).toFixed(1)),
+        trustedMemory: sampler.trusted(r.step),
+        health: health.summary(r.step),
         note: r.note,
       })),
     }),
@@ -268,17 +421,20 @@ async function main(): Promise<void> {
   }
 
   const sampler = new MetricsSampler();
+  const health = new HealthSampler();
+  const steppables: Steppable[] = [sampler, health];
   sampler.start();
+  health.start();
 
   await register();
 
   const results: StepResult[] = [];
 
-  results.push(await timed(sampler, 'export-before', exportStep));
+  results.push(await timed(steppables, 'export-before', exportStep));
 
   let digest: string | undefined;
   results.push(
-    await timed(sampler, 'preview', async () => {
+    await timed(steppables, 'preview', async () => {
       const r = await previewStep(archivePath);
       digest = r.digest;
       return r;
@@ -286,20 +442,21 @@ async function main(): Promise<void> {
   );
 
   if (digest) {
-    results.push(await timed(sampler, 'confirm', () => confirmStep(archivePath, digest!)));
+    results.push(await timed(steppables, 'confirm', () => confirmStep(archivePath, digest!)));
   } else {
     results.push({ step: 'confirm', seconds: 0, ok: false, note: 'skipped: no digest' });
   }
 
   if (!SKIP_EXPORT_AFTER) {
-    results.push(await timed(sampler, 'export-after', exportStep));
+    results.push(await timed(steppables, 'export-after', exportStep));
   }
 
   // A final settle sample so idle RSS after the run is captured too.
   await new Promise((r) => setTimeout(r, 1_200));
   sampler.stop();
+  health.stop();
 
-  report(label, results, sampler);
+  report(label, results, sampler, health);
 }
 
 void main();
