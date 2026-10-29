@@ -318,6 +318,7 @@ describe('spoolAccountData', () => {
       rules: 1,
       positions: 1,
       fills: 1,
+      lotSelections: 0,
       positionTags: 1,
       positionImages: 1,
       ledgerEntries: 1,
