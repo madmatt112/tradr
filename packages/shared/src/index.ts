@@ -146,6 +146,7 @@ export * from './constants/expense-categories';
 export * from './constants/tags';
 export { CSV_IMPORT_PRESETS, mappingColumns } from './constants/csv-import-presets';
 export * from './lib/occ';
+export * from './lib/tax-lots';
 export * from './fees';
 export { calculateTrade } from './calculator';
 export {

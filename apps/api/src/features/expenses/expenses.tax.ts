@@ -10,6 +10,8 @@
  */
 import { Decimal } from 'decimal.js';
 
+import { holdTerm } from '@tradr/shared';
+
 import type { CandidatePositionRow, RealisedPositionRow } from './expenses.query';
 
 // ---------------------------------------------------------------------------
@@ -64,7 +66,6 @@ export function aggregatePerCurrencyRealisedPnl(rows: RealisedPositionRow[]): Ma
 // ---------------------------------------------------------------------------
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const THREE_HUNDRED_SIXTY_FIVE_DAYS_MS = 365 * ONE_DAY_MS;
 const THIRTY_DAYS_MS = 30 * ONE_DAY_MS;
 
 /**
@@ -83,8 +84,7 @@ export function classifyUSHoldPeriod(rows: RealisedPositionRow[]): {
 
   for (const row of rows) {
     if (row.closedAt === null) continue;
-    const held = new Date(row.closedAt).getTime() - new Date(row.openedAt).getTime();
-    const bucket = held <= THREE_HUNDRED_SIXTY_FIVE_DAYS_MS ? shortTerm : longTerm;
+    const bucket = holdTerm(row.openedAt, row.closedAt) === 'short' ? shortTerm : longTerm;
     const current = bucket.get(row.currency) ?? new Decimal(0);
     bucket.set(row.currency, current.plus(new Decimal(row.realisedPnl)));
   }
