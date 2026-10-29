@@ -350,17 +350,54 @@ grand total, never a zero.
 ### Tax summary
 
 The tax summary reports your **realised P&L for the year, one figure per
-currency**. What else it shows depends on the tax jurisdiction set in your
-profile.
+currency**. What else it shows depends on your tax jurisdiction and your lot
+method, both set in your profile.
 
-**Only a US jurisdiction splits that P&L into short-term and long-term.** A
-position held 365 days or fewer is short-term; a longer hold is long-term.
-Canada and every other jurisdiction leave the split empty.
+**Lots.** Each fill that opens or adds to a position becomes one lot. A lot
+keeps its own price, fee and open date.
 
-Losses can raise a flag. A **US wash sale** or a **Canadian superficial loss**
-is flagged when a matching trade sits within 30 days either side of the loss.
-The flag is a note only — **Tradr never adjusts your cost basis** — and
-jurisdiction "other" raises no flags.
+**Lot method.** Tradr matches each sale against your lots with one of two
+methods.
+
+- **FIFO** matches a sale against your oldest open lot first. It splits a
+  sale across lots when one lot does not cover the whole sale. FIFO is the
+  default method for a US jurisdiction, for jurisdiction "other", and when no
+  jurisdiction is stored.
+- **Average cost** pools every lot into one cost and one date per position.
+  This is the same figure your journal, ledger and performance pages use.
+  Average cost is the default method for a Canadian jurisdiction.
+
+You can set your own method on the tax summary page. Your choice changes no
+fill, lot or ledger row; it only changes which method builds this page.
+
+**Specific identification.** Under FIFO, you can pick which lots a sale
+closes instead of taking the oldest lots first. Pick lots in the fill dialog
+when you record or edit a sale. Clear your picks to match that sale by FIFO
+again.
+
+**The per-lot split.** Under FIFO, each matched lot gets its own row, with
+its own gross, fees and net. For a US jurisdiction only, a row is short-term
+when its sale date falls 365 days or fewer after its lot's open date, and
+long-term after that. Canada and every other jurisdiction leave the term
+empty on every row.
+
+Under average cost, the tax summary keeps today's figures: one realised P&L
+row per position, no lot rows, and the US split on the position's own open
+and close dates.
+
+Losses can raise a flag. A **US wash sale** or a **Canadian superficial
+loss** is flagged when a matching trade sits within 30 days either side of
+the loss. Under FIFO, a flag uses the matched lot's own open and close dates;
+under average cost, it uses the position's dates, as before. For an option,
+a flag matches on the underlying only. It does not compare strike or
+expiration, so a replacement option on the same underlying can still raise a
+flag even at a different strike or expiration. The flag is a note only.
+**Tradr never adjusts your cost basis**, and jurisdiction "other" raises no
+flags.
+
+**The journal keeps average cost.** Your lot method changes only this page.
+Your journal, account balance and every performance figure always use
+average cost, even when your tax summary shows FIFO.
 
 ### Black-Scholes
 
