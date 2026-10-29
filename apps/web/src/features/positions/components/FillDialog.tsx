@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { type Resolver, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
@@ -27,8 +27,11 @@ import { Textarea } from '@/components/ui/textarea';
 
 import { useAccountFeeSchedule } from '../hooks/useAccountFeeSchedule';
 import { useAddFill, useUpdateFill } from '../hooks/usePosition';
+import { usePositionLots } from '../hooks/usePositionLots';
 import { QUANTITY_PRESETS, defaultFillPrice, presetQuantity } from '../utils/fillDefaults';
 import { computeFillFee } from '../utils/fillFees';
+
+import { LotPicker, sumLotSelection, type LotSelectionItem } from './LotPicker';
 
 // A `datetime-local` input yields "YYYY-MM-DDTHH:mm", which the API schemas'
 // `.datetime()` rule rejects (it wants a full ISO instant). The form validates
@@ -110,6 +113,25 @@ export function FillDialog({
   const feeIsCalculable = !isEdit && !!position && feeSchedule !== null;
   const [feeOverride, setFeeOverride] = useState(false);
 
+  // The specific-identification pick for this exit (design C11). `null` means
+  // FIFO; an edit seeds it from the fill's stored selection so an untouched
+  // picker can be told apart from a cleared one at submit time.
+  const [lotSelectionValue, setLotSelectionValue] = useState<LotSelectionItem[] | null>(
+    fill?.lotSelection ?? null,
+  );
+  const lotSelectionInitialRef = useRef<LotSelectionItem[] | null>(fill?.lotSelection ?? null);
+  // AC 4.3's mismatch guard only applies once the user has actually acted on
+  // the picker in THIS session — a stored selection opens in pick mode
+  // (AC 4.6) and must stay submittable untouched even though nothing here
+  // re-validates it sums to the fill's current quantity.
+  const [lotPickerTouched, setLotPickerTouched] = useState(false);
+  // Matches the exact string the widget was seeded with below, so an untouched
+  // field compares equal without a lossy local-time round trip through
+  // `Date` (a bare `new Date(dateOnlyString)` parses as LOCAL time).
+  const initialFilledAtRef = useRef<string>(
+    fill?.filledAt ? new Date(fill.filledAt).toISOString().slice(0, 16) : '',
+  );
+
   const form = useForm<CreateFillInput>({
     // `fees`'s `.default('0')` makes zod's own input type optional for it,
     // and the edit schema drops required fields entirely, so the resolver's
@@ -153,6 +175,7 @@ export function FillDialog({
       filledAt: new Date().toISOString().slice(0, 16),
     });
     setFeeOverride(false);
+    setLotPickerTouched(false);
     // `form` is stable across renders; re-seed only on an open transition or a
     // change of direction.
   }, [open, defaultType, isEdit, position, form]);
@@ -160,6 +183,34 @@ export function FillDialog({
   const watchedType = form.watch('type');
   const watchedPrice = form.watch('price');
   const watchedQuantity = form.watch('quantity');
+  const watchedFilledAt = form.watch('filledAt');
+
+  // Lots only matter for an exit, and only while the dialog is actually open
+  // (restriction: no network call on an entry or a closed dialog). On edit,
+  // the endpoint excludes the edited exit's own reservation from `available`.
+  const { data: lotsData } = usePositionLots(
+    positionId,
+    isEdit ? fill!.id : null,
+    open && watchedType === 'exit',
+  );
+  const availableLotCount = lotsData?.lots.filter((lot) => Number(lot.available) > 0).length ?? 0;
+  const showLotPicker =
+    watchedType === 'exit' && lotsData?.method === 'fifo' && availableLotCount >= 2;
+  const showClearLotSelection =
+    watchedType === 'exit' &&
+    !showLotPicker &&
+    lotsData?.method === 'fifo' &&
+    isEdit &&
+    !!fill?.lotSelection &&
+    fill.lotSelection.length > 0;
+  const lotPickMismatch =
+    lotPickerTouched &&
+    lotSelectionValue !== null &&
+    sumLotSelection(lotSelectionValue) !== (Number(watchedQuantity) || 0);
+  const setLotSelection = (next: LotSelectionItem[] | null) => {
+    setLotSelectionValue(next);
+    setLotPickerTouched(true);
+  };
 
   // Recomputed on every keystroke so the preview tracks price and quantity.
   const previewFee =
@@ -187,13 +238,24 @@ export function FillDialog({
       if (data.quantity !== fill!.quantity) updateData.quantity = data.quantity;
       if (data.fees !== fill!.fees) updateData.fees = data.fees;
       if (data.notes !== fill!.notes) updateData.notes = data.notes;
-      if (filledAt !== fill!.filledAt) updateData.filledAt = filledAt;
+      // Compared against the widget string it was seeded with, not the raw
+      // ISO round trip — `new Date(data.filledAt).toISOString()` reinterprets
+      // a bare "YYYY-MM-DDTHH:mm" as LOCAL time, so an untouched field would
+      // otherwise read as changed outside UTC.
+      if (data.filledAt !== initialFilledAtRef.current) updateData.filledAt = filledAt;
+      if (JSON.stringify(lotSelectionValue) !== JSON.stringify(lotSelectionInitialRef.current)) {
+        updateData.lotSelection = lotSelectionValue;
+      }
       await updateFill.mutateAsync({ fillId: fill!.id, data: updateData });
     } else {
       // Schedule-derived fees are the server's job — submitting the previewed
       // number here would have the position count it twice.
       const fees = feeIsCalculable && !feeOverride ? '0' : data.fees;
-      await addFill.mutateAsync({ ...data, fees, filledAt });
+      const payload: CreateFillInput = { ...data, fees, filledAt };
+      // FIFO (null) sends no selection at all — CreateFillSchema's
+      // `lotSelection` is optional-only, not nullable.
+      if (lotSelectionValue) payload.lotSelection = lotSelectionValue;
+      await addFill.mutateAsync(payload);
       // Before the close, per onAdded's contract.
       onAdded?.();
     }
@@ -289,6 +351,28 @@ export function FillDialog({
             </div>
           </div>
 
+          {showLotPicker && lotsData && (
+            <LotPicker
+              lots={lotsData.lots}
+              jurisdiction={lotsData.jurisdiction}
+              filledAt={watchedFilledAt}
+              quantity={watchedQuantity}
+              value={lotSelectionValue}
+              onChange={setLotSelection}
+            />
+          )}
+          {showClearLotSelection && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
+              onClick={() => setLotSelection(null)}
+            >
+              Clear lot selection
+            </Button>
+          )}
+
           <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -365,7 +449,11 @@ export function FillDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" className="cursor-pointer" disabled={isPending}>
+            <Button
+              type="submit"
+              className="cursor-pointer"
+              disabled={isPending || lotPickMismatch}
+            >
               {isPending ? 'Saving...' : isEdit ? 'Save' : 'Add'}
             </Button>
           </div>
