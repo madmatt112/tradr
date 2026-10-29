@@ -876,3 +876,343 @@ describe('lot selection on create', () => {
     expect(simplify(ledgerSel)).toEqual(simplify(ledgerNoSel));
   });
 });
+
+/**
+ * Edit, clear and guard lot selections on fill edits and removals (tax-lots
+ * task 6, design C5 write steps 5-7).
+ *
+ * Contract per criterion — pre-condition / call / observable result / expected-value source:
+ *
+ * AC 3.7 (new selection on a quantity edit, success path):
+ *   an exit with a stored selection -> PUT the exit with a new quantity and a
+ *   new lotSelection that sums to it -> 200, and `fill_lot_selections` holds
+ *   exactly the new rows, the old ones gone. Source: design C5 step 5 ("a
+ *   selection is checked against the post-edit quantity and replaces the
+ *   stored rows"), requirements AC 3.7.
+ *
+ * AC 3.7 / Error Handling item 3 (quantity edit, no new selection):
+ *   an exit with a stored selection -> PUT a new quantity with no
+ *   `lotSelection` field -> 409 whose message states both the stored
+ *   selection's sum and the new quantity. Source: design C5 step 5 ("a
+ *   quantity change on an exit with rows is a ConflictError"), design D12 /
+ *   Error Handling item 8 (the same fixed-message 409, not varied by method),
+ *   this document's D9 ("the 409 ... always names both ways out").
+ *
+ * AC 3.8 (null clears the selection):
+ *   an exit with a stored selection -> PUT `lotSelection: null` (no quantity
+ *   change) -> 200 and zero stored rows for that exit; a further PUT changing
+ *   only its quantity, now that no rows remain, succeeds instead of hitting
+ *   the AC 3.7 guard above — proving the exit is no longer selection-tracked
+ *   and has reverted to FIFO. Source: design C5 step 5 ("null deletes them"),
+ *   requirements AC 3.8.
+ *
+ * AC 3.5 (edit moves an earlier exit's match):
+ *   an earlier, unselected FIFO exit has already consumed a lot in full; a
+ *   later exit holds a selection on a different lot -> PUT the later exit's
+ *   selection to reserve part of the first lot instead -> 409 naming the
+ *   earlier exit, and the later exit's stored selection rows are unchanged
+ *   (rolled back). Source: design C5 step 4 (`assertLotSelectionsTx` with
+ *   `slicesBefore`), Error Handling item 4, mirroring task 5's analogous
+ *   create-path case but through an edit.
+ *
+ * AC 3.6 (entry quantity edit under a claim):
+ *   an entry fill is claimed in full by a selected exit -> PUT the entry's
+ *   quantity down below the claimed amount -> 409 naming the claiming exit,
+ *   and the entry's stored quantity is unchanged. Source: design C5 step 6
+ *   ("editFill on an entry with a quantity change calls assertLotSelectionsTx
+ *   after the update"), Error Handling item 5, requirements AC 3.6.
+ *
+ * AC 3.6 (entry removal under a claim):
+ *   an entry fill is claimed (in part) by a selected exit -> DELETE the entry
+ *   -> 409 naming the claiming exit, and nothing is deleted (fill count and
+ *   the selection row are unchanged). Source: design C5 step 7 ("removeFill
+ *   on an entry that any selection row names is a ConflictError naming the
+ *   claiming exit, checked before the delete"), Error Handling item 5,
+ *   requirements AC 3.6.
+ *
+ * Folded/out-of-scope criteria (recorded, not retested here):
+ *   - AC 1.4 ("the lot SHALL follow the edited fill or disappear, subject to
+ *     Requirement 3.6") — its unclaimed-entry-edit branch is already asserted
+ *     by the existing "updates fill price, quantity, and fees on an open
+ *     position" case above (unchanged by this task); its claimed branch IS
+ *     Requirement 3.6, covered by the two AC 3.6 cases in this block.
+ *   - Error Handling item 8 / design D12 (average-cost user, quantity-change
+ *     409) — the task's own D9 fixes the 409's message regardless of method,
+ *     with no settings read in the edit path, so the AC 3.7 failure case
+ *     above already exercises the one check both methods share; there is no
+ *     separate average-cost-only behaviour to assert.
+ *   - AC 3.9 (exit removal, and position deletion, clear every selection row)
+ *     — the task brief itself calls this "a regression guard" that "holds
+ *     through the task 2 foreign keys," and both branches already have a
+ *     green, existing assertion: `fill_lot_selections_exit_fill_id_fills_id_fk
+ *     is ON DELETE CASCADE` and
+ *     `fill_lot_selections_entry_fill_id_fills_id_fk is ON DELETE CASCADE`
+ *     (apps/api/src/db/expenses.migration.test.ts:151-162 and :164-175). A
+ *     `pg_constraint` check is a stronger guarantee than an API round trip —
+ *     Postgres enforces it mechanically — so no new test is added here.
+ *   - AC 3.13 (`@swagger` blocks and `tradr-api.json` regeneration) — not
+ *     reachable through this file's `authedRequest` seam, as task 5's fold
+ *     already recorded; enforced by CI's generated-pages `git diff
+ *     --exit-code` gate, not a vitest assertion.
+ */
+async function addSelectedExit(
+  cookie: string,
+  positionId: string,
+  body: {
+    price: string;
+    quantity: string;
+    fees: string;
+    filledAt: string;
+    lotSelection: { entryFillId: string; quantity: string }[];
+  },
+) {
+  const res = await authedRequest('POST', `/api/positions/${positionId}/fills`, cookie, {
+    type: 'exit',
+    ...body,
+  });
+  expect(res.status).toBe(201);
+  return res.json();
+}
+
+describe('edit, clear and guard lot selections on fill edits and removals', () => {
+  it('replaces the stored rows when an exit edit carries a new selection summing to the new quantity', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '5', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    const entry2 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-02T10:00:00Z' }),
+    );
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '5' }],
+    });
+
+    const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${exit.id}`, cookie, {
+      quantity: '8',
+      lotSelection: [
+        { entryFillId: entry1.id, quantity: '3' },
+        { entryFillId: entry2.id, quantity: '5' },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const rows = await db
+      .select()
+      .from(fillLotSelections)
+      .where(eq(fillLotSelections.exitFillId, exit.id));
+    expect(rows).toHaveLength(2);
+    const byEntry = new Map(rows.map((r) => [r.entryFillId, Number(r.quantity)]));
+    expect(byEntry.get(entry1.id)).toBe(3);
+    expect(byEntry.get(entry2.id)).toBe(5);
+  });
+
+  it('rejects a quantity edit on a selected exit that carries no new selection, naming both quantities', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '20' }));
+    await openPos(cookie, pos.id);
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '7',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '7' }],
+    });
+
+    const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${exit.id}`, cookie, {
+      quantity: '9',
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.message).toContain('7');
+    expect(body.error.message).toContain('9');
+  });
+
+  it('clears the stored selection on a null edit and lets the exit revert to FIFO', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '10' }));
+    await openPos(cookie, pos.id);
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '4',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '4' }],
+    });
+
+    const clearRes = await authedRequest(
+      'PUT',
+      `/api/positions/${pos.id}/fills/${exit.id}`,
+      cookie,
+      { lotSelection: null },
+    );
+    expect(clearRes.status).toBe(200);
+
+    const rows = await db
+      .select()
+      .from(fillLotSelections)
+      .where(eq(fillLotSelections.exitFillId, exit.id));
+    expect(rows).toHaveLength(0);
+
+    // Now unselected: a further quantity-only edit must succeed — were the
+    // rows still present, this would hit the AC 3.7 guard above and 409.
+    const quantityRes = await authedRequest(
+      'PUT',
+      `/api/positions/${pos.id}/fills/${exit.id}`,
+      cookie,
+      { quantity: '6' },
+    );
+    expect(quantityRes.status).toBe(200);
+  });
+
+  it("rejects an edit that would change an earlier exit's FIFO match, and rolls back", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '5', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    const entry2 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '5', filledAt: '2025-01-02T10:00:00Z' }),
+    );
+
+    // Unselected FIFO exit: consumes entry1 (the oldest lot) in full.
+    const exitA = await addFill(
+      cookie,
+      pos.id,
+      makeFill({
+        type: 'exit',
+        quantity: '5',
+        price: '160.00',
+        filledAt: '2025-01-05T10:00:00Z',
+      }),
+    );
+
+    // A later exit, selected on entry2 — no conflict with exitA as created.
+    const exitB = await addSelectedExit(cookie, pos.id, {
+      price: '161.00',
+      quantity: '3',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry2.id, quantity: '3' }],
+    });
+
+    // Edit exitB to instead reserve part of entry1 — the lot exitA already
+    // consumed in full by FIFO. Same reservation-recompute behaviour task 5
+    // proved on create (apps/api/src/features/positions/lots.ts:90-176):
+    // exitA's match shifts from {entry1: 5} to {entry1: 2, entry2: 3}.
+    const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${exitB.id}`, cookie, {
+      lotSelection: [{ entryFillId: entry1.id, quantity: '3' }],
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.message).toContain(exitA.id);
+
+    const rows = await db
+      .select()
+      .from(fillLotSelections)
+      .where(eq(fillLotSelections.exitFillId, exitB.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.entryFillId).toBe(entry2.id);
+    expect(Number(rows[0]!.quantity)).toBe(3);
+  });
+
+  it('rejects an entry quantity edit that would leave a claim above the lot, naming the claiming exit', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '20', filledAt: '2025-01-02T10:00:00Z' }),
+    );
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '10',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '10' }],
+    });
+
+    const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${entry1.id}`, cookie, {
+      quantity: '5',
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.message).toContain(exit.id);
+
+    const detail = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    const detailBody = await detail.json();
+    const unchangedEntry1 = detailBody.fills.find((f: { id: string }) => f.id === entry1.id);
+    expect(unchangedEntry1.quantity).toBe(entry1.quantity);
+  });
+
+  it('rejects removing an entry fill claimed by a selected exit, naming the exit, and deletes nothing', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '20', filledAt: '2025-01-02T10:00:00Z' }),
+    );
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '5' }],
+    });
+
+    const res = await authedRequest(
+      'DELETE',
+      `/api/positions/${pos.id}/fills/${entry1.id}`,
+      cookie,
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.message).toContain(exit.id);
+
+    const detail = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    const detailBody = await detail.json();
+    expect(detailBody.fills).toHaveLength(3);
+
+    const rows = await db
+      .select()
+      .from(fillLotSelections)
+      .where(eq(fillLotSelections.exitFillId, exit.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.entryFillId).toBe(entry1.id);
+  });
+});
