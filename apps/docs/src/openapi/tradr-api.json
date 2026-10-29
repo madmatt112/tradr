@@ -4050,6 +4050,24 @@
                       "format": "uuid",
                       "type": "string"
                     },
+                    "lotSelection": {
+                      "description": "The stored selection on this fill, or null for an entry or an unselected exit.",
+                      "items": {
+                        "properties": {
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "type": "array"
+                    },
                     "notes": {
                       "nullable": true,
                       "type": "string"
@@ -4219,7 +4237,72 @@
         },
         "responses": {
           "200": {
-            "description": "The updated fill."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "fees": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "filledAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "lotSelection": {
+                      "items": {
+                        "properties": {
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "type": "array"
+                    },
+                    "notes": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "positionId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "entry",
+                        "exit"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The updated fill, carrying its stored `lotSelection` (null for an entry or an unselected exit).\n"
           },
           "400": {
             "description": "Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, or a `lotSelection` repeating an `entryFillId`."

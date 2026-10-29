@@ -651,13 +651,29 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   // (Requirement 6.1). Scoring never fails the read — a throw returns unscored.
   const compliance = await getPositionCompliance(db, userId, position.id, position.status);
 
+  // Stored selections for this position's fills (design C6, Requirement 3.14):
+  // one query for the whole detail read, not one per fill. Grouped by exit
+  // fill id so each fill below picks up its own array, or null for an entry
+  // or an unselected exit.
+  const selectionRows = await findLotSelectionsByPosition(db, position.id);
+  const selectionsByExit = new Map<string, { entryFillId: string; quantity: string }[]>();
+  for (const row of selectionRows) {
+    const items = selectionsByExit.get(row.exitFillId) ?? [];
+    items.push({ entryFillId: row.entryFillId, quantity: row.quantity });
+    selectionsByExit.set(row.exitFillId, items);
+  }
+  const fillsWithSelection = fillRows.map((f) => ({
+    ...f,
+    lotSelection: selectionsByExit.get(f.id) ?? null,
+  }));
+
   const detail = {
     ...position,
     // Account timezone defines the trading day the client uses to decide
     // whether a closed position may be reopened (R13 same-day rule). Surfaced
     // here so the frontend need not duplicate or guess the account's zone.
     accountTimezone,
-    fills: fillRows,
+    fills: fillsWithSelection,
     // Category-then-name ordered tag set; `[]` when the position carries none.
     tags,
     // Screenshots in creation order; `[]` when the position carries none.
@@ -1116,7 +1132,13 @@ export async function addFill(
   // not noticing at all. The web app publishes its own 'closed' event off this
   // flag, which is what keeps a balance-derived view (and the guided
   // walkthrough's close step) in step with a position that closed itself.
-  return { ...fill, positionClosed: closed !== null };
+  return {
+    ...fill,
+    positionClosed: closed !== null,
+    // The selection just validated and written (design C6) — already in hand
+    // from the request, so the response needs no extra read.
+    lotSelection: data.lotSelection ?? null,
+  };
 }
 
 // Tx-accepting variant — runs directly on the passed tx (no re-wrap / savepoint).
@@ -1509,7 +1531,26 @@ export async function editFill(
     // post-edit, so the ledger's time axis stays trade time rather than edit time.
     await runFillHooks(tx, positionId, userId, rows[0].filledAt);
 
-    return rows[0];
+    // The response carries the stored selection too (design C6). The clear and
+    // replace branches above already know the new value; anything else (an
+    // entry fill, or an exit this edit left untouched) reads what is actually
+    // stored now.
+    let lotSelection: { entryFillId: string; quantity: string }[] | null = null;
+    if (fill.type === 'exit') {
+      if (clearSelectionForThisExit) {
+        lotSelection = null;
+      } else if (replacementSelectionItems) {
+        lotSelection = replacementSelectionItems;
+      } else {
+        const currentSelections = await findLotSelectionsByPosition(tx, positionId);
+        const forThisExit = currentSelections
+          .filter((s) => s.exitFillId === fillId)
+          .map((s) => ({ entryFillId: s.entryFillId, quantity: s.quantity }));
+        lotSelection = forThisExit.length > 0 ? forThisExit : null;
+      }
+    }
+
+    return { ...rows[0], lotSelection };
   });
 }
 

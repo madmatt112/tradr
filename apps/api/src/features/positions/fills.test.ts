@@ -1288,13 +1288,19 @@ describe('return the stored selection on fill reads', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
 
-    const byId = new Map(body.fills.map((f: { id: string }) => [f.id, f]));
-    expect(byId.get(entry1.id).lotSelection).toBeNull();
-    expect(byId.get(plainExit.id).lotSelection).toBeNull();
-    const selected = byId.get(selectedExit.id).lotSelection;
+    type FillWithSelection = {
+      id: string;
+      lotSelection: { entryFillId: string; quantity: string }[] | null;
+    };
+    const byId = new Map<string, FillWithSelection>(
+      body.fills.map((f: FillWithSelection) => [f.id, f]),
+    );
+    expect(byId.get(entry1.id)!.lotSelection).toBeNull();
+    expect(byId.get(plainExit.id)!.lotSelection).toBeNull();
+    const selected = byId.get(selectedExit.id)!.lotSelection!;
     expect(selected).toHaveLength(1);
-    expect(selected[0].entryFillId).toBe(entry1.id);
-    expect(Number(selected[0].quantity)).toBe(4);
+    expect(selected[0]!.entryFillId).toBe(entry1.id);
+    expect(Number(selected[0]!.quantity)).toBe(4);
   });
 
   it('carries the stored selection on the POST response of a selected exit', async () => {

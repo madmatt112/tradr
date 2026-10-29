@@ -100,6 +100,15 @@ const FillParamSchema = z.object({
  *                 filledAt: { type: string, format: date-time }
  *                 createdAt: { type: string, format: date-time }
  *                 positionClosed: { type: boolean }
+ *                 lotSelection:
+ *                   type: array
+ *                   nullable: true
+ *                   description: The stored selection on this fill, or null for an entry or an unselected exit.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       entryFillId: { type: string, format: uuid }
+ *                       quantity: { type: string, description: Decimal. }
  *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, a `lotSelection` on an entry fill, or a `lotSelection` repeating an `entryFillId`.' }
  *       404: { description: No such position for this user. }
  *       409: { description: 'The position is closed, an exit fill was sent to a position that is still a draft, a `lotSelection` names an entry fill that is not an entry of this position, its quantities do not sum to the exit quantity, its claims exceed a lot, or the write would change an earlier exit''s matched lots.' }
@@ -167,7 +176,34 @@ fillsRouter.post(
  *                     entryFillId: { type: string, format: uuid, description: Must be an entry fill of this position. }
  *                     quantity: { type: string, description: Positive decimal. }
  *     responses:
- *       200: { description: The updated fill. }
+ *       200:
+ *         description: >
+ *           The updated fill, carrying its stored `lotSelection` (null for an
+ *           entry or an unselected exit).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id: { type: string, format: uuid }
+ *                 positionId: { type: string, format: uuid }
+ *                 type:
+ *                   type: string
+ *                   enum: [entry, exit]
+ *                 price: { type: string, description: Decimal. }
+ *                 quantity: { type: string, description: Decimal. }
+ *                 fees: { type: string, description: Decimal. }
+ *                 notes: { type: string, nullable: true }
+ *                 filledAt: { type: string, format: date-time }
+ *                 createdAt: { type: string, format: date-time }
+ *                 lotSelection:
+ *                   type: array
+ *                   nullable: true
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       entryFillId: { type: string, format: uuid }
+ *                       quantity: { type: string, description: Decimal. }
  *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, or a `lotSelection` repeating an `entryFillId`.' }
  *       404: { description: No such position or fill for this user. }
  *       409: { description: 'The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit''s matched lots; or an entry quantity edit that would leave a selected exit''s claim above the lot.' }
