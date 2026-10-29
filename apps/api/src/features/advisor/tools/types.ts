@@ -66,9 +66,9 @@ export type ToolResult =
  * HARD CONSTRAINT — flat-object inputSchema (design §Component 2, REQ-1.6):
  * `inputSchema` MUST be a flat `z.object({...})` of scalar fields (string /
  * number / boolean / enum). NO nested objects, arrays of objects, unions, or
- * reused sub-schemas. The provider JSON Schema is derived (task 5) via the
- * `zod-to-json-schema` package:
- * `zodToJsonSchema(inputSchema, { target: 'jsonSchema7', $refStrategy: 'none' })`,
+ * reused sub-schemas. The provider JSON Schema is derived (task 5) via zod's
+ * built-in converter:
+ * `z.toJSONSchema(inputSchema, { target: 'draft-7' })`,
  * yielding a flat draft-07 schema; nesting/reuse
  * makes the converter emit `$ref`/`$defs`, which Anthropic `input_schema` and OpenAI
  * strict `function.parameters` handle inconsistently. Flat schemas guarantee
@@ -80,7 +80,7 @@ export interface ToolDefinition {
   description: string;
   category: ToolCategory;
   requires: ToolRequires;
-  /** v3 Zod schema; MUST satisfy the flat-object constraint above. */
+  /** Zod schema; MUST satisfy the flat-object constraint above. */
   inputSchema: z.ZodType;
   /**
    * Static worst-case egress bound in tokens (trade-data tools only), used for

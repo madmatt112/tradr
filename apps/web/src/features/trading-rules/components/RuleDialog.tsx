@@ -237,7 +237,7 @@ function buildDefinition(form: RuleForm): TradingRuleDefinition {
 
 // Map a rule's failed field parses onto the input that owns them: the last path
 // segment (`percent`, `amount`, `fields`, …) is the field key.
-function mapFieldErrors(issues: { path: (string | number)[]; message: string }[]): {
+function mapFieldErrors(issues: { path: PropertyKey[]; message: string }[]): {
   [key: string]: string;
 } {
   const out: { [key: string]: string } = {};

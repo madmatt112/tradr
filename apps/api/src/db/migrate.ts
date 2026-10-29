@@ -61,7 +61,10 @@ export async function runMigrations(): Promise<void> {
       types: { bigint: postgres.BigInt },
     },
   );
-  const migrationsDb = drizzle(migrationsSql, { schema });
+  // `drizzle`'s `Sql` constraint is contravariant in the custom `types` map,
+  // so the `bigint`-branded client does not satisfy it even though it is the
+  // same client at runtime.
+  const migrationsDb = drizzle(migrationsSql as unknown as postgres.Sql, { schema });
   try {
     await migrationsSql`SELECT pg_advisory_lock(${MIGRATIONS_LOCK_KEY})`;
     await migrate(migrationsDb, { migrationsFolder: MIGRATIONS_DIR });

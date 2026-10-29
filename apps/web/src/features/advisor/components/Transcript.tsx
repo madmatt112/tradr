@@ -38,6 +38,7 @@ import { useShallow } from 'zustand/shallow';
 import type {
   Message,
   ResponseMessageContentPart,
+  ToolCallPart,
   ToolResultPart,
 } from '@tradr/shared/schemas/advisor';
 
@@ -225,7 +226,7 @@ function CitesRow({ message }: { message: Message }) {
   const names = [
     ...new Set(
       message.contentParts
-        .filter((p): p is { type: 'tool_call'; id: string; name: string } => p.type === 'tool_call')
+        .filter((p): p is ToolCallPart => p.type === 'tool_call')
         .map((p) => p.name.replaceAll('_', ' ')),
     ),
   ];

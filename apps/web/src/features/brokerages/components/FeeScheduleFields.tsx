@@ -3,14 +3,19 @@ import { type Control, type FieldValues, type Path, useController } from 'react-
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-interface FeeFieldProps<T extends FieldValues> {
-  control: Control<T>;
+interface FeeFieldProps<T extends FieldValues, TTransformed extends FieldValues = T> {
+  control: Control<T, unknown, TTransformed>;
   name: Path<T>;
   label: string;
   disabled?: boolean;
 }
 
-function FeeField<T extends FieldValues>({ control, name, label, disabled }: FeeFieldProps<T>) {
+function FeeField<T extends FieldValues, TTransformed extends FieldValues = T>({
+  control,
+  name,
+  label,
+  disabled,
+}: FeeFieldProps<T, TTransformed>) {
   const { field, fieldState } = useController({ control, name });
 
   return (
@@ -31,15 +36,15 @@ function FeeField<T extends FieldValues>({ control, name, label, disabled }: Fee
   );
 }
 
-interface FeeScheduleFieldsProps<T extends FieldValues> {
-  control: Control<T>;
+interface FeeScheduleFieldsProps<T extends FieldValues, TTransformed extends FieldValues = T> {
+  control: Control<T, unknown, TTransformed>;
   disabled?: boolean;
 }
 
-export function FeeScheduleFields<T extends FieldValues>({
+export function FeeScheduleFields<T extends FieldValues, TTransformed extends FieldValues = T>({
   control,
   disabled,
-}: FeeScheduleFieldsProps<T>) {
+}: FeeScheduleFieldsProps<T, TTransformed>) {
   return (
     <div className="space-y-6">
       <fieldset className="space-y-3 rounded-md border p-4">
