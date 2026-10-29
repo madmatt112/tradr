@@ -1,5 +1,7 @@
 import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm';
 
+import type { LotMethod } from '@tradr/shared/lib/tax-lots';
+
 import type { Database, Transaction } from '@/db';
 import { ledgerEntries } from '@/db/schema/accounting.schema';
 import { accounts } from '@/db/schema/accounts.schema';
@@ -442,4 +444,37 @@ export async function updateUserTaxJurisdiction(
   value: TaxJurisdiction | null,
 ): Promise<void> {
   await tx.update(users).set({ taxJurisdiction: value }).where(eq(users.id, userId));
+}
+
+/**
+ * Read the user's stored jurisdiction and lot method together. Both are
+ * returned NULL straight through — the service resolves the effective
+ * method via `resolveLotMethod`.
+ */
+export async function getUserTaxSettings(
+  db: Database | Transaction,
+  userId: string,
+): Promise<{ taxJurisdiction: TaxJurisdiction | null; taxLotMethod: LotMethod | null }> {
+  const rows = await db
+    .select({ taxJurisdiction: users.taxJurisdiction, taxLotMethod: users.taxLotMethod })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return {
+    taxJurisdiction: (rows[0]?.taxJurisdiction as TaxJurisdiction | null | undefined) ?? null,
+    taxLotMethod: (rows[0]?.taxLotMethod as LotMethod | null | undefined) ?? null,
+  };
+}
+
+/**
+ * Update the user's stored lot method. Write-side — Transaction only. The
+ * CHECK constraint on `users.tax_lot_method` enforces the allowed set
+ * (`'fifo' | 'average'` or NULL).
+ */
+export async function updateUserTaxLotMethod(
+  tx: Transaction,
+  userId: string,
+  value: LotMethod | null,
+): Promise<void> {
+  await tx.update(users).set({ taxLotMethod: value }).where(eq(users.id, userId));
 }

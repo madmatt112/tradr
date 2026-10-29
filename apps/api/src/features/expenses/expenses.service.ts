@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits } from '@tradr/shared/constants/currencies';
 import { parseOccUnderlying } from '@tradr/shared/lib/occ';
+import { resolveLotMethod, type LotMethod } from '@tradr/shared/lib/tax-lots';
 import type {
   CreateExpenseInput,
   ExpenseListResponse,
@@ -27,12 +28,14 @@ import {
   deleteExpense,
   findExpenseById,
   getUserTaxJurisdiction,
+  getUserTaxSettings,
   insertExpense,
   listCandidatePositionsByYear,
   listExpenses,
   listRealisedPositionsForYear,
   updateExpense as updateExpenseRow,
   updateUserTaxJurisdiction,
+  updateUserTaxLotMethod,
   type ExpenseRow,
   type TaxJurisdiction,
 } from './expenses.query';
@@ -376,6 +379,32 @@ export async function setTaxJurisdiction(
 ): Promise<void> {
   await withTransaction(db, async (tx) => {
     await updateUserTaxJurisdiction(tx, userId, value);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tax lot method (design.md §C2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the user's stored lot method alongside its effective, resolved value.
+ * A stored method overrides the jurisdiction default (AC 2.2).
+ */
+export async function getTaxLotMethod(
+  userId: string,
+): Promise<{ taxLotMethod: LotMethod | null; effectiveMethod: LotMethod; isDefault: boolean }> {
+  const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
+  const { method, isDefault } = resolveLotMethod(taxLotMethod, taxJurisdiction);
+  return { taxLotMethod, effectiveMethod: method, isDefault };
+}
+
+/**
+ * Persist the user's lot method selection. `null` clears the column,
+ * returning the effective method to the jurisdiction default.
+ */
+export async function setTaxLotMethod(userId: string, value: LotMethod | null): Promise<void> {
+  await withTransaction(db, async (tx) => {
+    await updateUserTaxLotMethod(tx, userId, value);
   });
 }
 

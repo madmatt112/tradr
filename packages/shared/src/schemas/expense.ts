@@ -108,6 +108,14 @@ export const UpdateTaxJurisdictionInputSchema = z
   })
   .strict();
 
+export const LotMethodEnum = z.enum(['fifo', 'average']);
+
+export const UpdateTaxLotMethodInputSchema = z
+  .object({
+    taxLotMethod: LotMethodEnum.nullable(),
+  })
+  .strict();
+
 // Fee-rollup response — encodes `requirements.md` §3.1 verbatim. Decimal
 // fields are plain `z.string()` (NOT `positiveDecimal4`) because the server
 // emits raw `Decimal.toFixed(...)` strings and future surfaces may carry

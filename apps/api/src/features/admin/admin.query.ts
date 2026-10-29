@@ -894,6 +894,7 @@ export async function resetUserPreferences(
             displayCurrency: null,
             timezone: null,
             taxJurisdiction: null,
+            taxLotMethod: null,
             theme: 'system',
             buyingPowerBasis: 'cash',
             advisorTradeDataConsent: false,

@@ -5552,6 +5552,85 @@
         ]
       }
     },
+    "/api/users/me/tax-lot-method": {
+      "get": {
+        "description": "Authed. The effective method is the stored value if one is set, otherwise the jurisdiction default (average cost for CA, FIFO otherwise).\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "effectiveMethod": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "type": "string"
+                    },
+                    "isDefault": {
+                      "type": "boolean"
+                    },
+                    "taxLotMethod": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The stored and effective lot method."
+          }
+        },
+        "summary": "Get the tax lot method.",
+        "tags": [
+          "Expenses"
+        ]
+      },
+      "patch": {
+        "description": "Authed. `fifo` or `average` overrides the jurisdiction default; `null` returns to it. Changes only the stored method — no fill, lot choice or ledger row changes.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "taxLotMethod": {
+                    "enum": [
+                      "fifo",
+                      "average"
+                    ],
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "taxLotMethod"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored and effective lot method."
+          },
+          "400": {
+            "description": "Validation error."
+          }
+        },
+        "summary": "Set the tax lot method.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    },
     "/api/users/me/timezone": {
       "get": {
         "description": "Authed. The IANA zone the user's P&L is bucketed into by day, week and month. It does not affect how individual timestamps are displayed. `timezone` is never null: accounts created before the preference existed store nothing and read as the default `UTC`, with `stored` false to say so. This is not an account's trading-day timezone — that one defaults to US Eastern because that is where the US equity venues run, and setting either leaves the other untouched.\n",
