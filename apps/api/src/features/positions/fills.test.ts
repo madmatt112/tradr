@@ -1216,3 +1216,197 @@ describe('edit, clear and guard lot selections on fill edits and removals', () =
     expect(rows[0]!.entryFillId).toBe(entry1.id);
   });
 });
+
+/**
+ * Return the stored selection on fill reads (tax-lots task 7, design C6, this
+ * document's D12).
+ *
+ * Contract per criterion — pre-condition / call / observable result / expected-value source:
+ *
+ * AC 3.14 (detail read carries the selection, and null elsewhere):
+ *   a position with an unselected entry, a selected exit, and a second,
+ *   unselected exit -> GET `/api/positions/:id` -> the selected exit's fill
+ *   carries `lotSelection` with the stored entryFillId/quantity items, and
+ *   both the entry's and the plain exit's fills carry `lotSelection: null`.
+ *   Source: design C6 ("sets lotSelection on every fill — the array for a
+ *   selected exit, otherwise null"), requirements AC 3.14.
+ *
+ * AC 3.14 (POST response carries it):
+ *   two entry lots open on a position -> POST an exit carrying a
+ *   lotSelection -> the 201 response body itself (not a re-fetch) carries
+ *   `lotSelection` with the stored items. Source: design C6 ("Create and edit
+ *   responses carry the stored value too").
+ *
+ * AC 3.14 (PUT response carries the change):
+ *   an exit with a stored selection -> PUT a new quantity and a new
+ *   lotSelection that sums to it -> the 200 response body itself carries the
+ *   new `lotSelection`, not the one stored before the edit. Source: design C6
+ *   ("Create and edit responses carry the stored value too").
+ *
+ * AC 3.14 (detail read reflects a clear):
+ *   an exit with a stored selection -> PUT `lotSelection: null` -> a
+ *   subsequent GET `/api/positions/:id` shows that fill's `lotSelection` as
+ *   `null`. Source: design C6, requirements AC 3.8 (the clear) read through
+ *   AC 3.14 (the read contract).
+ *
+ * Folded/out-of-scope criteria (recorded, not retested here):
+ *   - AC 3.13 (`@swagger` blocks and `tradr-api.json` regeneration) — not
+ *     reachable through this file's `authedRequest` seam, as tasks 5 and 6's
+ *     folds already recorded; enforced by CI's generated-pages `git diff
+ *     --exit-code` gate, not a vitest assertion.
+ */
+describe('return the stored selection on fill reads', () => {
+  it('carries the selection on the selected exit and null on every other fill, from the detail read', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    const selectedExit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '4',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '4' }],
+    });
+    const plainExit = await addFill(
+      cookie,
+      pos.id,
+      makeFill({
+        type: 'exit',
+        quantity: '6',
+        price: '161.00',
+        filledAt: '2025-01-11T10:00:00Z',
+      }),
+    );
+
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    const byId = new Map(body.fills.map((f: { id: string }) => [f.id, f]));
+    expect(byId.get(entry1.id).lotSelection).toBeNull();
+    expect(byId.get(plainExit.id).lotSelection).toBeNull();
+    const selected = byId.get(selectedExit.id).lotSelection;
+    expect(selected).toHaveLength(1);
+    expect(selected[0].entryFillId).toBe(entry1.id);
+    expect(Number(selected[0].quantity)).toBe(4);
+  });
+
+  it('carries the stored selection on the POST response of a selected exit', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '3', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    const entry2 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '7', filledAt: '2025-01-02T10:00:00Z' }),
+    );
+
+    const res = await authedRequest('POST', `/api/positions/${pos.id}/fills`, cookie, {
+      type: 'exit',
+      price: '160.00',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [
+        { entryFillId: entry1.id, quantity: '2' },
+        { entryFillId: entry2.id, quantity: '3' },
+      ],
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    expect(body.lotSelection).toHaveLength(2);
+    const byEntry = new Map(
+      body.lotSelection.map((item: { entryFillId: string; quantity: string }) => [
+        item.entryFillId,
+        Number(item.quantity),
+      ]),
+    );
+    expect(byEntry.get(entry1.id)).toBe(2);
+    expect(byEntry.get(entry2.id)).toBe(3);
+  });
+
+  it('carries the new selection on the PUT response after a change', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '5', filledAt: '2025-01-01T10:00:00Z' }),
+    );
+    await openPos(cookie, pos.id);
+    const entry2 = await addFill(
+      cookie,
+      pos.id,
+      makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-02T10:00:00Z' }),
+    );
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '5' }],
+    });
+
+    const res = await authedRequest('PUT', `/api/positions/${pos.id}/fills/${exit.id}`, cookie, {
+      quantity: '8',
+      lotSelection: [
+        { entryFillId: entry1.id, quantity: '3' },
+        { entryFillId: entry2.id, quantity: '5' },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.lotSelection).toHaveLength(2);
+    const byEntry = new Map(
+      body.lotSelection.map((item: { entryFillId: string; quantity: string }) => [
+        item.entryFillId,
+        Number(item.quantity),
+      ]),
+    );
+    expect(byEntry.get(entry1.id)).toBe(3);
+    expect(byEntry.get(entry2.id)).toBe(5);
+  });
+
+  it('returns null from the detail read after a selection is cleared', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createDraftPosition(cookie, account.id);
+    const entry1 = await addFill(cookie, pos.id, makeFill({ type: 'entry', quantity: '10' }));
+    await openPos(cookie, pos.id);
+    const exit = await addSelectedExit(cookie, pos.id, {
+      price: '160.00',
+      quantity: '4',
+      fees: '0',
+      filledAt: '2025-01-10T10:00:00Z',
+      lotSelection: [{ entryFillId: entry1.id, quantity: '4' }],
+    });
+
+    const clearRes = await authedRequest(
+      'PUT',
+      `/api/positions/${pos.id}/fills/${exit.id}`,
+      cookie,
+      { lotSelection: null },
+    );
+    expect(clearRes.status).toBe(200);
+
+    const detail = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    const detailBody = await detail.json();
+    const clearedExit = detailBody.fills.find((f: { id: string }) => f.id === exit.id);
+    expect(clearedExit.lotSelection).toBeNull();
+  });
+});
