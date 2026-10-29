@@ -1,22 +1,32 @@
 // @vitest-environment jsdom
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { FeeSchedule } from '@tradr/shared';
+import { holdTerm, type FeeSchedule, type Fill } from '@tradr/shared';
 
 import { useAccountFeeSchedule } from '../hooks/useAccountFeeSchedule';
+import { usePositionLots } from '../hooks/usePositionLots';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const addFillMutate = vi.fn().mockResolvedValue(undefined);
+const updateFillMutate = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('../hooks/usePosition', () => ({
   useAddFill: vi.fn(() => ({ mutateAsync: addFillMutate, isPending: false })),
-  useUpdateFill: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useUpdateFill: vi.fn(() => ({ mutateAsync: updateFillMutate, isPending: false })),
 }));
 
 vi.mock('../hooks/useAccountFeeSchedule', () => ({
   useAccountFeeSchedule: vi.fn(() => null),
+}));
+
+// usePositionLots.ts does not exist until task 12 is implemented, so every test
+// in this file fails to resolve this module until the implementer creates it
+// (task note: "it gains a vi.mock of the new hook"). Default to no lots so the
+// pre-existing suites above render no picker and keep their current assertions.
+vi.mock('../hooks/usePositionLots', () => ({
+  usePositionLots: vi.fn(() => ({ data: undefined, isLoading: false })),
 }));
 
 import { FillDialog, type FillPositionContext } from './FillDialog';
@@ -45,6 +55,10 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.mocked(useAccountFeeSchedule).mockReturnValue(null);
+  vi.mocked(usePositionLots).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+  } as ReturnType<typeof usePositionLots>);
 });
 
 function renderDialog(props: Partial<React.ComponentProps<typeof FillDialog>> = {}) {
@@ -61,6 +75,59 @@ function renderDialog(props: Partial<React.ComponentProps<typeof FillDialog>> = 
 }
 
 const field = (name: string) => screen.getByLabelText(name) as HTMLInputElement;
+
+// Two entry lots for a US position: LOT_A opened 31 days before the fixed
+// dialog filledAt used in the term test (short-term), LOT_B opened well over a
+// year before it (long-term) — see holdTerm usage below.
+const LOT_A = {
+  entryFillId: '00000000-0000-4000-a000-000000000101',
+  filledAt: '2025-05-01T00:00:00.000Z',
+  price: '100.00',
+  quantity: '10',
+  available: '10',
+};
+const LOT_B = {
+  entryFillId: '00000000-0000-4000-a000-000000000102',
+  filledAt: '2023-01-01T00:00:00.000Z',
+  price: '90.00',
+  quantity: '10',
+  available: '10',
+};
+const DIALOG_FILLED_AT = '2025-06-01T12:00';
+
+function mockLots(
+  data:
+    | {
+        method: 'fifo' | 'average';
+        jurisdiction: 'US' | 'CA' | 'other';
+        lots: Array<{
+          entryFillId: string;
+          filledAt: string;
+          price: string;
+          quantity: string;
+          available: string;
+        }>;
+      }
+    | undefined,
+) {
+  vi.mocked(usePositionLots).mockReturnValue({
+    data,
+    isLoading: false,
+  } as ReturnType<typeof usePositionLots>);
+}
+
+const editFillWithSelection: Fill = {
+  id: 'f1',
+  positionId: 'p1',
+  type: 'exit',
+  price: '160',
+  quantity: '10',
+  fees: '0',
+  notes: null,
+  filledAt: '2025-06-01T12:00:00.000Z',
+  createdAt: '2025-06-01T12:00:00.000Z',
+  lotSelection: [{ entryFillId: LOT_A.entryFillId, quantity: '4' }],
+};
 
 describe('FillDialog — price prefill differs by direction', () => {
   it('prefills an entry with the average entry price', () => {
@@ -233,5 +300,270 @@ describe('FillDialog — single-purpose type', () => {
     renderDialog({});
     expect(screen.getByText('Type')).toBeTruthy();
     expect(screen.getByText('Add Fill')).toBeTruthy();
+  });
+});
+
+// Contract block — task 12, FillDialog lot picker (design C11; requirements.md
+// Requirement 4). Every case renders FillDialog with usePositionLots mocked
+// and reaches the behaviour through that render, exactly as the task's Test
+// line specifies.
+//
+// AC 4.1 — Pre: exit fill, method fifo, two lots with available > 0. Call:
+//   render(FillDialog, {defaultType:'exit'}). Observe: a "FIFO" toggle button
+//   with aria-pressed="true" and a "Pick lots" button with aria-pressed=
+//   "false". Source: requirements.md AC 4.1 ("offer a lot picker, with FIFO
+//   preselected").
+// AC 4.2 — Pre: as above, Pick lots clicked, dialog filledAt set to a fixed
+//   value. Call: same render, then click "Pick lots". Observe: each lot row
+//   (data-testid lot-row-<entryFillId>) shows its filledAt, price, available
+//   and (jurisdiction US) its term. Source: requirements.md AC 4.2; term
+//   values from the real holdTerm(lot.filledAt, dialog filledAt) (task 1,
+//   packages/shared/src/lib/tax-lots.ts).
+// AC 4.3 — Pre: exit quantity 10, one lot picked at 6. Call: same render.
+//   Observe: Add button disabled, a lot-picker-difference element containing
+//   "4", and no addFillMutate call on click. Source: requirements.md AC 4.3
+//   (10 - 6 = 4).
+// AC 4.4 (+ design C11, no standalone AC for the pick-mode half — folded
+//   here) — Pre: FIFO left selected, vs. two lots picked summing to the exit
+//   quantity. Call: fill the form and click Add. Observe: FIFO submits a
+//   payload with no lotSelection key; a pick submits
+//   lotSelection:[{entryFillId,quantity}, ...] matching the entered values.
+//   Source: requirements.md AC 4.4; design.md C11 ("a pick submits the
+//   picked items" — brief Success line, same task).
+// AC 4.5 — Pre: (a) method average, two available lots; (b) method fifo, one
+//   of two lots has available "0". Call: same render. Observe: no "FIFO" /
+//   "Pick lots" buttons in either case. Source: requirements.md AC 4.5.
+// AC 4.6 — Pre: edit of an exit fill carrying a stored selection.
+//   (a) two available lots: Call: render(FillDialog, {fill}). Observe: Pick
+//       lots pre-pressed, the stored quantity pre-filled; clicking FIFO then
+//       Save sends data.lotSelection === null. Source: requirements.md
+//       AC 4.6 first sentence + brief Success ("switching to FIFO submits
+//       null", resolving the brief's own wording over requirements.md's
+//       "submits no selection" — UpdateFillSchema's lotSelection is
+//       nullable+optional, so a clear can only be expressed by sending
+//       null, never by omission).
+//   (b) fewer than two available lots: Call: render(FillDialog, {fill}).
+//       Observe: only a "Clear lot selection" button; clicking it then Save
+//       sends lotSelection === null. Source: requirements.md AC 4.6 second
+//       sentence.
+//   (c) restriction, folded under AC 4.6 ("an untouched edit picker sends no
+//       field"): Call: render(FillDialog, {fill}), change an unrelated field,
+//       click Save. Observe: data has no lotSelection key. Source: task 12's
+//       Restrictions line.
+// AC 4.7 — Pre: picker shown, Pick lots clicked. Call: same render. Observe:
+//   the FIFO and Pick lots buttons carry cursor-pointer; each lot row's
+//   quantity input has a <label for=...> matching its id. Source:
+//   requirements.md AC 4.7.
+//
+// AC 8.4 is NOT reachable through FillDialog — it is PositionDetail's Net
+// P&L card, a different component the task also touches. Its red test lives
+// in PositionDetail.pnl.test.tsx instead (see that file); flagged here
+// because the task names only this file's render call as the seam.
+describe('FillDialog — lot picker (AC 4.1)', () => {
+  it('shows the picker with FIFO preselected for a FIFO exit with two available lots', () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    const fifoBtn = screen.getByRole('button', { name: 'FIFO' });
+    const pickBtn = screen.getByRole('button', { name: 'Pick lots' });
+    expect(fifoBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(pickBtn.getAttribute('aria-pressed')).toBe('false');
+  });
+});
+
+describe('FillDialog — lot picker rows (AC 4.2)', () => {
+  it("lists each US lot's open date, price, available quantity and term at the dialog filledAt", () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    fireEvent.change(field('Date & Time'), { target: { value: DIALOG_FILLED_AT } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pick lots' }));
+
+    const rowA = screen.getByTestId(`lot-row-${LOT_A.entryFillId}`);
+    expect(within(rowA).getByText(LOT_A.filledAt)).toBeTruthy();
+    expect(within(rowA).getByText(LOT_A.price)).toBeTruthy();
+    expect(within(rowA).getByText(LOT_A.available)).toBeTruthy();
+    expect(within(rowA).getByText(holdTerm(LOT_A.filledAt, DIALOG_FILLED_AT))).toBeTruthy();
+
+    const rowB = screen.getByTestId(`lot-row-${LOT_B.entryFillId}`);
+    expect(within(rowB).getByText(holdTerm(LOT_B.filledAt, DIALOG_FILLED_AT))).toBeTruthy();
+    // The two lots fall on opposite sides of the 365-day line, so this also
+    // proves both terms are read live rather than one hardcoded value.
+    expect(holdTerm(LOT_A.filledAt, DIALOG_FILLED_AT)).not.toBe(
+      holdTerm(LOT_B.filledAt, DIALOG_FILLED_AT),
+    );
+  });
+});
+
+describe('FillDialog — lot picker sum mismatch (AC 4.3)', () => {
+  it('blocks submit and shows the difference when picks do not sum to the exit quantity', () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    fireEvent.change(field('Quantity'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pick lots' }));
+
+    const rowA = screen.getByTestId(`lot-row-${LOT_A.entryFillId}`);
+    fireEvent.change(within(rowA).getByRole('textbox'), { target: { value: '6' } });
+
+    const addBtn = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement;
+    expect(addBtn.disabled).toBe(true);
+    expect(screen.getByTestId('lot-picker-difference').textContent).toContain('4');
+
+    fireEvent.click(addBtn);
+    expect(addFillMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('FillDialog — lot picker submission (AC 4.4)', () => {
+  it('leaves FIFO selected and submits no lotSelection', async () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    fireEvent.change(field('Quantity'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(addFillMutate).toHaveBeenCalled());
+    expect(addFillMutate.mock.calls[0][0]).not.toHaveProperty('lotSelection');
+  });
+
+  it('submits the picked items when the user picks lots', async () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    fireEvent.change(field('Quantity'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pick lots' }));
+    fireEvent.change(
+      within(screen.getByTestId(`lot-row-${LOT_A.entryFillId}`)).getByRole('textbox'),
+      {
+        target: { value: '4' },
+      },
+    );
+    fireEvent.change(
+      within(screen.getByTestId(`lot-row-${LOT_B.entryFillId}`)).getByRole('textbox'),
+      {
+        target: { value: '6' },
+      },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(addFillMutate).toHaveBeenCalled());
+    const sent = addFillMutate.mock.calls[0][0];
+    expect(sent.lotSelection).toHaveLength(2);
+    expect(sent.lotSelection).toEqual(
+      expect.arrayContaining([
+        { entryFillId: LOT_A.entryFillId, quantity: '4' },
+        { entryFillId: LOT_B.entryFillId, quantity: '6' },
+      ]),
+    );
+  });
+});
+
+describe('FillDialog — no picker under average cost or one available lot (AC 4.5)', () => {
+  it('shows no picker under average cost even with two available lots', () => {
+    mockLots({ method: 'average', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    expect(screen.queryByRole('button', { name: 'FIFO' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pick lots' })).toBeNull();
+  });
+
+  it('shows no picker under FIFO when only one lot carries available quantity', () => {
+    mockLots({
+      method: 'fifo',
+      jurisdiction: 'US',
+      lots: [LOT_A, { ...LOT_B, available: '0' }],
+    });
+    renderDialog({ defaultType: 'exit' });
+
+    expect(screen.queryByRole('button', { name: 'FIFO' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pick lots' })).toBeNull();
+  });
+});
+
+describe('FillDialog — editing a selected exit (AC 4.6)', () => {
+  it('opens pick mode with the stored selection, and switching to FIFO submits null', async () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ fill: editFillWithSelection });
+
+    const pickBtn = screen.getByRole('button', { name: 'Pick lots' });
+    expect(pickBtn.getAttribute('aria-pressed')).toBe('true');
+    const rowA = screen.getByTestId(`lot-row-${LOT_A.entryFillId}`);
+    expect((within(rowA).getByRole('textbox') as HTMLInputElement).value).toBe('4');
+
+    fireEvent.click(screen.getByRole('button', { name: 'FIFO' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateFillMutate).toHaveBeenCalled());
+    expect(updateFillMutate.mock.calls[0][0].data).toEqual({ lotSelection: null });
+  });
+
+  it('offers only "Clear lot selection" when fewer than two lots have available quantity, and clearing submits null', async () => {
+    mockLots({
+      method: 'fifo',
+      jurisdiction: 'US',
+      lots: [
+        { ...LOT_A, available: '4' },
+        { ...LOT_B, available: '0' },
+      ],
+    });
+    renderDialog({ fill: editFillWithSelection });
+
+    expect(screen.queryByRole('button', { name: 'FIFO' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pick lots' })).toBeNull();
+    const clearBtn = screen.getByRole('button', { name: 'Clear lot selection' });
+
+    fireEvent.click(clearBtn);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateFillMutate).toHaveBeenCalled());
+    expect(updateFillMutate.mock.calls[0][0].data).toEqual({ lotSelection: null });
+  });
+
+  it('sends no lotSelection field when an existing selection is left untouched', async () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ fill: editFillWithSelection });
+
+    fireEvent.change(field('Notes'), { target: { value: 'updated note' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateFillMutate).toHaveBeenCalled());
+    expect(updateFillMutate.mock.calls[0][0].data).not.toHaveProperty('lotSelection');
+  });
+});
+
+describe('FillDialog — lot picker controls (AC 4.7)', () => {
+  it('gives the toggle buttons cursor-pointer and ties each quantity input to a Label by htmlFor', () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    for (const name of ['FIFO', 'Pick lots']) {
+      expect(screen.getByRole('button', { name }).className).toContain('cursor-pointer');
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pick lots' }));
+
+    for (const lot of [LOT_A, LOT_B]) {
+      const row = screen.getByTestId(`lot-row-${lot.entryFillId}`);
+      const input = within(row).getByRole('textbox') as HTMLInputElement;
+      const label = row.querySelector('label');
+      expect(label).not.toBeNull();
+      expect(input.id).toBeTruthy();
+      expect(label!.getAttribute('for')).toBe(input.id);
+    }
+  });
+});
+
+describe('FillDialog — no lots network call when closed or on an entry (restriction, folded under AC 4.1/4.6)', () => {
+  it('passes enabled:false while the dialog is closed or recording an entry', () => {
+    renderDialog({ open: false, defaultType: 'exit' });
+    let lastCall = vi.mocked(usePositionLots).mock.calls.at(-1);
+    expect(lastCall?.[2]).toBe(false);
+    cleanup();
+
+    renderDialog({ defaultType: 'entry' });
+    lastCall = vi.mocked(usePositionLots).mock.calls.at(-1);
+    expect(lastCall?.[2]).toBe(false);
   });
 });
