@@ -1,4 +1,5 @@
-import { and, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import type { LotMethod } from '@tradr/shared/lib/tax-lots';
 
@@ -299,6 +300,8 @@ export type LotYearPositionRow = {
   assetType: 'stock' | 'option';
   accountId: string;
   currency: string;
+  openedAt: Date;
+  closedAt: Date | null;
 };
 
 /**
@@ -306,7 +309,9 @@ export type LotYearPositionRow = {
  * (half-open `[year-01-01, year+1-01-01)`), with the account currency needed
  * to format each position's lot rows. A position can have exits in other
  * years too — the caller derives slices over the position's whole life and
- * keeps only those realised in this year (AC 5.5).
+ * keeps only those realised in this year (AC 5.5). `openedAt`/`closedAt` are
+ * the position-level dates the wash-sale `LossUnit` shape still carries
+ * alongside the lot-level `lotOpenedAt` (design C9).
  */
 export async function listPositionsWithExitInYear(
   db: Database | Transaction,
@@ -324,6 +329,8 @@ export async function listPositionsWithExitInYear(
       assetType: sql<'stock' | 'option'>`${positions.assetType}`,
       accountId: positions.accountId,
       currency: accounts.currency,
+      openedAt: positions.openedAt,
+      closedAt: positions.closedAt,
     })
     .from(positions)
     .innerJoin(accounts, eq(positions.accountId, accounts.id))
@@ -413,15 +420,13 @@ export async function listLotSelectionsForPositions(
 }
 
 /**
- * Wash-sale / superficial-loss candidate row — projections needed to key by
- * `(underlying, side)` and check the 30-day window in memory. `assetType` is
- * required so the in-memory helper can partition stock vs option before any
- * symbol matching (post-review fix #7).
+ * Candidate-lot position row (design C8) — the position-level projection
+ * `getCandidateLots` (`tax-lots.service.ts`) derives each entry fill's
+ * `CandidateLot` from. Carries no dates of its own: lot-level `openedAt` /
+ * `endedAt` come from the fills and `lotEndDates`, not from the position row.
  */
-export type CandidatePositionRow = {
+export type CandidateLotPositionRow = {
   positionId: string;
-  openedAt: Date | null;
-  closedAt: Date | null;
   symbol: string;
   assetType: 'stock' | 'option';
   side: 'long' | 'short';
@@ -429,48 +434,63 @@ export type CandidatePositionRow = {
 };
 
 /**
- * Positions that could be wash-sale / superficial-loss counterparties for any
- * loss closed within `window`. Returns every position that either opened
- * inside `window` OR opened before `window.start` and was still open past
- * `window.start` (held-open-through-window).
- *
- * Single SQL statement — no per-symbol filter. The wash-sale helper
- * (Task 9) keys candidates by `(underlying, side)` in memory so we don't
- * round-trip the DB per loss.
+ * Positions that could hold wash-sale / superficial-loss candidate lots for
+ * any loss realised within `window`: an entry fill at or before `window.end`,
+ * and either still open (`closedAt IS NULL`) or with a fill at or after
+ * `window.start` (design C8) — a loose, position-level superset; the per-lot
+ * ±30d / held-open rules run in memory in `expenses.tax.ts`. Replaces
+ * `listCandidatePositionsByYear`, which keyed off position-level dates rather
+ * than fills.
  */
-export async function listCandidatePositionsByYear(
+export async function listCandidateLotPositions(
   db: Database | Transaction,
   userId: string,
   window: { start: Date; end: Date },
-): Promise<CandidatePositionRow[]> {
+): Promise<CandidateLotPositionRow[]> {
   // postgres-js cannot bind a `Date` directly through drizzle's `sql\`\``
   // template (it surfaces as "Received an instance of Date"). The typed
   // operators `gte`/`lte` handle Date → timestamp conversion themselves,
   // but the raw template comparisons need ISO strings.
   const startIso = window.start.toISOString();
+  const endIso = window.end.toISOString();
+  const laterFill = alias(fills, 'later_fill');
+
   return db
-    .select({
+    .selectDistinct({
       positionId: positions.id,
-      openedAt: positions.openedAt,
-      closedAt: positions.closedAt,
       symbol: positions.symbol,
       assetType: sql<'stock' | 'option'>`${positions.assetType}`,
       side: sql<'long' | 'short'>`${positions.side}`,
       accountId: positions.accountId,
     })
     .from(positions)
+    .innerJoin(
+      fills,
+      and(
+        eq(fills.positionId, positions.id),
+        eq(fills.type, 'entry'),
+        sql`${fills.filledAt} <= ${endIso}`,
+      ),
+    )
     .where(
       and(
         eq(positions.userId, userId),
         or(
-          and(gte(positions.openedAt, window.start), lte(positions.openedAt, window.end)),
-          and(
-            sql`${positions.openedAt} < ${startIso}`,
-            or(sql`${positions.closedAt} IS NULL`, sql`${positions.closedAt} > ${startIso}`),
+          sql`${positions.closedAt} IS NULL`,
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(laterFill)
+              .where(
+                and(
+                  eq(laterFill.positionId, positions.id),
+                  sql`${laterFill.filledAt} >= ${startIso}`,
+                ),
+              ),
           ),
         ),
       ),
-    ) as Promise<CandidatePositionRow[]>;
+    ) as Promise<CandidateLotPositionRow[]>;
 }
 
 // ---------------------------------------------------------------------------

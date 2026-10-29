@@ -30,7 +30,6 @@ import {
   getUserTaxJurisdiction,
   getUserTaxSettings,
   insertExpense,
-  listCandidatePositionsByYear,
   listExpenses,
   listRealisedPositionsForYear,
   updateExpense as updateExpenseRow,
@@ -45,8 +44,13 @@ import {
   classifyUSHoldPeriod,
   findSuperficialLossFlags,
   findWashSaleFlags,
+  type LossUnit,
 } from './expenses.tax';
-import { getLotRealisationsForYear, type LotRealisationForYear } from './tax-lots.service';
+import {
+  getCandidateLots,
+  getLotRealisationsForYear,
+  type LotRealisationForYear,
+} from './tax-lots.service';
 
 // ---------------------------------------------------------------------------
 // Write-side validation helpers (design.md §Component 6)
@@ -425,6 +429,15 @@ const taxLog: { warn: (obj: object) => void } = {
   warn: (obj) => logger.warn('tax_summary_helper', obj as Record<string, unknown>),
 };
 
+/** `Date | string` → ISO string. Never `String(null)` (AC 7.8). */
+function toIso(d: Date | string): string {
+  return d instanceof Date ? d.toISOString() : d;
+}
+
+function toIsoOrNull(d: Date | string | null): string | null {
+  return d === null ? null : toIso(d);
+}
+
 /**
  * Jurisdiction-specific clause for the disclaimer. Verbatim from
  * requirements §4.4 (see design §Component 6 "Disclaimer composition").
@@ -443,7 +456,7 @@ const DISCLAIMER_RECONCILIATION =
   'Recorded fill fees and tracked expenses are surfaced in separate places — recorded fees on the [Fee Rollup page](/accounting/fee-rollup) (bucketed by `filledAt`), tracked expenses in the section below. Tradr does not compute a net taxable income — that subtraction depends on filer status and jurisdiction-specific deduction rules.';
 
 const DISCLAIMER_HEURISTIC =
-  'Wash-sale (US) and superficial-loss (CA) flags use a symbol-and-date heuristic, not lot-level matching. For options, matching uses the underlying — different strikes and expirations of the same underlying are flagged together. Wash-sale and superficial-loss flags aggregate across all of your accounts.';
+  'Wash-sale (US) and superficial-loss (CA) flags are a heuristic on lot dates: each entry fill is a lot, and a lot opened within 30 days either side of a loss, or held through that window, raises a flag. For options, matching uses the underlying — different strikes and expirations of the same underlying are flagged together. Flags aggregate across all of your accounts and never adjust the figures.';
 
 const DISCLAIMER_YEAR_BUCKETING =
   "All year-bucketing uses UTC calendar boundaries. A position closed after 19:00 ET on December 31 will appear in the following year's tax summary.";
@@ -483,9 +496,9 @@ function composeDisclaimer(
  * Seven-step orchestration per design §Component 6 / §C8:
  *   1. Resolve jurisdiction (NULL → 'other') and the effective lot method.
  *   2. Per-position realised P&L rows for the year (signed; reversal-cancelled)
- *      — read unconditionally; the flag step (6) still reads the ledger under
- *      both methods (task 10 switches flags to lot-based and drops this bridge).
- *      Under FIFO, realised-P&L totals instead come from lot rows (3b).
+ *      — read unconditionally; still the source of truth for the average-cost
+ *      path (steps 4/5). Under FIFO, realised-P&L totals instead come from lot
+ *      rows (3b).
  *   3. Per-(category, currency) expense aggregates for the year.
  *   3b. FIFO only: lot realisations for the year (design C8); average cost
  *       emits no rows (AC 6.2) and skips this query entirely.
@@ -495,8 +508,9 @@ function composeDisclaimer(
  *   5. US short/long-term classification (CA/other → null totals): today's
  *      position-date rule under average cost (D6); per-row `holdTerm` under
  *      FIFO (AC 5.6).
- *   6. Wash-sale / superficial-loss heuristic — short-circuit when no losses;
- *      candidate window bounded to `[min(loss.closedAt) - 30d, max + 30d]`.
+ *   6. Wash-sale / superficial-loss heuristic on lot-grain `LossUnit` /
+ *      `CandidateLot` inputs (design C9) — short-circuit when no losses;
+ *      candidate window bounded to `[min(loss.realisedAt) - 30d, max + 30d]`.
  *   7. Display-currency conversion via `applyYearEndSpotConversion` (twice —
  *      for realised P&L total and for tracked-expenses total). Compose response.
  */
@@ -570,62 +584,108 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
     }
   }
 
-  // Step 6: wash-sale / superficial-loss heuristic.
-  // BRIDGE (task 9 → task 10): this step still reads today's ledger-based
-  // `realisedRows`, under BOTH methods — task 10 switches it to lot-based
-  // `LossUnit`/`CandidateLot` inputs (design C9, AC 7.1-7.8) and removes this
-  // comment.
-  // SHORT-CIRCUIT: skip the candidate query entirely when there are no losses
-  // or when jurisdiction === 'other' (no flags emitted at all).
-  const losingRows = realisedRows.filter((r) => new Decimal(r.realisedPnl).isNegative());
+  // Step 6: wash-sale / superficial-loss heuristic on lot-grain `LossUnit` /
+  // `CandidateLot` inputs (design C9). FIFO: one `LossUnit` per losing lot row
+  // from step 3b, lot fields set (AC 7.1). Average cost: one per losing
+  // `realisedRows` row (today's ledger-based source), lot fields null
+  // (AC 7.2). SHORT-CIRCUIT: skip the candidate query entirely when there are
+  // no losses or when jurisdiction === 'other' (no flags emitted at all).
+  const losses: LossUnit[] =
+    method === 'fifo'
+      ? lotRows
+          .filter((row) => row.net.isNegative())
+          .map((row) => ({
+            lossRowId: `${row.exitFillId}:${row.entryFillId}`,
+            positionId: row.positionId,
+            symbol: row.symbol,
+            assetType: row.assetType,
+            side: row.side,
+            accountId: row.accountId,
+            currency: row.currency,
+            openedAt: row.positionOpenedAt,
+            closedAt: row.positionClosedAt,
+            realisedAt: row.realisedAt,
+            lotEntryFillId: row.entryFillId,
+            lotOpenedAt: row.lotOpenedAt,
+            realisedPnl: row.net.toFixed(getCurrencyMinorUnits(row.currency)),
+          }))
+      : realisedRows
+          .filter((row) => new Decimal(row.realisedPnl).isNegative())
+          .map((row) => ({
+            lossRowId: `${row.positionId}:${row.currency}`,
+            positionId: row.positionId,
+            symbol: row.symbol,
+            assetType: row.assetType,
+            side: row.side,
+            accountId: row.accountId,
+            currency: row.currency,
+            openedAt: row.openedAt,
+            closedAt: row.closedAt,
+            realisedAt: row.realisedAt,
+            lotEntryFillId: null,
+            lotOpenedAt: null,
+            realisedPnl: row.realisedPnl,
+          }));
 
   let washSales: TaxSummaryResponse['flags']['washSales'] = [];
   let superficialLosses: TaxSummaryResponse['flags']['superficialLosses'] = [];
 
-  if (jurisdiction !== 'other' && losingRows.length > 0) {
-    // Window: [min(losing.closedAt) - 30d, max(losing.closedAt) + 30d].
-    // `closedAt` is non-null on realised rows (Task 9 helpers also assume this
-    // and skip nulls defensively; the same defence applies here).
-    const closedTimes = losingRows
-      .map((r) => (r.closedAt ? new Date(r.closedAt).getTime() : null))
-      .filter((t): t is number => t !== null);
+  if (jurisdiction !== 'other' && losses.length > 0) {
+    // Window: [min(realisedAt) - 30d, max(realisedAt) + 30d] (AC 7.7) —
+    // `realisedAt` is never null, unlike the old `closedAt`-anchored window.
+    const realisedTimes = losses.map((l) => new Date(l.realisedAt).getTime());
+    const windowStart = new Date(Math.min(...realisedTimes) - THIRTY_DAYS_MS);
+    const windowEnd = new Date(Math.max(...realisedTimes) + THIRTY_DAYS_MS);
+    const candidates = await getCandidateLots(
+      db,
+      userId,
+      { start: windowStart, end: windowEnd },
+      method,
+    );
 
-    if (closedTimes.length > 0) {
-      const windowStart = new Date(Math.min(...closedTimes) - THIRTY_DAYS_MS);
-      const windowEnd = new Date(Math.max(...closedTimes) + THIRTY_DAYS_MS);
-      const candidates = await listCandidatePositionsByYear(db, userId, {
-        start: windowStart,
-        end: windowEnd,
-      });
-
-      if (jurisdiction === 'US') {
-        const flags = findWashSaleFlags(losingRows, candidates, parseOccUnderlying, taxLog);
-        washSales = flags.map((f) => ({
-          positionId: f.positionId,
-          symbol: f.symbol,
-          underlying: f.underlying,
-          side: f.side,
-          openedAt: f.openedAt instanceof Date ? f.openedAt.toISOString() : String(f.openedAt),
-          closedAt: f.closedAt instanceof Date ? f.closedAt.toISOString() : String(f.closedAt),
-          realisedLoss: f.realisedLoss,
-          reason: f.reason,
-          counterpartyPositionIds: f.counterpartyPositionIds,
-        }));
-      } else {
-        // jurisdiction === 'CA'
-        const flags = findSuperficialLossFlags(losingRows, candidates, parseOccUnderlying, taxLog);
-        superficialLosses = flags.map((f) => ({
-          positionId: f.positionId,
-          symbol: f.symbol,
-          underlying: f.underlying,
-          side: f.side,
-          openedAt: f.openedAt instanceof Date ? f.openedAt.toISOString() : String(f.openedAt),
-          closedAt: f.closedAt instanceof Date ? f.closedAt.toISOString() : String(f.closedAt),
-          realisedLoss: f.realisedLoss,
-          reason: f.reason,
-          counterpartyPositionIds: f.counterpartyPositionIds,
-        }));
-      }
+    if (jurisdiction === 'US') {
+      const flags = findWashSaleFlags(losses, candidates, method, parseOccUnderlying, taxLog);
+      washSales = flags.map((f) => ({
+        lossRowId: f.lossRowId,
+        positionId: f.positionId,
+        symbol: f.symbol,
+        underlying: f.underlying,
+        side: f.side,
+        openedAt: toIso(f.openedAt),
+        closedAt: toIsoOrNull(f.closedAt),
+        realisedAt: toIso(f.realisedAt),
+        lotEntryFillId: f.lotEntryFillId,
+        lotOpenedAt: toIsoOrNull(f.lotOpenedAt),
+        realisedLoss: f.realisedLoss,
+        reason: f.reason,
+        counterpartyPositionIds: f.counterpartyPositionIds,
+        counterpartyLotIds: f.counterpartyLotIds,
+      }));
+    } else {
+      // jurisdiction === 'CA'
+      const flags = findSuperficialLossFlags(
+        losses,
+        candidates,
+        method,
+        parseOccUnderlying,
+        taxLog,
+      );
+      superficialLosses = flags.map((f) => ({
+        lossRowId: f.lossRowId,
+        positionId: f.positionId,
+        symbol: f.symbol,
+        underlying: f.underlying,
+        side: f.side,
+        openedAt: toIso(f.openedAt),
+        closedAt: toIsoOrNull(f.closedAt),
+        realisedAt: toIso(f.realisedAt),
+        lotEntryFillId: f.lotEntryFillId,
+        lotOpenedAt: toIsoOrNull(f.lotOpenedAt),
+        realisedLoss: f.realisedLoss,
+        reason: f.reason,
+        counterpartyPositionIds: f.counterpartyPositionIds,
+        counterpartyLotIds: f.counterpartyLotIds,
+      }));
     }
   }
 

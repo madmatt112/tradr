@@ -12,7 +12,7 @@ import { Decimal } from 'decimal.js';
 
 import { holdTerm } from '@tradr/shared';
 
-import type { CandidatePositionRow, RealisedPositionRow } from './expenses.query';
+import type { RealisedPositionRow } from './expenses.query';
 
 // ---------------------------------------------------------------------------
 // Local flag types — mirror the shapes in `TaxSummaryResponseSchema` (Task 2)
@@ -21,7 +21,48 @@ import type { CandidatePositionRow, RealisedPositionRow } from './expenses.query
 // emission.
 // ---------------------------------------------------------------------------
 
+/**
+ * One losing row to check for wash-sale / superficial-loss candidates
+ * (design C9). FIFO: one per losing lot slice, `lossRowId =
+ * exitFillId:entryFillId`, `lotEntryFillId`/`lotOpenedAt` set (AC 7.1).
+ * Average: one per losing `RealisedPositionRow`, `lossRowId =
+ * positionId:currency`, lot fields null (AC 7.2).
+ */
+export type LossUnit = {
+  lossRowId: string;
+  positionId: string;
+  symbol: string;
+  assetType: 'stock' | 'option';
+  side: 'long' | 'short';
+  accountId: string;
+  currency: string;
+  openedAt: Date | string;
+  closedAt: Date | string | null;
+  /** The instant the loss was realized — what the ±30d window is anchored on. */
+  realisedAt: Date | string;
+  lotEntryFillId: string | null;
+  lotOpenedAt: Date | string | null;
+  realisedPnl: string;
+};
+
+/**
+ * A candidate lot — one entry fill (design C9, D1: "each entry fill is a
+ * lot"). `endedAt` is null while the lot is still open (FIFO: not yet fully
+ * consumed; average: the position not yet flat).
+ */
+export type CandidateLot = {
+  entryFillId: string;
+  positionId: string;
+  symbol: string;
+  assetType: 'stock' | 'option';
+  side: 'long' | 'short';
+  accountId: string;
+  openedAt: Date | string;
+  endedAt: Date | string | null;
+};
+
 export type WashSaleFlag = {
+  lossRowId: string;
   positionId: string;
   symbol: string;
   underlying: string | null;
@@ -31,9 +72,12 @@ export type WashSaleFlag = {
   closedAt: Date | string | null;
   /** The instant the loss was realized — what the ±30d window is anchored on. */
   realisedAt: Date | string;
+  lotEntryFillId: string | null;
+  lotOpenedAt: Date | string | null;
   realisedLoss: string;
   reason: 'repurchase_within_30_days' | 'held_open_in_30d_window';
   counterpartyPositionIds: string[];
+  counterpartyLotIds: string[];
 };
 
 export type SuperficialLossFlag = WashSaleFlag;
@@ -155,7 +199,9 @@ export function applyYearEndSpotConversion(
 
 type ParseUnderlying = (symbol: string) => string | null;
 
-type KeyedCandidate = CandidatePositionRow & { matchKey: string };
+type Method = 'fifo' | 'average';
+
+type KeyedCandidate = CandidateLot & { matchKey: string };
 
 /**
  * UTC `YYYY-MM-DD` bucket for the same-day-reopen exclusion (Req 1.10 / 4.6).
@@ -171,7 +217,7 @@ function utcDateBucket(d: Date | string): string {
  * parser returns `null` are skipped + logged (Req 4.11).
  */
 function keyCandidates(
-  candidates: CandidatePositionRow[],
+  candidates: CandidateLot[],
   parseUnderlying: ParseUnderlying,
   log: Logger,
 ): { stock: KeyedCandidate[]; option: KeyedCandidate[] } {
@@ -193,14 +239,10 @@ function keyCandidates(
 }
 
 /**
- * Compute the match key for a losing position. On `option` with a parser-null,
+ * Compute the match key for a losing row. On `option` with a parser-null,
  * logs and returns `null` so the caller skips this loss (cannot match anyone).
  */
-function keyLoss(
-  loss: RealisedPositionRow,
-  parseUnderlying: ParseUnderlying,
-  log: Logger,
-): string | null {
+function keyLoss(loss: LossUnit, parseUnderlying: ParseUnderlying, log: Logger): string | null {
   if (loss.assetType === 'stock') return loss.symbol;
   const underlying = parseUnderlying(loss.symbol);
   if (underlying === null) {
@@ -212,13 +254,15 @@ function keyLoss(
 
 /**
  * The shared wash-sale / superficial-loss candidate filter, parameterised on
- * the CRA "still-open-at-+30d" rule. Returns `{ matched, anyOpenedInWindow }`
- * so the caller can pick the `reason` enum without re-scanning.
+ * `method` and the CRA "still-open-at-+30d" rule. Returns `{ matched,
+ * anyOpenedInWindow }` so the caller can pick the `reason` enum without
+ * re-scanning.
  */
 function findMatchingCandidates(
-  loss: RealisedPositionRow,
+  loss: LossUnit,
   matchKey: string,
   candidates: KeyedCandidate[],
+  method: Method,
   opts: { requireStillOpenAt: Date | null },
 ): { matched: KeyedCandidate[]; anyOpenedInWindow: boolean } {
   // Anchored on the REALIZATION date, not the close date. Under staged exits a
@@ -236,11 +280,18 @@ function findMatchingCandidates(
 
   for (const c of candidates) {
     if (c.matchKey !== matchKey) continue;
-    if (c.positionId === loss.positionId) continue;
     if (c.side !== loss.side) continue;
 
+    // Skip the losing lot itself (FIFO; AC 7.4).
+    if (loss.lotEntryFillId !== null && c.entryFillId === loss.lotEntryFillId) continue;
+
+    const samePosition = c.positionId === loss.positionId;
+    // Average cost has no lot distinction: skip the whole losing position,
+    // as the pre-C9 code did unconditionally (AC 7.4).
+    if (samePosition && method === 'average') continue;
+
     const openedAtMs = c.openedAt ? new Date(c.openedAt).getTime() : null;
-    const closedAtMsCandidate = c.closedAt ? new Date(c.closedAt).getTime() : null;
+    const endedAtMs = c.endedAt ? new Date(c.endedAt).getTime() : null;
 
     // Same-day re-open exclusion (UTC-bucketed).
     if (c.openedAt && utcDateBucket(c.openedAt) === lossDayBucket) continue;
@@ -248,19 +299,21 @@ function findMatchingCandidates(
     const openedInWindow =
       openedAtMs !== null && openedAtMs >= windowStartMs && openedAtMs <= windowEndMs;
 
-    // Held-open-through-pre-close-window: opened before windowStart AND
-    // (still open OR closed after windowStart). Mirrors the SQL in
-    // `listCandidatePositionsByYear` and the Req 4.6 text.
+    // Held-open-through-pre-window: opened before windowStart AND (still open
+    // OR ended after windowStart). FIFO restricts a same-position lot to the
+    // "opened in window" branch only — held-open never applies to a lot on
+    // the losing position itself (AC 7.5).
     const heldOpenThroughWindow =
+      !samePosition &&
       openedAtMs !== null &&
       openedAtMs < windowStartMs &&
-      (closedAtMsCandidate === null || closedAtMsCandidate > windowStartMs);
+      (endedAtMs === null || endedAtMs > windowStartMs);
 
     if (!openedInWindow && !heldOpenThroughWindow) continue;
 
-    // CRA superficial-loss extra rule: still open at loss.closedAt + 30d.
+    // CRA superficial-loss extra rule: still open at realisedAt + 30d.
     if (stillOpenAtMs !== null) {
-      const stillOpen = closedAtMsCandidate === null || closedAtMsCandidate > stillOpenAtMs;
+      const stillOpen = endedAtMs === null || endedAtMs > stillOpenAtMs;
       if (!stillOpen) continue;
     }
 
@@ -276,39 +329,42 @@ function findMatchingCandidates(
 // ---------------------------------------------------------------------------
 
 /**
- * Emit one `WashSaleFlag` per losing position that has ≥1 matching candidate.
+ * Emit one `WashSaleFlag` per `LossUnit` that has ≥1 matching candidate lot.
  *
  * Partitions by `assetType` first — a stock-loss never matches an option
  * candidate, even when their match keys coincide (post-review fix #7). The
  * `reason` is `'repurchase_within_30_days'` when ANY matched candidate was
- * opened inside the ±30d window of `loss.closedAt`; otherwise
- * `'held_open_in_30d_window'`. `counterpartyPositionIds` always contains every
- * matched candidate, regardless of which reason was selected (v3-8).
+ * opened inside the ±30d window of `loss.realisedAt`; otherwise
+ * `'held_open_in_30d_window'`. `counterpartyPositionIds` / `counterpartyLotIds`
+ * always contain every matched candidate, regardless of which reason was
+ * selected (v3-8).
  */
 export function findWashSaleFlags(
-  losingPositions: RealisedPositionRow[],
-  candidates: CandidatePositionRow[],
+  losses: LossUnit[],
+  candidates: CandidateLot[],
+  method: Method,
   parseUnderlying: ParseUnderlying,
   log: Logger,
 ): WashSaleFlag[] {
-  if (losingPositions.length === 0) return [];
+  if (losses.length === 0) return [];
 
   const { stock, option } = keyCandidates(candidates, parseUnderlying, log);
   const flags: WashSaleFlag[] = [];
 
-  for (const loss of losingPositions) {
+  for (const loss of losses) {
     // No `closedAt === null` skip: a position can hold a realized loss while
     // still open (Req 9), and skipping those hid them from detection entirely.
     const matchKey = keyLoss(loss, parseUnderlying, log);
     if (matchKey === null) continue;
     const pool = loss.assetType === 'stock' ? stock : option;
 
-    const { matched, anyOpenedInWindow } = findMatchingCandidates(loss, matchKey, pool, {
+    const { matched, anyOpenedInWindow } = findMatchingCandidates(loss, matchKey, pool, method, {
       requireStillOpenAt: null,
     });
     if (matched.length === 0) continue;
 
     flags.push({
+      lossRowId: loss.lossRowId,
       positionId: loss.positionId,
       symbol: loss.symbol,
       underlying: loss.assetType === 'option' ? matchKey : null,
@@ -316,9 +372,12 @@ export function findWashSaleFlags(
       openedAt: loss.openedAt,
       closedAt: loss.closedAt,
       realisedAt: loss.realisedAt,
+      lotEntryFillId: loss.lotEntryFillId,
+      lotOpenedAt: loss.lotOpenedAt,
       realisedLoss: loss.realisedPnl,
       reason: anyOpenedInWindow ? 'repurchase_within_30_days' : 'held_open_in_30d_window',
       counterpartyPositionIds: matched.map((c) => c.positionId),
+      counterpartyLotIds: matched.map((c) => c.entryFillId),
     });
   }
 
@@ -331,33 +390,35 @@ export function findWashSaleFlags(
 
 /**
  * Same matching contract as `findWashSaleFlags` plus the CRA-specific rule:
- * the candidate must still be open at `loss.closedAt + 30 days`
- * (`candidate.closedAt === null || candidate.closedAt > closedAt + 30d`).
+ * the candidate lot must still be open at `loss.realisedAt + 30 days`
+ * (`candidate.endedAt === null || candidate.endedAt > realisedAt + 30d`).
  */
 export function findSuperficialLossFlags(
-  losingPositions: RealisedPositionRow[],
-  candidates: CandidatePositionRow[],
+  losses: LossUnit[],
+  candidates: CandidateLot[],
+  method: Method,
   parseUnderlying: ParseUnderlying,
   log: Logger,
 ): SuperficialLossFlag[] {
-  if (losingPositions.length === 0) return [];
+  if (losses.length === 0) return [];
 
   const { stock, option } = keyCandidates(candidates, parseUnderlying, log);
   const flags: SuperficialLossFlag[] = [];
 
-  for (const loss of losingPositions) {
+  for (const loss of losses) {
     const matchKey = keyLoss(loss, parseUnderlying, log);
     if (matchKey === null) continue;
     const pool = loss.assetType === 'stock' ? stock : option;
     // CRA's "still held 30 days after" runs from the realization, same as above.
     const stillOpenAt = new Date(new Date(loss.realisedAt).getTime() + THIRTY_DAYS_MS);
 
-    const { matched, anyOpenedInWindow } = findMatchingCandidates(loss, matchKey, pool, {
+    const { matched, anyOpenedInWindow } = findMatchingCandidates(loss, matchKey, pool, method, {
       requireStillOpenAt: stillOpenAt,
     });
     if (matched.length === 0) continue;
 
     flags.push({
+      lossRowId: loss.lossRowId,
       positionId: loss.positionId,
       symbol: loss.symbol,
       underlying: loss.assetType === 'option' ? matchKey : null,
@@ -365,9 +426,12 @@ export function findSuperficialLossFlags(
       openedAt: loss.openedAt,
       closedAt: loss.closedAt,
       realisedAt: loss.realisedAt,
+      lotEntryFillId: loss.lotEntryFillId,
+      lotOpenedAt: loss.lotOpenedAt,
       realisedLoss: loss.realisedPnl,
       reason: anyOpenedInWindow ? 'repurchase_within_30_days' : 'held_open_in_30d_window',
       counterpartyPositionIds: matched.map((c) => c.positionId),
+      counterpartyLotIds: matched.map((c) => c.entryFillId),
     });
   }
 

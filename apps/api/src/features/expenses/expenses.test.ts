@@ -980,10 +980,63 @@ describe('GET /api/expenses/tax-summary', () => {
     expect(flag.symbol).toBe('AAPL');
     expect(flag.side).toBe('long');
     expect(flag.reason).toBe('repurchase_within_30_days');
-    // realisedLoss is the signed P&L from the SUM query — debit $10 → '-10.0000'.
-    expect(flag.realisedLoss).toBe('-10.0000');
+    // Default jurisdiction=US → FIFO: realisedLoss is the lot row's `net` at
+    // USD minor units, not the raw ledger SUM (task 10, design C9).
+    expect(flag.realisedLoss).toBe('-10.00');
     expect(flag.counterpartyPositionIds).toEqual([reopened.id]);
     expect(body.flags.superficialLosses).toEqual([]);
+  });
+
+  it('FIFO: a flag carries its lot fields and a null closedAt for a loss realised on a still-open position (AC 7.1, AC 7.8)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'US');
+
+    // Loss lot: buy 10 @ 100, partially exit 5 @ 90 → the position stays
+    // open (5 remain), so its `closedAt` is null.
+    const position = await createPositionFor(cookie, acct.id, { symbol: 'LOTF' });
+    const entry = await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-04-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-04-01T15:00:00Z');
+    const exit = await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '90',
+      quantity: '5',
+      fees: '0.00',
+      filledAt: '2026-07-01T15:00:00Z',
+    });
+
+    // Same-symbol re-open within 30d of the realisation.
+    const reopened = await createPositionFor(cookie, acct.id, { symbol: 'LOTF' });
+    const reopenedEntry = await addFillFor(cookie, reopened.id, {
+      type: 'entry',
+      price: '95',
+      quantity: '1',
+      fees: '0.00',
+      filledAt: '2026-07-15T15:00:00Z',
+    });
+    await openPositionFor(cookie, reopened.id, '2026-07-15T15:00:00Z');
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.flags.washSales).toHaveLength(1);
+    const flag = body.flags.washSales[0];
+    expect(flag.positionId).toBe(position.id);
+    expect(flag.lossRowId).toBe(`${exit.id}:${entry.id}`);
+    expect(flag.lotEntryFillId).toBe(entry.id);
+    expect(new Date(flag.lotOpenedAt).toISOString()).toBe('2026-04-01T15:00:00.000Z');
+    expect(flag.closedAt).toBeNull();
+    expect(new Date(flag.realisedAt).toISOString()).toBe('2026-07-01T15:00:00.000Z');
+    expect(flag.realisedLoss).toBe('-50.00');
+    expect(flag.counterpartyPositionIds).toEqual([reopened.id]);
+    expect(flag.counterpartyLotIds).toEqual([reopenedEntry.id]);
   });
 
   it('forward-compat: NULL position_id rows are excluded by the join (Req 7.6)', async () => {

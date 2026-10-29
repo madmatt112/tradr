@@ -3039,7 +3039,7 @@
                       "type": "string"
                     },
                     "flags": {
-                      "description": "Wash sales (US) or superficial losses (CA), with the counterparty positions.",
+                      "description": "Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots.",
                       "type": "object"
                     },
                     "jurisdiction": {

@@ -385,7 +385,7 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *                 trackedExpenses: { type: object }
  *                 flags:
  *                   type: object
- *                   description: Wash sales (US) or superficial losses (CA), with the counterparty positions.
+ *                   description: Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots.
  *                 lotRealisations:
  *                   type: array
  *                   description: One row per (exit fill, lot) pair under FIFO; empty under average cost.
