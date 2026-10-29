@@ -356,6 +356,12 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *       depends on rules Tradr does not model.
  *
  *
+ *       Under the FIFO lot method, `realisedPnl` is computed from matched lots
+ *       and `lotRealisations` carries one row per (exit fill, lot) pair, each
+ *       with its own term for `US`. Under average cost, `lotRealisations` is
+ *       empty and the figures are the pooled per-position totals, as today.
+ *
+ *
  *       This is a reporting aid, not tax advice, and it is not a filing.
  *     tags: [Expenses]
  *     parameters:
@@ -373,12 +379,33 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *               properties:
  *                 year: { type: integer }
  *                 jurisdiction: { type: string, enum: [US, CA, other], nullable: true }
+ *                 lotMethod: { type: string, enum: [fifo, average] }
  *                 displayCurrency: { type: string, nullable: true }
  *                 realisedPnl: { type: object }
  *                 trackedExpenses: { type: object }
  *                 flags:
  *                   type: object
  *                   description: Wash sales (US) or superficial losses (CA), with the counterparty positions.
+ *                 lotRealisations:
+ *                   type: array
+ *                   description: One row per (exit fill, lot) pair under FIFO; empty under average cost.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       exitFillId: { type: string, format: uuid }
+ *                       entryFillId: { type: string, format: uuid }
+ *                       positionId: { type: string, format: uuid }
+ *                       accountId: { type: string, format: uuid }
+ *                       symbol: { type: string }
+ *                       currency: { type: string }
+ *                       lotOpenedAt: { type: string, format: date-time }
+ *                       realisedAt: { type: string, format: date-time }
+ *                       quantity: { type: string, description: Decimal. }
+ *                       proceeds: { type: string, description: Decimal. }
+ *                       basis: { type: string, description: Decimal. }
+ *                       fees: { type: string, description: Decimal. }
+ *                       net: { type: string, description: Decimal. }
+ *                       term: { type: string, enum: [short, long], nullable: true }
  *       400: { description: Missing or invalid year. }
  */
 expensesRouter.get('/expenses/tax-summary', validate('query', YearQuerySchema), async (c) => {

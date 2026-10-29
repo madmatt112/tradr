@@ -2,7 +2,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits } from '@tradr/shared/constants/currencies';
 import { parseOccUnderlying } from '@tradr/shared/lib/occ';
-import { resolveLotMethod, type LotMethod } from '@tradr/shared/lib/tax-lots';
+import { holdTerm, resolveLotMethod, type LotMethod } from '@tradr/shared/lib/tax-lots';
 import type {
   CreateExpenseInput,
   ExpenseListResponse,
@@ -46,6 +46,7 @@ import {
   findSuperficialLossFlags,
   findWashSaleFlags,
 } from './expenses.tax';
+import { getLotRealisationsForYear, type LotRealisationForYear } from './tax-lots.service';
 
 // ---------------------------------------------------------------------------
 // Write-side validation helpers (design.md §Component 6)
@@ -479,40 +480,101 @@ function composeDisclaimer(
 /**
  * Compute the per-year tax summary for a user.
  *
- * Seven-step orchestration per design §Component 6:
- *   1. Resolve jurisdiction (NULL → 'other').
- *   2. Per-position realised P&L rows for the year (signed; reversal-cancelled).
+ * Seven-step orchestration per design §Component 6 / §C8:
+ *   1. Resolve jurisdiction (NULL → 'other') and the effective lot method.
+ *   2. Per-position realised P&L rows for the year (signed; reversal-cancelled)
+ *      — read unconditionally; the flag step (6) still reads the ledger under
+ *      both methods (task 10 switches flags to lot-based and drops this bridge).
+ *      Under FIFO, realised-P&L totals instead come from lot rows (3b).
  *   3. Per-(category, currency) expense aggregates for the year.
- *   4. Per-currency realised P&L aggregation.
- *   5. US short/long-term hold-period classification (CA/other → null).
+ *   3b. FIFO only: lot realisations for the year (design C8); average cost
+ *       emits no rows (AC 6.2) and skips this query entirely.
+ *   4. Per-currency realised P&L aggregation: today's ledger-based rows under
+ *      average cost (AC 6.1, AC 6.3 regression guard); lot rows' `net` under
+ *      FIFO.
+ *   5. US short/long-term classification (CA/other → null totals): today's
+ *      position-date rule under average cost (D6); per-row `holdTerm` under
+ *      FIFO (AC 5.6).
  *   6. Wash-sale / superficial-loss heuristic — short-circuit when no losses;
  *      candidate window bounded to `[min(loss.closedAt) - 30d, max + 30d]`.
  *   7. Display-currency conversion via `applyYearEndSpotConversion` (twice —
  *      for realised P&L total and for tracked-expenses total). Compose response.
  */
 export async function getTaxSummary(userId: string, year: number): Promise<TaxSummaryResponse> {
-  // Step 1: jurisdiction.
-  const jurisdiction = await getTaxJurisdiction(userId);
+  // Step 1: jurisdiction + effective lot method.
+  const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
+  const jurisdiction = taxJurisdiction ?? 'other';
+  const { method } = resolveLotMethod(taxLotMethod, taxJurisdiction);
 
-  // Step 2 + 3: data fetch (independent — issue in parallel).
-  const [realisedRows, expensesByCategory] = await Promise.all([
+  // Step 2 + 3 + 3b: data fetch (independent — issue in parallel). `lotRows`
+  // stays empty, with no query issued, outside FIFO.
+  const [realisedRows, expensesByCategory, lotRows] = await Promise.all([
     listRealisedPositionsForYear(db, userId, year),
     aggregateExpensesByCategory(db, userId, year),
+    method === 'fifo'
+      ? getLotRealisationsForYear(db, userId, year)
+      : Promise.resolve<LotRealisationForYear[]>([]),
   ]);
 
-  // Step 4: per-currency realised P&L aggregation.
-  const realisedPerCurrency = aggregatePerCurrencyRealisedPnl(realisedRows);
+  // Step 4 + 5: per-currency totals and US short/long-term classification.
+  let realisedPerCurrency: Map<string, Decimal>;
+  let shortTermPerCurrency = new Map<string, Decimal>();
+  let longTermPerCurrency = new Map<string, Decimal>();
+  const lotRealisations: TaxSummaryResponse['lotRealisations'] = [];
 
-  // Step 5: US short/long-term classification (CA/other → null totals).
-  const { shortTerm: shortTermPerCurrency, longTerm: longTermPerCurrency } =
-    jurisdiction === 'US'
-      ? classifyUSHoldPeriod(realisedRows)
-      : {
-          shortTerm: new Map<string, Decimal>(),
-          longTerm: new Map<string, Decimal>(),
-        };
+  if (method === 'fifo') {
+    realisedPerCurrency = new Map<string, Decimal>();
+    for (const row of lotRows) {
+      realisedPerCurrency.set(
+        row.currency,
+        (realisedPerCurrency.get(row.currency) ?? new Decimal(0)).plus(row.net),
+      );
+
+      const term = jurisdiction === 'US' ? holdTerm(row.lotOpenedAt, row.realisedAt) : null;
+      if (term === 'short') {
+        shortTermPerCurrency.set(
+          row.currency,
+          (shortTermPerCurrency.get(row.currency) ?? new Decimal(0)).plus(row.net),
+        );
+      } else if (term === 'long') {
+        longTermPerCurrency.set(
+          row.currency,
+          (longTermPerCurrency.get(row.currency) ?? new Decimal(0)).plus(row.net),
+        );
+      }
+
+      const currencyMinorUnits = getCurrencyMinorUnits(row.currency);
+      lotRealisations.push({
+        exitFillId: row.exitFillId,
+        entryFillId: row.entryFillId,
+        positionId: row.positionId,
+        accountId: row.accountId,
+        symbol: row.symbol,
+        currency: row.currency,
+        lotOpenedAt: row.lotOpenedAt.toISOString(),
+        realisedAt: row.realisedAt.toISOString(),
+        quantity: row.quantity.toString(),
+        proceeds: row.proceeds.toFixed(currencyMinorUnits),
+        basis: row.basis.toFixed(currencyMinorUnits),
+        fees: row.fees.toFixed(currencyMinorUnits),
+        net: row.net.toFixed(currencyMinorUnits),
+        term,
+      });
+    }
+  } else {
+    // Average cost: today's ledger-based aggregation, unchanged (AC 6.1, AC 6.3).
+    realisedPerCurrency = aggregatePerCurrencyRealisedPnl(realisedRows);
+    if (jurisdiction === 'US') {
+      ({ shortTerm: shortTermPerCurrency, longTerm: longTermPerCurrency } =
+        classifyUSHoldPeriod(realisedRows));
+    }
+  }
 
   // Step 6: wash-sale / superficial-loss heuristic.
+  // BRIDGE (task 9 → task 10): this step still reads today's ledger-based
+  // `realisedRows`, under BOTH methods — task 10 switches it to lot-based
+  // `LossUnit`/`CandidateLot` inputs (design C9, AC 7.1-7.8) and removes this
+  // comment.
   // SHORT-CIRCUIT: skip the candidate query entirely when there are no losses
   // or when jurisdiction === 'other' (no flags emitted at all).
   const losingRows = realisedRows.filter((r) => new Decimal(r.realisedPnl).isNegative());
@@ -609,6 +671,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
     return {
       year,
       jurisdiction,
+      lotMethod: method,
       displayCurrency: null,
       realisedPnl: {
         total: null,
@@ -622,6 +685,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
         perCategory: perCategoryResponse,
       },
       flags: { washSales, superficialLosses },
+      lotRealisations,
       missingRates: [],
       excludedCurrencies: [],
       ratesAsOf: null,
@@ -694,6 +758,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   return {
     year,
     jurisdiction,
+    lotMethod: method,
     displayCurrency,
     realisedPnl: {
       total:
@@ -709,6 +774,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
       perCategory: perCategoryResponse,
     },
     flags: { washSales, superficialLosses },
+    lotRealisations,
     missingRates: Array.from(missingRatesMap.values()),
     excludedCurrencies: Array.from(excludedSet),
     ratesAsOf,

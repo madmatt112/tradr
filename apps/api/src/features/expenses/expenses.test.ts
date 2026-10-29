@@ -981,6 +981,9 @@ describe('GET /api/expenses/tax-summary', () => {
 
   it('forward-compat: NULL position_id rows are excluded by the join (Req 7.6)', async () => {
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly; force average cost so
+    // the FIFO default (which reads fills, not ledger_entries) doesn't mask it.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
 
     // Two profit positions so we can null out one and observe the SUM drop.
@@ -1309,6 +1312,9 @@ describe('boundary-year transition + invariants', () => {
   it('reversal-cancellation: paired (position_pnl debit, position_pnl_reversal credit) cancel to zero — both rows have positive amount (post-v3-fix #1)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1404,6 +1410,9 @@ describe('boundary-year transition + invariants', () => {
   it('orphaned reversal forward-compat probe: standalone position_pnl_reversal credit contributes +amount to the SUM (v2-8, fixture pinned by v3-7)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1460,6 +1469,9 @@ describe('boundary-year transition + invariants', () => {
   it('balance_adjustment rows are excluded from realised P&L (ledger-balances Req 8.10)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1530,6 +1542,9 @@ describe('boundary-year transition + invariants', () => {
   it('cash-movement rows are excluded from realised P&L and fees (ledger-cash-movements Req 5.1-5.4)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 

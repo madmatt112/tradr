@@ -3015,7 +3015,7 @@
     },
     "/api/expenses/tax-summary": {
       "get": {
-        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
+        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nUnder the FIFO lot method, `realisedPnl` is computed from matched lots and `lotRealisations` carries one row per (exit fill, lot) pair, each with its own term for `US`. Under average cost, `lotRealisations` is empty and the figures are the pooled per-position totals, as today.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
         "parameters": [
           {
             "in": "query",
@@ -3050,6 +3050,80 @@
                       ],
                       "nullable": true,
                       "type": "string"
+                    },
+                    "lotMethod": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "type": "string"
+                    },
+                    "lotRealisations": {
+                      "description": "One row per (exit fill, lot) pair under FIFO; empty under average cost.",
+                      "items": {
+                        "properties": {
+                          "accountId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "basis": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "exitFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "fees": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "lotOpenedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "net": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "positionId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "proceeds": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "realisedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "symbol": {
+                            "type": "string"
+                          },
+                          "term": {
+                            "enum": [
+                              "short",
+                              "long"
+                            ],
+                            "nullable": true,
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "realisedPnl": {
                       "type": "object"

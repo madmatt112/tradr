@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 
 import type { LotMethod } from '@tradr/shared/lib/tax-lots';
 
@@ -6,7 +6,7 @@ import type { Database, Transaction } from '@/db';
 import { ledgerEntries } from '@/db/schema/accounting.schema';
 import { accounts } from '@/db/schema/accounts.schema';
 import { expenses } from '@/db/schema/expenses.schema';
-import { fills, positions } from '@/db/schema/positions.schema';
+import { fillLotSelections, fills, positions } from '@/db/schema/positions.schema';
 import { users } from '@/db/schema/users.schema';
 
 // ---------------------------------------------------------------------------
@@ -283,6 +283,133 @@ export async function listRealisedPositionsForYear(
       positions.accountId,
       ledgerEntries.currency,
     ) as Promise<RealisedPositionRow[]>;
+}
+
+// ---------------------------------------------------------------------------
+// FIFO lot-matching queries (design C8 — `tax-lots.service.ts`'s
+// `getLotRealisationsForYear`). Each filters `positions.user_id` directly or
+// through a join; batched once per request, never per position (NFR
+// Performance).
+// ---------------------------------------------------------------------------
+
+export type LotYearPositionRow = {
+  positionId: string;
+  symbol: string;
+  side: 'long' | 'short';
+  assetType: 'stock' | 'option';
+  accountId: string;
+  currency: string;
+};
+
+/**
+ * Positions with at least one exit fill inside the UTC calendar year
+ * (half-open `[year-01-01, year+1-01-01)`), with the account currency needed
+ * to format each position's lot rows. A position can have exits in other
+ * years too — the caller derives slices over the position's whole life and
+ * keeps only those realised in this year (AC 5.5).
+ */
+export async function listPositionsWithExitInYear(
+  db: Database | Transaction,
+  userId: string,
+  year: number,
+): Promise<LotYearPositionRow[]> {
+  const windowStart = `${year}-01-01T00:00:00Z`;
+  const windowEnd = `${year + 1}-01-01T00:00:00Z`;
+
+  return db
+    .selectDistinct({
+      positionId: positions.id,
+      symbol: positions.symbol,
+      side: sql<'long' | 'short'>`${positions.side}`,
+      assetType: sql<'stock' | 'option'>`${positions.assetType}`,
+      accountId: positions.accountId,
+      currency: accounts.currency,
+    })
+    .from(positions)
+    .innerJoin(accounts, eq(positions.accountId, accounts.id))
+    .innerJoin(fills, eq(fills.positionId, positions.id))
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(accounts.userId, userId),
+        eq(fills.type, 'exit'),
+        sql`${fills.filledAt} >= ${windowStart}`,
+        sql`${fills.filledAt} < ${windowEnd}`,
+      ),
+    ) as Promise<LotYearPositionRow[]>;
+}
+
+export type LotYearFillRow = {
+  id: string;
+  positionId: string;
+  type: 'entry' | 'exit';
+  price: string;
+  quantity: string;
+  fees: string;
+  filledAt: Date;
+  createdAt: Date;
+};
+
+/**
+ * Every fill of the given positions (not just those in the tax year —
+ * matching needs a position's whole life). One query for every position in
+ * the batch, not one per position.
+ */
+export async function listFillsForPositions(
+  db: Database | Transaction,
+  userId: string,
+  positionIds: string[],
+): Promise<LotYearFillRow[]> {
+  if (positionIds.length === 0) return [];
+  return db
+    .select({
+      id: fills.id,
+      positionId: fills.positionId,
+      type: sql<'entry' | 'exit'>`${fills.type}`,
+      price: fills.price,
+      quantity: fills.quantity,
+      fees: fills.fees,
+      filledAt: fills.filledAt,
+      createdAt: fills.createdAt,
+    })
+    .from(fills)
+    .innerJoin(positions, eq(fills.positionId, positions.id))
+    .where(and(eq(positions.userId, userId), inArray(fills.positionId, positionIds))) as Promise<
+    LotYearFillRow[]
+  >;
+}
+
+export type LotYearSelectionRow = {
+  positionId: string;
+  exitFillId: string;
+  entryFillId: string;
+  quantity: string;
+};
+
+/**
+ * Every stored lot selection for the given positions, joined through the
+ * exit fill so a selection never crosses positions. One query for every
+ * position in the batch.
+ */
+export async function listLotSelectionsForPositions(
+  db: Database | Transaction,
+  userId: string,
+  positionIds: string[],
+): Promise<LotYearSelectionRow[]> {
+  if (positionIds.length === 0) return [];
+  return db
+    .select({
+      positionId: fills.positionId,
+      exitFillId: fillLotSelections.exitFillId,
+      entryFillId: fillLotSelections.entryFillId,
+      quantity: fillLotSelections.quantity,
+    })
+    .from(fillLotSelections)
+    .innerJoin(fills, eq(fills.id, fillLotSelections.exitFillId))
+    .innerJoin(positions, eq(fills.positionId, positions.id))
+    .where(and(eq(positions.userId, userId), inArray(fills.positionId, positionIds))) as Promise<
+    LotYearSelectionRow[]
+  >;
 }
 
 /**

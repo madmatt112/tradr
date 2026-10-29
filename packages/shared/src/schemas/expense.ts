@@ -183,6 +183,25 @@ export const WashSaleFlag = z.object({
 
 export const SuperficialLossFlag = WashSaleFlag;
 
+// FIFO lot-realisation row (design C8 / Data Models). One row per (exit fill,
+// lot) pair; the stable row id client-side is `exitFillId:entryFillId`.
+export const LotRealisationRowSchema = z.object({
+  exitFillId: z.string().uuid(),
+  entryFillId: z.string().uuid(),
+  positionId: z.string().uuid(),
+  accountId: z.string().uuid(),
+  symbol: z.string(),
+  currency: z.string().length(3),
+  lotOpenedAt: z.string(),
+  realisedAt: z.string(),
+  quantity: z.string(),
+  proceeds: z.string(),
+  basis: z.string(),
+  fees: z.string(),
+  net: z.string(),
+  term: z.enum(['short', 'long']).nullable(),
+});
+
 // Tax-summary response — encodes `requirements.md` §4.1 verbatim.
 // MUST NOT include `netTaxableIncome` or any recorded-fee field (Req 4.1
 // hard rule — fees live only on the fee-rollup response and are already
@@ -191,6 +210,7 @@ export const TaxSummaryResponseSchema = z
   .object({
     year: z.number().int(),
     jurisdiction: TaxJurisdictionEnum,
+    lotMethod: LotMethodEnum,
     displayCurrency: z.string().length(3).nullable(),
     realisedPnl: z.object({
       total: z.string().nullable(),
@@ -223,6 +243,7 @@ export const TaxSummaryResponseSchema = z
       washSales: z.array(WashSaleFlag),
       superficialLosses: z.array(SuperficialLossFlag),
     }),
+    lotRealisations: z.array(LotRealisationRowSchema),
     missingRates: z.array(
       z.object({
         base: z.string().length(3),
