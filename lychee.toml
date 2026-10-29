@@ -69,6 +69,10 @@ exclude = [
   "staging-host",
   # The app's own hostname is not public yet — it 404s on purpose.
   "^https://app\\.tradr\\.cloud",
+  # The v0.16.0 account-deletion page exists in apps/docs/src but the docs site
+  # has not been redeployed since v0.16.0 shipped, so it 404s until the next docs
+  # deploy. Same posture as app.tradr.cloud above. Remove once the docs redeploy.
+  "^https://docs\\.tradr\\.cloud/user-guide/account-deletion/",
   # Vendor endpoints that answer only to an authenticated client.
   "^https://api\\.github\\.com",
   "^https://us\\.i\\.posthog\\.com",

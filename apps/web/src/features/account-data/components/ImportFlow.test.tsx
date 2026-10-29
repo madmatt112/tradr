@@ -253,6 +253,58 @@ describe('ImportFlow', () => {
     expect(screen.getAllByText(/busy/i).length).toBeGreaterThan(0);
   });
 
+  /**
+   * Contract — the two new `importErrorView` branches (design C8; Requirement 8.2)
+   *
+   * | Criterion (task 10 Success)                                            | Pre-condition                                      | Call (seam)                                        | Observable result                                              | Expected-value source |
+   * | ----------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------- | ---------------------- |
+   * | a 422 `IMPORT_TIMED_OUT` at confirm shows the timeout title + message  | preview succeeds; confirm returns 422 `IMPORT_TIMED_OUT` with a server message | choose file, click "Import this archive", click "Import data" | "The archive took too long" and the server's message both render | design C8: `IMPORT_TIMED_OUT` titled "The archive took too long", falling back to the server message (Req 8.2) |
+   * | a 503 `IMPORT_CAPACITY_REACHED` at preview shows the capacity title + message | preview itself returns 503 `IMPORT_CAPACITY_REACHED` with a server message | choose file (triggers the preview fetch)            | "The server is busy with another import" and the server's message both render | design C8: `IMPORT_CAPACITY_REACHED` titled "The server is busy with another import", falling back to the server message (Req 8.2) |
+   */
+  it('timed out: a 422 at confirm says the archive took too long', async () => {
+    mockFetch((url) =>
+      url.includes('/import/preview')
+        ? json(previewBody())
+        : json(
+            {
+              error: {
+                code: 'IMPORT_TIMED_OUT',
+                message: 'The archive took longer than the 4-minute limit; nothing was imported.',
+              },
+            },
+            422,
+          ),
+    );
+    renderFlow();
+
+    chooseFile();
+    fireEvent.click(await screen.findByRole('button', { name: /Import this archive/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Import data/i }));
+
+    expect(await screen.findByText(/took too long/i)).toBeTruthy();
+    expect(screen.getByText(/4-minute limit/i)).toBeTruthy();
+  });
+
+  it('capacity: a 503 at preview says the server is busy with another import', async () => {
+    mockFetch(() =>
+      json(
+        {
+          error: {
+            code: 'IMPORT_CAPACITY_REACHED',
+            message: 'The server is already running another import; your account is unaffected.',
+          },
+        },
+        503,
+      ),
+    );
+    renderFlow();
+
+    chooseFile();
+
+    expect(await screen.findByText(/busy with another import/i)).toBeTruthy();
+    expect(screen.getByText(/your account is unaffected/i)).toBeTruthy();
+  });
+
   it('no response at confirm: shows the Requirement 10.3 notice', async () => {
     mockFetch((url) => {
       if (url.includes('/import/preview')) return json(previewBody());

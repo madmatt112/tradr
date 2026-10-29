@@ -92,4 +92,14 @@ describe('spoolUpload', () => {
 
     expect(result.sha256).toBe(createHash('sha256').update(all).digest('hex'));
   });
+
+  it('rejects with the abort reason when the signal is already aborted and deletes the partial file (design C3)', async () => {
+    const reason = new Error('cancelled');
+    const controller = new AbortController();
+    controller.abort(reason);
+    const stream = streamOf([new Uint8Array([1, 2, 3])]);
+
+    await expect(spoolUpload(stream, dir, 1000, controller.signal)).rejects.toBe(reason);
+    expect(existsSync(path.join(dir, 'upload.zip'))).toBe(false);
+  });
 });

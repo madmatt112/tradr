@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -53,7 +53,9 @@ import { withTransaction } from '@/lib/transaction';
 import {
   ArchiveDigestMismatchError,
   ImportBusyError,
+  ImportCapacityError,
   ImportFailedError,
+  ImportTimedOutError,
 } from './account-data.errors';
 import { accountDataSlot } from './account-data.slots';
 import { readArchive } from './archive-reader';
@@ -96,11 +98,18 @@ import {
 } from './import.query';
 import { newSalt, orderedMessageIds, remapId, createCoveredThroughResolver } from './remap';
 
-// Design C6 — the import service. Two entry points: `previewImport` validates an
+// Design C3 — the import service. Two entry points: `previewImport` validates an
 // uploaded archive and reports what a restore would create (Req 4.6, 4.7);
-// `confirmImport` performs the whole-or-nothing restore (Req 5–7). Both spool the
-// upload into their own `os.tmpdir()` directory (task 5's `spoolUpload`) and delete
-// it on any close, mirroring the export service's teardown (C3).
+// `confirmImport` performs the whole-or-nothing restore (Req 5–7). Both run inside
+// `withImportAdmission`: it takes the per-process import slot without queueing
+// (`tryAcquire`, C2) or refuses at once with `ImportCapacityError` before any body
+// byte (Req 4.1, 4.2); arms a 240 s deadline from `startedAt` (D6) joined with the
+// caller's request signal into one `AbortController` that aborts the work with
+// `ImportTimedOutError`; spools the upload into its own `os.tmpdir()` directory
+// (task 5's `spoolUpload`); and in a `finally` clears the timer, removes the
+// directory and releases the slot. The spool, the validating read and the restore
+// read all take that signal, so a deadline or a client disconnect stops the work at
+// the next chunk boundary (Req 3.1–3.4).
 //
 // The restore writes the archived rows DIRECTLY through task 11's per-category
 // inserts: no tier check, no close/fill/reverse hook, no gating counter, no ledger
@@ -127,23 +136,91 @@ const HEARTBEAT_MS = 15_000;
 const FLUSH_MAX_ROWS = 500;
 const FLUSH_MAX_BYTES = 1024 * 1024;
 
-interface PreviewOptions {
+// The processing deadline from handler entry (design D6): the service aborts the
+// spool, the validating read and the restore with `ImportTimedOutError` this long
+// after `startedAt`, inside the 300 s proxy budget.
+const IMPORT_DEADLINE_MS = 240_000;
+
+// The trailing options both import entry points share (design C3): the caller's
+// request signal (a client disconnect), and the deadline clock origin and length.
+// Every field is optional and trailing, so existing callers and tests compile
+// unchanged.
+interface ImportRunOptions {
   caps?: Partial<ArchiveCaps>;
+  signal?: AbortSignal;
+  startedAt?: number;
+  deadlineMs?: number;
 }
 
-interface ConfirmOptions {
-  caps?: Partial<ArchiveCaps>;
+type PreviewOptions = ImportRunOptions;
+
+interface ConfirmOptions extends ImportRunOptions {
   /** Overrides the restore transaction's `lock_timeout` (tests only). */
   lockTimeout?: string;
 }
 
+// What the admission scaffold hands the job callback.
+interface ImportJobContext {
+  archivePath: string;
+  sha256: string;
+  signal: AbortSignal;
+}
+
 /**
- * Validate an uploaded archive and return its preview (design C6, Req 4.6, 4.7).
- * Spools the body into a fresh temp directory, validates it (task 9), checks the
- * target is empty (task 11) and returns the server's own counts, the source app
- * version, the export instant, the degradations and the upload's sha256 hex as the
- * `digest` the confirm must echo. Writes nothing. The temp directory is deleted on
- * any exit.
+ * The shared C3 scaffold both entry points run inside. Takes the per-process import
+ * slot without queueing (`tryAcquire`, C2) or throws `ImportCapacityError` before
+ * any body byte; arms the deadline timer at `startedAt + deadlineMs` and builds the
+ * signal that aborts the work with `ImportTimedOutError` when that timer fires or
+ * the caller's signal aborts (D6); makes the temp directory; spools the body into it
+ * under that signal; runs `job` with the spool result and that signal; and in a
+ * `finally` clears the timer, removes the directory and releases the slot — in that
+ * order, so the slot frees only after the job has settled and the directory is gone.
+ */
+async function withImportAdmission<T>(
+  body: ReadableStream<Uint8Array> | null,
+  caps: ArchiveCaps,
+  opts: ImportRunOptions | undefined,
+  job: (ctx: ImportJobContext) => Promise<T>,
+): Promise<T> {
+  const release = accountDataSlot('import').tryAcquire();
+  if (!release) throw new ImportCapacityError();
+
+  const startedAt = opts?.startedAt ?? Date.now();
+  const deadlineMs = opts?.deadlineMs ?? IMPORT_DEADLINE_MS;
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(new ImportTimedOutError());
+  const timer = setTimeout(abort, Math.max(0, startedAt + deadlineMs - Date.now()));
+  const callerSignal = opts?.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) abort();
+    else callerSignal.addEventListener('abort', abort, { once: true });
+  }
+
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
+    const { path: archivePath, sha256 } = await spoolUpload(
+      body,
+      dir,
+      caps.maxUploadBytes,
+      controller.signal,
+    );
+    return await job({ archivePath, sha256, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', abort);
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    release();
+  }
+}
+
+/**
+ * Validate an uploaded archive and return its preview (design C3, Req 4.6, 4.7).
+ * Inside the admission/deadline scaffold, spools the body into a fresh temp
+ * directory, validates it (task 9) under the deadline signal, checks the target is
+ * empty (task 11) and returns the server's own counts, the source app version, the
+ * export instant, the degradations and the upload's sha256 hex as the `digest` the
+ * confirm must echo. Writes nothing. The temp directory is deleted on any exit.
  */
 export async function previewImport(
   userId: string,
@@ -151,10 +228,8 @@ export async function previewImport(
   opts?: PreviewOptions,
 ): Promise<ImportPreview> {
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...opts?.caps };
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
-  try {
-    const { path: archivePath, sha256 } = await spoolUpload(body, dir, caps.maxUploadBytes);
-    const validated = await validateArchive(archivePath, opts?.caps);
+  return withImportAdmission(body, caps, opts, async ({ archivePath, sha256, signal }) => {
+    const validated = await validateArchive(archivePath, opts?.caps, signal);
     await assertTargetEmpty(db, userId);
     return {
       counts: validated.counts,
@@ -163,24 +238,22 @@ export async function previewImport(
       degradations: validated.degradations,
       digest: sha256,
     };
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  });
 }
 
 /**
- * Perform a confirmed whole-or-nothing restore (design C6, Req 5–7). Follows C6
- * steps 1–6: re-spool and digest-check the body; acquire the import slot and
- * validate; then one transaction that sets `lock_timeout`, takes the gc fence (only
- * with storage configured), the per-user guard and the in-transaction emptiness
- * re-check, streams the archive a second time to write objects then rows in FK
- * order with fresh ids and resolved platform references, overwrites preferences
- * (bar `advisor_trade_data_consent`) and replaces the dashboard layout, and commits.
- * A lock-wait expiry becomes the 503 busy error; an object-write failure the 503
- * unreachable error before any row is inserted; any other non-`AppError` the 500
- * import-failed error, with the objects the failed run wrote deleted best-effort.
- * Emits `account_imported` after commit. The temp directory is deleted and the slot
- * released on any exit.
+ * Perform a confirmed whole-or-nothing restore (design C3, Req 5–7). Inside the
+ * admission/deadline scaffold, re-spools and digest-checks the body, validates it
+ * under the deadline signal, then runs one transaction that sets `lock_timeout`,
+ * takes the gc fence (only with storage configured), the per-user guard and the
+ * in-transaction emptiness re-check, streams the archive a second time to write
+ * objects then rows in FK order with fresh ids and resolved platform references,
+ * overwrites preferences (bar `advisor_trade_data_consent`) and replaces the
+ * dashboard layout, and commits. A lock-wait expiry becomes the 503 busy error; an
+ * object-write failure the 503 unreachable error before any row is inserted; any
+ * other non-`AppError` the 500 import-failed error, with the objects the failed run
+ * wrote deleted best-effort. Emits `account_imported` after commit, timed from call
+ * time (`emitStartedAt`), not from the deadline's `startedAt` origin.
  */
 export async function confirmImport(
   userId: string,
@@ -188,59 +261,93 @@ export async function confirmImport(
   digest: string,
   opts?: ConfirmOptions,
 ): Promise<ImportResult> {
-  const startedAt = Date.now();
+  // The `account_imported` duration is timed from call time, kept distinct from the
+  // deadline's `startedAt` option so the duration is never moved onto the handler
+  // clock (design D6).
+  const emitStartedAt = Date.now();
   const caps: ArchiveCaps = { ...ARCHIVE_CAPS, ...opts?.caps };
   const lockTimeout = opts?.lockTimeout ?? DEFAULT_LOCK_TIMEOUT;
   const storage = getObjectStorage();
 
-  const release = await accountDataSlot('import').acquire();
-  let dir: string;
-  try {
-    dir = await mkdtemp(path.join(os.tmpdir(), 'tradr-import-'));
-  } catch (err) {
-    release();
-    throw err;
-  }
-
-  // Objects written by this run; deleted best-effort if the transaction rolls back
-  // (Req 7.4). The fence (task 4) protects them until then.
-  const writtenKeys: string[] = [];
-
-  try {
-    const { path: archivePath, sha256 } = await spoolUpload(body, dir, caps.maxUploadBytes);
+  return withImportAdmission(body, caps, opts, async ({ archivePath, sha256, signal }) => {
     if (sha256 !== digest) throw new ArchiveDigestMismatchError();
 
-    const validated = await validateArchive(archivePath, opts?.caps);
+    const validated = await validateArchive(archivePath, opts?.caps, signal);
 
-    const result = await withTransaction(db, async (tx) => {
-      // Bound the lock waits below; an expiry raises 55P03 → the busy error.
-      await tx.execute(sql`SELECT set_config('lock_timeout', ${lockTimeout}, true)`);
-      // The gc fence is only meaningful when objects are written (Req 7.3).
-      if (storage) await holdImportFence(tx);
-      await lockUserForAccountChange(tx, userId);
-      await assertTargetEmpty(tx, userId);
-      return restore(tx, userId, archivePath, opts?.caps, validated, storage, writtenKeys);
-    });
+    // Objects written by this run; deleted best-effort if the transaction rolls back
+    // (Req 7.4). The fence (task 4) protects them until then.
+    const writtenKeys: string[] = [];
 
-    emitImported(userId, validated, startedAt);
-    return result;
-  } catch (err) {
-    if (storage && writtenKeys.length > 0) {
-      await Promise.all(writtenKeys.map((key) => storage.delete(key).catch(() => {})));
+    try {
+      const result = await withTransaction(db, async (tx) => {
+        // Bound the lock waits below; an expiry raises 55P03 → the busy error.
+        await tx.execute(sql`SELECT set_config('lock_timeout', ${lockTimeout}, true)`);
+        // The gc fence is only meaningful when objects are written (Req 7.3).
+        if (storage) await holdImportFence(tx);
+        await lockUserForAccountChange(tx, userId);
+        await assertTargetEmpty(tx, userId);
+        return restore(
+          tx,
+          userId,
+          archivePath,
+          opts?.caps,
+          validated,
+          storage,
+          writtenKeys,
+          signal,
+        );
+      });
+
+      emitImported(userId, validated, emitStartedAt);
+      return result;
+    } catch (err) {
+      if (storage && writtenKeys.length > 0) {
+        await Promise.all(writtenKeys.map((key) => storage.delete(key).catch(() => {})));
+      }
+      if (err instanceof AppError) throw err;
+      if ((err as { code?: unknown }).code === PG_LOCK_TIMEOUT_CODE) throw new ImportBusyError();
+      throw new ImportFailedError();
     }
-    if (err instanceof AppError) throw err;
-    if ((err as { code?: unknown }).code === PG_LOCK_TIMEOUT_CODE) throw new ImportBusyError();
-    throw new ImportFailedError();
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-    release();
-  }
+  });
 }
 
 function emitImported(userId: string, validated: ValidatedArchive, startedAt: number): void {
   const properties: Record<string, number> = { durationMs: Date.now() - startedAt };
   for (const [key, value] of Object.entries(validated.counts)) properties[`count_${key}`] = value;
   captureServerEvent('account_imported', { distinctId: userId, properties });
+}
+
+// An orphaned spool directory is swept once it is older than this. A killed
+// process leaves its `tradr-import-*` directory behind with no hook to remove it;
+// ten minutes keeps the sweep clear of another process's live operation, which
+// finishes well inside the 240 s deadline (design C5).
+const STALE_IMPORT_DIR_MS = 10 * 60 * 1000;
+
+/**
+ * Remove orphaned import spool directories a killed process left behind (design C5,
+ * Reliability NFR). Sweeps `tradr-import-*` directories directly under `os.tmpdir()`
+ * whose modification time is older than ten minutes and returns how many were
+ * removed. Per-directory errors are swallowed so one unreadable entry never stops
+ * the sweep; `main()` calls this once at boot, logs the count and never fails boot
+ * on it.
+ */
+export async function sweepStaleImportDirs(now: number = Date.now()): Promise<number> {
+  const root = os.tmpdir();
+  const names = await readdir(root);
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith('tradr-import-')) continue;
+    const full = path.join(root, name);
+    try {
+      const info = await stat(full);
+      if (!info.isDirectory() || now - info.mtimeMs < STALE_IMPORT_DIR_MS) continue;
+      await rm(full, { recursive: true, force: true });
+      removed += 1;
+    } catch {
+      // Unreadable, or removed by a concurrent sweep between readdir and here.
+    }
+  }
+  return removed;
 }
 
 // --- The streaming restore ---------------------------------------------------
@@ -278,6 +385,9 @@ function makeFlusher<T>(flush: (rows: T[]) => Promise<void>): {
 }
 
 // Restore the archive's rows in one pass and one transaction (design C6 steps 4–5).
+// The reader takes the deadline `signal` so an abort stops the read at its next
+// chunk boundary; after the read loop ends no check runs again, so a commit is
+// never a timeout (design C3).
 async function restore(
   tx: Transaction,
   userId: string,
@@ -286,6 +396,7 @@ async function restore(
   validated: ValidatedArchive,
   storage: ObjectStorage | null,
   writtenKeys: string[],
+  signal?: AbortSignal,
 ): Promise<ImportResult> {
   const salt = newSalt();
   const nowTs = new Date().toISOString();
@@ -475,7 +586,7 @@ async function restore(
   };
 
   try {
-    for await (const event of readArchive(archivePath, capsOverride)) {
+    for await (const event of readArchive(archivePath, capsOverride, signal)) {
       if (event.kind === 'image') {
         await handleImage(event.entry, event.bytes);
         continue;
