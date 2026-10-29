@@ -108,8 +108,8 @@ async function addFill(cookie: string, positionId: string, fill: ReturnType<type
   return res.json();
 }
 
-async function openPos(cookie: string, positionId: string) {
-  const res = await authedRequest('POST', `/api/positions/${positionId}/open`, cookie, {});
+async function openPos(cookie: string, positionId: string, body: Record<string, unknown> = {}) {
+  const res = await authedRequest('POST', `/api/positions/${positionId}/open`, cookie, body);
   expect(res.status).toBe(200);
   return res.json();
 }
@@ -796,7 +796,12 @@ describe('lot selection on create', () => {
         filledAt: '2025-01-01T10:00:00Z',
       }),
     );
-    await openPos(cookie, posNoSel.id);
+    // Explicit, identical openedAt for both positions: the exit's filledAt
+    // (2025-01-10) is otherwise earlier than the real "now" `/open` would
+    // otherwise stamp, which clamps closedAt to openedAt (see addFillTx) and
+    // would make lastFlatAt depend on wall-clock jitter between these two
+    // sequential requests rather than on the byte-identical fills.
+    await openPos(cookie, posNoSel.id, { openedAt: '2024-12-01T00:00:00Z' });
     await addFill(
       cookie,
       posNoSel.id,
@@ -822,7 +827,7 @@ describe('lot selection on create', () => {
         filledAt: '2025-01-01T10:00:00Z',
       }),
     );
-    await openPos(cookie, posSel.id);
+    await openPos(cookie, posSel.id, { openedAt: '2024-12-01T00:00:00Z' });
     const exitSelRes = await authedRequest('POST', `/api/positions/${posSel.id}/fills`, cookie, {
       type: 'exit',
       price: '110.00',

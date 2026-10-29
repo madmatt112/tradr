@@ -118,6 +118,19 @@ export const CreatedFillSchema = FillSchema.extend({
   positionClosed: z.boolean(),
 });
 
+// A specific-identification choice for one exit (design C3/C5). `quantity`
+// reuses the fill schemas' positive-decimal-string rule.
+export const LotSelectionItemSchema = z
+  .object({
+    entryFillId: z.string().uuid(),
+    quantity: z.string().refine((v) => !isNaN(Number(v)) && Number(v) > 0, {
+      message: 'Quantity must be a positive number',
+    }),
+  })
+  .strict();
+
+export const LotSelectionSchema = z.array(LotSelectionItemSchema).min(1);
+
 export const CreateFillSchema = z.object({
   type: z.enum(['entry', 'exit']),
   price: z.string().refine((v) => !isNaN(Number(v)) && Number(v) >= 0, {
@@ -134,6 +147,7 @@ export const CreateFillSchema = z.object({
     .default('0'),
   notes: z.string().max(10000).nullable().optional(),
   filledAt: z.string().datetime(),
+  lotSelection: LotSelectionSchema.optional(),
 });
 
 // type is immutable — excluded from update schema

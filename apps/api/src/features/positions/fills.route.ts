@@ -37,6 +37,9 @@ const FillParamSchema = z.object({
  *       The position's average price, open quantity, status, and realised P&L
  *       are all derived from its fills, so adding one recomputes them.
  *       Monetary and quantity fields are strings to preserve decimal precision.
+ *       An exit may carry `lotSelection` to pick specific lots by specific
+ *       identification; omitted, the exit matches FIFO against the oldest
+ *       lots not already reserved by another exit's selection.
  *     tags: [Positions]
  *     parameters:
  *       - in: path
@@ -60,6 +63,20 @@ const FillParamSchema = z.object({
  *               fees: { type: string, default: '0', description: Non-negative decimal. }
  *               notes: { type: string, maxLength: 10000, nullable: true }
  *               filledAt: { type: string, format: date-time }
+ *               lotSelection:
+ *                 type: array
+ *                 minItems: 1
+ *                 description: >
+ *                   Exit only. A specific-identification choice of lots: each
+ *                   item's `quantity` must claim no more than its lot still
+ *                   has available, and every item's `quantity` must sum to
+ *                   this fill's `quantity`.
+ *                 items:
+ *                   type: object
+ *                   required: [entryFillId, quantity]
+ *                   properties:
+ *                     entryFillId: { type: string, format: uuid, description: Must be an entry fill of this position. }
+ *                     quantity: { type: string, description: Positive decimal. }
  *     responses:
  *       201:
  *         description: >
@@ -83,9 +100,9 @@ const FillParamSchema = z.object({
  *                 filledAt: { type: string, format: date-time }
  *                 createdAt: { type: string, format: date-time }
  *                 positionClosed: { type: boolean }
- *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position.' }
+ *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, a `lotSelection` on an entry fill, or a `lotSelection` repeating an `entryFillId`.' }
  *       404: { description: No such position for this user. }
- *       409: { description: 'The position is closed, or an exit fill was sent to a position that is still a draft.' }
+ *       409: { description: 'The position is closed, an exit fill was sent to a position that is still a draft, a `lotSelection` names an entry fill that is not an entry of this position, its quantities do not sum to the exit quantity, its claims exceed a lot, or the write would change an earlier exit''s matched lots.' }
  */
 fillsRouter.post(
   '/:id/fills',
