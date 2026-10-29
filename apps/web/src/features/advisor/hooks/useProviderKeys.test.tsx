@@ -19,7 +19,7 @@ vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), put: vi.fn(), delete: vi.fn() },
 }));
 
-const KEY_ID = '22222222-2222-2222-2222-222222222222';
+const KEY_ID = '22222222-2222-4222-a222-222222222222';
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {

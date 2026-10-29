@@ -285,7 +285,7 @@ describe('QuickStatsTab', () => {
     vi.mocked(usePositions).mockReturnValue({
       data: [
         makePosition({
-          id: '00000000-0000-0000-0000-0000000000a1',
+          id: '00000000-0000-4000-a000-0000000000a1',
           assetType: 'option',
           totalEntryQuantity: 5,
           totalExitQuantity: 0,
@@ -314,15 +314,15 @@ describe('QuickStatsTab', () => {
     vi.mocked(usePositions).mockReturnValue({
       data: [
         makePosition({
-          id: '00000000-0000-0000-0000-0000000000d1',
+          id: '00000000-0000-4000-a000-0000000000d1',
           accountCurrency: 'USD',
         }),
         makePosition({
-          id: '00000000-0000-0000-0000-0000000000d2',
+          id: '00000000-0000-4000-a000-0000000000d2',
           accountCurrency: 'EUR',
         }),
         makePosition({
-          id: '00000000-0000-0000-0000-0000000000d3',
+          id: '00000000-0000-4000-a000-0000000000d3',
           accountCurrency: 'EUR',
         }),
       ],

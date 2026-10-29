@@ -152,19 +152,19 @@ describe('RecentlyCreatedTab', () => {
   it('renders action labels for draft/open/closed rows', () => {
     const rows = [
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000d1',
+        id: '00000000-0000-4000-a000-0000000000d1',
         symbol: 'X',
         status: 'draft',
         createdAt: '2026-05-27T11:00:00.000Z',
       }),
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000d2',
+        id: '00000000-0000-4000-a000-0000000000d2',
         symbol: 'Y',
         status: 'open',
         createdAt: '2026-05-27T10:00:00.000Z',
       }),
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000d3',
+        id: '00000000-0000-4000-a000-0000000000d3',
         symbol: 'Z',
         status: 'closed',
         createdAt: '2026-05-27T09:00:00.000Z',
@@ -221,7 +221,7 @@ describe('RecentlyCreatedTab', () => {
     vi.mocked(useMediaQuery).mockReturnValue(true);
     const rows = [
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000e1',
+        id: '00000000-0000-4000-a000-0000000000e1',
         symbol: 'AAPL',
         status: 'open',
         createdAt: '2026-05-27T11:00:00.000Z',
@@ -238,7 +238,7 @@ describe('RecentlyCreatedTab', () => {
     const { container, root } = mountWith(<RecentlyCreatedTab />);
     const link = container.querySelector('a');
     expect(link).not.toBeNull();
-    expect(link?.getAttribute('href')).toBe('/positions/00000000-0000-0000-0000-0000000000e1');
+    expect(link?.getAttribute('href')).toBe('/positions/00000000-0000-4000-a000-0000000000e1');
 
     act(() => {
       link!.click();

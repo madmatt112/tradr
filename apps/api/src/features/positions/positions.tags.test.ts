@@ -391,7 +391,7 @@ describe('GET /api/positions tag filter and tags payload', () => {
     const pos = await createTestPosition(cookie, account.id, { symbol: 'AAA' });
     await setTags(cookie, pos.id, [a.id]);
 
-    const foreign = '11111111-1111-1111-1111-111111111111';
+    const foreign = '11111111-1111-4111-a111-111111111111';
     const none = await (await authedRequest('GET', `/api/positions?tag=${foreign}`, cookie)).json();
     expect(none).toEqual([]);
 

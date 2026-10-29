@@ -83,16 +83,16 @@ describe('backup-restore checker — SQL against a real Postgres', () => {
       const rel = { child: '_drill_c', childCol: 'p_id', parent: '_drill_p', parentCol: 'id' };
 
       // Consistent row: child points at an existing parent → no orphan.
-      await tx.unsafe("INSERT INTO _drill_p (id) VALUES ('11111111-1111-1111-1111-111111111111')");
+      await tx.unsafe("INSERT INTO _drill_p (id) VALUES ('11111111-1111-4111-a111-111111111111')");
       await tx.unsafe(
-        "INSERT INTO _drill_c (p_id) VALUES ('11111111-1111-1111-1111-111111111111')",
+        "INSERT INTO _drill_c (p_id) VALUES ('11111111-1111-4111-a111-111111111111')",
       );
       const healthy = await tx.unsafe(orphanSql(rel));
       expect(Number(healthy[0].n)).toBe(0);
 
       // Injected orphan: child references a non-existent parent.
       await tx.unsafe(
-        "INSERT INTO _drill_c (p_id) VALUES ('22222222-2222-2222-2222-222222222222')",
+        "INSERT INTO _drill_c (p_id) VALUES ('22222222-2222-4222-a222-222222222222')",
       );
       // A NULL FK must NOT count as an orphan.
       await tx.unsafe('INSERT INTO _drill_c (p_id) VALUES (NULL)');
@@ -128,9 +128,9 @@ describe('backup-restore checker — SQL against a real Postgres', () => {
     // user → account → position → position_images pointer row and prove pointerKeysSql()
     // (the parenthesized advisor ∪ position union) returns the seeded key.
     await inRollback(async (tx) => {
-      const userId = '33333333-3333-3333-3333-333333333333';
-      const accountId = '44444444-4444-4444-4444-444444444444';
-      const positionId = '55555555-5555-5555-5555-555555555555';
+      const userId = '33333333-3333-4333-a333-333333333333';
+      const accountId = '44444444-4444-4444-a444-444444444444';
+      const positionId = '55555555-5555-4555-a555-555555555555';
       const key = 'positions/drill/backup-restore-check';
       await tx.unsafe(
         `INSERT INTO users (id, email, password_hash) VALUES ('${userId}', 'drill-backup@example.test', 'x')`,

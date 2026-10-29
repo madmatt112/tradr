@@ -57,7 +57,7 @@ describe('UploadPositionImageSchema', () => {
 });
 
 describe('PositionImageSchema', () => {
-  const id = '11111111-1111-1111-1111-111111111111';
+  const id = '11111111-1111-4111-a111-111111111111';
   const createdAt = '2026-09-14T00:00:00.000Z';
 
   it('accepts a record without unavailable', () => {

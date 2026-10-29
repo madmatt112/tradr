@@ -16,12 +16,12 @@ vi.mock('../lib/sse', async (importOriginal) => ({
   readSseStream: vi.fn(),
 }));
 
-const CONV_ID = '11111111-1111-1111-1111-111111111111';
+const CONV_ID = '11111111-1111-4111-a111-111111111111';
 
 function makeInput(): StreamSubmitInput {
   return {
     conversationId: CONV_ID,
-    clientMessageId: '22222222-2222-2222-2222-222222222222',
+    clientMessageId: '22222222-2222-4222-a222-222222222222',
     text: 'hello',
   };
 }
@@ -149,7 +149,7 @@ describe('useAdvisorStream', () => {
 
     expect(seenMidStream).toEqual({ kind: 'pending' });
     expect(useStreamStore.getState().userMessageByConversation[CONV_ID]).toEqual({
-      clientMessageId: '22222222-2222-2222-2222-222222222222',
+      clientMessageId: '22222222-2222-4222-a222-222222222222',
       text: 'hello',
       attachments: [],
     });

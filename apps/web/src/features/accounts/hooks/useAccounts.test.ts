@@ -20,7 +20,7 @@ import {
 // vi.mock is hoisted above the imports — `toast` resolves to this mock.
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
+const ACCOUNT_ID = '11111111-1111-4111-a111-111111111111';
 
 function makeClient() {
   return new QueryClient({

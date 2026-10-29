@@ -43,7 +43,7 @@ const MODELS = {
 };
 
 const CONFIGURED_ITEM = {
-  id: '22222222-2222-2222-2222-222222222222',
+  id: '22222222-2222-4222-a222-222222222222',
   providerId: 'claude',
   defaultModel: 'claude-3-5-sonnet',
   keyHintTail: 'wxyz',

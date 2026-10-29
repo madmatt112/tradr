@@ -38,9 +38,9 @@ vi.mock('@/hooks/useAuth', () => ({
 
 import { UserTable } from '../UserTable';
 
-const SELF_ID = '11111111-1111-1111-1111-111111111111';
-const OTHER_ADMIN_ID = '22222222-2222-2222-2222-222222222222';
-const PLAIN_ID = '33333333-3333-3333-3333-333333333333';
+const SELF_ID = '11111111-1111-4111-a111-111111111111';
+const OTHER_ADMIN_ID = '22222222-2222-4222-a222-222222222222';
+const PLAIN_ID = '33333333-3333-4333-a333-333333333333';
 
 const SELF = {
   id: SELF_ID,
@@ -148,7 +148,7 @@ describe('UserTable — rendering', () => {
   it('loads the next page via the cursor when "Load more" is clicked', async () => {
     mockAuth.user = { id: SELF_ID, email: 'me@x.com', isAdmin: true };
     const pageTwoUser = {
-      id: '44444444-4444-4444-4444-444444444444',
+      id: '44444444-4444-4444-a444-444444444444',
       email: 'older@x.com',
       isAdmin: false,
       emailVerified: true,

@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Hoisted shared mock state (factories below run before module imports).
 const { ACCOUNT_ID, ACCOUNT_B_ID, mutateAsync, accountsData, tierData } = vi.hoisted(() => ({
-  ACCOUNT_ID: '11111111-1111-1111-1111-111111111111',
-  ACCOUNT_B_ID: '22222222-2222-2222-2222-222222222222',
+  ACCOUNT_ID: '11111111-1111-4111-a111-111111111111',
+  ACCOUNT_B_ID: '22222222-2222-4222-a222-222222222222',
   mutateAsync: vi.fn(),
   accountsData: { current: [] as unknown[] },
   tierData: { current: undefined as unknown },

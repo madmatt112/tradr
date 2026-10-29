@@ -56,7 +56,7 @@ import { CrossCurrencyTotal } from './CrossCurrencyTotal';
 function makeAccount(over: Partial<Account>): Account {
   return {
     id: '00000000-0000-0000-0000-000000000000',
-    userId: '00000000-0000-0000-0000-000000000001',
+    userId: '00000000-0000-4000-a000-000000000001',
     name: 'Test Account',
     currency: 'USD',
     timezone: 'America/New_York',

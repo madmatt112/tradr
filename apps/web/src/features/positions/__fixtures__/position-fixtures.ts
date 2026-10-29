@@ -10,9 +10,9 @@ import type { PositionListItem } from '@tradr/shared';
  * Per-test overrides cover variant cases (closed, short, option, etc.).
  */
 export const makePosition = (overrides: Partial<PositionListItem> = {}): PositionListItem => ({
-  id: '00000000-0000-0000-0000-000000000001',
-  userId: '00000000-0000-0000-0000-000000000100',
-  accountId: '00000000-0000-0000-0000-000000000010',
+  id: '00000000-0000-4000-a000-000000000001',
+  userId: '00000000-0000-4000-a000-000000000100',
+  accountId: '00000000-0000-4000-a000-000000000010',
   accountName: 'Test Account',
   accountCurrency: 'USD',
   accountTimezone: 'America/New_York',
