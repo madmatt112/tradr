@@ -274,6 +274,13 @@
       "when": 1791561406063,
       "tag": "0038_auth_security",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1793289433706,
+      "tag": "0039_tax_lots",
+      "breakpoints": true
     }
   ]
 }

@@ -6,9 +6,9 @@ description: Every table Tradr creates, its columns, and how they reference each
 {/* GENERATED FILE — do not edit.
     Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}
 
-Tradr's schema is **42 tables**, created by **39 migrations** that run
+Tradr's schema is **43 tables**, created by **40 migrations** that run
 automatically when the api boots. This page is generated from the Drizzle snapshot
-for the latest schema-changing migration (`0038_auth_security`), so it describes the schema the migrations
+for the latest schema-changing migration (`0039_tax_lots`), so it describes the schema the migrations
 actually produce.
 
 You do not need any of this to run Tradr. It is here for writing queries against
@@ -34,6 +34,7 @@ a query you write against these tables may need updating on any release.
 | `display_currency` | `varchar(3)` | — |
 | `timezone` | `varchar(64)` | — |
 | `tax_jurisdiction` | `varchar(8)` | — |
+| `tax_lot_method` | `varchar(8)` | — |
 | `theme` | `varchar(8)` | not null, default `'system'` |
 | `buying_power_basis` | `varchar(7)` | not null, default `'cash'` |
 | `writable_account_id` | `uuid` | — |
@@ -548,6 +549,21 @@ a query you write against these tables may need updating on any release.
 | `deleted_at` | `timestamp with time zone` | not null, default `now()` |
 | `initiator` | `text` | not null |
 | `purge_outcome` | `text` | not null, default `'pending'` |
+
+### `fill_lot_selections`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `exit_fill_id` | `uuid` | not null |
+| `entry_fill_id` | `uuid` | not null |
+| `quantity` | `numeric(18, 8)` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `exit_fill_id` → `fills.id` on delete cascade
+- `entry_fill_id` → `fills.id` on delete cascade
 
 ### `login_challenges`
 

@@ -7,6 +7,7 @@ import {
   timestamp,
   numeric,
   index,
+  uniqueIndex,
   check,
 } from 'drizzle-orm/pg-core';
 
@@ -83,4 +84,34 @@ export const fills = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('fills_position_id_idx').on(table.positionId)],
+);
+
+// Per-exit lot selections (tax-lots C3, Data Models). Each row pairs an exit
+// fill with one entry fill it is matched against and the quantity consumed from
+// that lot. Only explicit selections are stored; every lot figure is otherwise
+// re-derived from the position's fills and effective method (AC 1.5). Both
+// references cascade, so removing a fill — or the position that owns it, or the
+// user above that — removes its selection rows with it (AC 3.9, AC 9.5).
+export const fillLotSelections = pgTable(
+  'fill_lot_selections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    exitFillId: uuid('exit_fill_id')
+      .notNull()
+      .references(() => fills.id, { onDelete: 'cascade' }),
+    entryFillId: uuid('entry_fill_id')
+      .notNull()
+      .references(() => fills.id, { onDelete: 'cascade' }),
+    quantity: numeric('quantity', { precision: 18, scale: 8 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('fill_lot_selections_exit_entry_unique').on(table.exitFillId, table.entryFillId),
+    index('fill_lot_selections_entry_fill_id_idx').on(table.entryFillId),
+    check('fill_lot_selections_quantity_positive_chk', sql`${table.quantity} > 0`),
+    check(
+      'fill_lot_selections_distinct_fills_chk',
+      sql`${table.exitFillId} <> ${table.entryFillId}`,
+    ),
+  ],
 );
