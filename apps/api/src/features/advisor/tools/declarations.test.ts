@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { buildDeclarations, deriveInputJsonSchema } from './declarations';
+import { toolRegistry } from './registry';
 import type { ToolDefinition, ToolResult } from './types';
 
 // The registry is empty until individual tool tasks land, so we exercise schema
@@ -169,5 +170,85 @@ describe('buildDeclarations filtering (REQ-1.3, REQ-13.1)', () => {
 
   it('offers nothing when neither consent nor key is present', () => {
     expect(buildDeclarations({ toolUse: true }, false, false)).toEqual([]);
+  });
+});
+
+// Snapshot recorded on zod 3, before the zod 4 / converter-swap upgrade
+// (Requirement 8.1, 8.3). This is the base column of
+// /tmp/scratchpad/sdd/zod-4-and-body-limit/probe-declarations.out — a
+// regression guard the converter swap (task 6) must not change.
+describe('toolRegistry declarations snapshot on zod 3 (REQ-8.1, REQ-8.3)', () => {
+  it('derives the same JSON Schema for every registered tool as the zod 3 base', () => {
+    const actual: Record<string, Record<string, unknown>> = {};
+    for (const [name, def] of Object.entries(toolRegistry)) {
+      actual[name] = deriveInputJsonSchema(def);
+    }
+
+    expect(actual).toEqual({
+      market_data_stock_quote: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', pattern: '^[A-Z.]{1,6}$' },
+        },
+        additionalProperties: false,
+        required: ['symbol'],
+      },
+      market_data_options_flow: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', pattern: '^[A-Z.]{1,6}$' },
+          limit: { type: 'integer', minimum: 1, maximum: 25 },
+        },
+        additionalProperties: false,
+        required: ['symbol'],
+      },
+      market_data_options_chain: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', pattern: '^[A-Z.]{1,6}$' },
+          expiration: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+        },
+        additionalProperties: false,
+        required: ['symbol'],
+      },
+      trade_data_open_positions: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+      trade_data_recent_closed: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 20 },
+        },
+        additionalProperties: false,
+      },
+      trade_data_account_summary: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+      trade_data_pnl_summary: {
+        type: 'object',
+        properties: {
+          granularity: { type: 'string', enum: ['day', 'week', 'month', 'year'] },
+          start: { type: 'string' },
+          end: { type: 'string' },
+          tz: { type: 'string' },
+          currency: { type: 'string' },
+        },
+        additionalProperties: false,
+        required: ['granularity', 'start', 'end'],
+      },
+    });
+  });
+
+  it('has a non-empty properties object for every tool whose input schema has fields', () => {
+    const emptyInputTools = new Set(['trade_data_open_positions', 'trade_data_account_summary']);
+    for (const [name, def] of Object.entries(toolRegistry)) {
+      if (emptyInputTools.has(name)) continue;
+      const schema = deriveInputJsonSchema(def) as { properties: Record<string, unknown> };
+      expect(Object.keys(schema.properties).length).toBeGreaterThan(0);
+    }
   });
 });

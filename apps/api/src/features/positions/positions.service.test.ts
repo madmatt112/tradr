@@ -350,9 +350,9 @@ describe('buildCloseHookContext — invariant branches (mocked queries)', () => 
     );
 
     const fakePosition = {
-      id: '00000000-0000-0000-0000-000000000001',
-      userId: '00000000-0000-0000-0000-000000000002',
-      accountId: '00000000-0000-0000-0000-000000000003',
+      id: '00000000-0000-4000-a000-000000000001',
+      userId: '00000000-0000-4000-a000-000000000002',
+      accountId: '00000000-0000-4000-a000-000000000003',
       symbol: 'AAPL',
       side: 'long',
       assetType: 'stock',
@@ -378,8 +378,8 @@ describe('buildCloseHookContext — invariant branches (mocked queries)', () => 
     // computePnlFromTotals returns realizedPnl=null.
     vi.spyOn(accountsQuery, 'findAccountById').mockResolvedValueOnce([
       {
-        id: '00000000-0000-0000-0000-000000000003',
-        userId: '00000000-0000-0000-0000-000000000002',
+        id: '00000000-0000-4000-a000-000000000003',
+        userId: '00000000-0000-4000-a000-000000000002',
         name: 'Fake',
         currency: 'USD',
         brokerageId: null,
@@ -394,9 +394,9 @@ describe('buildCloseHookContext — invariant branches (mocked queries)', () => 
     );
 
     const fakePosition = {
-      id: '00000000-0000-0000-0000-000000000001',
-      userId: '00000000-0000-0000-0000-000000000002',
-      accountId: '00000000-0000-0000-0000-000000000003',
+      id: '00000000-0000-4000-a000-000000000001',
+      userId: '00000000-0000-4000-a000-000000000002',
+      accountId: '00000000-0000-4000-a000-000000000003',
       symbol: 'AAPL',
       side: 'long',
       assetType: 'stock',

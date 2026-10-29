@@ -70,8 +70,8 @@ describe('TagColorSchema', () => {
 });
 
 describe('parseTagIdList', () => {
-  const idA = '11111111-1111-1111-1111-111111111111';
-  const idB = '22222222-2222-2222-2222-222222222222';
+  const idA = '11111111-1111-4111-a111-111111111111';
+  const idB = '22222222-2222-4222-a222-222222222222';
 
   it('returns [] for undefined', () => {
     expect(parseTagIdList(undefined)).toEqual([]);

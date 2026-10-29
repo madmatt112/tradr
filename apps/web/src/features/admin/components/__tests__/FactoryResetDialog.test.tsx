@@ -32,7 +32,7 @@ vi.mock('sonner', () => ({ toast }));
 import { FactoryResetDialog } from '../FactoryResetDialog';
 
 const USER = {
-  id: '11111111-1111-1111-1111-111111111111',
+  id: '11111111-1111-4111-a111-111111111111',
   email: 'target@x.com',
   isAdmin: false,
   emailVerified: true,
@@ -236,7 +236,7 @@ describe('FactoryResetDialog — reopening', () => {
     await userEvent.type(confirmInput(), USER.email);
     expect(resetButton().disabled).toBe(false);
 
-    const other = { ...USER, id: '22222222-2222-2222-2222-222222222222', email: 'other@x.com' };
+    const other = { ...USER, id: '22222222-2222-4222-a222-222222222222', email: 'other@x.com' };
     vi.mocked(api.get).mockResolvedValue({ ...PREVIEW, userId: other.id, email: other.email });
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(QueryClientProvider, { client: qc }, children);

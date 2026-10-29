@@ -687,10 +687,10 @@ describe('BreakdownResponseSchema', () => {
           total: stats,
           rows: [
             {
-              key: '11111111-1111-1111-1111-111111111111',
+              key: '11111111-1111-4111-a111-111111111111',
               label: 'Breakout',
               tag: {
-                id: '11111111-1111-1111-1111-111111111111',
+                id: '11111111-1111-4111-a111-111111111111',
                 name: 'Breakout',
                 category: 'setup',
                 color: 'tag-1',

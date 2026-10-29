@@ -52,8 +52,8 @@ vi.mock('@/hooks/useAuth', () => ({
 
 import { AdminPage } from '../AdminPage';
 
-const ADMIN_USER = { id: '11111111-1111-1111-1111-111111111111', email: 'a@x.com', isAdmin: true };
-const PLAIN_USER = { id: '22222222-2222-2222-2222-222222222222', email: 'u@x.com', isAdmin: false };
+const ADMIN_USER = { id: '11111111-1111-4111-a111-111111111111', email: 'a@x.com', isAdmin: true };
+const PLAIN_USER = { id: '22222222-2222-4222-a222-222222222222', email: 'u@x.com', isAdmin: false };
 
 // The real envelope shape: the api client throws the parsed JSON body with
 // `status` patched on (api.ts) — the code is at `error.code`, NOT top-level.

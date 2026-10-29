@@ -111,7 +111,7 @@ async function expectFits(page: Page, type: string, testInfo: TestInfo, label = 
 function usdAccount(i: number): Record<string, unknown> {
   return {
     id: `00000000-0000-4000-8000-0000000000${String(i).padStart(2, '0')}`,
-    userId: '00000000-0000-0000-0000-000000000001',
+    userId: '00000000-0000-4000-a000-000000000001',
     name: `Account ${i}`,
     currency: 'USD',
     timezone: 'UTC',
@@ -137,7 +137,7 @@ function usdAccount(i: number): Record<string, unknown> {
 function openPosition(i: number): Record<string, unknown> {
   return {
     id: `00000000-0000-4000-9000-${String(i).padStart(12, '0')}`,
-    userId: '00000000-0000-0000-0000-000000000001',
+    userId: '00000000-0000-4000-a000-000000000001',
     accountId: '00000000-0000-4000-8000-0000000000a1',
     symbol: `SYM${i}`,
     side: 'long',

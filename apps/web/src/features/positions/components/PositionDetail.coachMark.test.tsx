@@ -80,9 +80,9 @@ const TODAY_UTC = new Date().toISOString().slice(0, 10);
 
 function makeDetail(overrides: Partial<PositionDetail> = {}): PositionDetail {
   return {
-    id: '00000000-0000-0000-0000-000000000001',
-    userId: '00000000-0000-0000-0000-000000000100',
-    accountId: '00000000-0000-0000-0000-000000000010',
+    id: '00000000-0000-4000-a000-000000000001',
+    userId: '00000000-0000-4000-a000-000000000100',
+    accountId: '00000000-0000-4000-a000-000000000010',
     accountTimezone: 'UTC',
     symbol: 'AAPL',
     side: 'long',

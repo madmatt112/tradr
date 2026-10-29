@@ -43,10 +43,10 @@ vi.mock('@/features/onboarding/hooks/useOnboarding', () => ({
 
 import { TagPicker } from './TagPicker';
 
-const A = '00000000-0000-0000-0000-00000000000a';
-const B = '00000000-0000-0000-0000-00000000000b';
-const C = '00000000-0000-0000-0000-00000000000c';
-const NEW = '00000000-0000-0000-0000-0000000000ff';
+const A = '00000000-0000-4000-a000-00000000000a';
+const B = '00000000-0000-4000-a000-00000000000b';
+const C = '00000000-0000-4000-a000-00000000000c';
+const NEW = '00000000-0000-4000-a000-0000000000ff';
 
 const THREE: TagWithCount[] = [
   { id: A, name: 'breakout', category: 'setup', color: null, positionCount: 0 },

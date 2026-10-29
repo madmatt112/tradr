@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { type Resolver, useForm } from 'react-hook-form';
 
 import {
   type Account,
@@ -67,7 +67,11 @@ function quoteErrorMessage(err: unknown): string {
 
 export function CalculatorForm() {
   const form = useForm<CalculatorInput>({
-    resolver: zodResolver(CalculatorInputSchema),
+    // The optional fields' `z.preprocess` (blank-string -> undefined) makes
+    // zod's own input type `unknown` for them, so the resolver's inferred
+    // input type diverges from `CalculatorInput`; every control here is a
+    // plain string input, so the cast is safe.
+    resolver: zodResolver(CalculatorInputSchema) as Resolver<CalculatorInput>,
     mode: 'onBlur',
     reValidateMode: 'onChange',
     defaultValues: {

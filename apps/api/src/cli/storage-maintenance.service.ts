@@ -96,8 +96,8 @@ function isObjectPointer(part: StoredContentPart): part is StoredImagePointer {
  * `{storage:{kind:'unrecoverable'}}` (REQ-3.3 — renders as the placeholder) and
  * `warn`-logged; the run is NEVER aborted on one gone object.
  */
-export async function migrateToInline(
-  sql: postgres.Sql,
+export async function migrateToInline<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
   storage: ObjectStorage,
 ): Promise<MigrateToInlineResult> {
   // `@>` array containment matches any element carrying storage.kind='object'.
@@ -227,7 +227,9 @@ export function deriveGcAgeFloorMs(): number {
  * the advisor's `content_parts` array (a jsonb scan) and the position-image
  * `part` object (D10). Either home keeps its own key from a gc sweep.
  */
-export async function collectLiveKeys(sql: postgres.Sql): Promise<Set<string>> {
+export async function collectLiveKeys<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
+): Promise<Set<string>> {
   const rows = await sql<{ key: string | null }[]>`
     SELECT DISTINCT part->'storage'->>'key' AS key
     FROM advisor_messages, jsonb_array_elements(content_parts) AS part
@@ -251,8 +253,8 @@ export async function collectLiveKeys(sql: postgres.Sql): Promise<Set<string>> {
  * `now` / `ageFloorMs` are injectable for deterministic tests; production uses
  * `Date.now()` and `deriveGcAgeFloorMs()`.
  */
-export async function runGc(
-  sql: postgres.Sql,
+export async function runGc<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
   storage: ObjectStorage,
   opts: { now?: number; ageFloorMs?: number } = {},
 ): Promise<GcResult> {
@@ -330,12 +332,15 @@ export async function runGc(
  * pooler regardless of the app pool. Independent of the app-runtime pool.
  */
 function openMaintenanceConnection(): postgres.Sql {
+  // The `types: { bigint }` override brands the client's `Sql` generic;
+  // the declared return type is contravariant in that generic, so the cast
+  // is required even though the client is unchanged at runtime.
   return postgres(config.DIRECT_DATABASE_URL ?? config.DATABASE_URL, {
     max: 1,
     prepare: false,
     types: { bigint: postgres.BigInt },
     onnotice: () => {},
-  });
+  }) as unknown as postgres.Sql;
 }
 
 /** Entrypoint for `tradr storage migrate-to-inline`. Returns a process exit code. */

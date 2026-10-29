@@ -143,7 +143,7 @@ describe('OpenPositionsTab', () => {
   it('renders symbol, direction, quantity, avg entry price, and cost basis per row', () => {
     const rows = [
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000a1',
+        id: '00000000-0000-4000-a000-0000000000a1',
         symbol: 'AAPL',
         side: 'long',
         assetType: 'stock',
@@ -157,7 +157,7 @@ describe('OpenPositionsTab', () => {
         openedAt: '2026-05-25T10:00:00.000Z',
       }),
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000a2',
+        id: '00000000-0000-4000-a000-0000000000a2',
         symbol: 'SPY',
         side: 'short',
         assetType: 'option',
@@ -201,17 +201,17 @@ describe('OpenPositionsTab', () => {
   it('sorts by openedAt desc with null last', () => {
     const rows = [
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000b1',
+        id: '00000000-0000-4000-a000-0000000000b1',
         symbol: 'OLD',
         openedAt: '2026-05-01T10:00:00.000Z',
       }),
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000b2',
+        id: '00000000-0000-4000-a000-0000000000b2',
         symbol: 'NULLROW',
         openedAt: null,
       }),
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000b3',
+        id: '00000000-0000-4000-a000-0000000000b3',
         symbol: 'NEW',
         openedAt: '2026-05-25T10:00:00.000Z',
       }),
@@ -234,7 +234,7 @@ describe('OpenPositionsTab', () => {
     vi.mocked(useMediaQuery).mockReturnValue(true);
     const rows = [
       makePosition({
-        id: '00000000-0000-0000-0000-0000000000c1',
+        id: '00000000-0000-4000-a000-0000000000c1',
         symbol: 'AAPL',
         openedAt: '2026-05-25T10:00:00.000Z',
       }),
@@ -250,7 +250,7 @@ describe('OpenPositionsTab', () => {
     const { container, root } = mountWith(<OpenPositionsTab />);
     const link = container.querySelector('a');
     expect(link).not.toBeNull();
-    expect(link?.getAttribute('href')).toBe('/positions/00000000-0000-0000-0000-0000000000c1');
+    expect(link?.getAttribute('href')).toBe('/positions/00000000-0000-4000-a000-0000000000c1');
 
     act(() => {
       link!.click();

@@ -32,7 +32,7 @@ const schedule: FeeSchedule = {
 };
 
 const position: FillPositionContext = {
-  accountId: '00000000-0000-0000-0000-000000000010',
+  accountId: '00000000-0000-4000-a000-000000000010',
   assetType: 'stock',
   side: 'long',
   openUnits: 100,

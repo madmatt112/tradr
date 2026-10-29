@@ -261,7 +261,7 @@ export const INVALID_TIMEZONE_RESPONSE = {
  * directly from the response.
  */
 export const SESSION_RESPONSE = {
-  id: '00000000-0000-0000-0000-000000000001',
+  id: '00000000-0000-4000-a000-000000000001',
   email: 'e2e@example.com',
   isAdmin: false,
 };

@@ -51,14 +51,14 @@ function byLabel(label: string): HTMLButtonElement | undefined {
 }
 
 const one: ConversationListItem = {
-  id: '11111111-1111-1111-1111-111111111111',
+  id: '11111111-1111-4111-a111-111111111111',
   title: 'First chat',
   providerId: 'claude',
   model: 'claude-opus-4-7',
   updatedAt: new Date().toISOString(),
 };
 const two: ConversationListItem = {
-  id: '22222222-2222-2222-2222-222222222222',
+  id: '22222222-2222-4222-a222-222222222222',
   title: 'Second chat',
   providerId: 'openai',
   model: 'gpt-4o',

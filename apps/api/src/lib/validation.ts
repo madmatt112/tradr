@@ -1,11 +1,12 @@
 import { zValidator } from '@hono/zod-validator';
-import type { ZodError, ZodSchema } from 'zod';
+import type { ZodSchema } from 'zod';
+import type { $ZodError } from 'zod/v4/core';
 
 import { ValidationError } from './errors';
 
 type ValidationTarget = 'json' | 'query' | 'param' | 'header' | 'cookie' | 'form';
 
-function formatZodErrors(error: ZodError): Record<string, string> {
+function formatZodErrors(error: $ZodError): Record<string, string> {
   const details: Record<string, string> = {};
   for (const issue of error.issues) {
     const path = issue.path.join('.') || '_root';
@@ -14,7 +15,9 @@ function formatZodErrors(error: ZodError): Record<string, string> {
   return details;
 }
 
-function formatZodFields(error: ZodError): Array<{ path: string; code: string; message: string }> {
+function formatZodFields(
+  error: $ZodError,
+): Array<{ path: string; code: string; message: string }> {
   return error.issues.map((issue) => ({
     path: issue.path.join('.') || '_root',
     code: issue.code,

@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { type Resolver, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
 import {
@@ -111,7 +111,13 @@ export function FillDialog({
   const [feeOverride, setFeeOverride] = useState(false);
 
   const form = useForm<CreateFillInput>({
-    resolver: zodResolver(isEdit ? FillEditFormSchema : FillFormSchema),
+    // `fees`'s `.default('0')` makes zod's own input type optional for it,
+    // and the edit schema drops required fields entirely, so the resolver's
+    // inferred type diverges from `CreateFillInput`; the cast matches the
+    // single shape this dialog has always read and written.
+    resolver: zodResolver(
+      isEdit ? FillEditFormSchema : FillFormSchema,
+    ) as unknown as Resolver<CreateFillInput>,
     defaultValues: fill
       ? {
           type: fill.type as 'entry' | 'exit',

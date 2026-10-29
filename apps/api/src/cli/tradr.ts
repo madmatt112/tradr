@@ -149,7 +149,10 @@ async function readPostMigrationFiles(): Promise<string[]> {
  * Returns true iff the advisory lock for `key` is held by any session.
  * Read-only: queries pg_locks only.
  */
-async function isLockHeld(sql: postgres.Sql, key: bigint): Promise<boolean> {
+async function isLockHeld<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
+  key: bigint,
+): Promise<boolean> {
   const { classid, objid, objsubid } = decodeLockKey(key);
   const rows = await sql<{ held: boolean }[]>`
     SELECT EXISTS (
@@ -167,7 +170,9 @@ async function isLockHeld(sql: postgres.Sql, key: bigint): Promise<boolean> {
 // Status gathering (read-only).
 // ---------------------------------------------------------------------------
 
-export async function gatherStatus(sql: postgres.Sql): Promise<StatusReport> {
+export async function gatherStatus<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
+): Promise<StatusReport> {
   // Standard track: existence first via to_regclass (NULL when absent — never
   // creates the table, never throws). Only query the table when it exists.
   const stdRegRows = await sql<{ reg: string | null }[]>`
@@ -376,8 +381,8 @@ export function validatePassword(password: string): string | undefined {
  * mark the account verified (REQ-6.5 pinned NO — a command proves nothing about
  * the mailbox) and does NOT revoke sessions (pre-existing asymmetry with D8).
  */
-export async function resetPassword(
-  sql: postgres.Sql,
+export async function resetPassword<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
   email: string,
   newPassword: string,
 ): Promise<boolean> {
@@ -502,8 +507,8 @@ export function normalizeEmail(raw: string): string | undefined {
  * default, exactly as an insert through `registerUser` does. Deliberately does
  * NOT grant admin: `SEED_ADMIN_EMAIL` is the mechanism for that.
  */
-export async function createUser(
-  sql: postgres.Sql,
+export async function createUser<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
   email: string,
   password: string,
 ): Promise<boolean> {
@@ -609,8 +614,8 @@ export function parseEmailArg(args: string[]): EmailArg {
  * Takes a caller-supplied connection so it is real-Postgres testable, and lets
  * a connection failure propagate (the entry point maps it to exit 2).
  */
-export async function unlockAddress(
-  sql: postgres.Sql,
+export async function unlockAddress<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
   email: string,
 ): Promise<'cleared' | 'no-lock' | 'unknown'> {
   const cleared = await sql<{ key_hash: string }[]>`
@@ -635,8 +640,8 @@ export async function unlockAddress(
  *   - `no-account`   — no account for the address (REQ-4.3 exit 1).
  * Takes a caller-supplied connection; a connection failure propagates (exit 2).
  */
-export async function disableTwoFactor(
-  sql: postgres.Sql,
+export async function disableTwoFactor<TTypes extends Record<string, unknown>>(
+  sql: postgres.Sql<TTypes>,
   email: string,
 ): Promise<'disabled' | 'not-enabled' | 'no-account'> {
   return sql.begin(async (txRaw) => {

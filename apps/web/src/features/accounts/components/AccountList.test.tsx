@@ -101,8 +101,8 @@ import { AccountList } from './AccountList';
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const ACCOUNT_A = '11111111-1111-1111-1111-111111111111';
-const ACCOUNT_B = '22222222-2222-2222-2222-222222222222';
+const ACCOUNT_A = '11111111-1111-4111-a111-111111111111';
+const ACCOUNT_B = '22222222-2222-4222-a222-222222222222';
 
 const ACCOUNTS: Account[] = [
   { id: ACCOUNT_A, name: 'Main', currency: 'USD' } as Account,

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CreatePositionSchema, UpdatePositionSchema } from './position';
 
-const accountId = '11111111-1111-1111-1111-111111111111';
+const accountId = '11111111-1111-4111-a111-111111111111';
 
 describe('CreatePositionSchema option-gated OCC refine', () => {
   it('rejects an option with a non-OCC symbol on path ["symbol"]', () => {

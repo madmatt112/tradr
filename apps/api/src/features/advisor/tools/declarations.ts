@@ -8,15 +8,14 @@
 //
 // Each declaration's JSON Schema is derived from the tool's `inputSchema` (the
 // same Zod object `safeParse`d on dispatch), so the declared and validated
-// contracts cannot drift. We use the `zod-to-json-schema` package with the
-// real `jsonSchema7` target and `$refStrategy:'none'`; because every tool's
-// `inputSchema` is a flat object of scalar fields (HARD CONSTRAINT in types.ts),
-// no `$ref`/`$defs` is emitted. The advisor uses NON-STRICT OpenAI
-// function-calling, so a single draft-07 schema with optional fields is valid
-// for both Anthropic `input_schema` and OpenAI `function.parameters` — we do
-// NOT opt into OpenAI strict mode.
+// contracts cannot drift. We use zod's built-in `z.toJSONSchema` with the
+// `draft-7` target; because every tool's `inputSchema` is a flat object of
+// scalar fields (HARD CONSTRAINT in types.ts), no `$ref`/`$defs` is emitted.
+// The advisor uses NON-STRICT OpenAI function-calling, so a single draft-07
+// schema with optional fields is valid for both Anthropic `input_schema` and
+// OpenAI `function.parameters` — we do NOT opt into OpenAI strict mode.
 
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 
 import { toolRegistry } from './registry';
 import type { ToolDefinition } from './types';
@@ -62,7 +61,7 @@ function isRequirementSatisfied(def: ToolDefinition, consent: boolean, hasUwKey:
  * Derive a flat draft-07 JSON Schema for a tool's `inputSchema`, stripped to the
  * provider-accepted top-level key set.
  *
- * `zod-to-json-schema` emits a top-level `$schema`
+ * `z.toJSONSchema` emits a top-level `$schema`
  * (`"http://json-schema.org/draft-07/schema#"`) which neither provider accepts
  * as a parameters-object key, so we delete it. We keep only `type`,
  * `properties`, `required` (when present — absent when all fields are optional),
@@ -70,9 +69,8 @@ function isRequirementSatisfied(def: ToolDefinition, consent: boolean, hasUwKey:
  * constraint (types.ts) guarantees no `$ref`/`$defs` is produced.
  */
 export function deriveInputJsonSchema(def: ToolDefinition): Record<string, unknown> {
-  const schema = zodToJsonSchema(def.inputSchema, {
-    target: 'jsonSchema7',
-    $refStrategy: 'none',
+  const schema = z.toJSONSchema(def.inputSchema, {
+    target: 'draft-7',
   }) as Record<string, unknown>;
 
   // Strip the top-level $schema dialect marker.

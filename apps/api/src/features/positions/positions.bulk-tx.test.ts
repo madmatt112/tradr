@@ -65,7 +65,7 @@ describe('bulk-composition — (a) FK 23503 propagates & rolls back', () => {
     // missing-account FK at insert time: stub findAccountById to return a row
     // for a non-existent accountId. The catch-free *Tx variant must NOT swallow
     // the resulting 23503 — it propagates and rolls back the whole tx.
-    const bogusAccountId = '00000000-0000-0000-0000-0000000000ff';
+    const bogusAccountId = '00000000-0000-4000-a000-0000000000ff';
     const realFind = accountsQuery.findAccountById;
     const fakeFind = (async (
       executor: Parameters<typeof accountsQuery.findAccountById>[0],

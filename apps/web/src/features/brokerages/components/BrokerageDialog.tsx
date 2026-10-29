@@ -37,6 +37,7 @@ const BrokerageFormSchema = z.object({
 });
 
 type BrokerageFormValues = z.infer<typeof BrokerageFormSchema>;
+type BrokerageFormInput = z.input<typeof BrokerageFormSchema>;
 
 const DEFAULT_FEE_SCHEDULE: BrokerageFormValues['feeSchedule'] = {
   stockPerShareCommission: '0',
@@ -66,7 +67,7 @@ export function BrokerageDialog({ open, onOpenChange, brokerage }: BrokerageDial
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [pendingData, setPendingData] = useState<BrokerageFormValues | null>(null);
 
-  const form = useForm<BrokerageFormValues>({
+  const form = useForm<BrokerageFormInput, unknown, BrokerageFormValues>({
     resolver: zodResolver(BrokerageFormSchema),
     defaultValues: {
       name: brokerage?.name ?? '',

@@ -20,8 +20,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Two fixed UUIDs where B sorts after A lexicographically.
-const A = '00000000-0000-0000-0000-00000000000a';
-const B = '00000000-0000-0000-0000-00000000000b';
+const A = '00000000-0000-4000-a000-00000000000a';
+const B = '00000000-0000-4000-a000-00000000000b';
 
 // ---- Mocks ----------------------------------------------------------------
 
@@ -288,13 +288,13 @@ describe('PositionList — classification (result) filter + Breakeven badge', ()
   it('renders the Breakeven badge only on a breakeven row', async () => {
     h.rows = [
       makePosition({
-        id: '00000000-0000-0000-0000-000000000001',
+        id: '00000000-0000-4000-a000-000000000001',
         symbol: 'EVEN',
         status: 'closed',
         classification: 'breakeven',
       }),
       makePosition({
-        id: '00000000-0000-0000-0000-000000000002',
+        id: '00000000-0000-4000-a000-000000000002',
         symbol: 'WINR',
         status: 'closed',
         classification: 'winning',

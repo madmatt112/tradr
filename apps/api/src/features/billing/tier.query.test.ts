@@ -16,8 +16,8 @@ const FUTURE_PERIOD_END = new Date('2026-08-01T00:00:00Z'); // after NOW
 
 function subRow(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
   return {
-    id: '00000000-0000-0000-0000-000000000001',
-    userId: '00000000-0000-0000-0000-0000000000aa',
+    id: '00000000-0000-4000-a000-000000000001',
+    userId: '00000000-0000-4000-a000-0000000000aa',
     stripeCustomerId: 'cus_test',
     stripeSubscriptionId: 'sub_test',
     status: 'active',
@@ -124,12 +124,12 @@ describe('deriveTier — cancel_at_period_end', () => {
 describe('deriveTier — D3 total order among qualifying rows', () => {
   it('earliest stripe_created_at wins regardless of array order', () => {
     const earlier = subRow({
-      id: '00000000-0000-0000-0000-000000000001',
+      id: '00000000-0000-4000-a000-000000000001',
       stripeSubscriptionId: 'sub_earlier',
       stripeCreatedAt: new Date('2026-07-01T00:00:00Z'),
     });
     const later = subRow({
-      id: '00000000-0000-0000-0000-000000000002',
+      id: '00000000-0000-4000-a000-000000000002',
       stripeSubscriptionId: 'sub_later',
       stripeCreatedAt: new Date('2026-07-02T00:00:00Z'),
     });
@@ -140,12 +140,12 @@ describe('deriveTier — D3 total order among qualifying rows', () => {
   it('a same-second stripe_created_at tie is resolved by ascending stripe_subscription_id', () => {
     const created = new Date('2026-07-01T00:00:00Z'); // Stripe created has second granularity
     const subA = subRow({
-      id: '00000000-0000-0000-0000-000000000001',
+      id: '00000000-0000-4000-a000-000000000001',
       stripeSubscriptionId: 'sub_a',
       stripeCreatedAt: created,
     });
     const subB = subRow({
-      id: '00000000-0000-0000-0000-000000000002',
+      id: '00000000-0000-4000-a000-000000000002',
       stripeSubscriptionId: 'sub_b',
       stripeCreatedAt: created,
     });
@@ -156,13 +156,13 @@ describe('deriveTier — D3 total order among qualifying rows', () => {
 
   it('an earlier-created NON-qualifying row never wins over a later qualifying one', () => {
     const earlierCanceled = subRow({
-      id: '00000000-0000-0000-0000-000000000001',
+      id: '00000000-0000-4000-a000-000000000001',
       stripeSubscriptionId: 'sub_dead',
       status: 'canceled',
       stripeCreatedAt: new Date('2026-06-01T00:00:00Z'),
     });
     const laterActive = subRow({
-      id: '00000000-0000-0000-0000-000000000002',
+      id: '00000000-0000-4000-a000-000000000002',
       stripeSubscriptionId: 'sub_live',
       status: 'active',
       stripeCreatedAt: new Date('2026-07-02T00:00:00Z'),

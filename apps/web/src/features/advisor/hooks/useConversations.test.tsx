@@ -19,7 +19,7 @@ vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }));
 
-const CONV_ID = '11111111-1111-1111-1111-111111111111';
+const CONV_ID = '11111111-1111-4111-a111-111111111111';
 
 function makeWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {

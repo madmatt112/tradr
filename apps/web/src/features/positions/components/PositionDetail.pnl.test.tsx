@@ -65,9 +65,9 @@ function mockDetail(pnl: {
 }) {
   vi.mocked(usePosition).mockReturnValue({
     data: {
-      id: '00000000-0000-0000-0000-000000000001',
-      userId: '00000000-0000-0000-0000-000000000100',
-      accountId: '00000000-0000-0000-0000-000000000010',
+      id: '00000000-0000-4000-a000-000000000001',
+      userId: '00000000-0000-4000-a000-000000000100',
+      accountId: '00000000-0000-4000-a000-000000000010',
       accountTimezone: 'America/New_York',
       symbol: 'AAPL',
       side: 'long',

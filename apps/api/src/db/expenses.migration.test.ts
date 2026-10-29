@@ -31,7 +31,13 @@ let sql: ReturnType<typeof postgres>;
 beforeAll(async () => {
   await runMigrations();
   await runPostMigrations();
-  sql = postgres(DATABASE_URL, { max: 1, types: { bigint: postgres.BigInt } });
+  // The `types: { bigint }` override brands the client's `Sql` generic;
+  // `sql`'s declared type is contravariant in that generic, so the cast is
+  // required even though the client is unchanged at runtime.
+  sql = postgres(DATABASE_URL, {
+    max: 1,
+    types: { bigint: postgres.BigInt },
+  }) as unknown as postgres.Sql;
 });
 
 afterAll(async () => {

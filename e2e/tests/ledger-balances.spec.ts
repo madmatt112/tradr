@@ -35,9 +35,9 @@ import { mockAppShell, SESSION_RESPONSE, test } from './fixtures/performance-fix
 // Test data
 // -----------------------------------------------------------------------------
 
-const USD_ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
-const GBP_ACCOUNT_ID = '22222222-2222-2222-2222-222222222222';
-const USD_GBP_RATE_ID = '33333333-3333-3333-3333-333333333333';
+const USD_ACCOUNT_ID = '11111111-1111-4111-a111-111111111111';
+const GBP_ACCOUNT_ID = '22222222-2222-4222-a222-222222222222';
+const USD_GBP_RATE_ID = '33333333-3333-4333-a333-333333333333';
 
 const NOW_ISO = '2026-05-15T00:00:00.000Z';
 
@@ -735,7 +735,7 @@ test.describe('Ledger balances — multi-currency user', () => {
         createdAt: NOW_ISO,
       },
       {
-        id: '44444444-4444-4444-4444-444444444444',
+        id: '44444444-4444-4444-a444-444444444444',
         userId: SESSION_RESPONSE.id,
         baseCurrency: 'USD',
         quoteCurrency: 'GBP',

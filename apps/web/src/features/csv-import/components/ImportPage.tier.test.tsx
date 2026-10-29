@@ -125,8 +125,8 @@ import { ImportPage } from './ImportPage';
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const ACCOUNT_A = '11111111-1111-1111-1111-111111111111';
-const ACCOUNT_B = '22222222-2222-2222-2222-222222222222';
+const ACCOUNT_A = '11111111-1111-4111-a111-111111111111';
+const ACCOUNT_B = '22222222-2222-4222-a222-222222222222';
 
 const FREE_LIMITS = {
   accounts: 1,
@@ -168,7 +168,7 @@ function tierFixture(
 }
 
 const PREVIEW = {
-  token: '33333333-3333-3333-3333-333333333333',
+  token: '33333333-3333-4333-a333-333333333333',
   committable: true,
   requiresDuplicateAffirmation: false,
 } as unknown as CsvPreviewResponse;

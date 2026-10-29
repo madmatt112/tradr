@@ -87,7 +87,12 @@ async function dropScratchDb(name: string): Promise<void> {
 async function applyStandardMigrations(url: string): Promise<void> {
   const sql = client(url);
   try {
-    await migrate(drizzle(sql, { schema }), { migrationsFolder: MIGRATIONS_FOLDER });
+    // `drizzle`'s `Sql` constraint is contravariant in the custom `types` map,
+    // so the `bigint`-branded client does not satisfy it even though it is the
+    // same client at runtime.
+    await migrate(drizzle(sql as unknown as postgres.Sql, { schema }), {
+      migrationsFolder: MIGRATIONS_FOLDER,
+    });
   } finally {
     await sql.end();
   }
@@ -287,7 +292,10 @@ describe('REQ-4.4 / D15 — reset-password atomically invalidates outstanding re
    * that the CLI must NOT flip false -> true (a command proves nothing about
    * the mailbox).
    */
-  async function insertUnverifiedUser(sql: postgres.Sql, email: string): Promise<string> {
+  async function insertUnverifiedUser<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    email: string,
+  ): Promise<string> {
     const oldHash = await bcrypt.hash('old-password-123', 10);
     const [row] = await sql<{ id: string }[]>`
       INSERT INTO users (email, password_hash, email_verified)
@@ -296,8 +304,8 @@ describe('REQ-4.4 / D15 — reset-password atomically invalidates outstanding re
     return row.id;
   }
 
-  function insertLiveToken(
-    sql: postgres.Sql,
+  function insertLiveToken<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
     userId: string,
     purpose: 'password_reset' | 'email_verification',
     tokenHash: string,
@@ -514,7 +522,10 @@ describe('REQ-8.3 — create-user makes an account that logs in through the real
 
   it('logs in through loginUser — the same service the login endpoint calls', async () => {
     const sql = client(url);
-    const scratchDb = drizzle(sql, { schema });
+    // `drizzle`'s `Sql` constraint is contravariant in the custom `types` map,
+    // so the `bigint`-branded client does not satisfy it even though it is the
+    // same client at runtime.
+    const scratchDb = drizzle(sql as unknown as postgres.Sql, { schema });
     try {
       const email = 'login-me@example.com';
       expect(await createUser(sql, email, 'a-real-password-123')).toBe(true);
@@ -643,7 +654,10 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
     }
   }
 
-  async function rowCount(sql: postgres.Sql, email: string): Promise<string> {
+  async function rowCount<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    email: string,
+  ): Promise<string> {
     const [row] = await sql<{ count: string }[]>`
       SELECT count(*)::text AS count FROM users WHERE email = ${email}
     `;
@@ -688,7 +702,10 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
 
   it('accepts a valid --password and the account logs in through the real auth path', async () => {
     const sql = client(url);
-    const scratchDb = drizzle(sql, { schema });
+    // `drizzle`'s `Sql` constraint is contravariant in the custom `types` map,
+    // so the `bigint`-branded client does not satisfy it even though it is the
+    // same client at runtime.
+    const scratchDb = drizzle(sql as unknown as postgres.Sql, { schema });
     try {
       const email = 'valid-pw@example.com';
       expect(await run([email, '--password', 'a-real-password-123'])).toBe(0);
@@ -711,7 +728,10 @@ describe('REQ-8.3 — create-user refuses a password the login path would reject
 
   it('generates a usable password when --password is omitted, and it logs in', async () => {
     const sql = client(url);
-    const scratchDb = drizzle(sql, { schema });
+    // `drizzle`'s `Sql` constraint is contravariant in the custom `types` map,
+    // so the `bigint`-branded client does not satisfy it even though it is the
+    // same client at runtime.
+    const scratchDb = drizzle(sql as unknown as postgres.Sql, { schema });
     const printed: string[] = [];
     const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       printed.push(args.join(' '));
@@ -757,12 +777,18 @@ describe('Req 4.1 / 4.3 — tradr unlock clears the counter and lock for an addr
     await dropScratchDb(DB);
   });
 
-  async function insertUser(sql: postgres.Sql, email: string): Promise<void> {
+  async function insertUser<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    email: string,
+  ): Promise<void> {
     const hash = await bcrypt.hash('whatever-123', 10);
     await sql`INSERT INTO users (email, password_hash) VALUES (${email}, ${hash})`;
   }
 
-  async function insertLockRow(sql: postgres.Sql, email: string): Promise<string> {
+  async function insertLockRow<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    email: string,
+  ): Promise<string> {
     const keyHash = lockoutKey(email);
     const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
     await sql`
@@ -772,7 +798,10 @@ describe('Req 4.1 / 4.3 — tradr unlock clears the counter and lock for an addr
     return keyHash;
   }
 
-  async function lockRowCount(sql: postgres.Sql, keyHash: string): Promise<string> {
+  async function lockRowCount<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    keyHash: string,
+  ): Promise<string> {
     const [row] = await sql<{ count: string }[]>`
       SELECT count(*)::text AS count FROM login_lockouts WHERE key_hash = ${keyHash}
     `;
@@ -868,7 +897,10 @@ describe('Req 4.2 / 4.3 / D17 — tradr disable-2fa removes the second factor an
     await dropScratchDb(DB);
   });
 
-  async function insertUser(sql: postgres.Sql, email: string): Promise<string> {
+  async function insertUser<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    email: string,
+  ): Promise<string> {
     const hash = await bcrypt.hash('whatever-123', 10);
     const [row] = await sql<{ id: string }[]>`
       INSERT INTO users (email, password_hash) VALUES (${email}, ${hash}) RETURNING id
@@ -876,7 +908,10 @@ describe('Req 4.2 / 4.3 / D17 — tradr disable-2fa removes the second factor an
     return row.id;
   }
 
-  async function enableTwoFactor(sql: postgres.Sql, userId: string): Promise<void> {
+  async function enableTwoFactor<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
+    userId: string,
+  ): Promise<void> {
     await sql`
       INSERT INTO user_two_factor (user_id, secret_envelope, enabled_at)
       VALUES (${userId}, 'envelope', now())
@@ -886,8 +921,8 @@ describe('Req 4.2 / 4.3 / D17 — tradr disable-2fa removes the second factor an
     `;
   }
 
-  async function insertSession(
-    sql: postgres.Sql,
+  async function insertSession<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
     userId: string,
     tokenHash: string,
   ): Promise<void> {
@@ -897,8 +932,8 @@ describe('Req 4.2 / 4.3 / D17 — tradr disable-2fa removes the second factor an
     `;
   }
 
-  async function rowCounts(
-    sql: postgres.Sql,
+  async function rowCounts<TTypes extends Record<string, unknown>>(
+    sql: postgres.Sql<TTypes>,
     userId: string,
   ): Promise<{ twoFactor: string; codes: string; sessions: string }> {
     const [row] = await sql<{ two_factor: string; codes: string; sessions: string }[]>`

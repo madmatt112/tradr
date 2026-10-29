@@ -56,7 +56,10 @@ const spec = swaggerJSDoc({
         'each route in the API source, so it always matches the endpoints the app actually ' +
         'serves. All routes are mounted under `/api`. The same API backs both the hosted ' +
         'app (`api.tradr.cloud`) and a self-hosted instance (reached through the web ' +
-        'container at `/api`). Most endpoints require an authenticated session cookie.',
+        'container at `/api`). Most endpoints require an authenticated session cookie.\n\n' +
+        'Request bodies are limited to 1 MiB (1,048,576 bytes); a larger body gets `413` ' +
+        'with error code `PAYLOAD_TOO_LARGE`, except on the image, CSV, archive-import and ' +
+        'advisor-stream uploads, which document their own limits.',
     },
     servers: [
       { url: 'https://api.tradr.cloud', description: 'Hosted (tradr.cloud)' },

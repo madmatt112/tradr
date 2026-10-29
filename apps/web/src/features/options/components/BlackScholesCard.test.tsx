@@ -179,7 +179,10 @@ describe('BlackScholesCard', () => {
 
     await waitFor(() => {
       const text = document.body.textContent ?? '';
-      expect(text).toContain('Number must be greater than 0');
+      // zod 4 default message for .positive() (Requirement 7.3, 7.4): "Too
+      // small: expected number to be >0", replacing zod 3's "Number must be
+      // greater than 0".
+      expect(text).toContain('Too small: expected number to be >0');
     });
   });
 });

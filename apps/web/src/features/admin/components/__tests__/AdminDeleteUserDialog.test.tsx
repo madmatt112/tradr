@@ -31,7 +31,7 @@ vi.mock('sonner', () => ({ toast }));
 import { AdminDeleteUserDialog } from '../AdminDeleteUserDialog';
 
 const USER = {
-  id: '11111111-1111-1111-1111-111111111111',
+  id: '11111111-1111-4111-a111-111111111111',
   email: 'target@x.com',
   isAdmin: false,
   emailVerified: true,

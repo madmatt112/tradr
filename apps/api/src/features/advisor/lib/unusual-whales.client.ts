@@ -142,10 +142,10 @@ export class MarketDataMeter {
 // compact projection; the client only guarantees the envelope is well-formed
 // and non-empty (empty → SYMBOL_NOT_FOUND, REQ-6.5).
 
-const stockStateSchema = z.object({ data: z.record(z.unknown()) });
-const flowAlertsSchema = z.object({ data: z.array(z.record(z.unknown())) });
-const expiryBreakdownSchema = z.object({ data: z.array(z.record(z.unknown())) });
-const optionContractsSchema = z.object({ data: z.array(z.record(z.unknown())) });
+const stockStateSchema = z.object({ data: z.record(z.string(), z.unknown()) });
+const flowAlertsSchema = z.object({ data: z.array(z.record(z.string(), z.unknown())) });
+const expiryBreakdownSchema = z.object({ data: z.array(z.record(z.string(), z.unknown())) });
+const optionContractsSchema = z.object({ data: z.array(z.record(z.string(), z.unknown())) });
 
 // --- Client -----------------------------------------------------------------
 
