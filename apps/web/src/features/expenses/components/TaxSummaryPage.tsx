@@ -5,7 +5,7 @@ import {
   EXPENSE_CATEGORY_LABELS,
   type ExpenseCategory,
 } from '@tradr/shared/constants/expense-categories';
-import type { TaxJurisdiction } from '@tradr/shared/schemas/expense';
+import type { LotMethod, TaxJurisdiction } from '@tradr/shared/schemas/expense';
 
 import { EmptyState } from '@/components/EmptyState';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -26,11 +26,16 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMissingRatePrompt } from '@/features/accounting/hooks/useMissingRatePrompt';
+import { LotRealisationsTable } from '@/features/expenses/components/LotRealisationsTable';
 import { WashSaleFlagsTable } from '@/features/expenses/components/WashSaleFlagsTable';
 import {
   useTaxJurisdictionMutation,
   useTaxJurisdictionQuery,
 } from '@/features/expenses/hooks/useTaxJurisdiction';
+import {
+  useTaxLotMethodMutation,
+  useTaxLotMethodQuery,
+} from '@/features/expenses/hooks/useTaxLotMethod';
 import { useTaxSummary } from '@/features/expenses/hooks/useTaxSummary';
 import { formatCurrency } from '@/lib/format';
 
@@ -39,6 +44,18 @@ const JURISDICTION_LABELS: Record<TaxJurisdiction, string> = {
   CA: 'Canada',
   other: 'Other',
 };
+
+const LOT_METHOD_LABELS: Record<LotMethod, string> = {
+  fifo: 'FIFO',
+  average: 'Average cost',
+};
+
+// Mirrors `defaultLotMethod` in packages/shared/src/lib/tax-lots.ts — apps/web
+// cannot import `@tradr/shared/lib/*` (no-restricted-imports), so the
+// one-line rule is duplicated here for the "Default (...)" option label.
+function defaultLotMethodFor(jurisdiction: TaxJurisdiction): LotMethod {
+  return jurisdiction === 'CA' ? 'average' : 'fifo';
+}
 
 function buildYearOptions(currentYear: number): number[] {
   const years: number[] = [];
@@ -108,6 +125,8 @@ export function TaxSummaryPage() {
 
   const { data: jurisdictionData } = useTaxJurisdictionQuery();
   const jurisdictionMutation = useTaxJurisdictionMutation();
+  const { data: lotMethodData } = useTaxLotMethodQuery();
+  const lotMethodMutation = useTaxLotMethodMutation();
   const { data, isLoading, isError } = useTaxSummary(selectedYear);
 
   // The dropdown's controlled value tracks the server-confirmed jurisdiction
@@ -122,6 +141,12 @@ export function TaxSummaryPage() {
 
   const jurisdiction = data?.jurisdiction ?? dropdownValue;
   const displayCurrency = data?.displayCurrency ?? null;
+
+  // Same "server-confirmed, never local state" pattern as dropdownValue
+  // above: 'default' sends null, and its label follows whichever jurisdiction
+  // is currently selected (design C10, AC 2.3).
+  const methodDropdownValue = lotMethodData?.taxLotMethod ?? 'default';
+  const defaultMethodLabel = `Default (${LOT_METHOD_LABELS[defaultLotMethodFor(jurisdiction)]})`;
 
   const isEmpty =
     data !== undefined &&
@@ -185,6 +210,35 @@ export function TaxSummaryPage() {
                 </SelectContent>
               </Select>
               {jurisdictionMutation.isPending && (
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              )}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="tax-summary-lot-method" className="text-xs text-muted-foreground">
+              Lot method
+            </label>
+            <div className="flex items-center gap-2">
+              <Select
+                value={methodDropdownValue}
+                onValueChange={(val) => {
+                  lotMethodMutation.mutate(val === 'default' ? null : (val as LotMethod));
+                }}
+                disabled={lotMethodMutation.isPending}
+              >
+                <SelectTrigger id="tax-summary-lot-method" className="w-44 cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">{defaultMethodLabel}</SelectItem>
+                  {(Object.keys(LOT_METHOD_LABELS) as LotMethod[]).map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {LOT_METHOD_LABELS[m]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {lotMethodMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               )}
             </div>
@@ -269,6 +323,12 @@ export function TaxSummaryPage() {
               )}
             </div>
 
+            {data.lotMethod === 'fifo' && (
+              <p className="text-xs text-muted-foreground">
+                Figures use FIFO lots. The journal, ledger and performance use average cost.
+              </p>
+            )}
+
             {data.realisedPnl.perCurrency.length > 0 && (
               <div>
                 <h3 className="mb-1 text-sm font-medium text-muted-foreground">Per currency</h3>
@@ -303,6 +363,18 @@ export function TaxSummaryPage() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {data.lotMethod === 'fifo' && data.lotRealisations.length > 0 && (
+              <Collapsible>
+                <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between rounded-md border p-3 text-left text-sm font-medium hover:bg-muted/50 [&[data-state=open]>svg]:rotate-180">
+                  <span>Lot realisations ({data.lotRealisations.length})</span>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2">
+                  <LotRealisationsTable rows={data.lotRealisations} jurisdiction={jurisdiction} />
+                </CollapsibleContent>
+              </Collapsible>
             )}
           </section>
 

@@ -35,9 +35,10 @@ export function useTaxJurisdictionQuery() {
 
 // PATCH mutation is NOT optimistic (post-review fix #10): awaits the server,
 // then cancels in-flight tax-summary fetches (v2-10) BEFORE invalidating
-// both the jurisdiction key and the `['expenses', 'tax-summary']` prefix.
-// On failure, surfaces a toast; the controlled dropdown reverts via
-// `useTaxJurisdictionQuery().data` (no local optimistic state).
+// the jurisdiction key, the `['expenses', 'tax-summary']` prefix, the
+// lot-method key (its default follows the jurisdiction, design C10) and the
+// lot-picker prefix. On failure, surfaces a toast; the controlled dropdown
+// reverts via `useTaxJurisdictionQuery().data` (no local optimistic state).
 export function useTaxJurisdictionMutation() {
   const queryClient = useQueryClient();
   return useMutation<TaxJurisdictionResponse, unknown, TaxJurisdictionValue>({
@@ -51,6 +52,8 @@ export function useTaxJurisdictionMutation() {
       await queryClient.cancelQueries({ queryKey: ['expenses', 'tax-summary'] });
       await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       await queryClient.invalidateQueries({ queryKey: ['expenses', 'tax-summary'] });
+      await queryClient.invalidateQueries({ queryKey: ['users', 'me', 'tax-lot-method'] });
+      await queryClient.invalidateQueries({ queryKey: ['positions', 'lots'] });
     },
     onError: (err: unknown) => {
       toast.error(getErrorMessage(err, 'Failed to update tax jurisdiction'));

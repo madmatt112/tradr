@@ -280,3 +280,5 @@ export type FeeRollupResponse = z.infer<typeof FeeRollupResponseSchema>;
 export type TaxSummaryResponse = z.infer<typeof TaxSummaryResponseSchema>;
 export type WashSaleFlag = z.infer<typeof WashSaleFlag>;
 export type SuperficialLossFlag = z.infer<typeof SuperficialLossFlag>;
+export type LotRealisationRow = z.infer<typeof LotRealisationRowSchema>;
+export type LotMethod = z.infer<typeof LotMethodEnum>;
