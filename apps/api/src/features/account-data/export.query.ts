@@ -413,7 +413,8 @@ async function spoolPreferences(tx: Transaction, userId: string, dir: string): P
     tx,
     sql`
       SELECT u.display_currency AS "displayCurrency", u.timezone,
-        u.tax_jurisdiction AS "taxJurisdiction", u.theme, u.buying_power_basis AS "buyingPowerBasis",
+        u.tax_jurisdiction AS "taxJurisdiction", u.tax_lot_method AS "taxLotMethod",
+        u.theme, u.buying_power_basis AS "buyingPowerBasis",
         u.advisor_default_persona_id AS "advisorDefaultPersonaId",
         dp.is_builtin AS "defaultPersonaIsBuiltin",
         u.advisor_trade_data_consent AS "advisorTradeDataConsent",
@@ -430,6 +431,7 @@ async function spoolPreferences(tx: Transaction, userId: string, dir: string): P
     displayCurrency: row.displayCurrency,
     timezone: row.timezone,
     taxJurisdiction: row.taxJurisdiction,
+    taxLotMethod: row.taxLotMethod,
     theme: row.theme,
     buyingPowerBasis: row.buyingPowerBasis,
     advisorDefaultPersona: personaRef(row.advisorDefaultPersonaId, row.defaultPersonaIsBuiltin),
@@ -534,6 +536,20 @@ export async function spoolAccountData(
         JOIN positions p ON p.id = f.position_id
         WHERE p.user_id = ${userId}
         ORDER BY f.created_at, f.id
+      `,
+    ),
+    lotSelections: await spoolFlat(
+      tx,
+      dir,
+      'lot-selections.ndjson',
+      sql`
+        SELECT ls.exit_fill_id AS "exitFillId", ls.entry_fill_id AS "entryFillId",
+          ${num('ls.quantity')} AS "quantity"
+        FROM fill_lot_selections ls
+        JOIN fills f ON f.id = ls.exit_fill_id
+        JOIN positions p ON p.id = f.position_id
+        WHERE p.user_id = ${userId}
+        ORDER BY ls.created_at, ls.id
       `,
     ),
     positionTags: await spoolFlat(

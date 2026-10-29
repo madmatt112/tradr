@@ -13,6 +13,7 @@ import {
   ArchiveExpenseSchema,
   ArchiveFillSchema,
   ArchiveLedgerEntrySchema,
+  ArchiveLotSelectionSchema,
   ArchiveManifestSchema,
   ArchiveMessageSchema,
   ArchivePersonaSchema,
@@ -78,6 +79,7 @@ const COUNT_KEY: Record<string, keyof ArchiveCounts> = {
   'rules.ndjson': 'rules',
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
+  'lot-selections.ndjson': 'lotSelections',
   'position-tags.ndjson': 'positionTags',
   'position-images.ndjson': 'positionImages',
   'ledger-entries.ndjson': 'ledgerEntries',
@@ -99,6 +101,7 @@ const LABEL: Record<string, string> = {
   'rules.ndjson': 'rules',
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
+  'lot-selections.ndjson': 'lot-selections',
   'position-tags.ndjson': 'position-tags',
   'position-images.ndjson': 'position-images',
   'ledger-entries.ndjson': 'ledger-entries',
@@ -179,6 +182,7 @@ export async function validateArchive(
     rules: 0,
     positions: 0,
     fills: 0,
+    lotSelections: 0,
     positionTags: 0,
     positionImages: 0,
     ledgerEntries: 0,
@@ -198,7 +202,10 @@ export async function validateArchive(
   const tagIds = new Set<string>();
   const ruleIds = new Set<string>();
   const positionIds = new Set<string>();
-  const fillIds = new Set<string>();
+  // Fill id → its type and owning position, so a lot selection can be checked
+  // against the archive's fills (C12): exit is an exit, entry is an entry, same
+  // position. Doubles as the per-entry id-uniqueness set for fills.
+  const fills = new Map<string, { type: 'entry' | 'exit'; position: string }>();
   const positionImageIds = new Set<string>();
   const ledgerIds = new Set<string>();
   const rateIds = new Set<string>();
@@ -432,12 +439,52 @@ export async function validateArchive(
       case 'fills.ndjson': {
         const r = ArchiveFillSchema.safeParse(value);
         if (!r.success) return void addZodFaults(base, r.error);
-        uniqueId(fillIds, r.data.id, `${base}.id`);
+        if (fills.has(r.data.id)) {
+          addFault(`${base}.id`, 'duplicate_id', `Duplicate id ${r.data.id}.`);
+        } else {
+          fills.set(r.data.id, { type: r.data.type, position: r.data.positionId });
+        }
         ref(
           positionIds.has(r.data.positionId),
           `${base}.positionId`,
           `positionId ${r.data.positionId} names no position in the archive.`,
         );
+        return;
+      }
+      case 'lot-selections.ndjson': {
+        const r = ArchiveLotSelectionSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        const exit = fills.get(r.data.exitFillId);
+        const entry = fills.get(r.data.entryFillId);
+        if (exit === undefined) {
+          ref(
+            false,
+            `${base}.exitFillId`,
+            `exitFillId ${r.data.exitFillId} names no fill in the archive.`,
+          );
+        } else if (exit.type !== 'exit') {
+          addFault(
+            `${base}.exitFillId`,
+            'invariant',
+            `exitFillId ${r.data.exitFillId} is not an exit fill.`,
+          );
+        }
+        if (entry === undefined) {
+          ref(
+            false,
+            `${base}.entryFillId`,
+            `entryFillId ${r.data.entryFillId} names no fill in the archive.`,
+          );
+        } else if (entry.type !== 'entry') {
+          addFault(
+            `${base}.entryFillId`,
+            'invariant',
+            `entryFillId ${r.data.entryFillId} is not an entry fill.`,
+          );
+        }
+        if (exit !== undefined && entry !== undefined && exit.position !== entry.position) {
+          addFault(base, 'invariant', 'A lot selection pairs fills in different positions.');
+        }
         return;
       }
       case 'position-tags.ndjson': {

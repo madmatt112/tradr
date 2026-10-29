@@ -867,9 +867,22 @@ describe('tax-lot archive carry (design C12, AC 9.1-9.3)', () => {
 
     // AC 9.2 — losing the selection on import would fall back to the natural
     // FIFO lot (entry1, basis 10) and change the realised gain from 50 to 100.
+    // Every realised figure must match; the fill/position/account ids are
+    // per-user and legitimately differ under the id bijection, so blank them
+    // before comparing the two summaries.
+    const normalize = (s: Awaited<ReturnType<typeof getTaxSummary>>) => ({
+      ...s,
+      lotRealisations: s.lotRealisations.map((r) => ({
+        ...r,
+        accountId: 'X',
+        positionId: 'X',
+        exitFillId: 'X',
+        entryFillId: 'X',
+      })),
+    });
     const summaryA = await getTaxSummary(seedA.userId, 2026);
     const summaryB = await getTaxSummary(userB, 2026);
-    expect(summaryB).toEqual(summaryA);
+    expect(normalize(summaryB)).toEqual(normalize(summaryA));
   });
 
   it('a version-2 archive imports with no selections and a null method (AC 9.3)', async () => {
@@ -906,7 +919,9 @@ describe('tax-lot archive carry (design C12, AC 9.1-9.3)', () => {
       id: accountId,
       name: 'Main',
       currency: 'USD',
-      timezone: null,
+      // accounts.timezone is NOT NULL, so a real export carries a zone; the
+      // archive account schema requires one too.
+      timezone: 'UTC',
       brokerage: null,
       startingBalance: '0.0000',
       defaultRiskPercent: null,
