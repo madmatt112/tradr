@@ -1612,4 +1612,117 @@ describe('boundary-year transition + invariants', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET/PATCH /api/users/me/tax-lot-method
+// ---------------------------------------------------------------------------
+
+async function patchLotMethod(cookie: string, value: 'fifo' | 'average' | null) {
+  return authedRequest('PATCH', '/api/users/me/tax-lot-method', cookie, { taxLotMethod: value });
+}
+
+describe('GET/PATCH /api/users/me/tax-lot-method', () => {
+  it('defaults a new user (no jurisdiction, no stored method) to FIFO', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const res = await authedRequest('GET', '/api/users/me/tax-lot-method', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBeNull();
+    expect(body.effectiveMethod).toBe('fifo');
+    expect(body.isDefault).toBe(true);
+  });
+
+  it('defaults a CA user with no stored method to average cost', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchJurisdiction(cookie, 'CA');
+
+    const res = await authedRequest('GET', '/api/users/me/tax-lot-method', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBeNull();
+    expect(body.effectiveMethod).toBe('average');
+    expect(body.isDefault).toBe(true);
+  });
+
+  it('a stored method overrides the CA jurisdiction default', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchJurisdiction(cookie, 'CA');
+
+    const res = await patchLotMethod(cookie, 'fifo');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBe('fifo');
+    expect(body.effectiveMethod).toBe('fifo');
+    expect(body.isDefault).toBe(false);
+  });
+
+  it('PATCH null clears the stored method and returns to the jurisdiction default', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchJurisdiction(cookie, 'CA');
+    await patchLotMethod(cookie, 'fifo');
+
+    const res = await patchLotMethod(cookie, null);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBeNull();
+    expect(body.effectiveMethod).toBe('average');
+    expect(body.isDefault).toBe(true);
+  });
+
+  it("PATCH 'lifo' is rejected with 400", async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const res = await authedRequest('PATCH', '/api/users/me/tax-lot-method', cookie, {
+      taxLotMethod: 'lifo',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('requires a session for both GET and PATCH', async () => {
+    const headers = { 'X-Forwarded-For': uniqueIp() };
+
+    const getRes = await app.request('/api/users/me/tax-lot-method', { headers });
+    expect(getRes.status).toBe(401);
+
+    const patchRes = await app.request('/api/users/me/tax-lot-method', {
+      method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taxLotMethod: 'fifo' }),
+    });
+    expect(patchRes.status).toBe(401);
+  });
+
+  it("a PATCH changes only the user's stored method, leaving fills and ledger rows unchanged", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    const position = await openAndClose(cookie, acct.id, {
+      symbol: 'LOTM',
+      entryPrice: '100',
+      exitPrice: '110',
+      openedAt: '2026-01-10T15:00:00Z',
+      closedAt: '2026-02-10T15:00:00Z',
+    });
+
+    const fillsBeforeRes = await authedRequest('GET', `/api/positions/${position.id}`, cookie);
+    const fillsBefore = (await fillsBeforeRes.json()).fills;
+    const ledgerBefore = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, position.id));
+
+    const res = await patchLotMethod(cookie, 'fifo');
+    expect(res.status).toBe(200);
+
+    const fillsAfterRes = await authedRequest('GET', `/api/positions/${position.id}`, cookie);
+    const fillsAfter = (await fillsAfterRes.json()).fills;
+    const ledgerAfter = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, position.id));
+
+    expect(fillsAfter).toEqual(fillsBefore);
+    expect(ledgerAfter).toEqual(ledgerBefore);
+  });
+});
+
 // DO NOT add describe() blocks below this line — see Task 17.4 (boundary-year vi.useFakeTimers scoping).

@@ -1363,6 +1363,22 @@ describe('POST /api/admin/users/:id/reset', () => {
     expect(row!.timezone).toBeNull();
   });
 
+  it('nulls the stored tax-lot method when settings are removed', async () => {
+    const admin = await seedAdmin();
+    const target = await seedFullUser();
+    await db.update(users).set({ taxLotMethod: 'fifo' }).where(eq(users.id, target.id));
+
+    const res = await postReset(
+      target.id,
+      { confirmEmail: target.email, removeSettings: true },
+      admin.token,
+    );
+    expect(res.status).toBe(200);
+
+    const [row] = await db.select().from(users).where(eq(users.id, target.id));
+    expect(row!.taxLotMethod).toBeNull();
+  });
+
   // THE SURVIVORS. None of this is observable from the endpoint's response, and
   // all of it is the reason the button can exist at all.
   it('never touches the wallet, the Stripe mirror, or the non-evasion quota counters', async () => {
