@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits, parseOccSymbol, type Tag } from '@tradr/shared';
 import { classifyPosition } from '@tradr/shared/lib/performance';
+import { resolveLotMethod } from '@tradr/shared/lib/tax-lots';
 
 import type { Database, Transaction } from '@/db';
 import {
@@ -10,6 +11,7 @@ import {
   resolveWritableAccountId,
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
+import { getUserTaxSettings } from '@/features/expenses/expenses.query';
 import { findTagsByPosition } from '@/features/tags/tags.query';
 import { getPositionCompliance } from '@/features/trading-rules/compliance.service';
 import {
@@ -20,6 +22,7 @@ import {
   HookAlreadyRegisteredError,
   InvariantViolationError,
 } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
 
@@ -32,7 +35,7 @@ import {
   deleteLotSelectionsForExit,
   findLotSelectionsByPosition,
 } from './fills.query';
-import { matchExitsToLots, orderFills } from './lots';
+import { matchExitsToLots, orderFills, availableByLot } from './lots';
 import type { LotConflict, LotFill, LotSlice } from './lots';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import type { FillTotals } from './pnl';
@@ -702,6 +705,66 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   return compliance === undefined ? detail : { ...detail, compliance };
 }
 
+/**
+ * Lots read for the specific-identification picker (design C7). `exitFillId`,
+ * when given, must be an exit of this position; its own slices are added
+ * back into `available` so the dialog sees what that exit currently holds
+ * (design D11). A stored-selection conflict is logged and the match falls
+ * back to plain FIFO rather than failing the read (design D8, Error Handling
+ * item 6, NFR Reliability).
+ */
+export async function listPositionLots(
+  db: Database,
+  positionId: string,
+  userId: string,
+  exitFillId?: string,
+) {
+  const positionRows = await findPositionById(db, positionId, userId);
+  if (positionRows.length === 0) {
+    throw new NotFoundError('Position', positionId);
+  }
+
+  const fills = await loadLotFills(db, positionId);
+  if (exitFillId && !fills.some((f) => f.id === exitFillId && f.type === 'exit')) {
+    throw new NotFoundError('Fill', exitFillId);
+  }
+
+  const selections = await findLotSelectionsByPosition(db, positionId);
+  const matched = matchExitsToLots(fills, selections);
+  let slices: LotSlice[];
+  if (matched.ok) {
+    slices = matched.slices;
+  } else {
+    logger.warn('tax_lot_selection_invalid', {
+      event: 'tax_lot_selection_invalid',
+      positionId,
+      conflict: matched.conflict,
+    });
+    const fallback = matchExitsToLots(fills, []);
+    slices = fallback.ok ? fallback.slices : [];
+  }
+
+  const availability = availableByLot(fills, slices, exitFillId);
+  const availableByEntry = new Map(availability.map((a) => [a.entryFillId, a.available]));
+
+  const lots = orderFills(fills.filter((f) => f.type === 'entry')).map((entry) => ({
+    entryFillId: entry.id,
+    filledAt: entry.filledAt.toISOString(),
+    price: entry.price,
+    quantity: entry.quantity,
+    available: (availableByEntry.get(entry.id) ?? new Decimal(0)).toString(),
+  }));
+
+  const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
+  const { method } = resolveLotMethod(taxLotMethod, taxJurisdiction);
+
+  return {
+    method,
+    jurisdiction: taxJurisdiction ?? 'other',
+    lots,
+  };
+}
+
 export async function editPosition(
   db: Database,
   id: string,
@@ -1266,8 +1329,8 @@ export async function addFillTx(
   return inserted;
 }
 
-async function loadLotFills(tx: Transaction, positionId: string): Promise<LotFill[]> {
-  const rows = await findFillsByPosition(tx, positionId);
+async function loadLotFills(db: Database | Transaction, positionId: string): Promise<LotFill[]> {
+  const rows = await findFillsByPosition(db, positionId);
   return rows.map((f) => ({
     id: f.id,
     type: f.type as 'entry' | 'exit',

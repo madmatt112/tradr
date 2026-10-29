@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { parseOccSymbol } from '../options';
 
+import { LotMethodEnum, TaxJurisdictionEnum } from './expense';
 import { ClassificationSchema } from './performance';
 import { PositionImageSchema } from './position-image';
 import { TagSchema } from './tag';
@@ -290,5 +291,27 @@ export type Fill = z.infer<typeof FillSchema>;
 export type CreatedFill = z.infer<typeof CreatedFillSchema>;
 export type CreateFillInput = z.infer<typeof CreateFillSchema>;
 export type UpdateFillInput = z.infer<typeof UpdateFillSchema>;
+// One entry lot's picker row (design C7). `available` is the lot quantity
+// less every other exit's current match (D11).
+export const PositionLotSchema = z
+  .object({
+    entryFillId: z.string().uuid(),
+    filledAt: z.string(),
+    price: z.string(),
+    quantity: z.string(),
+    available: z.string(),
+  })
+  .strict();
+
+export const PositionLotsResponseSchema = z
+  .object({
+    method: LotMethodEnum,
+    jurisdiction: TaxJurisdictionEnum,
+    lots: z.array(PositionLotSchema),
+  })
+  .strict();
+
 export type PositionListItem = z.infer<typeof PositionListItemSchema>;
 export type PositionDetail = z.infer<typeof PositionDetailSchema>;
+export type PositionLot = z.infer<typeof PositionLotSchema>;
+export type PositionLotsResponse = z.infer<typeof PositionLotsResponseSchema>;

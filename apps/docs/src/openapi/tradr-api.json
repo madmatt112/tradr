@@ -4507,6 +4507,98 @@
         ]
       }
     },
+    "/api/positions/{id}/lots": {
+      "get": {
+        "description": "Authed. One row per entry fill, carrying `available` — the lot's quantity less every other exit's current match. Pass `exitFillId` (an exit of this position) while editing that exit's selection, and its own slices are added back into `available` so the dialog sees what it currently holds. `method` and `jurisdiction` echo the user's resolved tax-lot settings, with no stored jurisdiction read as `other`.\n",
+        "parameters": [
+          {
+            "description": "The position whose lots are listed.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "An exit fill of this position whose own slices are excluded from `available`.",
+            "in": "query",
+            "name": "exitFillId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "jurisdiction": {
+                      "enum": [
+                        "US",
+                        "CA",
+                        "other"
+                      ],
+                      "type": "string"
+                    },
+                    "lots": {
+                      "items": {
+                        "properties": {
+                          "available": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "filledAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "price": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "method": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The position's lots, plus the resolved method and jurisdiction."
+          },
+          "404": {
+            "description": "No such position for this user",
+            "or `exitFillId` is not an exit of the position.": null
+          }
+        },
+        "summary": "List a position's entry lots for the specific-identification picker.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
     "/api/positions/{id}/reopen": {
       "post": {
         "description": "Authed. Transitions a `closed` position back to `open` for intraday re-entries, clearing `closedAt` while preserving `openedAt` (the position's identity day). Allowed only when `openedAt` and the reopen timestamp fall on the same calendar day **in the account's timezone** — a position opened on a previous day must be re-entered as a new position. A supplied `reopenedAt` may not precede `closedAt` nor lie in the future. Reopening posts a compensating reversing ledger row for the prior close so a subsequent re-close does not double-count realized P&L.\n",
