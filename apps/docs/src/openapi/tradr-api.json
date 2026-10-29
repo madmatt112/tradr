@@ -4101,7 +4101,7 @@
     },
     "/api/positions/{id}/fills/{fillId}": {
       "delete": {
-        "description": "Authed. Removes the fill and recomputes the position from what is left. An open position must keep at least one entry fill, and its entry quantity must stay at or above its exit quantity, so a deletion that would break either rule is refused rather than applied.\n",
+        "description": "Authed. Removes the fill and recomputes the position from what is left. An open position must keep at least one entry fill, and its entry quantity must stay at or above its exit quantity, so a deletion that would break either rule is refused rather than applied. An entry fill that a stored `lotSelection` claims cannot be removed either — the claiming exit's selection would otherwise lose its lot.\n",
         "parameters": [
           {
             "in": "path",
@@ -4130,7 +4130,7 @@
             "description": "No such position or fill for this user."
           },
           "409": {
-            "description": "The position is closed, the fill is the last remaining entry, or removing it would leave exit fills unbacked."
+            "description": "The position is closed, the fill is the last remaining entry, removing it would leave exit fills unbacked, or it is an entry fill a stored `lotSelection` claims."
           }
         },
         "summary": "Delete a fill.",
@@ -4139,7 +4139,7 @@
         ]
       },
       "put": {
-        "description": "Authed. Corrects a recorded fill and recomputes the position's derived figures. `type` is immutable — an entry cannot become an exit; delete the fill and add the right one instead. Every field is optional; only what you send changes.\n",
+        "description": "Authed. Corrects a recorded fill and recomputes the position's derived figures. `type` is immutable — an entry cannot become an exit; delete the fill and add the right one instead. Every field is optional; only what you send changes. On an exit, `lotSelection` replaces the stored specific-identification choice; `null` clears it back to FIFO; omitted, any stored selection is left as-is — except a quantity change on an exit that already carries a selection, which requires a new one.\n",
         "parameters": [
           {
             "in": "path",
@@ -4173,6 +4173,30 @@
                     "format": "date-time",
                     "type": "string"
                   },
+                  "lotSelection": {
+                    "description": "Exit only. Replaces the stored selection; `null` clears it (reverting the exit to FIFO); omitted, the stored selection (if any) is kept.\n",
+                    "items": {
+                      "properties": {
+                        "entryFillId": {
+                          "description": "Must be an entry fill of this position.",
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "description": "Positive decimal.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "entryFillId",
+                        "quantity"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "nullable": true,
+                    "type": "array"
+                  },
                   "notes": {
                     "maxLength": 10000,
                     "nullable": true,
@@ -4198,13 +4222,13 @@
             "description": "The updated fill."
           },
           "400": {
-            "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."
+            "description": "Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, or a `lotSelection` repeating an `entryFillId`."
           },
           "404": {
             "description": "No such position or fill for this user."
           },
           "409": {
-            "description": "The change would leave the position inconsistent with its other fills."
+            "description": "The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit's matched lots; or an entry quantity edit that would leave a selected exit's claim above the lot."
           }
         },
         "summary": "Edit a fill.",

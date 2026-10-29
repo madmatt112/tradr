@@ -29,6 +29,7 @@ import {
   updateFill,
   deleteFill,
   insertLotSelections,
+  deleteLotSelectionsForExit,
   findLotSelectionsByPosition,
 } from './fills.query';
 import { matchExitsToLots, orderFills } from './lots';
@@ -1278,7 +1279,7 @@ function lotConflictError(conflict: LotConflict, fills: LotFill[]): ConflictErro
     const lot = fills.find((f) => f.id === conflict.entryFillId);
     const openedAt = lot ? lot.filledAt.toISOString() : 'unknown';
     return new ConflictError(
-      `Lot ${conflict.entryFillId} (opened ${openedAt}) cannot cover the quantity claimed against it`,
+      `Lot ${conflict.entryFillId} (opened ${openedAt}) cannot cover the quantity claimed against it by exit fill(s) ${conflict.claimingExitFillIds.join(', ')}`,
     );
   }
   if (conflict.kind === 'not_an_entry') {
@@ -1338,6 +1339,7 @@ export async function editFill(
     fees?: string;
     notes?: string | null;
     filledAt?: string;
+    lotSelection?: LotSelectionItemInput[] | null;
   },
 ) {
   return withTransaction(db, async (tx) => {
@@ -1399,6 +1401,77 @@ export async function editFill(
       }
     }
 
+    // Lot selection (design C5 write steps 5-6). A write that cannot conflict
+    // — no lotSelection field and no quantity change on this exit — runs no
+    // extra query (step 8), which is what keeps a plain price/fees/notes edit
+    // free.
+    let slicesBefore: LotSlice[] | undefined;
+    let clearSelectionForThisExit = false;
+    let replacementSelectionItems: LotSelectionItemInput[] | undefined;
+
+    if (fill.type === 'exit' && (data.lotSelection !== undefined || data.quantity !== undefined)) {
+      const positionSelections = await findLotSelectionsByPosition(tx, positionId);
+      const existingForThisExit = positionSelections.filter((s) => s.exitFillId === fillId);
+
+      if (data.lotSelection === null) {
+        // Step 5: null deletes the stored rows (AC 3.8).
+        clearSelectionForThisExit = true;
+      } else if (data.lotSelection !== undefined) {
+        // A new selection replaces the stored rows (steps 1-4, mirroring
+        // addFillTx). The post-edit quantity is the sent one, else the
+        // fill's current one.
+        const newQuantity = data.quantity ?? fill.quantity;
+
+        const seenEntryIds = new Set<string>();
+        for (const item of data.lotSelection) {
+          if (seenEntryIds.has(item.entryFillId)) {
+            throw new ValidationError(`Lot selection repeats entry fill ${item.entryFillId}`);
+          }
+          seenEntryIds.add(item.entryFillId);
+        }
+        if (position.asset_type === 'option') {
+          for (const item of data.lotSelection) {
+            if (!isWholeContracts(item.quantity)) {
+              throw new ValidationError('Lot selection quantity must be a whole number');
+            }
+          }
+        }
+
+        const existingFills = await loadLotFills(tx, positionId);
+        const entryIds = new Set(existingFills.filter((f) => f.type === 'entry').map((f) => f.id));
+        for (const item of data.lotSelection) {
+          if (!entryIds.has(item.entryFillId)) {
+            throw new ConflictError(
+              `Entry fill ${item.entryFillId} is not an entry of this position`,
+            );
+          }
+        }
+
+        const sum = data.lotSelection.reduce(
+          (acc, item) => acc.plus(item.quantity),
+          new Decimal(0),
+        );
+        if (!sum.equals(newQuantity)) {
+          throw new ConflictError(
+            `Lot selection quantities sum to ${sum.toString()} but the exit quantity is ${newQuantity}`,
+          );
+        }
+
+        const before = matchExitsToLots(existingFills, positionSelections);
+        slicesBefore = before.ok ? before.slices : [];
+        replacementSelectionItems = data.lotSelection;
+      } else if (data.quantity !== undefined && existingForThisExit.length > 0) {
+        // Step 5: undefined keeps the rows, but a quantity change on an exit
+        // with rows conflicts (AC 3.7). The same fixed message covers design
+        // D12 / Error Handling item 8 — an average-cost user gets this same
+        // 409, not a silently-cleared selection.
+        const sum = existingForThisExit.reduce((acc, s) => acc.plus(s.quantity), new Decimal(0));
+        throw new ConflictError(
+          `Lot selection quantities sum to ${sum.toString()} but the exit quantity is ${data.quantity}`,
+        );
+      }
+    }
+
     const updateData: Record<string, unknown> = {};
     if (data.price !== undefined) updateData.price = data.price;
     if (data.quantity !== undefined) updateData.quantity = data.quantity;
@@ -1406,7 +1479,29 @@ export async function editFill(
     if (data.notes !== undefined) updateData.notes = data.notes;
     if (data.filledAt !== undefined) updateData.filledAt = new Date(data.filledAt);
 
-    const rows = await updateFill(tx, fillId, positionId, updateData);
+    // A lotSelection-only edit (no fill-column field sent) leaves updateData
+    // empty — skip the DB write rather than issue an empty SET.
+    const rows =
+      Object.keys(updateData).length > 0
+        ? await updateFill(tx, fillId, positionId, updateData)
+        : [fill];
+
+    if (clearSelectionForThisExit) {
+      await deleteLotSelectionsForExit(tx, fillId);
+    } else if (replacementSelectionItems) {
+      await deleteLotSelectionsForExit(tx, fillId);
+      await insertLotSelections(tx, fillId, replacementSelectionItems);
+      await assertLotSelectionsTx(tx, positionId, {
+        writtenExitFillId: fillId,
+        slicesBefore,
+      });
+    }
+
+    // Step 6: an entry quantity edit must not leave any selected exit's claim
+    // above the lot (AC 3.6).
+    if (fill.type === 'entry' && data.quantity !== undefined) {
+      await assertLotSelectionsTx(tx, positionId);
+    }
 
     // Re-derive realized P&L (Req 9.9). A price/quantity/fee edit changes the
     // cumulative amount, and the delta rule posts the difference — a correcting
@@ -1436,6 +1531,23 @@ export async function removeFill(db: Database, positionId: string, fillId: strin
       throw new NotFoundError('Fill', fillId);
     }
     const fill = fillRows[0];
+
+    // Step 7: an entry fill any selection row names cannot be removed — the
+    // cascade would erase the claim out from under its exit — checked before
+    // the delete (AC 3.6).
+    if (fill.type === 'entry') {
+      const positionSelections = await findLotSelectionsByPosition(tx, positionId);
+      const claimingExitFillIds = [
+        ...new Set(
+          positionSelections.filter((s) => s.entryFillId === fillId).map((s) => s.exitFillId),
+        ),
+      ];
+      if (claimingExitFillIds.length > 0) {
+        throw new ConflictError(
+          `Cannot remove entry fill: claimed by exit fill(s) ${claimingExitFillIds.join(', ')}`,
+        );
+      }
+    }
 
     if (fill.type === 'entry' && position.status === 'open') {
       const [{ total: entryTotal }] = await sumFillQuantityByType(tx, positionId, 'entry');

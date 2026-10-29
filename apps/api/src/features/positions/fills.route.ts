@@ -126,7 +126,10 @@ fillsRouter.post(
  *       Authed. Corrects a recorded fill and recomputes the position's derived
  *       figures. `type` is immutable — an entry cannot become an exit; delete
  *       the fill and add the right one instead. Every field is optional; only
- *       what you send changes.
+ *       what you send changes. On an exit, `lotSelection` replaces the stored
+ *       specific-identification choice; `null` clears it back to FIFO; omitted,
+ *       any stored selection is left as-is — except a quantity change on an
+ *       exit that already carries a selection, which requires a new one.
  *     tags: [Positions]
  *     parameters:
  *       - in: path
@@ -149,11 +152,25 @@ fillsRouter.post(
  *               fees: { type: string, description: Non-negative decimal. }
  *               notes: { type: string, maxLength: 10000, nullable: true }
  *               filledAt: { type: string, format: date-time }
+ *               lotSelection:
+ *                 type: array
+ *                 nullable: true
+ *                 minItems: 1
+ *                 description: >
+ *                   Exit only. Replaces the stored selection; `null` clears it
+ *                   (reverting the exit to FIFO); omitted, the stored selection
+ *                   (if any) is kept.
+ *                 items:
+ *                   type: object
+ *                   required: [entryFillId, quantity]
+ *                   properties:
+ *                     entryFillId: { type: string, format: uuid, description: Must be an entry fill of this position. }
+ *                     quantity: { type: string, description: Positive decimal. }
  *     responses:
  *       200: { description: The updated fill. }
- *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position.' }
+ *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, or a `lotSelection` repeating an `entryFillId`.' }
  *       404: { description: No such position or fill for this user. }
- *       409: { description: The change would leave the position inconsistent with its other fills. }
+ *       409: { description: 'The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit''s matched lots; or an entry quantity edit that would leave a selected exit''s claim above the lot.' }
  */
 fillsRouter.put(
   '/:id/fills/:fillId',
@@ -177,7 +194,9 @@ fillsRouter.put(
  *       Authed. Removes the fill and recomputes the position from what is left.
  *       An open position must keep at least one entry fill, and its entry
  *       quantity must stay at or above its exit quantity, so a deletion that
- *       would break either rule is refused rather than applied.
+ *       would break either rule is refused rather than applied. An entry fill
+ *       that a stored `lotSelection` claims cannot be removed either — the
+ *       claiming exit's selection would otherwise lose its lot.
  *     tags: [Positions]
  *     parameters:
  *       - in: path
@@ -191,7 +210,7 @@ fillsRouter.put(
  *     responses:
  *       204: { description: Deleted. }
  *       404: { description: No such position or fill for this user. }
- *       409: { description: 'The position is closed, the fill is the last remaining entry, or removing it would leave exit fills unbacked.' }
+ *       409: { description: 'The position is closed, the fill is the last remaining entry, removing it would leave exit fills unbacked, or it is an entry fill a stored `lotSelection` claims.' }
  */
 fillsRouter.delete('/:id/fills/:fillId', validate('param', FillParamSchema), async (c) => {
   const userId = c.get('userId');

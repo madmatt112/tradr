@@ -172,6 +172,7 @@ export const UpdateFillSchema = z.object({
     .optional(),
   notes: z.string().max(10000).nullable().optional(),
   filledAt: z.string().datetime().optional(),
+  lotSelection: LotSelectionSchema.nullable().optional(),
 });
 
 export const PositionListItemSchema = z.object({
