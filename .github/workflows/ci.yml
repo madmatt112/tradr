@@ -217,7 +217,9 @@ jobs:
         run: pnpm exec vitest run --project web --project shared --project web-scripts --project docs-scripts
 
   e2e:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: ubuntu-latest moved to 26.04, which Playwright browser
+    # install does not support yet ("chromium on ubuntu26.04-x64").
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     # ENCRYPTION_KEY is e2e-only (the API requires a 64-hex key on boot). The
@@ -298,7 +300,9 @@ jobs:
   # rather than the spec. A dedicated job gives it a fresh runner and its own
   # budget; it is Chromium-desktop-only, so it needs only the chromium browser.
   e2e-pwa-upgrade:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: ubuntu-latest moved to 26.04, which Playwright browser
+    # install does not support yet ("chromium on ubuntu26.04-x64").
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     env:

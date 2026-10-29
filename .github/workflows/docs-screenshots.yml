@@ -67,7 +67,9 @@ env:
 
 jobs:
   capture:
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: ubuntu-latest moved to 26.04, which Playwright browser
+    # install does not support yet ("chromium on ubuntu26.04-x64").
+    runs-on: ubuntu-24.04
     # The capture spec allows itself 600s and CI retries once, so the test alone
     # can legitimately spend 20 minutes before the install, the chromium
     # download and the one-time web build are counted. 30 left a slow-but-fine

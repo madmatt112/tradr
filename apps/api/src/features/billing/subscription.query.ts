@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Database, Transaction } from '@/db';
 import { billingCustomers, subscriptions } from '@/db/schema';
@@ -44,6 +44,18 @@ export async function selectSubscriptionsByUser(
   userId: string,
 ): Promise<SubscriptionRow[]> {
   return db.select().from(subscriptions).where(eq(subscriptions.userId, userId));
+}
+
+/**
+ * All mirror rows for a set of users in one read (the admin user list derives
+ * each row's tier from it). An empty set reads nothing.
+ */
+export async function selectSubscriptionsByUsers(
+  db: Database | Transaction,
+  userIds: string[],
+): Promise<SubscriptionRow[]> {
+  if (userIds.length === 0) return [];
+  return db.select().from(subscriptions).where(inArray(subscriptions.userId, userIds));
 }
 
 /**
