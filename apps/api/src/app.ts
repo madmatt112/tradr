@@ -56,6 +56,7 @@ import {
   runEncryptionFingerprintCheckIfConfigured,
 } from '@/lib/encryption';
 import { logger } from '@/lib/logger';
+import { globalBodyLimitMiddleware } from '@/middleware/body-limit.middleware';
 import { corsMiddleware } from '@/middleware/cors.middleware';
 import { csrfMiddleware } from '@/middleware/csrf.middleware';
 import { errorHandler } from '@/middleware/error.middleware';
@@ -106,6 +107,11 @@ if (isMetricsConfigured()) app.use(metricsMiddleware);
 // carry them.
 app.use(securityHeadersMiddleware());
 app.use(corsMiddleware);
+// Global body limit (design Component 2): after CORS/security headers so a
+// rejected cross-origin oversized request still carries them, before CSRF,
+// auth and every rate limiter so none of them ever buffers or reads an
+// oversized body (REQ-1.1, REQ-2.1-2.7).
+app.use(globalBodyLimitMiddleware);
 app.use(csrfMiddleware);
 
 // Routes
