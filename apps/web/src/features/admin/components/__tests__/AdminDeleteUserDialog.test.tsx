@@ -37,6 +37,7 @@ const USER = {
   emailVerified: true,
   createdAt: '2026-01-01T00:00:00.000Z',
   lastActiveAt: null,
+  tier: 'free' as const,
 };
 
 // AdminUserDetail: the delete dialog reads walletBalance off it for the summary.

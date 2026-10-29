@@ -227,4 +227,64 @@ describe('readArchive (design C5 reader)', () => {
       ArchiveInvalidError,
     );
   });
+
+  it('rejects with the abort reason when the signal is already aborted, before the first push (design C3)', async () => {
+    const buf = buildZip([manifest(1), { name: 'accounts.ndjson', data: '{"id":"a"}\n' }]);
+    const p = await save(buf);
+    const reason = new Error('cancelled');
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    const events: ArchiveEvent[] = [];
+    let thrown: unknown;
+    try {
+      for await (const ev of readArchive(p, undefined, controller.signal)) events.push(ev);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBe(reason);
+    expect(events).toEqual([]);
+  });
+
+  // Contract (Req 2.1, 2.5, 3.4; design C4; Testing Strategy "archive-reader.test.ts (b)"):
+  //   Pre-condition: a fixture archive whose one 8 KiB push inflates to 40 rows,
+  //     consumed with 5 ms of busy-wait per event, red-first against the pre-C4 base.
+  //   Call through the seam: for-await over `readArchive(path)`.
+  //   Observable result: a `setImmediate` callback queued mid-run fires within
+  //     100 ms of being queued.
+  //   Source of the expected value: design C4's probe (920 ms with no yield vs.
+  //     43 ms with the 20 ms budget) and the Testing Strategy's 100 ms bound.
+  it('fires a setImmediate queued during the read within 100 ms (design C4, red-first)', async () => {
+    // One 8 KiB push inflates many rows: accounts.ndjson holds 40 identical
+    // highly-compressible lines, well under the push-chunk size uncompressed.
+    const rows = '{"id":"a"}\n'.repeat(40);
+    const buf = buildZip([manifest(1), { name: 'accounts.ndjson', data: rows }]);
+    const p = await save(buf);
+
+    // Queue the setImmediate only once the run is under way (on the first
+    // event), not before the first push: an earlier queue would fire on the
+    // reader's own pre-push file I/O, proving nothing about C4's mid-run yield.
+    let rowCount = 0;
+    let queuedAt = 0;
+    let fired: Promise<number> | null = null;
+    for await (const ev of readArchive(p)) {
+      if (fired === null) {
+        queuedAt = performance.now();
+        fired = new Promise((resolve) => {
+          setImmediate(() => resolve(performance.now()));
+        });
+      }
+      if (ev.kind === 'row') rowCount++;
+      // Simulate per-event consumer work (design C4 probe: a validator or
+      // restore step costs real wall time between the reader's yields).
+      const start = Date.now();
+      while (Date.now() - start < 5) {
+        // busy-wait
+      }
+    }
+
+    expect(rowCount).toBe(40);
+    expect((await fired!) - queuedAt).toBeLessThan(100);
+  });
 });

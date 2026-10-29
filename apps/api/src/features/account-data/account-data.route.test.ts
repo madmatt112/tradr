@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import app from '@/app';
 
+import { accountDataSlot } from './account-data.slots';
+
 // The account export/import routes (design C9) end to end through `app.request`,
 // each test rolled back by the single-connection harness (test-setup.ts). Nothing
 // optional is configured, so object storage is off (inline images) and the
@@ -66,6 +68,25 @@ async function importRequest(path: string, cookie?: string, body?: BodyInit): Pr
   const headers: Record<string, string> = { 'X-Forwarded-For': uniqueIp() };
   if (cookie) headers.Cookie = `session=${cookie}`;
   return app.request(path, { method: 'POST', headers, body });
+}
+
+// Design C7: each handler passes `c.req.raw.signal` to its service, so an
+// already-aborted request signal must reach the deadline/abort machinery
+// (probed: hono 4.13.13's `app.request` keeps an init `signal` on
+// `c.req.raw.signal`, /tmp/scratchpad/sdd/import-keeps-api-up/probe-tasks-signal.mjs).
+async function importRequestAborted(
+  path: string,
+  cookie: string,
+  body: BodyInit,
+): Promise<Response> {
+  const controller = new AbortController();
+  controller.abort();
+  return app.request(path, {
+    method: 'POST',
+    headers: { 'X-Forwarded-For': uniqueIp(), Cookie: `session=${cookie}` },
+    body,
+    signal: controller.signal,
+  });
 }
 
 describe('account-data routes', () => {
@@ -166,5 +187,76 @@ describe('account-data routes', () => {
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('ARCHIVE_DIGEST_MISMATCH');
+  });
+
+  // Regression guard (design C7; Req 4.2): the per-process import slot
+  // (`accountDataSlot('import')`, task 4) already refuses at once regardless of
+  // what the route passes through, so held-slot 503 at the route is already true
+  // today — this is not a red test for this task, but it must not regress when
+  // the route starts threading `startedAt`/`signal`.
+  it('refuses both import routes at once with 503 IMPORT_CAPACITY_REACHED while the import slot is held', async () => {
+    const cookie = await registerAndGetCookie();
+    const release = accountDataSlot('import').tryAcquire();
+    expect(release).not.toBeNull();
+    try {
+      const previewRes = await importRequest(
+        '/api/account-data/import/preview',
+        cookie,
+        new Uint8Array([1]),
+      );
+      expect(previewRes.status).toBe(503);
+      const previewBody = (await previewRes.json()) as { error: { code: string; message: string } };
+      expect(previewBody.error.code).toBe('IMPORT_CAPACITY_REACHED');
+      expect(previewBody.error.message).toBe(
+        'The server is already processing another import. Your account is not affected; wait a few minutes and try again.',
+      );
+
+      const confirmRes = await importRequest(
+        `/api/account-data/import?digest=${ZERO_DIGEST}`,
+        cookie,
+        new Uint8Array([1]),
+      );
+      expect(confirmRes.status).toBe(503);
+      const confirmBody = (await confirmRes.json()) as { error: { code: string; message: string } };
+      expect(confirmBody.error.code).toBe('IMPORT_CAPACITY_REACHED');
+      expect(confirmBody.error.message).toBe(
+        'The server is already processing another import. Your account is not affected; wait a few minutes and try again.',
+      );
+    } finally {
+      release?.();
+    }
+  });
+
+  // Red (design C7; Req 3.1, 3.2): today neither handler passes `c.req.raw.signal`
+  // to its service, so an already-aborted client signal has no effect and the tiny
+  // malformed body below runs to a different outcome (e.g. 400 ARCHIVE_INVALID).
+  // Once each handler threads the signal through, the pre-aborted signal must stop
+  // the work before any of that validation and answer 422 IMPORT_TIMED_OUT.
+  it('answers both import routes with 422 IMPORT_TIMED_OUT when the request signal is already aborted', async () => {
+    const cookie = await registerAndGetCookie();
+
+    const previewRes = await importRequestAborted(
+      '/api/account-data/import/preview',
+      cookie,
+      new Uint8Array([1]),
+    );
+    expect(previewRes.status).toBe(422);
+    const previewBody = (await previewRes.json()) as { error: { code: string; message: string } };
+    expect(previewBody.error.code).toBe('IMPORT_TIMED_OUT');
+    expect(previewBody.error.message).toBe(
+      'The archive took too long to process and nothing was imported. Try again later; if it keeps happening, the archive is too large for this server.',
+    );
+
+    const confirmRes = await importRequestAborted(
+      `/api/account-data/import?digest=${ZERO_DIGEST}`,
+      cookie,
+      new Uint8Array([1]),
+    );
+    expect(confirmRes.status).toBe(422);
+    const confirmBody = (await confirmRes.json()) as { error: { code: string; message: string } };
+    expect(confirmBody.error.code).toBe('IMPORT_TIMED_OUT');
+    expect(confirmBody.error.message).toBe(
+      'The archive took too long to process and nothing was imported. Try again later; if it keeps happening, the archive is too large for this server.',
+    );
   });
 });

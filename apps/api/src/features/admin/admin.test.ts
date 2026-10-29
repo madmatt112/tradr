@@ -52,6 +52,7 @@ import {
   adminAuditLog,
   advisorProviderKeys,
   advisorTurnCounters,
+  billingCustomers,
   brokerages,
   dashboardLayouts,
   expenses,
@@ -60,6 +61,7 @@ import {
   positionTags,
   positions,
   sessions,
+  subscriptions,
   tags,
   usageRecords,
   users,
@@ -531,6 +533,7 @@ describe('GET /api/admin/users (+ /users/:id)', () => {
         'id',
         'isAdmin',
         'lastActiveAt',
+        'tier',
       ]);
     }
     expect(listText).not.toContain('password');
@@ -550,6 +553,7 @@ describe('GET /api/admin/users (+ /users/:id)', () => {
       'isAdmin',
       'lastActiveAt',
       'positionCount',
+      'tier',
       'usage',
       'walletBalance',
     ]);
@@ -557,6 +561,44 @@ describe('GET /api/admin/users (+ /users/:id)', () => {
     expect(detailText).not.toContain(SEEDED_PASSWORD_HASH);
     expect(detailText).not.toContain('tokenHash');
     expect(detailText).not.toContain('token_hash');
+  });
+
+  it('tier: pro for a live subscription, free for none or a canceled one, in the list and the detail', async () => {
+    const admin = await seedAdmin();
+    const pro = await seedUser();
+    const lapsed = await seedUser();
+    const free = await seedUser();
+    for (const [user, status] of [
+      [pro, 'active'],
+      [lapsed, 'canceled'],
+    ] as const) {
+      await db
+        .insert(billingCustomers)
+        .values({ userId: user.id, stripeCustomerId: `cus_${user.id}` });
+      await db.insert(subscriptions).values({
+        userId: user.id,
+        stripeCustomerId: `cus_${user.id}`,
+        stripeSubscriptionId: `sub_${user.id}`,
+        status,
+        currentPeriodEnd: new Date(Date.now() + 30 * DAY),
+        stripeCreatedAt: new Date(),
+        lastEventCreated: new Date(),
+      });
+    }
+
+    const list = AdminUserListResponseSchema.parse(
+      await (await get('/api/admin/users', admin.token)).json(),
+    );
+    const tierOf = (id: string) => list.items.find((i) => i.id === id)?.tier;
+    expect(tierOf(pro.id)).toBe('pro');
+    expect(tierOf(lapsed.id)).toBe('free');
+    expect(tierOf(free.id)).toBe('free');
+    expect(tierOf(admin.id)).toBe('free');
+
+    const detail = (await (await get(`/api/admin/users/${pro.id}`, admin.token)).json()) as {
+      tier: string;
+    };
+    expect(detail.tier).toBe('pro');
   });
 
   it('last_active_at: a stale session timestamp is returned AS-IS (may be old); NULL for a never-logged-in user', async () => {

@@ -102,8 +102,10 @@ accountDataRouter.post('/export', exportRateLimit, async (c) => {
  *       empty. Writes nothing. Returns the server's own per-category counts, the
  *       source app version, the export date, any degradations and a `digest` the
  *       confirm call must echo. Rate limited with import (10 / hour per user,
- *       fallback 6). Scripts sign in for a session cookie and, on split-origin
- *       deployments, send an allowed `Origin` header.
+ *       fallback 6). The server bounds processing to a four-minute limit from
+ *       handler entry; a longer run times out and previews nothing. Scripts sign
+ *       in for a session cookie and, on split-origin deployments, send an allowed
+ *       `Origin` header.
  *     tags: [Account data]
  *     requestBody:
  *       required: true
@@ -118,10 +120,16 @@ accountDataRouter.post('/export', exportRateLimit, async (c) => {
  *       401: { description: No valid session. }
  *       409: { description: "IMPORT_TARGET_NOT_EMPTY — the account already holds data; the message names the categories." }
  *       413: { description: "ARCHIVE_TOO_LARGE — the upload exceeded a cap; the message names the cap." }
+ *       422: { description: "IMPORT_TIMED_OUT — processing exceeded the four-minute server limit; nothing was previewed." }
  *       429: { description: Rate limit exceeded (10 / hour per user). }
+ *       503: { description: "IMPORT_CAPACITY_REACHED — the server is already processing another import; nothing was spooled." }
  */
 accountDataRouter.post('/import/preview', importRateLimit, async (c) => {
-  const preview = await previewImport(c.get('userId'), c.req.raw.body);
+  const startedAt = Date.now();
+  const preview = await previewImport(c.get('userId'), c.req.raw.body, {
+    startedAt,
+    signal: c.req.raw.signal,
+  });
   return c.json(preview, 200);
 });
 
@@ -137,9 +145,10 @@ accountDataRouter.post('/import/preview', importRateLimit, async (c) => {
  *       one transaction, giving every row a fresh identifier, resolving platform
  *       references and overwriting preferences and the dashboard layout (advisor
  *       trade-data consent keeps the target's value). Rate limited with preview
- *       (10 / hour per user, fallback 6, shared bucket). Scripts sign in for a
- *       session cookie and, on split-origin deployments, send an allowed
- *       `Origin` header.
+ *       (10 / hour per user, fallback 6, shared bucket). The server bounds
+ *       processing to a four-minute limit from handler entry; a longer run times
+ *       out before the commit and imports nothing. Scripts sign in for a session
+ *       cookie and, on split-origin deployments, send an allowed `Origin` header.
  *     tags: [Account data]
  *     parameters:
  *       - in: query
@@ -159,14 +168,19 @@ accountDataRouter.post('/import/preview', importRateLimit, async (c) => {
  *       401: { description: No valid session. }
  *       409: { description: "IMPORT_TARGET_NOT_EMPTY — the account already holds data; the message names the categories." }
  *       413: { description: "ARCHIVE_TOO_LARGE — the upload exceeded a cap; the message names the cap." }
+ *       422: { description: "IMPORT_TIMED_OUT — processing exceeded the four-minute server limit; nothing was imported." }
  *       429: { description: Rate limit exceeded (10 / hour per user). }
  *       500: { description: "IMPORT_FAILED — the restore rolled back; logged with the request id." }
- *       503: { description: "IMPORT_BUSY (another data operation held the lock) or OBJECT_UNREACHABLE (an image write failed before any row)." }
+ *       503: { description: "IMPORT_CAPACITY_REACHED (the server is already processing another import; nothing was spooled), IMPORT_BUSY (another data operation held the lock) or OBJECT_UNREACHABLE (an image write failed before any row)." }
  */
 accountDataRouter.post('/import', importRateLimit, async (c) => {
+  const startedAt = Date.now();
   const digest = c.req.query('digest');
   if (!digest || !DIGEST_RE.test(digest)) throw new ArchiveDigestMismatchError();
-  const result = await confirmImport(c.get('userId'), c.req.raw.body, digest);
+  const result = await confirmImport(c.get('userId'), c.req.raw.body, digest, {
+    startedAt,
+    signal: c.req.raw.signal,
+  });
   return c.json(result, 200);
 });
 

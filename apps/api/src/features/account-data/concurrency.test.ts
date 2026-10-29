@@ -9,25 +9,25 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ArchiveCounts } from '@tradr/shared';
 
 import type { Database } from '@/db';
+import { db } from '@/db';
 import * as dbModule from '@/db';
 import * as schema from '@/db/schema';
 import { accounts, users } from '@/db/schema';
 
-import { ImportBusyError, ImportTargetNotEmptyError } from './account-data.errors';
-import { confirmImport } from './import.service';
+import { ImportCapacityError } from './account-data.errors';
+import { confirmImport, previewImport } from './import.service';
 
-// Req 5.3 — two confirms for one committed user, exactly one restores. The guard
-// is the import slot plus the in-transaction emptiness re-check: the loser reaches
-// its restore transaction, re-checks Req 5.1 after the winner committed and is
-// refused (409), or is refused as busy (503) if its lock wait expired. Either
-// way it writes nothing.
+// Req 4.1, 4.2 — two confirms for one committed user: the import slot's
+// non-queueing admission (design C2) refuses the second at once with 503
+// IMPORT_CAPACITY_REACHED, before it ever reaches validation or the restore
+// transaction (confirmImport stops using the queueing `acquire`, design C3).
+// Exactly one restore commits.
 //
 // The single-connection rollback harness turns "concurrent" calls into savepoints
-// on one connection where no lock can contend and no row is ever truly committed,
-// so this race runs against COMMITTED rows over a dedicated two-connection pool,
-// per the email-tokens / accounts concurrency precedent — `dbModule.db` is
-// re-pointed at that pool for the duration and restored in `finally`, and every
-// committed row is deleted before the test ends.
+// on one connection, so this still runs the winner's restore against COMMITTED
+// rows over a dedicated two-connection pool to prove the commit really landed —
+// `dbModule.db` is re-pointed at that pool for the duration and restored in
+// `finally`, and every committed row is deleted before the test ends.
 
 const DATABASE_URL =
   process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5433/tradr_test';
@@ -137,8 +137,19 @@ function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-describe('confirmImport concurrency (Req 5.3)', () => {
-  it('lets exactly one of two concurrent confirms restore; the other is refused and writes nothing', async () => {
+// For the admission tests below, the loser never reaches the database (it is
+// refused before `mkdtemp`), so the regular per-test rollback transaction `db`
+// is enough — no dedicated committed-rows pool is needed.
+async function seedUser(): Promise<string> {
+  const [u] = await db
+    .insert(users)
+    .values({ email: `import-admit-${randomUUID()}@example.com`, passwordHash: 'x'.repeat(60) })
+    .returning({ id: users.id });
+  return u.id;
+}
+
+describe('confirmImport concurrency (Req 4.1, 4.2)', () => {
+  it('lets exactly one of two concurrent confirms for the same user restore; the other is refused at once with 503 IMPORT_CAPACITY_REACHED', async () => {
     const [u] = await dedicatedDb
       .insert(users)
       .values({ email: `import-race-${randomUUID()}@example.com`, passwordHash: 'x'.repeat(60) })
@@ -161,10 +172,12 @@ describe('confirmImport concurrency (Req 5.3)', () => {
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
 
-      // The loser is refused as target-not-empty (409) or busy (503); never a raw error.
+      // The loser never reaches validation or the transaction: the import slot's
+      // non-queueing admission refuses it at once.
       const err = (rejected[0] as PromiseRejectedResult).reason;
-      expect(err instanceof ImportTargetNotEmptyError || err instanceof ImportBusyError).toBe(true);
-      expect([409, 503]).toContain((err as { statusCode: number }).statusCode);
+      expect(err).toBeInstanceOf(ImportCapacityError);
+      expect((err as { statusCode: number }).statusCode).toBe(503);
+      expect((err as { code?: string }).code).toBe('IMPORT_CAPACITY_REACHED');
 
       // Exactly one restore committed: one account, not two.
       const rows = await dedicatedDb.select().from(accounts).where(eq(accounts.userId, userId));
@@ -174,5 +187,77 @@ describe('confirmImport concurrency (Req 5.3)', () => {
       await dedicatedDb.delete(accounts).where(eq(accounts.userId, userId));
       await dedicatedDb.delete(users).where(eq(users.id, userId));
     }
+  });
+});
+
+describe('previewImport admission (Req 4.1, 4.2)', () => {
+  it('refuses the second of two concurrent previews at once with 503 IMPORT_CAPACITY_REACHED', async () => {
+    const userId = await seedUser();
+
+    const settled = await Promise.allSettled([
+      previewImport(userId, streamOf(makeArchive())),
+      previewImport(userId, streamOf(makeArchive())),
+    ]);
+
+    const fulfilled = settled.filter((r) => r.status === 'fulfilled');
+    const rejected = settled.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    const err = (rejected[0] as PromiseRejectedResult).reason;
+    expect(err).toBeInstanceOf(ImportCapacityError);
+    expect((err as { statusCode: number }).statusCode).toBe(503);
+    expect((err as { code?: string }).code).toBe('IMPORT_CAPACITY_REACHED');
+  });
+});
+
+describe('confirmImport admission across users (Req 4.1, 4.2)', () => {
+  it('refuses a second confirm for a different user while one is admitted; exactly one restore commits', async () => {
+    const u1 = await seedUser();
+    const u2 = await seedUser();
+    const bytes1 = makeArchive();
+    const bytes2 = makeArchive();
+    const digest1 = createHash('sha256').update(bytes1).digest('hex');
+    const digest2 = createHash('sha256').update(bytes2).digest('hex');
+
+    const settled = await Promise.allSettled([
+      confirmImport(u1, streamOf(bytes1), digest1),
+      confirmImport(u2, streamOf(bytes2), digest2),
+    ]);
+
+    const fulfilled = settled.filter((r) => r.status === 'fulfilled');
+    const rejected = settled.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    const err = (rejected[0] as PromiseRejectedResult).reason;
+    expect(err).toBeInstanceOf(ImportCapacityError);
+    expect((err as { statusCode: number }).statusCode).toBe(503);
+
+    const rows1 = await db.select().from(accounts).where(eq(accounts.userId, u1));
+    const rows2 = await db.select().from(accounts).where(eq(accounts.userId, u2));
+    expect(rows1.length + rows2.length).toBe(1);
+  });
+});
+
+describe('import admission across preview and confirm (Req 4.1, 4.2)', () => {
+  it('refuses whichever of a preview and a confirm for the same user arrives second', async () => {
+    const userId = await seedUser();
+    const bytes = makeArchive();
+    const digest = createHash('sha256').update(bytes).digest('hex');
+
+    const settled = await Promise.allSettled([
+      previewImport(userId, streamOf(bytes)),
+      confirmImport(userId, streamOf(bytes), digest),
+    ]);
+
+    const fulfilled = settled.filter((r) => r.status === 'fulfilled');
+    const rejected = settled.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    const err = (rejected[0] as PromiseRejectedResult).reason;
+    expect(err).toBeInstanceOf(ImportCapacityError);
+    expect((err as { statusCode: number }).statusCode).toBe(503);
   });
 });

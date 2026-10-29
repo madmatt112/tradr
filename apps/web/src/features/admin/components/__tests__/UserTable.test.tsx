@@ -49,6 +49,7 @@ const SELF = {
   emailVerified: true,
   createdAt: '2026-01-01T00:00:00.000Z',
   lastActiveAt: '2026-06-10T12:00:00.000Z',
+  tier: 'free' as const,
 };
 // Unverified — the Verified column renders the neutral em dash.
 const OTHER_ADMIN = {
@@ -58,6 +59,7 @@ const OTHER_ADMIN = {
   emailVerified: false,
   createdAt: '2026-02-01T00:00:00.000Z',
   lastActiveAt: '2026-06-01T12:00:00.000Z',
+  tier: 'free' as const,
 };
 // Never active — lastActiveAt NULL.
 const PLAIN = {
@@ -67,6 +69,7 @@ const PLAIN = {
   emailVerified: true,
   createdAt: '2026-03-01T00:00:00.000Z',
   lastActiveAt: null,
+  tier: 'pro' as const,
 };
 
 const PAGE_ONE = { items: [SELF, OTHER_ADMIN, PLAIN], nextCursor: null };
@@ -145,6 +148,18 @@ describe('UserTable — rendering', () => {
     expect(within(unverifiedRow).getByText('—')).toBeTruthy();
   });
 
+  it('renders the Plan column: Pro for a paying user, Free otherwise', async () => {
+    mockAuth.user = { id: SELF_ID, email: 'me@x.com', isAdmin: true };
+    mockUsersList();
+
+    renderTable();
+
+    expect(await screen.findByText('me@x.com')).toBeTruthy();
+    expect(screen.getByText('Plan')).toBeTruthy();
+    expect(within(screen.getByText('user@x.com').closest('tr')!).getByText('Pro')).toBeTruthy();
+    expect(within(screen.getByText('me@x.com').closest('tr')!).getByText('Free')).toBeTruthy();
+  });
+
   it('loads the next page via the cursor when "Load more" is clicked', async () => {
     mockAuth.user = { id: SELF_ID, email: 'me@x.com', isAdmin: true };
     const pageTwoUser = {
@@ -154,6 +169,7 @@ describe('UserTable — rendering', () => {
       emailVerified: true,
       createdAt: '2025-12-01T00:00:00.000Z',
       lastActiveAt: null,
+      tier: 'free' as const,
     };
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === '/admin/users') {
