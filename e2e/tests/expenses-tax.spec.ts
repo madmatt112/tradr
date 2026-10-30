@@ -877,24 +877,25 @@ test.describe('Expenses-tax — lot picker specific identification and FIFO swit
 });
 
 // ---------------------------------------------------------------------------
-// Scenario 7 — CA default sees average-cost totals and no lot table
-// (task 15, design Testing Strategy > End-to-end; AC 6.3)
+// Scenario 7 — CA default sees the pooled ACB totals and no lot table
+// (task 15, design Testing Strategy > End-to-end; AC 6.3, AC 2.1)
 // ---------------------------------------------------------------------------
 
-test.describe('Expenses-tax — CA default average-cost tax summary', () => {
+test.describe('Expenses-tax — CA default pooled ACB tax summary', () => {
   test.beforeEach(async ({ page }) => {
     await ensureStackOrSkip(page.request);
   });
 
-  test('a CA user on the default sees average-cost totals equal to the ledger figure and no lot table', async ({
+  test('a CA user on the default sees pooled ACB totals equal to the ledger figure and no lot table', async ({
     page,
   }) => {
     await registerUser(page.request, 'ca-lots');
-    const account = await createAccount(page.request, 'USD Account', 'USD');
-    await setDisplayCurrency(page.request, 'USD');
+    const account = await createAccount(page.request, 'CAD Account', 'CAD');
+    await setDisplayCurrency(page.request, 'CAD');
     await setTaxJurisdiction(page.request, 'CA');
 
-    // gross = (60 - 50) * 10 = 100; fees = 1.00 + 1.00 = 2.00; net = 98.00.
+    // proceeds = 60*10 = 600.00; acb = 50*10 + 1.00 = 501.00; outlays
+    // (exit fee) = 1.00; gain = 600 - 1 - 501 = 98.00 (design C5, AC 3.11).
     await createClosedPosition(page.request, {
       accountId: account.id,
       symbol: 'CAAVG',
@@ -916,5 +917,21 @@ test.describe('Expenses-tax — CA default average-cost tax summary', () => {
     await expect(page.getByText(/Lot realisations/)).toHaveCount(0);
     await expect(page.getByText('Short-term', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Long-term', { exact: true })).toHaveCount(0);
+
+    // The pool itself (design C5, AC 3.11, AC 5.1, AC 5.3) — not yet surfaced
+    // in the UI (task 11), so asserted directly against the JSON the page's
+    // own query fetches.
+    const res = await page.request.get(`/api/expenses/tax-summary?year=${YEAR}`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.acbDispositions).toHaveLength(1);
+    expect(body.acbDispositions[0]).toMatchObject({
+      proceeds: '600.00',
+      outlays: '1.00',
+      acb: '501.00',
+      gain: '98.00',
+      unpricedReason: null,
+    });
+    expect(body.acbMissingRates).toEqual([]);
   });
 });

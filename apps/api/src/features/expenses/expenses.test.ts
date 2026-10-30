@@ -874,30 +874,59 @@ describe('GET /api/expenses/tax-summary', () => {
     expect(body.realisedPnl.shortTerm).toBe('10.00');
     expect(body.realisedPnl.longTerm).toBe('50.00');
     expect(body.realisedPnl.total).toBe('60.00');
+    // US carries every pre-feature value, plus the two new fields empty (AC 8.1).
+    expect(body.acbDispositions).toEqual([]);
+    expect(body.acbMissingRates).toEqual([]);
   });
 
-  it('CA jurisdiction: shortTerm and longTerm are null; total populated', async () => {
+  it('CA jurisdiction (pooled ACB): shortTerm and longTerm are null; total reflects the pooled disposition', async () => {
     const { cookie } = await registerAndGetCookie();
-    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    const acct = await createAccount(cookie, 'CAD acct', 'CAD');
 
     await patchJurisdiction(cookie, 'CA');
 
-    await openAndClose(cookie, acct.id, {
+    const position = await createPositionFor(cookie, acct.id, {
       symbol: 'AAPL',
-      entryPrice: '100',
-      exitPrice: '120',
-      openedAt: '2026-03-01T15:00:00Z',
-      closedAt: '2026-09-15T15:00:00Z',
+      side: 'long',
+      assetType: 'stock',
     });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '50',
+      quantity: '10',
+      fees: '1.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-03-01T15:00:00Z');
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '60',
+      quantity: '10',
+      fees: '1.00',
+      filledAt: '2026-09-15T15:00:00Z',
+    });
+    await closePositionFor(cookie, position.id, '2026-09-15T15:00:00Z');
 
     const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
     expect(res.status).toBe(200);
     const body = await res.json();
 
     expect(body.jurisdiction).toBe('CA');
+    expect(body.lotMethod).toBe('acb');
     expect(body.realisedPnl.shortTerm).toBeNull();
     expect(body.realisedPnl.longTerm).toBeNull();
-    expect(body.realisedPnl.total).toBe('20.00');
+    // proceeds 60*10=600.00; acb 50*10+1=501.00; outlays (exit fee)=1.00;
+    // gain 600-1-501=98.00 (design C5, AC 3.11/5.1).
+    expect(body.realisedPnl.total).toBe('98.00');
+    expect(body.acbDispositions).toHaveLength(1);
+    expect(body.acbDispositions[0]).toMatchObject({
+      proceeds: '600.00',
+      outlays: '1.00',
+      acb: '501.00',
+      gain: '98.00',
+      unpricedReason: null,
+    });
+    expect(body.acbMissingRates).toEqual([]);
   });
 
   it("'other' jurisdiction: flags === { washSales: [], superficialLosses: [] }", async () => {
@@ -935,6 +964,295 @@ describe('GET /api/expenses/tax-summary', () => {
 
     expect(body.jurisdiction).toBe('other');
     expect(body.flags).toEqual({ washSales: [], superficialLosses: [] });
+    // 'other' carries every pre-feature value, plus the two new fields empty (AC 8.1).
+    expect(body.acbDispositions).toEqual([]);
+    expect(body.acbMissingRates).toEqual([]);
+  });
+
+  it('CA ACB pool: two taxable accounts pool one disposition; a registered holding changes nothing (AC 3.11)', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    // Account A — CAD, entry 100 @ 10.00, no fees.
+    const acctA = await createAccount(cookie, 'CAD acct', 'CAD');
+    // Account B — USD, entry 100 @ 8.00, no fees; needs its own trade-date rate.
+    const acctB = await createAccount(cookie, 'USD acct', 'USD');
+    // Registered account holding the same symbol/side — must change nothing.
+    const registeredRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'TFSA',
+      currency: 'CAD',
+      taxTreatment: 'registered',
+    });
+    expect(registeredRes.status).toBe(201);
+    const acctR = await registeredRes.json();
+
+    await patchJurisdiction(cookie, 'CA');
+
+    const positionA = await createPositionFor(cookie, acctA.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, positionA.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '100',
+      fees: '0.00',
+      filledAt: '2026-02-01T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionA.id, '2026-02-01T14:00:00Z');
+
+    const positionB = await createPositionFor(cookie, acctB.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, positionB.id, {
+      type: 'entry',
+      price: '8.00',
+      quantity: '100',
+      fees: '0.00',
+      filledAt: '2026-02-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, positionB.id, '2026-02-01T15:00:00Z');
+    await createExchangeRate(cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'CAD',
+      rate: '1.35',
+      effectiveDate: '2026-02-01',
+    });
+
+    const positionR = await createPositionFor(cookie, acctR.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, positionR.id, {
+      type: 'entry',
+      price: '1000.00',
+      quantity: '50',
+      fees: '0.00',
+      filledAt: '2026-02-01T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionR.id, '2026-02-01T14:00:00Z');
+
+    // Sell 50 of A's 100 shares — a partial exit; A stays open.
+    const exitFill = await addFillFor(cookie, positionA.id, {
+      type: 'exit',
+      price: '12.00',
+      quantity: '50',
+      fees: '0.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // Pool: A (CAD 100@10=1000) + B (USD 100@8 * 1.35 = 1080 CAD) = 2080 CAD
+    // over 200 shares. ACB share for 50 = 2080*50/200 = 520.00; proceeds =
+    // 12*50 = 600.00; gain = 600 - 520 = 80.00. The registered holding (also
+    // XYZ/long) never joins the pool, so it changes none of these figures.
+    expect(body.acbDispositions).toHaveLength(1);
+    expect(body.acbDispositions[0]).toMatchObject({
+      exitFillId: exitFill.id,
+      positionId: positionA.id,
+      accountId: acctA.id,
+      symbol: 'XYZ',
+      currency: 'CAD',
+      tradeDate: '2026-03-01',
+      cadRate: null,
+      proceeds: '600.00',
+      outlays: '0.00',
+      acb: '520.00',
+      gain: '80.00',
+      unpricedReason: null,
+    });
+    expect(body.realisedPnl.perCurrency).toEqual([{ currency: 'CAD', amount: '80.00' }]);
+    expect(body.realisedPnl.total).toBe('80.00');
+  });
+
+  it('a USD exit with no rate is missing_rate, excluded from the total, and lists only in acbMissingRates (AC 4.6, AC 4.7, AC 5.1)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'CA');
+
+    const position = await createPositionFor(cookie, acct.id, {
+      symbol: 'NRTE',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '8.00',
+      quantity: '100',
+      fees: '0.00',
+      filledAt: '2026-02-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-02-01T15:00:00Z');
+    await createExchangeRate(cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'CAD',
+      rate: '1.30',
+      effectiveDate: '2026-02-01',
+    });
+
+    // Exit on a date with no rate entered — the pool is priced, so only this
+    // row is unpriced (AC 4.5); it stays out of acbMissingRates's sibling.
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '12.00',
+      quantity: '50',
+      fees: '0.00',
+      filledAt: '2026-04-01T15:00:00Z',
+    });
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.acbDispositions).toHaveLength(1);
+    expect(body.acbDispositions[0]).toMatchObject({
+      unpricedReason: 'missing_rate',
+      cadRate: null,
+      proceeds: null,
+      outlays: null,
+      acb: null,
+      gain: null,
+    });
+    expect(body.acbMissingRates).toEqual([{ currency: 'USD', tradeDate: '2026-04-01' }]);
+    // The old dateless field never carries an acb pair (AC 5.1).
+    expect(body.missingRates).toEqual([]);
+    expect(body.realisedPnl.perCurrency).toEqual([{ currency: 'CAD', amount: '0.00' }]);
+    expect(body.realisedPnl.total).toBe('0.00');
+  });
+
+  it('after the user enters the missing rate, the next read prices the previously unpriced row (AC 4.9)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'CA');
+
+    const position = await createPositionFor(cookie, acct.id, {
+      symbol: 'NRTE',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '8.00',
+      quantity: '100',
+      fees: '0.00',
+      filledAt: '2026-02-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-02-01T15:00:00Z');
+    await createExchangeRate(cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'CAD',
+      rate: '1.30',
+      effectiveDate: '2026-02-01',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '12.00',
+      quantity: '50',
+      fees: '0.00',
+      filledAt: '2026-04-01T15:00:00Z',
+    });
+
+    const before = await (
+      await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie)
+    ).json();
+    expect(before.acbDispositions[0].unpricedReason).toBe('missing_rate');
+
+    await createExchangeRate(cookie, {
+      baseCurrency: 'USD',
+      quoteCurrency: 'CAD',
+      rate: '1.25',
+      effectiveDate: '2026-04-01',
+    });
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    // Entry: 8*100*1.30 = 1040.00 CAD. ACB share for 50 of 100 = 520.00.
+    // Proceeds: 12*50*1.25 = 750.00. Gain: 750 - 520 = 230.00.
+    expect(body.acbDispositions).toHaveLength(1);
+    expect(body.acbDispositions[0]).toMatchObject({
+      unpricedReason: null,
+      proceeds: '750.00',
+      outlays: '0.00',
+      acb: '520.00',
+      gain: '230.00',
+    });
+    expect(body.acbMissingRates).toEqual([]);
+    expect(body.realisedPnl.perCurrency).toEqual([{ currency: 'CAD', amount: '230.00' }]);
+  });
+
+  it('a non-CAD display currency converts the CAD realised total at the year-end rate; CAD applies no conversion (AC 5.2)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const me = await getMe(cookie);
+    const acct = await createAccount(cookie, 'CAD acct', 'CAD'); // materializes displayCurrency CAD
+    await patchJurisdiction(cookie, 'CA');
+
+    const position = await createPositionFor(cookie, acct.id, {
+      symbol: 'FXCV',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '50',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-02-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-02-01T15:00:00Z');
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '60',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+
+    const resCad = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(resCad.status).toBe(200);
+    const bodyCad = await resCad.json();
+    expect(bodyCad.displayCurrency).toBe('CAD');
+    expect(bodyCad.realisedPnl.total).toBe('100.00');
+    expect(bodyCad.usedRates).toEqual([]);
+    expect(bodyCad.acbDispositions).toHaveLength(1);
+    expect(bodyCad.acbDispositions[0].gain).toBe('100.00');
+
+    await setDisplayCurrency(me.id, 'USD');
+    await createExchangeRate(cookie, {
+      baseCurrency: 'CAD',
+      quoteCurrency: 'USD',
+      rate: '0.50',
+      effectiveDate: '2026-01-01',
+    });
+
+    const resUsd = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(resUsd.status).toBe(200);
+    const bodyUsd = await resUsd.json();
+    expect(bodyUsd.displayCurrency).toBe('USD');
+    expect(bodyUsd.realisedPnl.total).toBe('50.00');
+  });
+
+  it('the CA disclaimer states the pooled ACB, excludes registered accounts, and drops the held-through-the-window clause (AC 5.5)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await createAccount(cookie, 'CAD acct', 'CAD');
+    await patchJurisdiction(cookie, 'CA');
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.disclaimer).toContain('pooled per security across your taxable accounts');
+    expect(body.disclaimer).toContain(
+      'registered accounts (TFSA, RRSP, FHSA and similar) are excluded',
+    );
+    expect(body.disclaimer).not.toContain('held through that window');
   });
 
   it('US wash-sale end-to-end: loss + same-symbol re-open within 30d produces one washSales entry', async () => {
@@ -1388,25 +1706,40 @@ describe('GET /api/expenses/tax-summary — FIFO lot realisations', () => {
     expect(fifo.realisedPnl.total).toBe(average.realisedPnl.total);
   });
 
-  it('a CA user with no stored method gets acb reported, average-cost figures and no lot rows (AC 2.3)', async () => {
+  it('a CA user with no stored method gets acb reported, pooled ACB figures and no lot rows (AC 2.3)', async () => {
     const { cookie } = await registerAndGetCookie();
-    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    const acct = await createAccount(cookie, 'CAD acct', 'CAD');
     await patchJurisdiction(cookie, 'CA');
 
-    await openAndClose(cookie, acct.id, {
+    const position = await createPositionFor(cookie, acct.id, {
       symbol: 'CAAV',
-      entryPrice: '100',
-      exitPrice: '120',
-      openedAt: '2026-03-01T15:00:00Z',
-      closedAt: '2026-09-15T15:00:00Z',
+      side: 'long',
+      assetType: 'stock',
     });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '50',
+      quantity: '10',
+      fees: '1.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-03-01T15:00:00Z');
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '60',
+      quantity: '10',
+      fees: '1.00',
+      filledAt: '2026-09-15T15:00:00Z',
+    });
+    await closePositionFor(cookie, position.id, '2026-09-15T15:00:00Z');
 
     const body = await taxSummary(cookie, 2026);
     expect(body.lotMethod).toBe('acb');
     expect(body.lotRealisations).toEqual([]);
-    expect(body.realisedPnl.total).toBe('20.00');
+    expect(body.realisedPnl.total).toBe('98.00');
     expect(body.realisedPnl.shortTerm).toBeNull();
     expect(body.realisedPnl.longTerm).toBeNull();
+    expect(body.acbDispositions).toHaveLength(1);
   });
 
   it('a stored lot selection is ignored under average cost and re-derived under FIFO (AC 3.12)', async () => {
