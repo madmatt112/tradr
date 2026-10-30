@@ -15,7 +15,7 @@
     },
     {
       "name": "web",
-      "testFiles": 220
+      "testFiles": 221
     },
     {
       "name": "web-scripts",
@@ -26,7 +26,7 @@
       "testFiles": 3
     }
   ],
-  "testFilesTotal": 456,
+  "testFilesTotal": 457,
   "e2eSpecFiles": 39,
   "migrations": 41,
   "ciJobs": [
