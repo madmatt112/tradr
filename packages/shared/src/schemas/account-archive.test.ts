@@ -34,6 +34,7 @@ import {
   ArchiveSystemBrokerageRefSchema,
   ArchiveTagSchema,
   ArchiveTradingRuleSchema,
+  ArchiveTransferLinkSchema,
   archiveDecimalString,
 } from './account-archive';
 
@@ -178,6 +179,10 @@ const rows = {
     schema: ArchiveLotSelectionSchema,
     value: { exitFillId: U(5), entryFillId: U(6), quantity: '5.00000000' },
   },
+  transferLink: {
+    schema: ArchiveTransferLinkSchema,
+    value: { exitFillId: U(5), entryFillId: U(6) },
+  },
   positionTag: { schema: ArchivePositionTagSchema, value: { positionId: U(4), tagId: U(3) } },
   positionImage: {
     schema: ArchivePositionImageSchema,
@@ -299,7 +304,7 @@ const rows = {
 
 describe('account-archive contract constants', () => {
   it('freezes the version, entry order and caps', () => {
-    expect(ARCHIVE_VERSION).toBe(3);
+    expect(ARCHIVE_VERSION).toBe(4);
     expect(ARCHIVE_ENTRY_ORDER[0]).toBe('manifest.json');
     expect(ARCHIVE_ENTRY_ORDER).toContain('dashboard-layout.json');
     // rules.ndjson sits directly after tags.ndjson (design C8).
@@ -309,6 +314,10 @@ describe('account-archive contract constants', () => {
     // lot-selections.ndjson sits directly after fills.ndjson (design C12).
     expect(ARCHIVE_ENTRY_ORDER.indexOf('lot-selections.ndjson')).toBe(
       ARCHIVE_ENTRY_ORDER.indexOf('fills.ndjson') + 1,
+    );
+    // transfer-links.ndjson sits directly after lot-selections.ndjson (design C8).
+    expect(ARCHIVE_ENTRY_ORDER.indexOf('transfer-links.ndjson')).toBe(
+      ARCHIVE_ENTRY_ORDER.indexOf('lot-selections.ndjson') + 1,
     );
     expect(Object.keys(ARCHIVE_CAPS)).toHaveLength(10);
     expect(ARCHIVE_CAPS.maxUploadBytes).toBe(536_870_912);
@@ -511,6 +520,41 @@ describe('archive version 3 additions (design C12, AC 9.1)', () => {
   it('ArchiveManifestSchema accepts archiveVersion 3', () => {
     expect(
       ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 3 }).success,
+    ).toBe(true);
+  });
+});
+
+// Design C8 (AC 9.1) — the version-4 archive additions: each account's tax
+// treatment, the transfer-links count, the strict ArchiveTransferLinkSchema
+// and the widened manifest version union.
+describe('archive version 4 additions (design C8, AC 9.1)', () => {
+  it('ArchiveAccountSchema accepts a taxable/registered taxTreatment, omission, and rejects an invalid one', () => {
+    expect(
+      ArchiveAccountSchema.safeParse({ ...rows.account.value, taxTreatment: 'taxable' }).success,
+    ).toBe(true);
+    expect(
+      ArchiveAccountSchema.safeParse({ ...rows.account.value, taxTreatment: 'registered' }).success,
+    ).toBe(true);
+    expect(ArchiveAccountSchema.safeParse(rows.account.value).success).toBe(true);
+    expect(
+      ArchiveAccountSchema.safeParse({ ...rows.account.value, taxTreatment: 'rrsp' }).success,
+    ).toBe(false);
+  });
+
+  it('ArchiveCountsSchema accepts an explicit transferLinks count', () => {
+    expect(ArchiveCountsSchema.safeParse({ ...counts, transferLinks: 2 }).success).toBe(true);
+    expect(ArchiveCountsSchema.safeParse({ ...counts, transferLinks: -1 }).success).toBe(false);
+  });
+
+  it('ArchiveTransferLinkSchema accepts exitFillId/entryFillId and is strict', () => {
+    const value = { exitFillId: U(5), entryFillId: U(6) };
+    expect(ArchiveTransferLinkSchema.safeParse(value).success).toBe(true);
+    expect(ArchiveTransferLinkSchema.safeParse({ ...value, quantity: '1' }).success).toBe(false);
+  });
+
+  it('ArchiveManifestSchema accepts archiveVersion 4', () => {
+    expect(
+      ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 4 }).success,
     ).toBe(true);
   });
 });

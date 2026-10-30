@@ -47,6 +47,7 @@ const NDJSON_ORDER: Array<[keyof Spec, string, string]> = [
   ['positions', 'positions.ndjson', 'positions'],
   ['fills', 'fills.ndjson', 'fills'],
   ['lotSelections', 'lot-selections.ndjson', 'lot-selections'],
+  ['transferLinks', 'transfer-links.ndjson', 'transfer-links'],
   ['positionTags', 'position-tags.ndjson', 'positionTags'],
   ['positionImages', 'position-images.ndjson', 'positionImages'],
   ['ledgerEntries', 'ledger-entries.ndjson', 'ledgerEntries'],
@@ -69,6 +70,7 @@ interface Spec {
   positions?: unknown[];
   fills?: unknown[];
   lotSelections?: unknown[];
+  transferLinks?: unknown[];
   positionTags?: unknown[];
   positionImages?: unknown[];
   ledgerEntries?: unknown[];
@@ -114,6 +116,7 @@ function makeArchive(spec: Spec): Buffer {
   // absent-count path.
   if (spec.rules) counts.rules = spec.rules.length;
   if (spec.lotSelections) counts.lotSelections = spec.lotSelections.length;
+  if (spec.transferLinks) counts.transferLinks = spec.transferLinks.length;
   Object.assign(counts, spec.countsOverride ?? {});
 
   if (!spec.omitManifest) {
@@ -228,6 +231,11 @@ const lotSelection = (o: Obj = {}): Obj => ({
   exitFillId: rid(),
   entryFillId: rid(),
   quantity: '1',
+  ...o,
+});
+const transferLink = (o: Obj = {}): Obj => ({
+  exitFillId: rid(),
+  entryFillId: rid(),
   ...o,
 });
 const ledger = (o: Obj = {}): Obj => ({
@@ -723,6 +731,73 @@ describe('validateArchive — references', () => {
       preferences: preferences(),
     });
     expect(hasPath(f, 'lot-selections[0]')).toBe(true);
+  });
+
+  // Design C8 — the transfer-links.ndjson case: both ids must name archive
+  // fills, the exit id must be an exit, the entry id must be an entry, and the
+  // two fills must sit in different positions (a transfer moves a holding
+  // between positions, so pairing fills in the same position is invalid —
+  // the opposite invariant from a lot selection).
+  it('rejects a transfer link whose id names no archive fill', async () => {
+    const a = acct();
+    const posA = position({ accountId: a.id });
+    const posB = position({ accountId: a.id });
+    const entryFill = fill({ positionId: posB.id, type: 'entry' });
+    const f = await faults({
+      accounts: [a],
+      positions: [posA, posB],
+      fills: [entryFill],
+      transferLinks: [transferLink({ exitFillId: rid(), entryFillId: entryFill.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'transfer-links[0]')).toBe(true);
+  });
+
+  it('rejects a transfer link whose exit fill is not an exit', async () => {
+    const a = acct();
+    const posA = position({ accountId: a.id });
+    const posB = position({ accountId: a.id });
+    const entry1 = fill({ positionId: posA.id, type: 'entry' });
+    const entry2 = fill({ positionId: posB.id, type: 'entry' });
+    const f = await faults({
+      accounts: [a],
+      positions: [posA, posB],
+      fills: [entry1, entry2],
+      transferLinks: [transferLink({ exitFillId: entry1.id, entryFillId: entry2.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'transfer-links[0]')).toBe(true);
+  });
+
+  it('rejects a transfer link whose entry fill is not an entry', async () => {
+    const a = acct();
+    const posA = position({ accountId: a.id });
+    const posB = position({ accountId: a.id });
+    const exitFill1 = fill({ positionId: posA.id, type: 'exit' });
+    const exitFill2 = fill({ positionId: posB.id, type: 'exit' });
+    const f = await faults({
+      accounts: [a],
+      positions: [posA, posB],
+      fills: [exitFill1, exitFill2],
+      transferLinks: [transferLink({ exitFillId: exitFill1.id, entryFillId: exitFill2.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'transfer-links[0]')).toBe(true);
+  });
+
+  it('rejects a transfer link whose fills sit in the same position', async () => {
+    const a = acct();
+    const pos = position({ accountId: a.id });
+    const exitFill = fill({ positionId: pos.id, type: 'exit' });
+    const entryFill = fill({ positionId: pos.id, type: 'entry' });
+    const f = await faults({
+      accounts: [a],
+      positions: [pos],
+      fills: [exitFill, entryFill],
+      transferLinks: [transferLink({ exitFillId: exitFill.id, entryFillId: entryFill.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'transfer-links[0]')).toBe(true);
   });
 
   it('rejects a position-tag referencing an unknown position or tag', async () => {
