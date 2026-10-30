@@ -1,9 +1,14 @@
 import { eq, inArray } from 'drizzle-orm';
-import { describe, it, expect } from 'vitest';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 import app from '@/app';
+import * as dbModule from '@/db';
 import { db } from '@/db';
-import { fillTransferLinks, ledgerEntries, positions } from '@/db/schema';
+import type { Database } from '@/db';
+import { fillTransferLinks, ledgerEntries, positions, users } from '@/db/schema';
+import * as schema from '@/db/schema';
 
 /**
  * Contract — task 9, design C7, AC 6.1/6.4/6.6/6.7, NFR Security
@@ -37,6 +42,14 @@ import { fillTransferLinks, ledgerEntries, positions } from '@/db/schema';
  *    row in fill_transfer_links for entryB.
  *    Expected value source: design C7 post-condition 1's unique-violation
  *    catch (the race loser gets the same 409, not a 500).
+ *    TEST-AMENDED: this case runs over a dedicated multi-connection pool
+ *    (`email-tokens.concurrency.test.ts` precedent) — under the project-wide
+ *    rollback harness (test-setup.ts), a per-test transaction on a single
+ *    `max: 1` connection turns two "concurrent" `withTransaction` calls into
+ *    nested savepoints on one session, where the loser's `ROLLBACK TO
+ *    SAVEPOINT` also undoes the winner's already-released insert (confirmed
+ *    against a plain psql session), so the setup and both PUTs below run
+ *    against committed rows instead, cleaned up in `finally`.
  * 5. Pre: entryB (eligible), plus decoys: a quantity mismatch, a different
  *    symbol, a same-account entry, and an entry already linked elsewhere.
  *    Call: GET /api/positions/:posA.id/fills/:exitA.id/transfer-link.
@@ -85,6 +98,23 @@ import { fillTransferLinks, ledgerEntries, positions } from '@/db/schema';
  * satisfied by the implementer regenerating the doc in the same change, not
  * by an assertion in this file.
  */
+
+// Dedicated multi-connection pool for the real-concurrency race case (item 4
+// above) — see its TEST-AMENDED note. max: 2, one connection per racer; the
+// harness's own beforeAll has already migrated the schema on its connection.
+const DATABASE_URL =
+  process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5433/tradr_test';
+let dedicatedSql: ReturnType<typeof postgres>;
+let dedicatedDb: Database;
+
+beforeAll(() => {
+  dedicatedSql = postgres(DATABASE_URL, { max: 2 });
+  dedicatedDb = drizzle(dedicatedSql, { schema });
+});
+
+afterAll(async () => {
+  await dedicatedSql.end();
+});
 
 let emailCounter = 0;
 function uniqueEmail() {
@@ -197,8 +227,8 @@ function linkPath(positionId: string, fillId: string) {
 /** posA (accountA): entry 15 + exit 10 (open, exit = exitA). posB
  * (accountB, same user): entry 10 (open, entry = entryB) — same symbol/side
  * as posA, equal quantity to exitA, a different account. */
-async function setupLinkablePair() {
-  const { cookie } = await registerAndGetCookie();
+async function setupLinkablePair(email = uniqueEmail()) {
+  const { cookie } = await registerAndGetCookie(email);
   const accountA = await createTestAccount(cookie);
   const accountB = await createTestAccount(cookie);
 
@@ -223,7 +253,7 @@ async function setupLinkablePair() {
   );
   await openPos(cookie, posB.id);
 
-  return { cookie, accountA, accountB, posA, posB, exitA, entryB };
+  return { cookie, email, accountA, accountB, posA, posB, exitA, entryB };
 }
 
 /** A self-contained entry+exit pair the caller owns, unrelated to any other
@@ -386,28 +416,43 @@ describe('transfer-link routes', () => {
   });
 
   it('two concurrent PUTs for the same entry give exactly one 200 and one 409 entry_already_linked', async () => {
-    const { posA, exitA, entryB, cookie } = await setupLinkablePair();
-    const other = await createOwnEntryAndExit(cookie);
+    // Real concurrency (see the TEST-AMENDED note on item 4 above): swap the
+    // app's db at the mocked module's live binding to a dedicated two-
+    // connection pool for setup AND the race, so both racers get genuinely
+    // separate connections and committed rows rather than nested savepoints
+    // on the harness's single per-test connection.
+    const harnessDb = dbModule.db;
+    (dbModule as Record<string, unknown>).db = dedicatedDb;
+    let email: string | undefined;
+    try {
+      const setup = await setupLinkablePair();
+      email = setup.email;
+      const { posA, exitA, entryB, cookie } = setup;
+      const other = await createOwnEntryAndExit(cookie);
 
-    const [resA, resOther] = await Promise.all([
-      authedRequest('PUT', linkPath(posA.id, exitA.id), cookie, { entryFillId: entryB.id }),
-      authedRequest('PUT', linkPath(other.pos.id, other.exit.id), cookie, {
-        entryFillId: entryB.id,
-      }),
-    ]);
+      const [resA, resOther] = await Promise.all([
+        authedRequest('PUT', linkPath(posA.id, exitA.id), cookie, { entryFillId: entryB.id }),
+        authedRequest('PUT', linkPath(other.pos.id, other.exit.id), cookie, {
+          entryFillId: entryB.id,
+        }),
+      ]);
 
-    const statuses = [resA.status, resOther.status].sort((a, b) => a - b);
-    expect(statuses).toEqual([200, 409]);
+      const statuses = [resA.status, resOther.status].sort((a, b) => a - b);
+      expect(statuses).toEqual([200, 409]);
 
-    const loser = resA.status === 409 ? resA : resOther;
-    const loserBody = await loser.json();
-    expect(loserBody.error.message.startsWith('entry_already_linked')).toBe(true);
+      const loser = resA.status === 409 ? resA : resOther;
+      const loserBody = await loser.json();
+      expect(loserBody.error.message.startsWith('entry_already_linked')).toBe(true);
 
-    const rows = await db
-      .select()
-      .from(fillTransferLinks)
-      .where(eq(fillTransferLinks.entryFillId, entryB.id));
-    expect(rows).toHaveLength(1);
+      const rows = await dedicatedDb
+        .select()
+        .from(fillTransferLinks)
+        .where(eq(fillTransferLinks.entryFillId, entryB.id));
+      expect(rows).toHaveLength(1);
+    } finally {
+      (dbModule as Record<string, unknown>).db = harnessDb;
+      if (email) await dedicatedDb.delete(users).where(eq(users.email, email));
+    }
   });
 
   it('GET lists only eligible candidates, excluding mismatched, cross-symbol, same-account and already-linked entries', async () => {
@@ -443,13 +488,29 @@ describe('transfer-link routes', () => {
       posE.id,
       makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-01T10:00:00Z' }),
     );
-    const otherExit = await createOwnEntryAndExit(cookie);
-    const realLink = await authedRequest(
-      'PUT',
-      linkPath(otherExit.pos.id, otherExit.exit.id),
+    // TEST-AMENDED: a plain createOwnEntryAndExit(cookie) pairs an entry and
+    // an exit at the SAME quantity (10) and default symbol (AAPL) — exactly
+    // this test's own candidate criteria — so its unlinked entry leg would
+    // itself be a genuine fifth candidate, which the original fixture's
+    // single-entryB expectation never accounted for. Entry qty 20 keeps the
+    // exit leg (qty 10) eligible to link against entryAlreadyLinked while
+    // excluding the entry leg from the candidate search by quantity.
+    const accountF = await createTestAccount(cookie);
+    const posF = await createDraftPosition(cookie, accountF.id);
+    await addFill(
       cookie,
-      { entryFillId: entryAlreadyLinked.id },
+      posF.id,
+      makeFill({ type: 'entry', quantity: '20', filledAt: '2025-01-01T10:00:00Z' }),
     );
+    await openPos(cookie, posF.id);
+    const exitF = await addFill(
+      cookie,
+      posF.id,
+      makeFill({ type: 'exit', quantity: '10', filledAt: '2025-01-06T10:00:00Z' }),
+    );
+    const realLink = await authedRequest('PUT', linkPath(posF.id, exitF.id), cookie, {
+      entryFillId: entryAlreadyLinked.id,
+    });
     expect(realLink.status).toBe(200);
 
     const res = await authedRequest('GET', linkPath(posA.id, exitA.id), cookie);

@@ -46,6 +46,7 @@ import {
   replaceFillHook,
   replaceReverseHook,
 } from '@/features/positions/positions.service';
+import transferLinksRouter from '@/features/positions/transfer-links.route';
 import { initStockQuoteCache } from '@/features/symbols/stock-quote.client';
 import symbolsRouter from '@/features/symbols/symbols.route';
 import { syncSymbolsIfStale } from '@/features/symbols/symbols.service';
@@ -163,6 +164,7 @@ app.route('/api/options', optionsRouter);
 app.route('/api/positions', positions);
 app.route('/api/positions', fillsRouter);
 app.route('/api/positions', lotsRouter);
+app.route('/api/positions', transferLinksRouter);
 app.route('/api/positions', positionImagesRouter);
 app.route('/api/performance', performance);
 app.route('/api/symbols', symbolsRouter);

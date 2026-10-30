@@ -4493,10 +4493,257 @@
             "description": "No such position or fill for this user."
           },
           "409": {
-            "description": "The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit's matched lots; or an entry quantity edit that would leave a selected exit's claim above the lot."
+            "description": "The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit's matched lots; an entry quantity edit that would leave a selected exit's claim above the lot; or a quantity change on a fill that is in an in-kind transfer link (remove the link first)."
           }
         },
         "summary": "Edit a fill.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/fills/{fillId}/transfer-link": {
+      "delete": {
+        "description": "Authed. Removes the stored link, if any.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fillId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "404": {
+            "description": "No such position or fill for this user",
+            "or no link to remove.": null
+          }
+        },
+        "summary": "Remove an exit fill's in-kind transfer link.",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "get": {
+        "description": "Authed. `fillId` must be an exit fill of this position. `link` is the stored link, or `null` if none. `candidates` are the caller's entry fills eligible to link against it — in another account, same symbol and side, equal quantity, and in no link of their own.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Must be an exit fill of this position.",
+            "in": "path",
+            "name": "fillId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "candidates": {
+                      "items": {
+                        "properties": {
+                          "accountId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "accountName": {
+                            "type": "string"
+                          },
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "filledAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "positionId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "price": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "link": {
+                      "nullable": true,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "entryAccountId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "entryAccountName": {
+                          "type": "string"
+                        },
+                        "entryFillId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "entryPositionId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "exitFillId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "id": {
+                          "format": "uuid",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The fill's link (or null) and its eligible candidates."
+          },
+          "404": {
+            "description": "No such position for this user",
+            "or the fill is not an exit of it.": null
+          }
+        },
+        "summary": "Get an exit fill's in-kind transfer link and eligible candidates.",
+        "tags": [
+          "Positions"
+        ]
+      },
+      "put": {
+        "description": "Authed. Stores the link only if `entryFillId` names one of the caller's own entry fills, the first fill is an exit, their positions sit in different accounts, they share the exit position's symbol and side, their quantities are equal, and neither fill is already in a link; otherwise refuses with 409 and a reason first in the message (`not_an_entry`, `same_account`, `different_security`, `quantity_mismatch`, `exit_already_linked`, `entry_already_linked`). An `entryFillId` naming another user's fill is refused as `not_an_entry` and never otherwise resolved. The write touches only the link row — no fill hook, ledger write, or position change runs.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Must be an exit fill of this position.",
+            "in": "path",
+            "name": "fillId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "entryFillId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "entryFillId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "entryAccountId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "entryAccountName": {
+                      "type": "string"
+                    },
+                    "entryFillId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "entryPositionId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "exitFillId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The created link."
+          },
+          "404": {
+            "description": "No such position for this user",
+            "or the fill is not one of its own.": null
+          },
+          "409": {
+            "description": "One of the six link rules is violated; the message starts with its reason."
+          }
+        },
+        "summary": "Link an exit fill to an entry fill as one in-kind transfer.",
         "tags": [
           "Positions"
         ]
