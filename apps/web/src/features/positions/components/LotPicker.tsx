@@ -40,7 +40,10 @@ export function LotPicker({ lots, jurisdiction, filledAt, quantity, value, onCha
 
   const picked = sumLotSelection(value);
   const target = Number(quantity) || 0;
-  const difference = Math.abs(target - picked);
+  const rawDifference = Math.abs(target - picked);
+  // Sub-epsilon float noise (e.g. 0.1 + 0.2 vs 0.3) reads as an exact match,
+  // matching the submit guard's tolerance in FillDialog.
+  const difference = rawDifference < 1e-9 ? 0 : rawDifference;
 
   return (
     <div className="space-y-2">
