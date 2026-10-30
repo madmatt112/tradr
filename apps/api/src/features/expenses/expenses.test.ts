@@ -1268,6 +1268,9 @@ describe('GET /api/expenses/tax-summary', () => {
     await patchJurisdiction(cookie, 'CA');
 
     // Taxable loss: entry 100@10, partial exit 50@8 -> gain 400-500=-100.00.
+    // Entry is >30 days before the exit so the position's own opening fill
+    // (same match key/side/position as the loss) is outside the matching
+    // window and cannot itself count as a repurchase candidate.
     const position = await createPositionFor(cookie, acct.id, {
       symbol: 'XYZ',
       side: 'long',
@@ -1278,9 +1281,9 @@ describe('GET /api/expenses/tax-summary', () => {
       price: '10.00',
       quantity: '100',
       fees: '0.00',
-      filledAt: '2026-02-01T14:00:00Z',
+      filledAt: '2026-01-01T14:00:00Z',
     });
-    await openPositionFor(cookie, position.id, '2026-02-01T14:00:00Z');
+    await openPositionFor(cookie, position.id, '2026-01-01T14:00:00Z');
     const exitFill = await addFillFor(cookie, position.id, {
       type: 'exit',
       price: '8.00',
@@ -1353,7 +1356,8 @@ describe('GET /api/expenses/tax-summary', () => {
     await patchJurisdiction(cookie, 'CA');
 
     // Account A: entry 100@10, partial exit 50@8 -> loss -100.00; position
-    // stays open.
+    // stays open. Entry is >30 days before the exit so the position's own
+    // opening fill does not itself double as a repurchase candidate.
     const positionA = await createPositionFor(cookie, acctA.id, {
       symbol: 'XYZ',
       side: 'long',
@@ -1364,9 +1368,9 @@ describe('GET /api/expenses/tax-summary', () => {
       price: '10.00',
       quantity: '100',
       fees: '0.00',
-      filledAt: '2026-02-01T14:00:00Z',
+      filledAt: '2026-01-01T14:00:00Z',
     });
-    await openPositionFor(cookie, positionA.id, '2026-02-01T14:00:00Z');
+    await openPositionFor(cookie, positionA.id, '2026-01-01T14:00:00Z');
     const exitFillA = await addFillFor(cookie, positionA.id, {
       type: 'exit',
       price: '8.00',

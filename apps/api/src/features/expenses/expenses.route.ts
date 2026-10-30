@@ -395,7 +395,7 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *                 trackedExpenses: { type: object }
  *                 flags:
  *                   type: object
- *                   description: Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots.
+ *                   description: Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots. Under `CA`, a repurchase in any account of the user — registered accounts included — counts, and the losing position itself can supply the match; a flag never adjusts the figures.
  *                 lotRealisations:
  *                   type: array
  *                   description: One row per (exit fill, lot) pair under FIFO; empty under average cost.
