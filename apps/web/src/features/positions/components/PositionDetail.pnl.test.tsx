@@ -219,3 +219,28 @@ describe('PositionDetail — R/R + target-price cards', () => {
     unmount(container, root);
   });
 });
+
+// Contract — task 12 AC 8.4 (design C11/D14). Not reachable through
+// FillDialog (the task's named Test seam): this is PositionDetail's own Net
+// P&L card, so its red test lives here, next to the existing title-based
+// regression guard this file already runs. Pre: a position with a net P&L.
+// Call: render(PositionDetailView) (this file's own mount pattern). Observe:
+// the card still titled "Net P&L" (D14: unchanged, the existing
+// `cardNumeric` lookups above are the regression guard for that) now also
+// carries the caption "Average cost". Source: requirements.md AC 8.4 +
+// design.md D14's exact caption text.
+describe('PositionDetail — Net P&L stays labelled as average cost (AC 8.4)', () => {
+  it('keeps the Net P&L card title and adds an "Average cost" caption', () => {
+    mockDetail({ grossPnl: 200, netPnl: 195, ret: 12.5 });
+    const { container, root } = mountWith(<PositionDetailView positionId="p1" />);
+
+    const titleEl = Array.from(container.querySelectorAll('[data-slot="card-title"]')).find(
+      (el) => el.textContent === 'Net P&L',
+    );
+    const card = titleEl?.closest('[data-slot="card"]');
+    expect(card).toBeTruthy();
+    expect(card?.textContent).toContain('Average cost');
+
+    unmount(container, root);
+  });
+});

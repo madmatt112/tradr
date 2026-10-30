@@ -13,13 +13,14 @@ import { RuleWeightSchema, TradingRuleDefinitionSchema } from './trading-rule';
 //
 // Version discipline (Req 3.4, D4): ARCHIVE_VERSION is the version this build
 // writes. A payload-shape change increments it; the manifest still accepts every
-// earlier version whose payload this build reads (1 and 2), so a version-1 export
+// earlier version whose payload this build reads (1 and 2), so an older export
 // imports unchanged. The reader refuses a version above ARCHIVE_VERSION by number,
 // not by a parse failure.
 
 // The archive schema version. The manifest's `format` and `archiveVersion` field
 // are frozen across versions; the value increments when a payload shape changes.
-export const ARCHIVE_VERSION = 2;
+// Version 3 adds the lot-selections entry and the taxLotMethod preference (C12).
+export const ARCHIVE_VERSION = 3;
 
 // The fixed entry names, in the order they appear in the archive (Data Models).
 // Image entries (matching ARCHIVE_IMAGE_ENTRY_RE) come first, before
@@ -34,6 +35,7 @@ export const ARCHIVE_ENTRY_ORDER = [
   'rules.ndjson',
   'positions.ndjson',
   'fills.ndjson',
+  'lot-selections.ndjson',
   'position-tags.ndjson',
   'position-images.ndjson',
   'ledger-entries.ndjson',
@@ -266,6 +268,9 @@ export const ArchiveCountsSchema = z
     rules: nonNegInt.optional(),
     positions: nonNegInt,
     fills: nonNegInt,
+    // Optional so a version-1 or version-2 manifest (which has no lot-selections
+    // entry) still parses; the reader treats an absent count as 0 (C12, D15).
+    lotSelections: nonNegInt.optional(),
     positionTags: nonNegInt,
     positionImages: nonNegInt,
     ledgerEntries: nonNegInt,
@@ -309,8 +314,8 @@ export type ArchiveDegradation = z.infer<typeof ArchiveDegradationSchema>;
 export const ArchiveManifestSchema = z
   .object({
     format: z.literal('tradr-account-archive'),
-    // Accept the frozen version-1 payload and this build's version (D4).
-    archiveVersion: z.union([z.literal(1), z.literal(2)]),
+    // Accept every earlier payload this build reads and its own version (D4, C12 D5).
+    archiveVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     // APP_VERSION at export, or 'unknown'.
     sourceAppVersion: z.string(),
     exportedAt: timestamp,
@@ -431,6 +436,21 @@ export const ArchiveFillSchema = z
   })
   .strict();
 export type ArchiveFill = z.infer<typeof ArchiveFillSchema>;
+
+// A per-exit lot selection (fill_lot_selections, C12): the exit fill, the entry
+// fill it is matched against and the quantity consumed. No `id` and no `createdAt`
+// — the import owns the row (fresh id, default timestamp) and remaps both fill
+// references. The validator checks that both ids name archive fills, that exit is
+// an exit, entry is an entry, and both share a position. quantity is numeric(18,8)
+// with a `> 0` CHECK, so unsigned.
+export const ArchiveLotSelectionSchema = z
+  .object({
+    exitFillId: uuid,
+    entryFillId: uuid,
+    quantity: archiveDecimalString(18, 8, { signed: false }),
+  })
+  .strict();
+export type ArchiveLotSelection = z.infer<typeof ArchiveLotSelectionSchema>;
 
 export const ArchivePositionTagSchema = z.object({ positionId: uuid, tagId: uuid }).strict();
 export type ArchivePositionTag = z.infer<typeof ArchivePositionTagSchema>;
@@ -584,6 +604,9 @@ export const ArchivePreferencesSchema = z
     timezone: timezone.nullable(),
     // users_tax_jurisdiction_chk.
     taxJurisdiction: z.enum(['US', 'CA', 'other']).nullable(),
+    // users_tax_lot_method_chk; optional so a version-1 or version-2 preferences
+    // payload (which has no key) still parses and imports with a null method (C12).
+    taxLotMethod: z.enum(['fifo', 'average']).nullable().optional(),
     // users_theme_chk.
     theme: z.enum(['light', 'dark', 'system']),
     // users_buying_power_basis_chk.

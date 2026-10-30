@@ -3,6 +3,7 @@
 //   1. Expenses LIST  — 500 rows mixed currencies/years     → budget  50 ms
 //   2. Fee rollup      — 50 accounts × 10k fills/year         → budget 200 ms
 //   3. Tax summary     — 5-year history (5k closed, 1k in-yr) → budget 500 ms
+//                         (measured under FIFO and under average cost)
 //
 // All three scenarios drive the HTTP layer via `app.request()` (so the bench
 // exercises the same code path as production — middleware + route + service +
@@ -24,6 +25,7 @@
 
 import { pipeline } from 'node:stream/promises';
 
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -43,6 +45,7 @@ import {
   buildFillsCopyStream,
   buildLedgerPnlCopyStream,
   buildPositionsCopyStream,
+  buildTaxFillsCopyStream,
 } from './fixtures/expenses-tax-fixture';
 
 // ---------------------------------------------------------------------------
@@ -241,6 +244,17 @@ async function copyFills(opts: {
   await pipeline(stream, writable);
 }
 
+async function copyTaxFills(opts: {
+  positions: Array<{ positionId: string; exitAt: Date }>;
+  twoEntryIndices: ReadonlySet<number>;
+  rngSeed: number;
+}): Promise<void> {
+  const stream = buildTaxFillsCopyStream(opts);
+  const cols = FILLS_COPY_COLUMNS.join(',');
+  const writable = await benchSql.unsafe(`COPY fills (${cols}) FROM STDIN`).writable();
+  await pipeline(stream, writable);
+}
+
 async function copyLedgerPnl(opts: {
   userId: string;
   positionPairs: Array<{ positionId: string; accountId: string; closedAt: Date }>;
@@ -404,6 +418,19 @@ beforeAll(async () => {
         ),
       }));
 
+    // Entry/exit fills for the in-year cohort only (prior-year positions
+    // never enter the FIFO candidate set for TARGET_YEAR, so they stay
+    // fill-less). One in ten gets a second entry + a partially-consuming
+    // exit, so FIFO's multi-lot split path is exercised too.
+    const twoEntryIndices = new Set(
+      Array.from({ length: inYear }, (_, i) => i).filter((i) => i % 10 === 0),
+    );
+    await copyTaxFills({
+      positions: inYearPairs.map((p) => ({ positionId: p.positionId, exitAt: p.closedAt })),
+      twoEntryIndices,
+      rngSeed: RNG_SEED + 7,
+    });
+
     await copyLedgerPnl({
       userId: taxUserId,
       positionPairs: inYearPairs,
@@ -542,9 +569,12 @@ describe('expenses bench — fee-rollup 500k fills', () => {
 // Plan assertion: `listRealisedPositionsForYear` must use an `Index Scan` or
 // `Bitmap Index Scan` on `ledger_entries`, NOT a `Seq Scan on ledger_entries`
 // — proves the partial-index path is active.
+// Measured under both lot methods: the first `it()` runs FIFO (the fixture's
+// default — US jurisdiction, no stored `tax_lot_method`); the second flips
+// `users.tax_lot_method` to `average` and re-measures against the same data.
 // ---------------------------------------------------------------------------
 describe('expenses bench — tax-summary 5-year history', () => {
-  it(`p95 < ${TAX_BUDGET_MS}ms with index scan on ledger_entries`, async () => {
+  it(`p95 < ${TAX_BUDGET_MS}ms with index scan on ledger_entries — FIFO`, async () => {
     await benchSql.unsafe('VACUUM ANALYZE ledger_entries');
     await benchSql.unsafe('VACUUM ANALYZE positions');
 
@@ -600,7 +630,38 @@ describe('expenses bench — tax-summary 5-year history', () => {
     const stats = summarize(samples);
 
     console.log(
-      `[bench] tax-summary 5yr — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
+      `[bench] tax-summary 5yr (FIFO) — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
+    );
+    expect(stats.p95).toBeLessThan(TAX_BUDGET_MS);
+  }, 600_000);
+
+  it(`p95 < ${TAX_BUDGET_MS}ms — average cost`, async () => {
+    await benchDb
+      .update(usersTable)
+      .set({ taxLotMethod: 'average' })
+      .where(eq(usersTable.id, taxUserId));
+
+    const path = `/api/expenses/tax-summary?year=${TARGET_YEAR}&jurisdiction=US`;
+    const headers = { Cookie: `session=${taxSessionCookie}` };
+
+    for (let i = 0; i < N_WARMUP; i++) {
+      const res = await app.request(path, { headers });
+      if (res.status !== 200) throw new Error(`warmup expected 200, got ${res.status}`);
+      await res.json();
+    }
+
+    const samples: number[] = [];
+    for (let i = 0; i < N_ITERATIONS; i++) {
+      const t0 = nowMs();
+      const res = await app.request(path, { headers });
+      await res.json();
+      samples.push(nowMs() - t0);
+      if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
+    }
+    const stats = summarize(samples);
+
+    console.log(
+      `[bench] tax-summary 5yr (average cost) — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
     );
     expect(stats.p95).toBeLessThan(TAX_BUDGET_MS);
   }, 600_000);

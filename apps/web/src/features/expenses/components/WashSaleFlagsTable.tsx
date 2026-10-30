@@ -40,8 +40,8 @@ export function WashSaleFlagsTable({ flags, displayCurrency }: WashSaleFlagsTabl
           <TableHead>Symbol</TableHead>
           <TableHead>Underlying</TableHead>
           <TableHead>Side</TableHead>
-          <TableHead>Opened</TableHead>
-          <TableHead>Closed</TableHead>
+          <TableHead>Lot opened</TableHead>
+          <TableHead>Realised</TableHead>
           <TableHead className="text-right">Realised loss</TableHead>
           <TableHead>Reason</TableHead>
           <TableHead>Counterparty position ids</TableHead>
@@ -49,12 +49,12 @@ export function WashSaleFlagsTable({ flags, displayCurrency }: WashSaleFlagsTabl
       </TableHeader>
       <TableBody>
         {flags.map((flag) => (
-          <TableRow key={flag.positionId}>
+          <TableRow key={flag.lossRowId}>
             <TableCell className="font-medium">{flag.symbol}</TableCell>
             <TableCell>{flag.underlying ?? flag.symbol}</TableCell>
             <TableCell className="capitalize">{flag.side}</TableCell>
-            <TableCell>{flag.openedAt}</TableCell>
-            <TableCell>{flag.closedAt}</TableCell>
+            <TableCell>{flag.lotOpenedAt ?? '—'}</TableCell>
+            <TableCell>{flag.realisedAt}</TableCell>
             <TableCell className="text-right whitespace-nowrap">
               {displayCurrency
                 ? formatCurrency(parseFloat(flag.realisedLoss), displayCurrency)

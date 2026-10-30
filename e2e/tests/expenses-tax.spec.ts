@@ -117,6 +117,27 @@ async function setDisplayCurrency(req: APIRequestContext, currency: string): Pro
   expect(res.status(), `PUT display-currency ${currency}`).toBe(200);
 }
 
+/**
+ * A `/performance` URL spanning all of `YEAR`, with `end` capped at
+ * tomorrow — `PerformanceQuerySchema` 400s on an `end` beyond "today + 1 day"
+ * (`packages/shared/src/schemas/performance.ts`), so a hardcoded year-end
+ * date would break once run on a date inside that same year.
+ */
+function performanceUrlForYear(): string {
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const yearEnd = `${YEAR}-12-31`;
+  const end = new Date(tomorrow) < new Date(yearEnd) ? tomorrow : yearEnd;
+  return `/performance?granularity=year&start=${YEAR}-01-01&end=${end}&tz=UTC`;
+}
+
+async function setTaxJurisdiction(
+  req: APIRequestContext,
+  taxJurisdiction: 'US' | 'CA',
+): Promise<void> {
+  const res = await req.patch('/api/users/me/tax-jurisdiction', { data: { taxJurisdiction } });
+  expect(res.status(), `PATCH tax-jurisdiction ${taxJurisdiction}`).toBe(200);
+}
+
 async function createExchangeRate(
   req: APIRequestContext,
   base: string,
@@ -225,6 +246,61 @@ async function createClosedPosition(
   );
 
   return { positionId: position.id };
+}
+
+interface TwoLotInput {
+  accountId: string;
+  symbol: string;
+  lot1: { price: string; quantity: string; filledAt: string };
+  lot2: { price: string; quantity: string; filledAt: string };
+}
+
+/**
+ * An open (not closed) long stock position with two entry fills — two lots,
+ * no exit yet. Task 15's picker/FIFO-switch scenario drives the exit itself
+ * through the dialog, so only the entries (never the exit or its selection)
+ * are seeded here.
+ */
+async function createOpenPositionWithTwoLots(
+  req: APIRequestContext,
+  input: TwoLotInput,
+): Promise<{ positionId: string; lot1FillId: string; lot2FillId: string }> {
+  const posRes = await req.post('/api/positions', {
+    data: { accountId: input.accountId, symbol: input.symbol, side: 'long', assetType: 'stock' },
+  });
+  expect(posRes.status(), 'POST /positions').toBe(201);
+  const position = (await posRes.json()) as { id: string };
+
+  const entry1Res = await req.post(`/api/positions/${position.id}/fills`, {
+    data: {
+      type: 'entry',
+      price: input.lot1.price,
+      quantity: input.lot1.quantity,
+      fees: '0.00',
+      filledAt: input.lot1.filledAt,
+    },
+  });
+  expect(entry1Res.status(), 'POST entry fill (lot1)').toBe(201);
+  const entry1 = (await entry1Res.json()) as { id: string };
+
+  const openRes = await req.post(`/api/positions/${position.id}/open`, {
+    data: { openedAt: input.lot1.filledAt },
+  });
+  expect(openRes.status(), 'POST /positions/:id/open').toBe(200);
+
+  const entry2Res = await req.post(`/api/positions/${position.id}/fills`, {
+    data: {
+      type: 'entry',
+      price: input.lot2.price,
+      quantity: input.lot2.quantity,
+      fees: '0.00',
+      filledAt: input.lot2.filledAt,
+    },
+  });
+  expect(entry2Res.status(), 'POST entry fill (lot2)').toBe(201);
+  const entry2 = (await entry2Res.json()) as { id: string };
+
+  return { positionId: position.id, lot1FillId: entry1.id, lot2FillId: entry2.id };
 }
 
 /**
@@ -613,5 +689,232 @@ test.describe('Expenses-tax — multi-currency tax summary missing rate', () => 
     await expect(enterRate.first()).toBeVisible();
     const href = await enterRate.first().getAttribute('href');
     expect(href).toMatch(/\/settings\/profile\?base=GBP&quote=USD/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 6 — Lot picker specific-identification and the FIFO switch
+// (task 15, design Testing Strategy > End-to-end; AC 4.1, 4.2, 5.8, 5.9, 8.1,
+// 8.3)
+// ---------------------------------------------------------------------------
+
+test.describe('Expenses-tax — lot picker specific identification and FIFO switch', () => {
+  test.beforeEach(async ({ page }) => {
+    await ensureStackOrSkip(page.request);
+  });
+
+  test('picking the second lot shows its basis and term; switching to FIFO spans both lots; realised P&L is unchanged', async ({
+    page,
+  }) => {
+    await registerUser(page.request, 'lots');
+    const account = await createAccount(page.request, 'USD Account', 'USD');
+    await setDisplayCurrency(page.request, 'USD');
+    await setTaxJurisdiction(page.request, 'US');
+
+    const { positionId, lot1FillId, lot2FillId } = await createOpenPositionWithTwoLots(
+      page.request,
+      {
+        accountId: account.id,
+        symbol: 'LOTS',
+        lot1: { price: '100', quantity: '5', filledAt: `${YEAR}-01-05T14:00:00.000Z` },
+        lot2: { price: '110', quantity: '15', filledAt: `${YEAR}-02-05T14:00:00.000Z` },
+      },
+    );
+
+    await page.goto(`/positions/${positionId}`);
+    await expect(page.getByRole('button', { name: 'Add Fill' })).toBeVisible();
+
+    // --- Record a partial exit (10 of 20 open), picking only the second lot. ---
+    await page.getByRole('button', { name: 'Add Fill' }).click();
+    const addDialog = page.getByRole('dialog');
+    await expect(addDialog.getByRole('heading', { name: 'Add Fill' })).toBeVisible();
+
+    await addDialog.getByRole('combobox').first().click();
+    await page.getByRole('option', { name: 'Exit' }).click();
+
+    await addDialog.getByLabel('Price').fill('130');
+    await addDialog.getByLabel('Quantity').fill('10');
+    await addDialog.getByLabel('Date & Time').fill(`${YEAR}-03-05T14:00`);
+
+    // AC 4.1 — the picker offers FIFO (preselected) and Pick lots for a FIFO
+    // exit with two available lots.
+    const fifoBtn = addDialog.getByRole('button', { name: 'FIFO', exact: true });
+    const pickBtn = addDialog.getByRole('button', { name: 'Pick lots' });
+    await expect(fifoBtn).toBeVisible();
+    await expect(fifoBtn).toHaveAttribute('aria-pressed', 'true');
+    await expect(pickBtn).toHaveAttribute('aria-pressed', 'false');
+    await pickBtn.click();
+
+    // AC 4.2 — each lot row shows its open date, price, available quantity
+    // and (US) its term. The row is four `<span>`s in that order (open date,
+    // price, available, term) — see LotPicker.tsx — so index each one
+    // directly rather than substring-matching the whole row, which would
+    // pass on a coincidental digit overlap between columns. Price and
+    // available quantity render as fixed-point decimals (e.g. "100.00000000"),
+    // so match the leading digits rather than the exact string.
+    const lot1Row = addDialog.getByTestId(`lot-row-${lot1FillId}`);
+    const lot2Row = addDialog.getByTestId(`lot-row-${lot2FillId}`);
+    const lot1Cells = lot1Row.locator('span');
+    const lot2Cells = lot2Row.locator('span');
+    await expect(lot1Cells.nth(0)).toHaveText(`${YEAR}-01-05T14:00:00.000Z`);
+    await expect(lot1Cells.nth(1)).toContainText('100');
+    await expect(lot1Cells.nth(2)).toContainText('5');
+    await expect(lot1Cells.nth(3)).toHaveText(/short|long/);
+    await expect(lot2Cells.nth(0)).toHaveText(`${YEAR}-02-05T14:00:00.000Z`);
+    await expect(lot2Cells.nth(1)).toContainText('110');
+    await expect(lot2Cells.nth(2)).toContainText('15');
+    await expect(lot2Cells.nth(3)).toHaveText(/short|long/);
+
+    await lot2Row.getByLabel('Quantity from this lot').fill('10');
+    await expect(addDialog.getByTestId('lot-picker-difference')).toContainText('Picked 10 of 10');
+
+    await addDialog.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(addDialog).toHaveCount(0);
+
+    // --- The tax summary shows exactly one row, for the picked (second)
+    // lot — the position's only exit so far (AC 4.1/4.2/5.8). ---
+    await page.goto('/accounting/tax-summary');
+    await expect(page.getByRole('heading', { name: 'Tax Summary' })).toBeVisible();
+    await page.getByText(/Lot realisations \(\d+\)/).click();
+
+    const lotTable = page
+      .getByRole('table')
+      .filter({ has: page.getByRole('columnheader', { name: 'Lot opened' }) });
+    await expect(lotTable.getByRole('row')).toHaveCount(2); // header + 1 data row
+    const pickedRow = lotTable.getByRole('row').filter({ hasText: `${YEAR}-02-05T14:00:00.000Z` });
+    await expect(pickedRow).toHaveCount(1);
+    await expect(pickedRow.locator('td').nth(3)).toHaveText('10');
+    await expect(pickedRow.locator('td').last()).toContainText(/short|long/);
+
+    // --- An UNRELATED closed position, so the Performance page has
+    // something to total — the switch below touches only the still-open
+    // LOTS position, so this figure is the AC 8.1 control: unaffected by a
+    // lot-selection edit on a position it has nothing to do with. (The
+    // LOTS position itself cannot be closed for this scenario: closing it
+    // would force both lots to zero available quantity, which collapses
+    // the edit dialog to AC 4.6's "fewer than two available" branch instead
+    // of the one this scenario exercises — AC 4.1/4.2's own 2-lot-available
+    // picker needs genuine open, unclaimed quantity on both lots.) ---
+    await createClosedPosition(page.request, {
+      accountId: account.id,
+      symbol: 'PERF',
+      side: 'long',
+      entryPrice: '200',
+      exitPrice: '210',
+      quantity: '5',
+      entryAt: `${YEAR}-05-01T14:00:00.000Z`,
+      exitAt: `${YEAR}-05-10T14:00:00.000Z`,
+      fees: '0.00',
+    });
+
+    // --- Capture realised P&L before the switch (AC 8.1). ---
+    await page.goto(`/positions/${positionId}`);
+    const netPnlCard = page
+      .locator('[data-slot="card"]')
+      .filter({ has: page.getByText('Net P&L', { exact: true }) });
+    const netPnlTextBefore = await netPnlCard.innerText();
+
+    await page.goto(performanceUrlForYear());
+    const totalNetPnlBefore = await page.getByTestId('stat-Total Net P&L').innerText();
+
+    await page.goto('/accounting/tax-summary');
+    await page.getByText(/Lot realisations \(\d+\)/).click();
+    const rowCountBefore = await lotTable.getByRole('row').count();
+
+    // --- Edit the picked exit and switch it to FIFO (AC 3.8, AC 4.6). ---
+    await page.goto(`/positions/${positionId}`);
+    const pickedExitRow = page.getByRole('row').filter({ hasText: 'exit' });
+    await pickedExitRow.getByRole('button', { name: '⋯' }).click();
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+
+    const editDialog = page.getByRole('dialog');
+    await expect(editDialog.getByRole('heading', { name: 'Edit Fill' })).toBeVisible();
+    // AC 4.6 — the edit dialog opens already in pick mode with the stored
+    // selection shown.
+    await expect(editDialog.getByRole('button', { name: 'Pick lots' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await editDialog.getByRole('button', { name: 'FIFO', exact: true }).click();
+    await editDialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(editDialog).toHaveCount(0);
+
+    // --- The tax summary gains exactly one row: the edited exit now spans
+    // both lots instead of just the second — two rows, each keyed to its own
+    // lot's open date and each carrying its own term (AC 5.9). ---
+    await page.goto('/accounting/tax-summary');
+    await page.getByText(/Lot realisations \(\d+\)/).click();
+    await expect(lotTable.getByRole('row')).toHaveCount(rowCountBefore + 1);
+    const lot1RowAfterSwitch = lotTable
+      .getByRole('row')
+      .filter({ hasText: `${YEAR}-01-05T14:00:00.000Z` });
+    const lot2RowAfterSwitch = lotTable
+      .getByRole('row')
+      .filter({ hasText: `${YEAR}-02-05T14:00:00.000Z` });
+    await expect(lot1RowAfterSwitch).toHaveCount(1);
+    await expect(lot2RowAfterSwitch).toHaveCount(1);
+    await expect(lot1RowAfterSwitch.locator('td').last()).toContainText(/short|long/);
+    await expect(lot2RowAfterSwitch.locator('td').last()).toContainText(/short|long/);
+
+    // --- Realised P&L is unchanged by the switch (AC 8.1). ---
+    await page.goto(`/positions/${positionId}`);
+    await expect(netPnlCard).toBeVisible();
+    expect(await netPnlCard.innerText()).toBe(netPnlTextBefore);
+
+    await page.goto(performanceUrlForYear());
+    const totalNetPnlLocator = page.getByTestId('stat-Total Net P&L');
+    await expect(totalNetPnlLocator).toBeVisible();
+    expect(await totalNetPnlLocator.innerText()).toBe(totalNetPnlBefore);
+
+    // --- The tax summary states the journal/ledger/performance figure (AC 8.3). ---
+    await page.goto('/accounting/tax-summary');
+    await expect(
+      page.getByText(
+        'Figures use FIFO lots. The journal, ledger and performance use average cost.',
+      ),
+    ).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 7 — CA default sees average-cost totals and no lot table
+// (task 15, design Testing Strategy > End-to-end; AC 6.3)
+// ---------------------------------------------------------------------------
+
+test.describe('Expenses-tax — CA default average-cost tax summary', () => {
+  test.beforeEach(async ({ page }) => {
+    await ensureStackOrSkip(page.request);
+  });
+
+  test('a CA user on the default sees average-cost totals equal to the ledger figure and no lot table', async ({
+    page,
+  }) => {
+    await registerUser(page.request, 'ca-lots');
+    const account = await createAccount(page.request, 'USD Account', 'USD');
+    await setDisplayCurrency(page.request, 'USD');
+    await setTaxJurisdiction(page.request, 'CA');
+
+    // gross = (60 - 50) * 10 = 100; fees = 1.00 + 1.00 = 2.00; net = 98.00.
+    await createClosedPosition(page.request, {
+      accountId: account.id,
+      symbol: 'CAAVG',
+      side: 'long',
+      entryPrice: '50',
+      exitPrice: '60',
+      quantity: '10',
+      entryAt: `${YEAR}-02-01T14:00:00.000Z`,
+      exitAt: `${YEAR}-02-20T14:00:00.000Z`,
+      fees: '1.00',
+    });
+
+    await page.goto('/accounting/tax-summary');
+    await expect(page.getByRole('heading', { name: 'Tax Summary' })).toBeVisible();
+
+    await expect(
+      page.getByText('Realised P&L', { exact: true }).locator('..').getByText('$98.00'),
+    ).toBeVisible();
+    await expect(page.getByText(/Lot realisations/)).toHaveCount(0);
+    await expect(page.getByText('Short-term', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Long-term', { exact: true })).toHaveCount(0);
   });
 });

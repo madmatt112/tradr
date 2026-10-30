@@ -22,6 +22,7 @@ import {
   ArchiveFillSchema,
   ArchiveImagePartSchema,
   ArchiveLedgerEntrySchema,
+  ArchiveLotSelectionSchema,
   ArchiveManifestSchema,
   ArchiveMessageSchema,
   ArchivePersonaSchema,
@@ -173,6 +174,10 @@ const rows = {
       createdAt: TS,
     },
   },
+  lotSelection: {
+    schema: ArchiveLotSelectionSchema,
+    value: { exitFillId: U(5), entryFillId: U(6), quantity: '5.00000000' },
+  },
   positionTag: { schema: ArchivePositionTagSchema, value: { positionId: U(4), tagId: U(3) } },
   positionImage: {
     schema: ArchivePositionImageSchema,
@@ -294,12 +299,16 @@ const rows = {
 
 describe('account-archive contract constants', () => {
   it('freezes the version, entry order and caps', () => {
-    expect(ARCHIVE_VERSION).toBe(2);
+    expect(ARCHIVE_VERSION).toBe(3);
     expect(ARCHIVE_ENTRY_ORDER[0]).toBe('manifest.json');
     expect(ARCHIVE_ENTRY_ORDER).toContain('dashboard-layout.json');
     // rules.ndjson sits directly after tags.ndjson (design C8).
     expect(ARCHIVE_ENTRY_ORDER.indexOf('rules.ndjson')).toBe(
       ARCHIVE_ENTRY_ORDER.indexOf('tags.ndjson') + 1,
+    );
+    // lot-selections.ndjson sits directly after fills.ndjson (design C12).
+    expect(ARCHIVE_ENTRY_ORDER.indexOf('lot-selections.ndjson')).toBe(
+      ARCHIVE_ENTRY_ORDER.indexOf('fills.ndjson') + 1,
     );
     expect(Object.keys(ARCHIVE_CAPS)).toHaveLength(10);
     expect(ARCHIVE_CAPS.maxUploadBytes).toBe(536_870_912);
@@ -470,5 +479,38 @@ describe('dashboard layout entry', () => {
         theme: 'dark',
       }).success,
     ).toBe(false);
+  });
+});
+
+// Design C12 (AC 9.1) — the version-3 archive additions: the lot-selections
+// count, the taxLotMethod preference and the widened manifest version union.
+describe('archive version 3 additions (design C12, AC 9.1)', () => {
+  it('ArchiveCountsSchema accepts an explicit lotSelections count', () => {
+    expect(ArchiveCountsSchema.safeParse({ ...counts, lotSelections: 3 }).success).toBe(true);
+    expect(ArchiveCountsSchema.safeParse({ ...counts, lotSelections: -1 }).success).toBe(false);
+  });
+
+  it('ArchivePreferencesSchema accepts a fifo/average/null taxLotMethod and rejects an invalid one', () => {
+    expect(
+      ArchivePreferencesSchema.safeParse({ ...rows.preferences.value, taxLotMethod: 'fifo' })
+        .success,
+    ).toBe(true);
+    expect(
+      ArchivePreferencesSchema.safeParse({ ...rows.preferences.value, taxLotMethod: 'average' })
+        .success,
+    ).toBe(true);
+    expect(
+      ArchivePreferencesSchema.safeParse({ ...rows.preferences.value, taxLotMethod: null }).success,
+    ).toBe(true);
+    expect(
+      ArchivePreferencesSchema.safeParse({ ...rows.preferences.value, taxLotMethod: 'lifo' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('ArchiveManifestSchema accepts archiveVersion 3', () => {
+    expect(
+      ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 3 }).success,
+    ).toBe(true);
   });
 });

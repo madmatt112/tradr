@@ -108,6 +108,14 @@ export const UpdateTaxJurisdictionInputSchema = z
   })
   .strict();
 
+export const LotMethodEnum = z.enum(['fifo', 'average']);
+
+export const UpdateTaxLotMethodInputSchema = z
+  .object({
+    taxLotMethod: LotMethodEnum.nullable(),
+  })
+  .strict();
+
 // Fee-rollup response — encodes `requirements.md` §3.1 verbatim. Decimal
 // fields are plain `z.string()` (NOT `positiveDecimal4`) because the server
 // emits raw `Decimal.toFixed(...)` strings and future surfaces may carry
@@ -158,22 +166,47 @@ export const FeeRollupResponseSchema = z
   })
   .strict();
 
-// Wash-sale / superficial-loss flag rows. Carried in
-// `TaxSummaryResponseSchema.flags`. Reason is a closed enum — the task block
-// pins the two possible v1 values.
+// Wash-sale / superficial-loss flag rows (design C9 / Data Models). Carried
+// in `TaxSummaryResponseSchema.flags`. Reason is a closed enum — the task
+// block pins the two possible v1 values. `lossRowId` is `exitFillId:entryFillId`
+// under FIFO, `positionId:currency` under average cost — not itself a uuid.
 export const WashSaleFlag = z.object({
+  lossRowId: z.string(),
   positionId: z.string().uuid(),
   symbol: z.string(),
   underlying: z.string().nullable(),
   side: z.enum(['long', 'short']),
   openedAt: z.string(),
-  closedAt: z.string(),
+  closedAt: z.string().nullable(),
+  realisedAt: z.string(),
+  lotEntryFillId: z.string().uuid().nullable(),
+  lotOpenedAt: z.string().nullable(),
   realisedLoss: z.string(),
   reason: z.enum(['repurchase_within_30_days', 'held_open_in_30d_window']),
   counterpartyPositionIds: z.array(z.string().uuid()),
+  counterpartyLotIds: z.array(z.string().uuid()),
 });
 
 export const SuperficialLossFlag = WashSaleFlag;
+
+// FIFO lot-realisation row (design C8 / Data Models). One row per (exit fill,
+// lot) pair; the stable row id client-side is `exitFillId:entryFillId`.
+export const LotRealisationRowSchema = z.object({
+  exitFillId: z.string().uuid(),
+  entryFillId: z.string().uuid(),
+  positionId: z.string().uuid(),
+  accountId: z.string().uuid(),
+  symbol: z.string(),
+  currency: z.string().length(3),
+  lotOpenedAt: z.string(),
+  realisedAt: z.string(),
+  quantity: z.string(),
+  proceeds: z.string(),
+  basis: z.string(),
+  fees: z.string(),
+  net: z.string(),
+  term: z.enum(['short', 'long']).nullable(),
+});
 
 // Tax-summary response — encodes `requirements.md` §4.1 verbatim.
 // MUST NOT include `netTaxableIncome` or any recorded-fee field (Req 4.1
@@ -183,6 +216,7 @@ export const TaxSummaryResponseSchema = z
   .object({
     year: z.number().int(),
     jurisdiction: TaxJurisdictionEnum,
+    lotMethod: LotMethodEnum,
     displayCurrency: z.string().length(3).nullable(),
     realisedPnl: z.object({
       total: z.string().nullable(),
@@ -215,6 +249,7 @@ export const TaxSummaryResponseSchema = z
       washSales: z.array(WashSaleFlag),
       superficialLosses: z.array(SuperficialLossFlag),
     }),
+    lotRealisations: z.array(LotRealisationRowSchema),
     missingRates: z.array(
       z.object({
         base: z.string().length(3),
@@ -245,3 +280,5 @@ export type FeeRollupResponse = z.infer<typeof FeeRollupResponseSchema>;
 export type TaxSummaryResponse = z.infer<typeof TaxSummaryResponseSchema>;
 export type WashSaleFlag = z.infer<typeof WashSaleFlag>;
 export type SuperficialLossFlag = z.infer<typeof SuperficialLossFlag>;
+export type LotRealisationRow = z.infer<typeof LotRealisationRowSchema>;
+export type LotMethod = z.infer<typeof LotMethodEnum>;

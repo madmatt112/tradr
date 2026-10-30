@@ -10,6 +10,7 @@ import {
   TaxSummaryResponseSchema,
   UpdateExpenseInputSchema,
   UpdateTaxJurisdictionInputSchema,
+  UpdateTaxLotMethodInputSchema,
 } from '@tradr/shared/schemas/expense';
 
 import { db } from '@/db';
@@ -21,10 +22,12 @@ import { getUserTaxJurisdiction } from './expenses.query';
 import {
   createExpense,
   getFeeRollup,
+  getTaxLotMethod,
   getTaxSummary,
   listExpensesForUser,
   removeExpense,
   setTaxJurisdiction,
+  setTaxLotMethod,
   updateExpense,
 } from './expenses.service';
 
@@ -72,6 +75,14 @@ const YearQuerySchema = z.object({
 
 const TaxJurisdictionResponseSchema = z
   .object({ taxJurisdiction: z.enum(['US', 'CA', 'other']).nullable() })
+  .strict();
+
+const TaxLotMethodResponseSchema = z
+  .object({
+    taxLotMethod: z.enum(['fifo', 'average']).nullable(),
+    effectiveMethod: z.enum(['fifo', 'average']),
+    isDefault: z.boolean(),
+  })
   .strict();
 
 // ---------------------------------------------------------------------------
@@ -345,6 +356,12 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *       depends on rules Tradr does not model.
  *
  *
+ *       Under the FIFO lot method, `realisedPnl` is computed from matched lots
+ *       and `lotRealisations` carries one row per (exit fill, lot) pair, each
+ *       with its own term for `US`. Under average cost, `lotRealisations` is
+ *       empty and the figures are the pooled per-position totals, as today.
+ *
+ *
  *       This is a reporting aid, not tax advice, and it is not a filing.
  *     tags: [Expenses]
  *     parameters:
@@ -362,12 +379,33 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *               properties:
  *                 year: { type: integer }
  *                 jurisdiction: { type: string, enum: [US, CA, other], nullable: true }
+ *                 lotMethod: { type: string, enum: [fifo, average] }
  *                 displayCurrency: { type: string, nullable: true }
  *                 realisedPnl: { type: object }
  *                 trackedExpenses: { type: object }
  *                 flags:
  *                   type: object
- *                   description: Wash sales (US) or superficial losses (CA), with the counterparty positions.
+ *                   description: Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots.
+ *                 lotRealisations:
+ *                   type: array
+ *                   description: One row per (exit fill, lot) pair under FIFO; empty under average cost.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       exitFillId: { type: string, format: uuid }
+ *                       entryFillId: { type: string, format: uuid }
+ *                       positionId: { type: string, format: uuid }
+ *                       accountId: { type: string, format: uuid }
+ *                       symbol: { type: string }
+ *                       currency: { type: string }
+ *                       lotOpenedAt: { type: string, format: date-time }
+ *                       realisedAt: { type: string, format: date-time }
+ *                       quantity: { type: string, description: Decimal. }
+ *                       proceeds: { type: string, description: Decimal. }
+ *                       basis: { type: string, description: Decimal. }
+ *                       fees: { type: string, description: Decimal. }
+ *                       net: { type: string, description: Decimal. }
+ *                       term: { type: string, enum: [short, long], nullable: true }
  *       400: { description: Missing or invalid year. }
  */
 expensesRouter.get('/expenses/tax-summary', validate('query', YearQuerySchema), async (c) => {
@@ -447,6 +485,79 @@ expensesRouter.patch(
       TaxJurisdictionResponseSchema,
       { taxJurisdiction: stored },
       'PATCH /users/me/tax-jurisdiction',
+    );
+    return c.json(body, 200);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// /users/me/tax-lot-method
+// ---------------------------------------------------------------------------
+
+/**
+ * @swagger
+ * /api/users/me/tax-lot-method:
+ *   get:
+ *     summary: Get the tax lot method.
+ *     description: >
+ *       Authed. The effective method is the stored value if one is set,
+ *       otherwise the jurisdiction default (average cost for CA, FIFO
+ *       otherwise).
+ *     tags: [Expenses]
+ *     responses:
+ *       200:
+ *         description: The stored and effective lot method.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 taxLotMethod: { type: string, enum: [fifo, average], nullable: true }
+ *                 effectiveMethod: { type: string, enum: [fifo, average] }
+ *                 isDefault: { type: boolean }
+ */
+expensesRouter.get('/users/me/tax-lot-method', async (c) => {
+  const userId = c.get('userId');
+  const result = await getTaxLotMethod(userId);
+  const body = assertResponse(TaxLotMethodResponseSchema, result, 'GET /users/me/tax-lot-method');
+  return c.json(body, 200);
+});
+
+/**
+ * @swagger
+ * /api/users/me/tax-lot-method:
+ *   patch:
+ *     summary: Set the tax lot method.
+ *     description: >
+ *       Authed. `fifo` or `average` overrides the jurisdiction default;
+ *       `null` returns to it. Changes only the stored method — no fill,
+ *       lot choice or ledger row changes.
+ *     tags: [Expenses]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [taxLotMethod]
+ *             properties:
+ *               taxLotMethod: { type: string, enum: [fifo, average], nullable: true }
+ *     responses:
+ *       200: { description: The stored and effective lot method. }
+ *       400: { description: Validation error. }
+ */
+expensesRouter.patch(
+  '/users/me/tax-lot-method',
+  validate('json', UpdateTaxLotMethodInputSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { taxLotMethod } = c.req.valid('json');
+    await setTaxLotMethod(userId, taxLotMethod);
+    const result = await getTaxLotMethod(userId);
+    const body = assertResponse(
+      TaxLotMethodResponseSchema,
+      result,
+      'PATCH /users/me/tax-lot-method',
     );
     return c.json(body, 200);
   },

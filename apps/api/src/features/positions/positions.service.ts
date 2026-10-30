@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits, parseOccSymbol, type Tag } from '@tradr/shared';
 import { classifyPosition } from '@tradr/shared/lib/performance';
+import { resolveLotMethod } from '@tradr/shared/lib/tax-lots';
 
 import type { Database, Transaction } from '@/db';
 import {
@@ -10,6 +11,7 @@ import {
   resolveWritableAccountId,
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
+import { getUserTaxSettings } from '@/features/expenses/expenses.query';
 import { findTagsByPosition } from '@/features/tags/tags.query';
 import { getPositionCompliance } from '@/features/trading-rules/compliance.service';
 import {
@@ -20,10 +22,21 @@ import {
   HookAlreadyRegisteredError,
   InvariantViolationError,
 } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
 
-import { insertFill, findFillById, updateFill, deleteFill } from './fills.query';
+import {
+  insertFill,
+  findFillById,
+  updateFill,
+  deleteFill,
+  insertLotSelections,
+  deleteLotSelectionsForExit,
+  findLotSelectionsByPosition,
+} from './fills.query';
+import { matchExitsToLots, orderFills, availableByLot } from './lots';
+import type { LotConflict, LotFill, LotSlice } from './lots';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import type { FillTotals } from './pnl';
 import { findPositionImagesByPosition } from './position-images.query';
@@ -641,13 +654,29 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   // (Requirement 6.1). Scoring never fails the read — a throw returns unscored.
   const compliance = await getPositionCompliance(db, userId, position.id, position.status);
 
+  // Stored selections for this position's fills (design C6, Requirement 3.14):
+  // one query for the whole detail read, not one per fill. Grouped by exit
+  // fill id so each fill below picks up its own array, or null for an entry
+  // or an unselected exit.
+  const selectionRows = await findLotSelectionsByPosition(db, position.id);
+  const selectionsByExit = new Map<string, { entryFillId: string; quantity: string }[]>();
+  for (const row of selectionRows) {
+    const items = selectionsByExit.get(row.exitFillId) ?? [];
+    items.push({ entryFillId: row.entryFillId, quantity: row.quantity });
+    selectionsByExit.set(row.exitFillId, items);
+  }
+  const fillsWithSelection = fillRows.map((f) => ({
+    ...f,
+    lotSelection: selectionsByExit.get(f.id) ?? null,
+  }));
+
   const detail = {
     ...position,
     // Account timezone defines the trading day the client uses to decide
     // whether a closed position may be reopened (R13 same-day rule). Surfaced
     // here so the frontend need not duplicate or guess the account's zone.
     accountTimezone,
-    fills: fillRows,
+    fills: fillsWithSelection,
     // Category-then-name ordered tag set; `[]` when the position carries none.
     tags,
     // Screenshots in creation order; `[]` when the position carries none.
@@ -674,6 +703,66 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   };
 
   return compliance === undefined ? detail : { ...detail, compliance };
+}
+
+/**
+ * Lots read for the specific-identification picker (design C7). `exitFillId`,
+ * when given, must be an exit of this position; its own slices are added
+ * back into `available` so the dialog sees what that exit currently holds
+ * (design D11). A stored-selection conflict is logged and the match falls
+ * back to plain FIFO rather than failing the read (design D8, Error Handling
+ * item 6, NFR Reliability).
+ */
+export async function listPositionLots(
+  db: Database,
+  positionId: string,
+  userId: string,
+  exitFillId?: string,
+) {
+  const positionRows = await findPositionById(db, positionId, userId);
+  if (positionRows.length === 0) {
+    throw new NotFoundError('Position', positionId);
+  }
+
+  const fills = await loadLotFills(db, positionId);
+  if (exitFillId && !fills.some((f) => f.id === exitFillId && f.type === 'exit')) {
+    throw new NotFoundError('Fill', exitFillId);
+  }
+
+  const selections = await findLotSelectionsByPosition(db, positionId);
+  const matched = matchExitsToLots(fills, selections);
+  let slices: LotSlice[];
+  if (matched.ok) {
+    slices = matched.slices;
+  } else {
+    logger.warn('tax_lot_selection_invalid', {
+      event: 'tax_lot_selection_invalid',
+      positionId,
+      conflict: matched.conflict,
+    });
+    const fallback = matchExitsToLots(fills, []);
+    slices = fallback.ok ? fallback.slices : [];
+  }
+
+  const availability = availableByLot(fills, slices, exitFillId);
+  const availableByEntry = new Map(availability.map((a) => [a.entryFillId, a.available]));
+
+  const lots = orderFills(fills.filter((f) => f.type === 'entry')).map((entry) => ({
+    entryFillId: entry.id,
+    filledAt: entry.filledAt.toISOString(),
+    price: entry.price,
+    quantity: entry.quantity,
+    available: (availableByEntry.get(entry.id) ?? new Decimal(0)).toString(),
+  }));
+
+  const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
+  const { method } = resolveLotMethod(taxLotMethod, taxJurisdiction);
+
+  return {
+    method,
+    jurisdiction: taxJurisdiction ?? 'other',
+    lots,
+  };
 }
 
 export async function editPosition(
@@ -1025,6 +1114,11 @@ export async function reopenPositionTx(
 
 // --- Fill operations ---
 
+export interface LotSelectionItemInput {
+  entryFillId: string;
+  quantity: string;
+}
+
 export async function addFill(
   db: Database,
   positionId: string,
@@ -1036,6 +1130,7 @@ export async function addFill(
     fees: string;
     notes?: string | null;
     filledAt: string;
+    lotSelection?: LotSelectionItemInput[];
   },
 ) {
   const { fill, closed } = await withTransaction(db, async (tx) => {
@@ -1100,7 +1195,13 @@ export async function addFill(
   // not noticing at all. The web app publishes its own 'closed' event off this
   // flag, which is what keeps a balance-derived view (and the guided
   // walkthrough's close step) in step with a position that closed itself.
-  return { ...fill, positionClosed: closed !== null };
+  return {
+    ...fill,
+    positionClosed: closed !== null,
+    // The selection just validated and written (design C6) — already in hand
+    // from the request, so the response needs no extra read.
+    lotSelection: data.lotSelection ?? null,
+  };
 }
 
 // Tx-accepting variant — runs directly on the passed tx (no re-wrap / savepoint).
@@ -1115,6 +1216,7 @@ export async function addFillTx(
     fees: string;
     notes?: string | null;
     filledAt: string;
+    lotSelection?: LotSelectionItemInput[];
   },
 ) {
   const lockRows = await findPositionForUpdate(tx, positionId, userId);
@@ -1147,6 +1249,56 @@ export async function addFillTx(
     }
   }
 
+  // Lot selection (design C5 write steps 1-4, 8): a write that cannot
+  // conflict — an entry fill, or an exit carrying no selection — skips every
+  // extra query (step 8), which is what keeps CSV import and the demo seed
+  // paying nothing for this.
+  let slicesBefore: LotSlice[] | undefined;
+  if (data.lotSelection) {
+    // Step 1: shape faults are ValidationErrors.
+    if (data.type !== 'exit') {
+      throw new ValidationError('Lot selection is only allowed on an exit fill');
+    }
+    const seenEntryIds = new Set<string>();
+    for (const item of data.lotSelection) {
+      if (seenEntryIds.has(item.entryFillId)) {
+        throw new ValidationError(`Lot selection repeats entry fill ${item.entryFillId}`);
+      }
+      seenEntryIds.add(item.entryFillId);
+    }
+    if (position.asset_type === 'option') {
+      for (const item of data.lotSelection) {
+        if (!isWholeContracts(item.quantity)) {
+          throw new ValidationError('Lot selection quantity must be a whole number');
+        }
+      }
+    }
+
+    const existingFills = await loadLotFills(tx, positionId);
+
+    // Step 2: every entryFillId must be an entry of THIS position, checked
+    // before any insert so a foreign id is refused without ever being
+    // resolved (NFR Security, AC 3.5).
+    const entryIds = new Set(existingFills.filter((f) => f.type === 'entry').map((f) => f.id));
+    for (const item of data.lotSelection) {
+      if (!entryIds.has(item.entryFillId)) {
+        throw new ConflictError(`Entry fill ${item.entryFillId} is not an entry of this position`);
+      }
+    }
+
+    // Step 3: item quantities must sum to the exit quantity.
+    const sum = data.lotSelection.reduce((acc, item) => acc.plus(item.quantity), new Decimal(0));
+    if (!sum.equals(data.quantity)) {
+      throw new ConflictError(
+        `Lot selection quantities sum to ${sum.toString()} but the exit quantity is ${data.quantity}`,
+      );
+    }
+
+    const existingSelections = await findLotSelectionsByPosition(tx, positionId);
+    const before = matchExitsToLots(existingFills, existingSelections);
+    slicesBefore = before.ok ? before.slices : [];
+  }
+
   const rows = await insertFill(tx, {
     positionId,
     type: data.type,
@@ -1156,6 +1308,17 @@ export async function addFillTx(
     notes: data.notes,
     filledAt: new Date(data.filledAt),
   });
+  const inserted = rows[0]!;
+
+  if (data.lotSelection) {
+    // Step 4: write the selection rows, then check the full position. A
+    // throw here rolls back the fill and the selection rows with it.
+    await insertLotSelections(tx, inserted.id, data.lotSelection);
+    await assertLotSelectionsTx(tx, positionId, {
+      writtenExitFillId: inserted.id,
+      slicesBefore,
+    });
+  }
 
   // Post the realized-P&L delta for this fill (Req 9.9). Deliberately on the
   // INNER tx variant, not `addFill`: the bulk importers (csv-import, demo seed)
@@ -1163,7 +1326,91 @@ export async function addFillTx(
   // every imported trade unposted.
   await runFillHooks(tx, positionId, userId, new Date(data.filledAt));
 
-  return rows[0];
+  return inserted;
+}
+
+async function loadLotFills(db: Database | Transaction, positionId: string): Promise<LotFill[]> {
+  const rows = await findFillsByPosition(db, positionId);
+  return rows.map((f) => ({
+    id: f.id,
+    type: f.type as 'entry' | 'exit',
+    price: f.price,
+    quantity: f.quantity,
+    fees: f.fees,
+    filledAt: f.filledAt,
+    createdAt: f.createdAt,
+  }));
+}
+
+function slicesByEntry(slices: LotSlice[], exitFillId: string): Map<string, Decimal> {
+  const map = new Map<string, Decimal>();
+  for (const slice of slices) {
+    if (slice.exitFillId === exitFillId) map.set(slice.entryFillId, slice.quantity);
+  }
+  return map;
+}
+
+function slicesChanged(before: Map<string, Decimal>, after: Map<string, Decimal>): boolean {
+  if (before.size !== after.size) return true;
+  for (const [entryFillId, qty] of before) {
+    const otherQty = after.get(entryFillId);
+    if (!otherQty || !otherQty.equals(qty)) return true;
+  }
+  return false;
+}
+
+function lotConflictError(conflict: LotConflict, fills: LotFill[]): ConflictError {
+  if (conflict.kind === 'over_claimed') {
+    const lot = fills.find((f) => f.id === conflict.entryFillId);
+    const openedAt = lot ? lot.filledAt.toISOString() : 'unknown';
+    return new ConflictError(
+      `Lot ${conflict.entryFillId} (opened ${openedAt}) cannot cover the quantity claimed against it by exit fill(s) ${conflict.claimingExitFillIds.join(', ')}`,
+    );
+  }
+  if (conflict.kind === 'not_an_entry') {
+    return new ConflictError(`Entry fill ${conflict.entryFillId} is not an entry of this position`);
+  }
+  if (conflict.kind === 'sum_mismatch') {
+    const exit = fills.find((f) => f.id === conflict.exitFillId);
+    return new ConflictError(
+      `Lot selection quantities do not sum to the exit quantity ${exit?.quantity ?? ''} on exit ${conflict.exitFillId}`,
+    );
+  }
+  // 'unmatched' carries no message of its own (design Error Handling item 4).
+  return new ConflictError(`Lot selection conflict on exit ${conflict.exitFillId}`);
+}
+
+/**
+ * Loads a position's fills and stored selections, re-runs the matcher, and
+ * throws a ConflictError on any matcher conflict. Given `writtenExitFillId`
+ * and `slicesBefore`, also throws if the write changed the match of any exit
+ * ordered before the written one (design C5 step 4, Error Handling item 4).
+ */
+export async function assertLotSelectionsTx(
+  tx: Transaction,
+  positionId: string,
+  opts?: { writtenExitFillId?: string; slicesBefore?: LotSlice[] },
+) {
+  const fills = await loadLotFills(tx, positionId);
+  const selections = await findLotSelectionsByPosition(tx, positionId);
+  const result = matchExitsToLots(fills, selections);
+  if (!result.ok) {
+    throw lotConflictError(result.conflict, fills);
+  }
+
+  if (opts?.writtenExitFillId && opts.slicesBefore) {
+    const ordered = orderFills(fills);
+    const writtenIndex = ordered.findIndex((f) => f.id === opts.writtenExitFillId);
+    const earlierExits =
+      writtenIndex === -1 ? [] : ordered.slice(0, writtenIndex).filter((f) => f.type === 'exit');
+    for (const exit of earlierExits) {
+      const before = slicesByEntry(opts.slicesBefore, exit.id);
+      const after = slicesByEntry(result.slices, exit.id);
+      if (slicesChanged(before, after)) {
+        throw new ConflictError(`This write would change exit fill ${exit.id}'s matched lots`);
+      }
+    }
+  }
 }
 
 export async function editFill(
@@ -1177,6 +1424,7 @@ export async function editFill(
     fees?: string;
     notes?: string | null;
     filledAt?: string;
+    lotSelection?: LotSelectionItemInput[] | null;
   },
 ) {
   return withTransaction(db, async (tx) => {
@@ -1238,6 +1486,77 @@ export async function editFill(
       }
     }
 
+    // Lot selection (design C5 write steps 5-6). A write that cannot conflict
+    // — no lotSelection field and no quantity change on this exit — runs no
+    // extra query (step 8), which is what keeps a plain price/fees/notes edit
+    // free.
+    let slicesBefore: LotSlice[] | undefined;
+    let clearSelectionForThisExit = false;
+    let replacementSelectionItems: LotSelectionItemInput[] | undefined;
+
+    if (fill.type === 'exit' && (data.lotSelection !== undefined || data.quantity !== undefined)) {
+      const positionSelections = await findLotSelectionsByPosition(tx, positionId);
+      const existingForThisExit = positionSelections.filter((s) => s.exitFillId === fillId);
+
+      if (data.lotSelection === null) {
+        // Step 5: null deletes the stored rows (AC 3.8).
+        clearSelectionForThisExit = true;
+      } else if (data.lotSelection !== undefined) {
+        // A new selection replaces the stored rows (steps 1-4, mirroring
+        // addFillTx). The post-edit quantity is the sent one, else the
+        // fill's current one.
+        const newQuantity = data.quantity ?? fill.quantity;
+
+        const seenEntryIds = new Set<string>();
+        for (const item of data.lotSelection) {
+          if (seenEntryIds.has(item.entryFillId)) {
+            throw new ValidationError(`Lot selection repeats entry fill ${item.entryFillId}`);
+          }
+          seenEntryIds.add(item.entryFillId);
+        }
+        if (position.asset_type === 'option') {
+          for (const item of data.lotSelection) {
+            if (!isWholeContracts(item.quantity)) {
+              throw new ValidationError('Lot selection quantity must be a whole number');
+            }
+          }
+        }
+
+        const existingFills = await loadLotFills(tx, positionId);
+        const entryIds = new Set(existingFills.filter((f) => f.type === 'entry').map((f) => f.id));
+        for (const item of data.lotSelection) {
+          if (!entryIds.has(item.entryFillId)) {
+            throw new ConflictError(
+              `Entry fill ${item.entryFillId} is not an entry of this position`,
+            );
+          }
+        }
+
+        const sum = data.lotSelection.reduce(
+          (acc, item) => acc.plus(item.quantity),
+          new Decimal(0),
+        );
+        if (!sum.equals(newQuantity)) {
+          throw new ConflictError(
+            `Lot selection quantities sum to ${sum.toString()} but the exit quantity is ${newQuantity}`,
+          );
+        }
+
+        const before = matchExitsToLots(existingFills, positionSelections);
+        slicesBefore = before.ok ? before.slices : [];
+        replacementSelectionItems = data.lotSelection;
+      } else if (data.quantity !== undefined && existingForThisExit.length > 0) {
+        // Step 5: undefined keeps the rows, but a quantity change on an exit
+        // with rows conflicts (AC 3.7). The same fixed message covers design
+        // D12 / Error Handling item 8 — an average-cost user gets this same
+        // 409, not a silently-cleared selection.
+        const sum = existingForThisExit.reduce((acc, s) => acc.plus(s.quantity), new Decimal(0));
+        throw new ConflictError(
+          `Lot selection quantities sum to ${sum.toString()} but the exit quantity is ${data.quantity}`,
+        );
+      }
+    }
+
     const updateData: Record<string, unknown> = {};
     if (data.price !== undefined) updateData.price = data.price;
     if (data.quantity !== undefined) updateData.quantity = data.quantity;
@@ -1245,7 +1564,29 @@ export async function editFill(
     if (data.notes !== undefined) updateData.notes = data.notes;
     if (data.filledAt !== undefined) updateData.filledAt = new Date(data.filledAt);
 
-    const rows = await updateFill(tx, fillId, positionId, updateData);
+    // A lotSelection-only edit (no fill-column field sent) leaves updateData
+    // empty — skip the DB write rather than issue an empty SET.
+    const rows =
+      Object.keys(updateData).length > 0
+        ? await updateFill(tx, fillId, positionId, updateData)
+        : [fill];
+
+    if (clearSelectionForThisExit) {
+      await deleteLotSelectionsForExit(tx, fillId);
+    } else if (replacementSelectionItems) {
+      await deleteLotSelectionsForExit(tx, fillId);
+      await insertLotSelections(tx, fillId, replacementSelectionItems);
+      await assertLotSelectionsTx(tx, positionId, {
+        writtenExitFillId: fillId,
+        slicesBefore,
+      });
+    }
+
+    // Step 6: an entry quantity edit must not leave any selected exit's claim
+    // above the lot (AC 3.6).
+    if (fill.type === 'entry' && data.quantity !== undefined) {
+      await assertLotSelectionsTx(tx, positionId);
+    }
 
     // Re-derive realized P&L (Req 9.9). A price/quantity/fee edit changes the
     // cumulative amount, and the delta rule posts the difference — a correcting
@@ -1253,7 +1594,26 @@ export async function editFill(
     // post-edit, so the ledger's time axis stays trade time rather than edit time.
     await runFillHooks(tx, positionId, userId, rows[0].filledAt);
 
-    return rows[0];
+    // The response carries the stored selection too (design C6). The clear and
+    // replace branches above already know the new value; anything else (an
+    // entry fill, or an exit this edit left untouched) reads what is actually
+    // stored now.
+    let lotSelection: { entryFillId: string; quantity: string }[] | null = null;
+    if (fill.type === 'exit') {
+      if (clearSelectionForThisExit) {
+        lotSelection = null;
+      } else if (replacementSelectionItems) {
+        lotSelection = replacementSelectionItems;
+      } else {
+        const currentSelections = await findLotSelectionsByPosition(tx, positionId);
+        const forThisExit = currentSelections
+          .filter((s) => s.exitFillId === fillId)
+          .map((s) => ({ entryFillId: s.entryFillId, quantity: s.quantity }));
+        lotSelection = forThisExit.length > 0 ? forThisExit : null;
+      }
+    }
+
+    return { ...rows[0], lotSelection };
   });
 }
 
@@ -1275,6 +1635,23 @@ export async function removeFill(db: Database, positionId: string, fillId: strin
       throw new NotFoundError('Fill', fillId);
     }
     const fill = fillRows[0];
+
+    // Step 7: an entry fill any selection row names cannot be removed — the
+    // cascade would erase the claim out from under its exit — checked before
+    // the delete (AC 3.6).
+    if (fill.type === 'entry') {
+      const positionSelections = await findLotSelectionsByPosition(tx, positionId);
+      const claimingExitFillIds = [
+        ...new Set(
+          positionSelections.filter((s) => s.entryFillId === fillId).map((s) => s.exitFillId),
+        ),
+      ];
+      if (claimingExitFillIds.length > 0) {
+        throw new ConflictError(
+          `Cannot remove entry fill: claimed by exit fill(s) ${claimingExitFillIds.join(', ')}`,
+        );
+      }
+    }
 
     if (fill.type === 'entry' && position.status === 'open') {
       const [{ total: entryTotal }] = await sumFillQuantityByType(tx, positionId, 'entry');

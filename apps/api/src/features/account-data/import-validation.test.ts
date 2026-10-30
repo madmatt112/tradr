@@ -46,6 +46,7 @@ const NDJSON_ORDER: Array<[keyof Spec, string, string]> = [
   ['rules', 'rules.ndjson', 'rules'],
   ['positions', 'positions.ndjson', 'positions'],
   ['fills', 'fills.ndjson', 'fills'],
+  ['lotSelections', 'lot-selections.ndjson', 'lot-selections'],
   ['positionTags', 'position-tags.ndjson', 'positionTags'],
   ['positionImages', 'position-images.ndjson', 'positionImages'],
   ['ledgerEntries', 'ledger-entries.ndjson', 'ledgerEntries'],
@@ -67,6 +68,7 @@ interface Spec {
   rules?: unknown[];
   positions?: unknown[];
   fills?: unknown[];
+  lotSelections?: unknown[];
   positionTags?: unknown[];
   positionImages?: unknown[];
   ledgerEntries?: unknown[];
@@ -107,9 +109,11 @@ function makeArchive(spec: Spec): Buffer {
     summaries: spec.summaries?.length ?? 0,
     images: spec.images?.length ?? 0,
   };
-  // `rules` is optional on the manifest; only declare it when the spec has rules,
-  // so a spec with none exercises the absent-count path.
+  // `rules` and `lotSelections` are optional on the manifest; only declare them
+  // when the spec carries that category, so a spec with none exercises the
+  // absent-count path.
   if (spec.rules) counts.rules = spec.rules.length;
+  if (spec.lotSelections) counts.lotSelections = spec.lotSelections.length;
   Object.assign(counts, spec.countsOverride ?? {});
 
   if (!spec.omitManifest) {
@@ -218,6 +222,12 @@ const fill = (o: Obj = {}): Obj => ({
   notes: null,
   filledAt: TS,
   createdAt: TS,
+  ...o,
+});
+const lotSelection = (o: Obj = {}): Obj => ({
+  exitFillId: rid(),
+  entryFillId: rid(),
+  quantity: '1',
   ...o,
 });
 const ledger = (o: Obj = {}): Obj => ({
@@ -347,6 +357,13 @@ const has = (
   pathIncludes?: string,
 ): boolean =>
   fields.some((f) => f.code === code && (pathIncludes ? f.path.includes(pathIncludes) : true));
+
+// Path-only check, for a case whose fault `code` is not pinned by the spec text
+// (design C12 names only the semantic check, not its code).
+const hasPath = (
+  fields: Array<{ path: string; code: string; message: string }>,
+  pathIncludes: string,
+): boolean => fields.some((f) => f.path.includes(pathIncludes));
 
 beforeAll(async () => {
   dir = await mkdtemp(nodePath.join(os.tmpdir(), 'import-validation-test-'));
@@ -643,6 +660,69 @@ describe('validateArchive — references', () => {
       preferences: preferences(),
     });
     expect(has(f, 'reference', 'fills[0].positionId')).toBe(true);
+  });
+
+  // Design C12 — the lot-selections.ndjson case: both ids must name archive
+  // fills, the exit id must be an exit, the entry id must be an entry, and both
+  // must share a position.
+  it('rejects a lot selection whose id names no archive fill', async () => {
+    const a = acct();
+    const pos = position({ accountId: a.id });
+    const entryFill = fill({ positionId: pos.id, type: 'entry' });
+    const f = await faults({
+      accounts: [a],
+      positions: [pos],
+      fills: [entryFill],
+      lotSelections: [lotSelection({ exitFillId: rid(), entryFillId: entryFill.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'lot-selections[0]')).toBe(true);
+  });
+
+  it('rejects a lot selection whose exit fill is not an exit', async () => {
+    const a = acct();
+    const pos = position({ accountId: a.id });
+    const entry1 = fill({ positionId: pos.id, type: 'entry' });
+    const entry2 = fill({ positionId: pos.id, type: 'entry' });
+    const f = await faults({
+      accounts: [a],
+      positions: [pos],
+      fills: [entry1, entry2],
+      lotSelections: [lotSelection({ exitFillId: entry1.id, entryFillId: entry2.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'lot-selections[0]')).toBe(true);
+  });
+
+  it('rejects a lot selection whose entry fill is not an entry', async () => {
+    const a = acct();
+    const pos = position({ accountId: a.id });
+    const entryFill = fill({ positionId: pos.id, type: 'entry' });
+    const exitFill = fill({ positionId: pos.id, type: 'exit' });
+    const f = await faults({
+      accounts: [a],
+      positions: [pos],
+      fills: [entryFill, exitFill],
+      lotSelections: [lotSelection({ exitFillId: exitFill.id, entryFillId: exitFill.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'lot-selections[0]')).toBe(true);
+  });
+
+  it('rejects a lot selection whose fills sit in different positions', async () => {
+    const a = acct();
+    const posA = position({ accountId: a.id });
+    const posB = position({ accountId: a.id });
+    const entryFill = fill({ positionId: posA.id, type: 'entry' });
+    const exitFill = fill({ positionId: posB.id, type: 'exit' });
+    const f = await faults({
+      accounts: [a],
+      positions: [posA, posB],
+      fills: [entryFill, exitFill],
+      lotSelections: [lotSelection({ exitFillId: exitFill.id, entryFillId: entryFill.id })],
+      preferences: preferences(),
+    });
+    expect(hasPath(f, 'lot-selections[0]')).toBe(true);
   });
 
   it('rejects a position-tag referencing an unknown position or tag', async () => {

@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits } from '@tradr/shared/constants/currencies';
 import { parseOccUnderlying } from '@tradr/shared/lib/occ';
+import { holdTerm, resolveLotMethod, type LotMethod } from '@tradr/shared/lib/tax-lots';
 import type {
   CreateExpenseInput,
   ExpenseListResponse,
@@ -27,12 +28,13 @@ import {
   deleteExpense,
   findExpenseById,
   getUserTaxJurisdiction,
+  getUserTaxSettings,
   insertExpense,
-  listCandidatePositionsByYear,
   listExpenses,
   listRealisedPositionsForYear,
   updateExpense as updateExpenseRow,
   updateUserTaxJurisdiction,
+  updateUserTaxLotMethod,
   type ExpenseRow,
   type TaxJurisdiction,
 } from './expenses.query';
@@ -42,7 +44,13 @@ import {
   classifyUSHoldPeriod,
   findSuperficialLossFlags,
   findWashSaleFlags,
+  type LossUnit,
 } from './expenses.tax';
+import {
+  getCandidateLots,
+  getLotRealisationsForYear,
+  type LotRealisationForYear,
+} from './tax-lots.service';
 
 // ---------------------------------------------------------------------------
 // Write-side validation helpers (design.md §Component 6)
@@ -380,6 +388,32 @@ export async function setTaxJurisdiction(
 }
 
 // ---------------------------------------------------------------------------
+// Tax lot method (design.md §C2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the user's stored lot method alongside its effective, resolved value.
+ * A stored method overrides the jurisdiction default (AC 2.2).
+ */
+export async function getTaxLotMethod(
+  userId: string,
+): Promise<{ taxLotMethod: LotMethod | null; effectiveMethod: LotMethod; isDefault: boolean }> {
+  const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
+  const { method, isDefault } = resolveLotMethod(taxLotMethod, taxJurisdiction);
+  return { taxLotMethod, effectiveMethod: method, isDefault };
+}
+
+/**
+ * Persist the user's lot method selection. `null` clears the column,
+ * returning the effective method to the jurisdiction default.
+ */
+export async function setTaxLotMethod(userId: string, value: LotMethod | null): Promise<void> {
+  await withTransaction(db, async (tx) => {
+    await updateUserTaxLotMethod(tx, userId, value);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tax-summary orchestration (design.md §Component 6 — `getTaxSummary`)
 // ---------------------------------------------------------------------------
 
@@ -394,6 +428,15 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const taxLog: { warn: (obj: object) => void } = {
   warn: (obj) => logger.warn('tax_summary_helper', obj as Record<string, unknown>),
 };
+
+/** `Date | string` → ISO string. Never `String(null)` (AC 7.8). */
+function toIso(d: Date | string): string {
+  return d instanceof Date ? d.toISOString() : d;
+}
+
+function toIsoOrNull(d: Date | string | null): string | null {
+  return d === null ? null : toIso(d);
+}
 
 /**
  * Jurisdiction-specific clause for the disclaimer. Verbatim from
@@ -413,7 +456,7 @@ const DISCLAIMER_RECONCILIATION =
   'Recorded fill fees and tracked expenses are surfaced in separate places — recorded fees on the [Fee Rollup page](/accounting/fee-rollup) (bucketed by `filledAt`), tracked expenses in the section below. Tradr does not compute a net taxable income — that subtraction depends on filer status and jurisdiction-specific deduction rules.';
 
 const DISCLAIMER_HEURISTIC =
-  'Wash-sale (US) and superficial-loss (CA) flags use a symbol-and-date heuristic, not lot-level matching. For options, matching uses the underlying — different strikes and expirations of the same underlying are flagged together. Wash-sale and superficial-loss flags aggregate across all of your accounts.';
+  'Wash-sale (US) and superficial-loss (CA) flags are a heuristic on lot dates: each entry fill is a lot, and a lot opened within 30 days either side of a loss, or held through that window, raises a flag. For options, matching uses the underlying — different strikes and expirations of the same underlying are flagged together. Flags aggregate across all of your accounts and never adjust the figures.';
 
 const DISCLAIMER_YEAR_BUCKETING =
   "All year-bucketing uses UTC calendar boundaries. A position closed after 19:00 ET on December 31 will appear in the following year's tax summary.";
@@ -450,91 +493,199 @@ function composeDisclaimer(
 /**
  * Compute the per-year tax summary for a user.
  *
- * Seven-step orchestration per design §Component 6:
- *   1. Resolve jurisdiction (NULL → 'other').
- *   2. Per-position realised P&L rows for the year (signed; reversal-cancelled).
+ * Seven-step orchestration per design §Component 6 / §C8:
+ *   1. Resolve jurisdiction (NULL → 'other') and the effective lot method.
+ *   2. Per-position realised P&L rows for the year (signed; reversal-cancelled)
+ *      — read unconditionally; still the source of truth for the average-cost
+ *      path (steps 4/5). Under FIFO, realised-P&L totals instead come from lot
+ *      rows (3b).
  *   3. Per-(category, currency) expense aggregates for the year.
- *   4. Per-currency realised P&L aggregation.
- *   5. US short/long-term hold-period classification (CA/other → null).
- *   6. Wash-sale / superficial-loss heuristic — short-circuit when no losses;
- *      candidate window bounded to `[min(loss.closedAt) - 30d, max + 30d]`.
+ *   3b. FIFO only: lot realisations for the year (design C8); average cost
+ *       emits no rows (AC 6.2) and skips this query entirely.
+ *   4. Per-currency realised P&L aggregation: today's ledger-based rows under
+ *      average cost (AC 6.1, AC 6.3 regression guard); lot rows' `net` under
+ *      FIFO.
+ *   5. US short/long-term classification (CA/other → null totals): today's
+ *      position-date rule under average cost (D6); per-row `holdTerm` under
+ *      FIFO (AC 5.6).
+ *   6. Wash-sale / superficial-loss heuristic on lot-grain `LossUnit` /
+ *      `CandidateLot` inputs (design C9) — short-circuit when no losses;
+ *      candidate window bounded to `[min(loss.realisedAt) - 30d, max + 30d]`.
  *   7. Display-currency conversion via `applyYearEndSpotConversion` (twice —
  *      for realised P&L total and for tracked-expenses total). Compose response.
  */
 export async function getTaxSummary(userId: string, year: number): Promise<TaxSummaryResponse> {
-  // Step 1: jurisdiction.
-  const jurisdiction = await getTaxJurisdiction(userId);
+  // Step 1: jurisdiction + effective lot method.
+  const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
+  const jurisdiction = taxJurisdiction ?? 'other';
+  const { method } = resolveLotMethod(taxLotMethod, taxJurisdiction);
 
-  // Step 2 + 3: data fetch (independent — issue in parallel).
-  const [realisedRows, expensesByCategory] = await Promise.all([
+  // Step 2 + 3 + 3b: data fetch (independent — issue in parallel). `lotRows`
+  // stays empty, with no query issued, outside FIFO.
+  const [realisedRows, expensesByCategory, lotRows] = await Promise.all([
     listRealisedPositionsForYear(db, userId, year),
     aggregateExpensesByCategory(db, userId, year),
+    method === 'fifo'
+      ? getLotRealisationsForYear(db, userId, year)
+      : Promise.resolve<LotRealisationForYear[]>([]),
   ]);
 
-  // Step 4: per-currency realised P&L aggregation.
-  const realisedPerCurrency = aggregatePerCurrencyRealisedPnl(realisedRows);
+  // Step 4 + 5: per-currency totals and US short/long-term classification.
+  let realisedPerCurrency: Map<string, Decimal>;
+  let shortTermPerCurrency = new Map<string, Decimal>();
+  let longTermPerCurrency = new Map<string, Decimal>();
+  const lotRealisations: TaxSummaryResponse['lotRealisations'] = [];
 
-  // Step 5: US short/long-term classification (CA/other → null totals).
-  const { shortTerm: shortTermPerCurrency, longTerm: longTermPerCurrency } =
-    jurisdiction === 'US'
-      ? classifyUSHoldPeriod(realisedRows)
-      : {
-          shortTerm: new Map<string, Decimal>(),
-          longTerm: new Map<string, Decimal>(),
-        };
+  if (method === 'fifo') {
+    realisedPerCurrency = new Map<string, Decimal>();
+    for (const row of lotRows) {
+      realisedPerCurrency.set(
+        row.currency,
+        (realisedPerCurrency.get(row.currency) ?? new Decimal(0)).plus(row.net),
+      );
 
-  // Step 6: wash-sale / superficial-loss heuristic.
-  // SHORT-CIRCUIT: skip the candidate query entirely when there are no losses
-  // or when jurisdiction === 'other' (no flags emitted at all).
-  const losingRows = realisedRows.filter((r) => new Decimal(r.realisedPnl).isNegative());
+      const term = jurisdiction === 'US' ? holdTerm(row.lotOpenedAt, row.realisedAt) : null;
+      if (term === 'short') {
+        shortTermPerCurrency.set(
+          row.currency,
+          (shortTermPerCurrency.get(row.currency) ?? new Decimal(0)).plus(row.net),
+        );
+      } else if (term === 'long') {
+        longTermPerCurrency.set(
+          row.currency,
+          (longTermPerCurrency.get(row.currency) ?? new Decimal(0)).plus(row.net),
+        );
+      }
+
+      const currencyMinorUnits = getCurrencyMinorUnits(row.currency);
+      lotRealisations.push({
+        exitFillId: row.exitFillId,
+        entryFillId: row.entryFillId,
+        positionId: row.positionId,
+        accountId: row.accountId,
+        symbol: row.symbol,
+        currency: row.currency,
+        lotOpenedAt: row.lotOpenedAt.toISOString(),
+        realisedAt: row.realisedAt.toISOString(),
+        quantity: row.quantity.toString(),
+        proceeds: row.proceeds.toFixed(currencyMinorUnits),
+        basis: row.basis.toFixed(currencyMinorUnits),
+        fees: row.fees.toFixed(currencyMinorUnits),
+        net: row.net.toFixed(currencyMinorUnits),
+        term,
+      });
+    }
+  } else {
+    // Average cost: today's ledger-based aggregation, unchanged (AC 6.1, AC 6.3).
+    realisedPerCurrency = aggregatePerCurrencyRealisedPnl(realisedRows);
+    if (jurisdiction === 'US') {
+      ({ shortTerm: shortTermPerCurrency, longTerm: longTermPerCurrency } =
+        classifyUSHoldPeriod(realisedRows));
+    }
+  }
+
+  // Step 6: wash-sale / superficial-loss heuristic on lot-grain `LossUnit` /
+  // `CandidateLot` inputs (design C9). FIFO: one `LossUnit` per losing lot row
+  // from step 3b, lot fields set (AC 7.1). Average cost: one per losing
+  // `realisedRows` row (today's ledger-based source), lot fields null
+  // (AC 7.2). SHORT-CIRCUIT: skip the candidate query entirely when there are
+  // no losses or when jurisdiction === 'other' (no flags emitted at all).
+  const losses: LossUnit[] =
+    method === 'fifo'
+      ? lotRows
+          .filter((row) => row.net.isNegative())
+          .map((row) => ({
+            lossRowId: `${row.exitFillId}:${row.entryFillId}`,
+            positionId: row.positionId,
+            symbol: row.symbol,
+            assetType: row.assetType,
+            side: row.side,
+            accountId: row.accountId,
+            currency: row.currency,
+            openedAt: row.positionOpenedAt,
+            closedAt: row.positionClosedAt,
+            realisedAt: row.realisedAt,
+            lotEntryFillId: row.entryFillId,
+            lotOpenedAt: row.lotOpenedAt,
+            realisedPnl: row.net.toFixed(getCurrencyMinorUnits(row.currency)),
+          }))
+      : realisedRows
+          .filter((row) => new Decimal(row.realisedPnl).isNegative())
+          .map((row) => ({
+            lossRowId: `${row.positionId}:${row.currency}`,
+            positionId: row.positionId,
+            symbol: row.symbol,
+            assetType: row.assetType,
+            side: row.side,
+            accountId: row.accountId,
+            currency: row.currency,
+            openedAt: row.openedAt,
+            closedAt: row.closedAt,
+            realisedAt: row.realisedAt,
+            lotEntryFillId: null,
+            lotOpenedAt: null,
+            realisedPnl: row.realisedPnl,
+          }));
 
   let washSales: TaxSummaryResponse['flags']['washSales'] = [];
   let superficialLosses: TaxSummaryResponse['flags']['superficialLosses'] = [];
 
-  if (jurisdiction !== 'other' && losingRows.length > 0) {
-    // Window: [min(losing.closedAt) - 30d, max(losing.closedAt) + 30d].
-    // `closedAt` is non-null on realised rows (Task 9 helpers also assume this
-    // and skip nulls defensively; the same defence applies here).
-    const closedTimes = losingRows
-      .map((r) => (r.closedAt ? new Date(r.closedAt).getTime() : null))
-      .filter((t): t is number => t !== null);
+  if (jurisdiction !== 'other' && losses.length > 0) {
+    // Window: [min(realisedAt) - 30d, max(realisedAt) + 30d] (AC 7.7) —
+    // `realisedAt` is never null, unlike the old `closedAt`-anchored window.
+    const realisedTimes = losses.map((l) => new Date(l.realisedAt).getTime());
+    const windowStart = new Date(Math.min(...realisedTimes) - THIRTY_DAYS_MS);
+    const windowEnd = new Date(Math.max(...realisedTimes) + THIRTY_DAYS_MS);
+    const candidates = await getCandidateLots(
+      db,
+      userId,
+      { start: windowStart, end: windowEnd },
+      method,
+    );
 
-    if (closedTimes.length > 0) {
-      const windowStart = new Date(Math.min(...closedTimes) - THIRTY_DAYS_MS);
-      const windowEnd = new Date(Math.max(...closedTimes) + THIRTY_DAYS_MS);
-      const candidates = await listCandidatePositionsByYear(db, userId, {
-        start: windowStart,
-        end: windowEnd,
-      });
-
-      if (jurisdiction === 'US') {
-        const flags = findWashSaleFlags(losingRows, candidates, parseOccUnderlying, taxLog);
-        washSales = flags.map((f) => ({
-          positionId: f.positionId,
-          symbol: f.symbol,
-          underlying: f.underlying,
-          side: f.side,
-          openedAt: f.openedAt instanceof Date ? f.openedAt.toISOString() : String(f.openedAt),
-          closedAt: f.closedAt instanceof Date ? f.closedAt.toISOString() : String(f.closedAt),
-          realisedLoss: f.realisedLoss,
-          reason: f.reason,
-          counterpartyPositionIds: f.counterpartyPositionIds,
-        }));
-      } else {
-        // jurisdiction === 'CA'
-        const flags = findSuperficialLossFlags(losingRows, candidates, parseOccUnderlying, taxLog);
-        superficialLosses = flags.map((f) => ({
-          positionId: f.positionId,
-          symbol: f.symbol,
-          underlying: f.underlying,
-          side: f.side,
-          openedAt: f.openedAt instanceof Date ? f.openedAt.toISOString() : String(f.openedAt),
-          closedAt: f.closedAt instanceof Date ? f.closedAt.toISOString() : String(f.closedAt),
-          realisedLoss: f.realisedLoss,
-          reason: f.reason,
-          counterpartyPositionIds: f.counterpartyPositionIds,
-        }));
-      }
+    if (jurisdiction === 'US') {
+      const flags = findWashSaleFlags(losses, candidates, method, parseOccUnderlying, taxLog);
+      washSales = flags.map((f) => ({
+        lossRowId: f.lossRowId,
+        positionId: f.positionId,
+        symbol: f.symbol,
+        underlying: f.underlying,
+        side: f.side,
+        openedAt: toIso(f.openedAt),
+        closedAt: toIsoOrNull(f.closedAt),
+        realisedAt: toIso(f.realisedAt),
+        lotEntryFillId: f.lotEntryFillId,
+        lotOpenedAt: toIsoOrNull(f.lotOpenedAt),
+        realisedLoss: f.realisedLoss,
+        reason: f.reason,
+        counterpartyPositionIds: f.counterpartyPositionIds,
+        counterpartyLotIds: f.counterpartyLotIds,
+      }));
+    } else {
+      // jurisdiction === 'CA'
+      const flags = findSuperficialLossFlags(
+        losses,
+        candidates,
+        method,
+        parseOccUnderlying,
+        taxLog,
+      );
+      superficialLosses = flags.map((f) => ({
+        lossRowId: f.lossRowId,
+        positionId: f.positionId,
+        symbol: f.symbol,
+        underlying: f.underlying,
+        side: f.side,
+        openedAt: toIso(f.openedAt),
+        closedAt: toIsoOrNull(f.closedAt),
+        realisedAt: toIso(f.realisedAt),
+        lotEntryFillId: f.lotEntryFillId,
+        lotOpenedAt: toIsoOrNull(f.lotOpenedAt),
+        realisedLoss: f.realisedLoss,
+        reason: f.reason,
+        counterpartyPositionIds: f.counterpartyPositionIds,
+        counterpartyLotIds: f.counterpartyLotIds,
+      }));
     }
   }
 
@@ -580,6 +731,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
     return {
       year,
       jurisdiction,
+      lotMethod: method,
       displayCurrency: null,
       realisedPnl: {
         total: null,
@@ -593,6 +745,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
         perCategory: perCategoryResponse,
       },
       flags: { washSales, superficialLosses },
+      lotRealisations,
       missingRates: [],
       excludedCurrencies: [],
       ratesAsOf: null,
@@ -665,6 +818,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   return {
     year,
     jurisdiction,
+    lotMethod: method,
     displayCurrency,
     realisedPnl: {
       total:
@@ -680,6 +834,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
       perCategory: perCategoryResponse,
     },
     flags: { washSales, superficialLosses },
+    lotRealisations,
     missingRates: Array.from(missingRatesMap.values()),
     excludedCurrencies: Array.from(excludedSet),
     ratesAsOf,

@@ -19,6 +19,7 @@ import {
   expenses,
   externalApiKeys,
   feeSchedules,
+  fillLotSelections,
   fills,
   ledgerEntries,
   positionImages,
@@ -403,7 +404,7 @@ describe('createExport', () => {
       degradations: unknown[];
     };
     expect(manifest.format).toBe('tradr-account-archive');
-    expect(manifest.archiveVersion).toBe(2);
+    expect(manifest.archiveVersion).toBe(3);
     expect(manifest.sourceAppVersion).toBe('unknown'); // APP_VERSION unset in tests
     expect(manifest.exportedAt).toMatch(MICRO_TS_RE);
     expect(manifest.degradations).toEqual([]);
@@ -444,6 +445,82 @@ describe('createExport', () => {
 
     const [image] = ndjson(entries, 'position-images.ndjson');
     expect(image.part).toEqual({ type: 'image', format: 'jpeg', entry: POSITION_IMAGE_ENTRY });
+  });
+
+  // Design C12, AC 9.1 — the stored lot method and every lot selection travel
+  // with the archive, and ARCHIVE_VERSION increments to 3.
+  it('carries the tax lot method and every lot selection (AC 9.1)', async () => {
+    const [u] = await db
+      .insert(users)
+      .values({ email: `export-lots-${randomUUID()}@example.com`, passwordHash: PASSWORD_HASH })
+      .returning({ id: users.id });
+    const [acct] = await db
+      .insert(accounts)
+      .values({ userId: u.id, name: 'Main', currency: 'USD', startingBalance: '0' })
+      .returning({ id: accounts.id });
+    // eslint-disable-next-line no-restricted-syntax -- seed a fixed position for the lot-archive export test
+    const [pos] = await db
+      .insert(positions)
+      .values({
+        userId: u.id,
+        accountId: acct.id,
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'stock',
+      })
+      .returning({ id: positions.id });
+    const [entryFill] = await db
+      .insert(fills)
+      .values({
+        positionId: pos.id,
+        type: 'entry',
+        price: '10',
+        quantity: '5',
+        fees: '0',
+        filledAt: new Date('2026-01-01T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+    const [exitFill] = await db
+      .insert(fills)
+      .values({
+        positionId: pos.id,
+        type: 'exit',
+        price: '30',
+        quantity: '5',
+        fees: '0',
+        filledAt: new Date('2026-02-01T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+    await db.insert(fillLotSelections).values({
+      exitFillId: exitFill.id,
+      entryFillId: entryFill.id,
+      quantity: '5',
+    });
+    await db
+      .update(users)
+      .set({ taxLotMethod: 'average' })
+      .where(sql`id = ${u.id}`);
+
+    const entries = await exportEntries(u.id);
+
+    const manifest = JSON.parse(decode(entries, 'manifest.json')) as {
+      archiveVersion: number;
+      counts: Record<string, number>;
+    };
+    expect(manifest.archiveVersion).toBe(3);
+    expect(manifest.counts.lotSelections).toBe(1);
+
+    const [selection] = ndjson(entries, 'lot-selections.ndjson');
+    expect(selection).toEqual({
+      exitFillId: exitFill.id,
+      entryFillId: entryFill.id,
+      quantity: '5.00000000',
+    });
+
+    const preferences = JSON.parse(decode(entries, 'preferences.json')) as {
+      taxLotMethod: string | null;
+    };
+    expect(preferences.taxLotMethod).toBe('average');
   });
 
   it('never writes a secret into the archive (Req 2.5)', async () => {

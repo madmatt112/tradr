@@ -295,6 +295,14 @@ export interface FillInsert {
   createdAt: string;
 }
 
+// The exit and entry fill ids are already remapped; `id` and `created_at` are
+// left to their column defaults, so a selection is never carried by id (C12).
+export interface LotSelectionInsert {
+  exitFillId: string;
+  entryFillId: string;
+  quantity: string;
+}
+
 export interface PositionTagInsert {
   positionId: string;
   tagId: string;
@@ -478,6 +486,12 @@ const FILL_COLUMNS: Column[] = [
   { name: 'notes', cast: 'plain' },
   { name: 'filled_at', cast: 'timestamptz' },
   { name: 'created_at', cast: 'timestamptz' },
+];
+
+const LOT_SELECTION_COLUMNS: Column[] = [
+  { name: 'exit_fill_id', cast: 'plain' },
+  { name: 'entry_fill_id', cast: 'plain' },
+  { name: 'quantity', cast: 'numeric' },
 ];
 
 const POSITION_TAG_COLUMNS: Column[] = [
@@ -720,6 +734,19 @@ export async function insertArchiveFills(tx: ImportDb, rows: FillInsert[]): Prom
       r.filledAt,
       r.createdAt,
     ]),
+  );
+}
+
+/** Insert per-exit lot selections; `id` and `created_at` take their defaults. */
+export async function insertArchiveLotSelections(
+  tx: ImportDb,
+  rows: LotSelectionInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'fill_lot_selections',
+    LOT_SELECTION_COLUMNS,
+    rows.map((r) => [r.exitFillId, r.entryFillId, r.quantity]),
   );
 }
 

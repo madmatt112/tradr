@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { eq, sql } from 'drizzle-orm';
-import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate';
+import { Unzip, UnzipInflate, UnzipPassThrough, Zip, ZipDeflate } from 'fflate';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { db } from '@/db';
@@ -16,6 +16,7 @@ import {
   exchangeRates,
   expenses,
   feeSchedules,
+  fillLotSelections,
   fills,
   ledgerEntries,
   positionImages,
@@ -28,6 +29,7 @@ import {
 import { createExport } from '@/features/account-data/export.service';
 import { confirmImport } from '@/features/account-data/import.service';
 import { findAccountsByUser } from '@/features/accounts/accounts.query';
+import { getTaxSummary } from '@/features/expenses/expenses.service';
 import { ObjectUnreachableError, type ObjectStorage } from '@/lib/object-storage';
 
 // Req 3.7 and 5.7 — the byte-equal round trip. Seed user A with every archive
@@ -763,5 +765,243 @@ describe('account-data round trip (Req 3.7, 5.7)', () => {
     const part = img.part as Record<string, unknown>;
     expect(typeof part.dataBase64).toBe('string');
     expect('storage' in part).toBe(false);
+  });
+});
+
+// --- tax-lot archive carry (design C12, AC 9.1-9.3) --------------------------
+
+const LOT_TS = '2026-01-01T00:00:00.000000Z';
+
+async function seedLotUser(prefix: string): Promise<{
+  userId: string;
+  entry1Id: string;
+  entry2Id: string;
+  exitId: string;
+}> {
+  const userId = await seedBareUser(prefix);
+  const [acct] = await db
+    .insert(accounts)
+    .values({ userId, name: 'Main', currency: 'USD', startingBalance: '0' })
+    .returning({ id: accounts.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed a fixed position for the lot-archive round-trip test
+  const [pos] = await db
+    .insert(positions)
+    .values({ userId, accountId: acct.id, symbol: 'AAPL', side: 'long', assetType: 'stock' })
+    .returning({ id: positions.id });
+  const [entry1] = await db
+    .insert(fills)
+    .values({
+      positionId: pos.id,
+      type: 'entry',
+      price: '10',
+      quantity: '5',
+      fees: '0',
+      filledAt: new Date('2026-01-01T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  const [entry2] = await db
+    .insert(fills)
+    .values({
+      positionId: pos.id,
+      type: 'entry',
+      price: '20',
+      quantity: '5',
+      fees: '0',
+      filledAt: new Date('2026-01-05T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  const [exitFill] = await db
+    .insert(fills)
+    .values({
+      positionId: pos.id,
+      type: 'exit',
+      price: '30',
+      quantity: '5',
+      fees: '0',
+      filledAt: new Date('2026-02-01T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  // Pick the second, more expensive lot — not the FIFO-natural first one — so
+  // losing the selection on round trip would change the realised gain (AC 9.2).
+  await db
+    .insert(fillLotSelections)
+    .values({ exitFillId: exitFill.id, entryFillId: entry2.id, quantity: '5' });
+  await db.update(users).set({ taxLotMethod: 'fifo' }).where(eq(users.id, userId));
+  return { userId, entry1Id: entry1.id, entry2Id: entry2.id, exitId: exitFill.id };
+}
+
+describe('tax-lot archive carry (design C12, AC 9.1-9.3)', () => {
+  it('carries the stored method and lot selection; import restores them against remapped fills and the tax summary matches (AC 9.1, AC 9.2)', async () => {
+    const seedA = await seedLotUser('rt-lot-a');
+    const bytesA = await exportBytes(seedA.userId);
+    const parsedA = parseArchive(bytesA);
+
+    expect(parsedA.preferences.taxLotMethod).toBe('fifo');
+    const selectionsA = rowsOf(parsedA, 'lot-selections.ndjson');
+    expect(selectionsA).toHaveLength(1);
+    expect(selectionsA[0]).toMatchObject({
+      exitFillId: seedA.exitId,
+      entryFillId: seedA.entry2Id,
+      quantity: '5.00000000',
+    });
+
+    const userB = await seedBareUser('rt-lot-b');
+    await confirmImport(userB, streamOf(bytesA), digestOf(bytesA));
+
+    const bytesB = await exportBytes(userB);
+    const parsedB = parseArchive(bytesB);
+    expect(parsedB.preferences.taxLotMethod).toBe('fifo');
+
+    const selectionsB = rowsOf(parsedB, 'lot-selections.ndjson');
+    expect(selectionsB).toHaveLength(1);
+    const fillsB = rowsOf(parsedB, 'fills.ndjson');
+    const exitB = fillsB.find((f) => f.type === 'exit');
+    const entry2B = fillsB.find((f) => f.price === '20.00000000');
+
+    // Remapped: a fresh id on B, never A's own id, but the relation holds.
+    expect(selectionsB[0].exitFillId).toBe(exitB?.id);
+    expect(selectionsB[0].entryFillId).toBe(entry2B?.id);
+    expect(selectionsB[0].exitFillId).not.toBe(selectionsA[0].exitFillId);
+    expect(selectionsB[0].entryFillId).not.toBe(selectionsA[0].entryFillId);
+    expect(selectionsB[0].quantity).toBe(selectionsA[0].quantity);
+
+    // AC 9.2 — losing the selection on import would fall back to the natural
+    // FIFO lot (entry1, basis 10) and change the realised gain from 50 to 100.
+    // Every realised figure must match; the fill/position/account ids are
+    // per-user and legitimately differ under the id bijection, so blank them
+    // before comparing the two summaries.
+    const normalize = (s: Awaited<ReturnType<typeof getTaxSummary>>) => ({
+      ...s,
+      lotRealisations: s.lotRealisations.map((r) => ({
+        ...r,
+        accountId: 'X',
+        positionId: 'X',
+        exitFillId: 'X',
+        entryFillId: 'X',
+      })),
+    });
+    const summaryA = await getTaxSummary(seedA.userId, 2026);
+    const summaryB = await getTaxSummary(userB, 2026);
+    expect(normalize(summaryB)).toEqual(normalize(summaryA));
+  });
+
+  it('a version-2 archive imports with no selections and a null method (AC 9.3)', async () => {
+    const accountId = randomUUID();
+    const positionId = randomUUID();
+    const counts = {
+      brokerages: 0,
+      systemBrokerages: 0,
+      accounts: 1,
+      tags: 0,
+      positions: 1,
+      fills: 0,
+      positionTags: 0,
+      positionImages: 0,
+      ledgerEntries: 0,
+      exchangeRates: 0,
+      expenses: 0,
+      personas: 0,
+      builtinPersonas: 0,
+      conversations: 0,
+      messages: 0,
+      summaries: 0,
+      images: 0,
+    };
+    const manifest = {
+      format: 'tradr-account-archive',
+      archiveVersion: 2,
+      sourceAppVersion: 'test',
+      exportedAt: LOT_TS,
+      counts,
+      degradations: [] as unknown[],
+    };
+    const account = {
+      id: accountId,
+      name: 'Main',
+      currency: 'USD',
+      // accounts.timezone is NOT NULL, so a real export carries a zone; the
+      // archive account schema requires one too.
+      timezone: 'UTC',
+      brokerage: null,
+      startingBalance: '0.0000',
+      defaultRiskPercent: null,
+      isDemo: false,
+      isDefault: true,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const position = {
+      id: positionId,
+      accountId,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      status: 'open',
+      notes: null,
+      targetPrice: null,
+      stopLoss: null,
+      openedAt: null,
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    // A version-2 preferences payload: no `taxLotMethod` key at all.
+    const preferencesV2 = {
+      displayCurrency: null,
+      timezone: null,
+      taxJurisdiction: null,
+      theme: 'system',
+      buyingPowerBasis: 'cash',
+      advisorDefaultPersona: null,
+      advisorTradeDataConsent: false,
+      writableAccountId: null,
+      onboarding: {},
+    };
+
+    function buildV2Archive(): Uint8Array {
+      const entries: Array<{ name: string; data: string }> = [
+        { name: 'manifest.json', data: JSON.stringify(manifest) },
+        { name: 'accounts.ndjson', data: `${JSON.stringify(account)}\n` },
+        { name: 'positions.ndjson', data: `${JSON.stringify(position)}\n` },
+        { name: 'preferences.json', data: JSON.stringify(preferencesV2) },
+        { name: 'dashboard-layout.json', data: 'null' },
+      ];
+      const out: Uint8Array[] = [];
+      const z = new Zip((err, data) => {
+        if (err) throw err;
+        out.push(data);
+      });
+      for (const e of entries) {
+        const f = new ZipDeflate(e.name, { level: 9 });
+        z.add(f);
+        f.push(new TextEncoder().encode(e.data), true);
+      }
+      z.end();
+      return concat(out);
+    }
+
+    const bytes = buildV2Archive();
+    const userB = await seedBareUser('rt-lot-v2');
+    // Preset a non-null method so a null result after import proves the write
+    // happened, rather than reading a column that was already null.
+    await db.update(users).set({ taxLotMethod: 'fifo' }).where(eq(users.id, userB));
+
+    await confirmImport(userB, streamOf(bytes), digestOf(bytes));
+
+    const [row] = await db
+      .select({ taxLotMethod: users.taxLotMethod })
+      .from(users)
+      .where(eq(users.id, userB));
+    expect(row.taxLotMethod).toBeNull();
+
+    const selectionRows = await db
+      .select({ id: fillLotSelections.id })
+      .from(fillLotSelections)
+      .innerJoin(fills, eq(fills.id, fillLotSelections.exitFillId))
+      .innerJoin(positions, eq(positions.id, fills.positionId))
+      .where(eq(positions.userId, userB));
+    expect(selectionRows).toHaveLength(0);
   });
 });

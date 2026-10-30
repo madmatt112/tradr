@@ -3015,7 +3015,7 @@
     },
     "/api/expenses/tax-summary": {
       "get": {
-        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
+        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nUnder the FIFO lot method, `realisedPnl` is computed from matched lots and `lotRealisations` carries one row per (exit fill, lot) pair, each with its own term for `US`. Under average cost, `lotRealisations` is empty and the figures are the pooled per-position totals, as today.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
         "parameters": [
           {
             "in": "query",
@@ -3039,7 +3039,7 @@
                       "type": "string"
                     },
                     "flags": {
-                      "description": "Wash sales (US) or superficial losses (CA), with the counterparty positions.",
+                      "description": "Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots.",
                       "type": "object"
                     },
                     "jurisdiction": {
@@ -3050,6 +3050,80 @@
                       ],
                       "nullable": true,
                       "type": "string"
+                    },
+                    "lotMethod": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "type": "string"
+                    },
+                    "lotRealisations": {
+                      "description": "One row per (exit fill, lot) pair under FIFO; empty under average cost.",
+                      "items": {
+                        "properties": {
+                          "accountId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "basis": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "exitFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "fees": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "lotOpenedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "net": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "positionId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "proceeds": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "realisedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "symbol": {
+                            "type": "string"
+                          },
+                          "term": {
+                            "enum": [
+                              "short",
+                              "long"
+                            ],
+                            "nullable": true,
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
                     },
                     "realisedPnl": {
                       "type": "object"
@@ -3945,7 +4019,7 @@
     },
     "/api/positions/{id}/fills": {
       "post": {
-        "description": "Authed. A position is a sequence of fills, not a single trade: add an `entry` fill to open or scale in, an `exit` fill to scale out or close. The position's average price, open quantity, status, and realised P&L are all derived from its fills, so adding one recomputes them. Monetary and quantity fields are strings to preserve decimal precision.\n",
+        "description": "Authed. A position is a sequence of fills, not a single trade: add an `entry` fill to open or scale in, an `exit` fill to scale out or close. The position's average price, open quantity, status, and realised P&L are all derived from its fills, so adding one recomputes them. Monetary and quantity fields are strings to preserve decimal precision. An exit may carry `lotSelection` to pick specific lots by specific identification; omitted, the exit matches FIFO against the oldest lots not already reserved by another exit's selection.\n",
         "parameters": [
           {
             "description": "The position the fill belongs to.",
@@ -3971,6 +4045,29 @@
                   "filledAt": {
                     "format": "date-time",
                     "type": "string"
+                  },
+                  "lotSelection": {
+                    "description": "Exit only. A specific-identification choice of lots: each item's `quantity` must claim no more than its lot still has available, and every item's `quantity` must sum to this fill's `quantity`.\n",
+                    "items": {
+                      "properties": {
+                        "entryFillId": {
+                          "description": "Must be an entry fill of this position.",
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "description": "Positive decimal.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "entryFillId",
+                        "quantity"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
                   },
                   "notes": {
                     "maxLength": 10000,
@@ -4027,6 +4124,24 @@
                       "format": "uuid",
                       "type": "string"
                     },
+                    "lotSelection": {
+                      "description": "The stored selection on this fill, or null for an entry or an unselected exit.",
+                      "items": {
+                        "properties": {
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "type": "array"
+                    },
                     "notes": {
                       "nullable": true,
                       "type": "string"
@@ -4061,13 +4176,13 @@
             "description": "The created fill, plus `positionClosed` — true when this was the exit that balanced the entered quantity, which closes the position in the same transaction.\n"
           },
           "400": {
-            "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."
+            "description": "Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, a `lotSelection` on an entry fill, or a `lotSelection` repeating an `entryFillId`."
           },
           "404": {
             "description": "No such position for this user."
           },
           "409": {
-            "description": "The position is closed, or an exit fill was sent to a position that is still a draft."
+            "description": "The position is closed, an exit fill was sent to a position that is still a draft, a `lotSelection` names an entry fill that is not an entry of this position, its quantities do not sum to the exit quantity, its claims exceed a lot, or the write would change an earlier exit's matched lots."
           }
         },
         "summary": "Add a fill to a position.",
@@ -4078,7 +4193,7 @@
     },
     "/api/positions/{id}/fills/{fillId}": {
       "delete": {
-        "description": "Authed. Removes the fill and recomputes the position from what is left. An open position must keep at least one entry fill, and its entry quantity must stay at or above its exit quantity, so a deletion that would break either rule is refused rather than applied.\n",
+        "description": "Authed. Removes the fill and recomputes the position from what is left. An open position must keep at least one entry fill, and its entry quantity must stay at or above its exit quantity, so a deletion that would break either rule is refused rather than applied. An entry fill that a stored `lotSelection` claims cannot be removed either — the claiming exit's selection would otherwise lose its lot.\n",
         "parameters": [
           {
             "in": "path",
@@ -4107,7 +4222,7 @@
             "description": "No such position or fill for this user."
           },
           "409": {
-            "description": "The position is closed, the fill is the last remaining entry, or removing it would leave exit fills unbacked."
+            "description": "The position is closed, the fill is the last remaining entry, removing it would leave exit fills unbacked, or it is an entry fill a stored `lotSelection` claims."
           }
         },
         "summary": "Delete a fill.",
@@ -4116,7 +4231,7 @@
         ]
       },
       "put": {
-        "description": "Authed. Corrects a recorded fill and recomputes the position's derived figures. `type` is immutable — an entry cannot become an exit; delete the fill and add the right one instead. Every field is optional; only what you send changes.\n",
+        "description": "Authed. Corrects a recorded fill and recomputes the position's derived figures. `type` is immutable — an entry cannot become an exit; delete the fill and add the right one instead. Every field is optional; only what you send changes. On an exit, `lotSelection` replaces the stored specific-identification choice; `null` clears it back to FIFO; omitted, any stored selection is left as-is — except a quantity change on an exit that already carries a selection, which requires a new one.\n",
         "parameters": [
           {
             "in": "path",
@@ -4150,6 +4265,30 @@
                     "format": "date-time",
                     "type": "string"
                   },
+                  "lotSelection": {
+                    "description": "Exit only. Replaces the stored selection; `null` clears it (reverting the exit to FIFO); omitted, the stored selection (if any) is kept.\n",
+                    "items": {
+                      "properties": {
+                        "entryFillId": {
+                          "description": "Must be an entry fill of this position.",
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "description": "Positive decimal.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "entryFillId",
+                        "quantity"
+                      ],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "nullable": true,
+                    "type": "array"
+                  },
                   "notes": {
                     "maxLength": 10000,
                     "nullable": true,
@@ -4172,16 +4311,81 @@
         },
         "responses": {
           "200": {
-            "description": "The updated fill."
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "fees": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "filledAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "lotSelection": {
+                      "items": {
+                        "properties": {
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "type": "array"
+                    },
+                    "notes": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "positionId": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "description": "Decimal.",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "entry",
+                        "exit"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The updated fill, carrying its stored `lotSelection` (null for an entry or an unselected exit).\n"
           },
           "400": {
-            "description": "Validation error: an exit quantity beyond the available entry quantity, or a fractional quantity on an options position."
+            "description": "Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, or a `lotSelection` repeating an `entryFillId`."
           },
           "404": {
             "description": "No such position or fill for this user."
           },
           "409": {
-            "description": "The change would leave the position inconsistent with its other fills."
+            "description": "The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit's matched lots; or an entry quantity edit that would leave a selected exit's claim above the lot."
           }
         },
         "summary": "Edit a fill.",
@@ -4372,6 +4576,98 @@
           }
         },
         "summary": "Serve a position screenshot (ownership-scoped).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/lots": {
+      "get": {
+        "description": "Authed. One row per entry fill, carrying `available` — the lot's quantity less every other exit's current match. Pass `exitFillId` (an exit of this position) while editing that exit's selection, and its own slices are added back into `available` so the dialog sees what it currently holds. `method` and `jurisdiction` echo the user's resolved tax-lot settings, with no stored jurisdiction read as `other`.\n",
+        "parameters": [
+          {
+            "description": "The position whose lots are listed.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "An exit fill of this position whose own slices are excluded from `available`.",
+            "in": "query",
+            "name": "exitFillId",
+            "required": false,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "jurisdiction": {
+                      "enum": [
+                        "US",
+                        "CA",
+                        "other"
+                      ],
+                      "type": "string"
+                    },
+                    "lots": {
+                      "items": {
+                        "properties": {
+                          "available": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "entryFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "filledAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "price": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "method": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The position's lots, plus the resolved method and jurisdiction."
+          },
+          "404": {
+            "description": "No such position for this user",
+            "or `exitFillId` is not an exit of the position.": null
+          }
+        },
+        "summary": "List a position's entry lots for the specific-identification picker.",
         "tags": [
           "Positions"
         ]
@@ -5547,6 +5843,85 @@
           }
         },
         "summary": "Set the tax jurisdiction.",
+        "tags": [
+          "Expenses"
+        ]
+      }
+    },
+    "/api/users/me/tax-lot-method": {
+      "get": {
+        "description": "Authed. The effective method is the stored value if one is set, otherwise the jurisdiction default (average cost for CA, FIFO otherwise).\n",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "effectiveMethod": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "type": "string"
+                    },
+                    "isDefault": {
+                      "type": "boolean"
+                    },
+                    "taxLotMethod": {
+                      "enum": [
+                        "fifo",
+                        "average"
+                      ],
+                      "nullable": true,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The stored and effective lot method."
+          }
+        },
+        "summary": "Get the tax lot method.",
+        "tags": [
+          "Expenses"
+        ]
+      },
+      "patch": {
+        "description": "Authed. `fifo` or `average` overrides the jurisdiction default; `null` returns to it. Changes only the stored method — no fill, lot choice or ledger row changes.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "taxLotMethod": {
+                    "enum": [
+                      "fifo",
+                      "average"
+                    ],
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "taxLotMethod"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored and effective lot method."
+          },
+          "400": {
+            "description": "Validation error."
+          }
+        },
+        "summary": "Set the tax lot method.",
         "tags": [
           "Expenses"
         ]

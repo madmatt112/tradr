@@ -433,7 +433,14 @@ async function createPositionFor(
 async function addFillFor(
   cookie: string,
   positionId: string,
-  data: { type: 'entry' | 'exit'; price: string; quantity: string; fees: string; filledAt: string },
+  data: {
+    type: 'entry' | 'exit';
+    price: string;
+    quantity: string;
+    fees: string;
+    filledAt: string;
+    lotSelection?: Array<{ entryFillId: string; quantity: string }>;
+  },
 ) {
   const res = await authedRequest('POST', `/api/positions/${positionId}/fills`, cookie, data);
   expect(res.status).toBe(201);
@@ -973,14 +980,70 @@ describe('GET /api/expenses/tax-summary', () => {
     expect(flag.symbol).toBe('AAPL');
     expect(flag.side).toBe('long');
     expect(flag.reason).toBe('repurchase_within_30_days');
-    // realisedLoss is the signed P&L from the SUM query — debit $10 → '-10.0000'.
-    expect(flag.realisedLoss).toBe('-10.0000');
+    // Default jurisdiction=US → FIFO: realisedLoss is the lot row's `net` at
+    // USD minor units, not the raw ledger SUM (task 10, design C9).
+    expect(flag.realisedLoss).toBe('-10.00');
     expect(flag.counterpartyPositionIds).toEqual([reopened.id]);
     expect(body.flags.superficialLosses).toEqual([]);
   });
 
+  it('FIFO: a flag carries its lot fields and a null closedAt for a loss realised on a still-open position (AC 7.1, AC 7.8)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'US');
+
+    // Loss lot: buy 10 @ 100, partially exit 5 @ 90 → the position stays
+    // open (5 remain), so its `closedAt` is null.
+    const position = await createPositionFor(cookie, acct.id, { symbol: 'LOTF' });
+    const entry = await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-04-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-04-01T15:00:00Z');
+    const exit = await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '90',
+      quantity: '5',
+      fees: '0.00',
+      filledAt: '2026-07-01T15:00:00Z',
+    });
+
+    // Same-symbol re-open within 30d of the realisation.
+    const reopened = await createPositionFor(cookie, acct.id, { symbol: 'LOTF' });
+    const reopenedEntry = await addFillFor(cookie, reopened.id, {
+      type: 'entry',
+      price: '95',
+      quantity: '1',
+      fees: '0.00',
+      filledAt: '2026-07-15T15:00:00Z',
+    });
+    await openPositionFor(cookie, reopened.id, '2026-07-15T15:00:00Z');
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.flags.washSales).toHaveLength(1);
+    const flag = body.flags.washSales[0];
+    expect(flag.positionId).toBe(position.id);
+    expect(flag.lossRowId).toBe(`${exit.id}:${entry.id}`);
+    expect(flag.lotEntryFillId).toBe(entry.id);
+    expect(new Date(flag.lotOpenedAt).toISOString()).toBe('2026-04-01T15:00:00.000Z');
+    expect(flag.closedAt).toBeNull();
+    expect(new Date(flag.realisedAt).toISOString()).toBe('2026-07-01T15:00:00.000Z');
+    expect(flag.realisedLoss).toBe('-50.00');
+    expect(flag.counterpartyPositionIds).toEqual([reopened.id]);
+    expect(flag.counterpartyLotIds).toEqual([reopenedEntry.id]);
+  });
+
   it('forward-compat: NULL position_id rows are excluded by the join (Req 7.6)', async () => {
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly; force average cost so
+    // the FIFO default (which reads fills, not ledger_entries) doesn't mask it.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
 
     // Two profit positions so we can null out one and observe the SUM drop.
@@ -1115,6 +1178,302 @@ describe('GET /api/expenses/tax-summary — closed-delete via the real removePos
     // sharp edge: 2025 realised-P&L retroactively changes with nothing in 2025
     // to offset it.
     expect(await taxTotal(cookie, 2025)).toBe('10.00');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/expenses/tax-summary — FIFO lot realisations (design C8)
+// ---------------------------------------------------------------------------
+
+describe('GET /api/expenses/tax-summary — FIFO lot realisations', () => {
+  async function taxSummary(cookie: string, year: number) {
+    const res = await authedRequest('GET', `/api/expenses/tax-summary?year=${year}`, cookie);
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  function expectTermsSumToTotal(body: {
+    realisedPnl: { total: string | null; shortTerm: string | null; longTerm: string | null };
+  }) {
+    const short = Number(body.realisedPnl.shortTerm ?? 0);
+    const long = Number(body.realisedPnl.longTerm ?? 0);
+    expect(short + long).toBeCloseTo(Number(body.realisedPnl.total), 2);
+  }
+
+  // Two entry lots at different dates and prices, opened as one position.
+  async function twoLotPosition(cookie: string, accountId: string, symbol: string) {
+    const position = await createPositionFor(cookie, accountId, { symbol });
+    const lot1 = await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2025-01-10T15:00:00Z',
+    });
+    const lot2 = await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '120',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2025-01-10T15:00:00Z');
+    return { position, lot1, lot2 };
+  }
+
+  it('US partial exit takes the first lot: one row with its basis and term; counts in the exit year only', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'US');
+
+    const { position, lot1 } = await twoLotPosition(cookie, acct.id, 'FIFO');
+    const exit = await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '150',
+      quantity: '5',
+      fees: '0.00',
+      filledAt: '2026-06-01T15:00:00Z',
+    });
+
+    const body = await taxSummary(cookie, 2026);
+    expect(body.lotMethod).toBe('fifo');
+    expect(body.lotRealisations).toHaveLength(1);
+    const row = body.lotRealisations[0];
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        'accountId',
+        'basis',
+        'currency',
+        'entryFillId',
+        'exitFillId',
+        'fees',
+        'lotOpenedAt',
+        'net',
+        'positionId',
+        'proceeds',
+        'quantity',
+        'realisedAt',
+        'symbol',
+        'term',
+      ].sort(),
+    );
+    expect(row.exitFillId).toBe(exit.id);
+    expect(row.entryFillId).toBe(lot1.id);
+    expect(row.positionId).toBe(position.id);
+    expect(row.accountId).toBe(acct.id);
+    expect(row.symbol).toBe('FIFO');
+    expect(row.currency).toBe('USD');
+    expect(new Date(row.lotOpenedAt).toISOString()).toBe('2025-01-10T15:00:00.000Z');
+    expect(new Date(row.realisedAt).toISOString()).toBe('2026-06-01T15:00:00.000Z');
+    expect(Number(row.quantity)).toBe(5);
+    expect(row.proceeds).toBe('750.00');
+    expect(row.basis).toBe('500.00');
+    expect(row.net).toBe('250.00');
+    expect(row.term).toBe('long');
+    expect(body.realisedPnl.total).toBe('250.00');
+    expect(body.realisedPnl.longTerm).toBe('250.00');
+    expectTermsSumToTotal(body);
+
+    // The lot was opened in 2025 but realised in 2026: 2025 shows nothing.
+    const prior = await taxSummary(cookie, 2025);
+    expect(prior.lotRealisations).toEqual([]);
+  });
+
+  it('US exit over two lots gives two rows, each with its own basis and term (AC 5.9)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'US');
+
+    const { position, lot1, lot2 } = await twoLotPosition(cookie, acct.id, 'SPLT');
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '150',
+      quantity: '15',
+      fees: '0.00',
+      filledAt: '2026-06-01T15:00:00Z',
+    });
+
+    const body = await taxSummary(cookie, 2026);
+    expect(body.lotRealisations).toHaveLength(2);
+    const byLot = new Map(
+      body.lotRealisations.map((r: { entryFillId: string }) => [r.entryFillId, r]),
+    );
+    expect(byLot.get(lot1.id)).toMatchObject({ basis: '1000.00', net: '500.00', term: 'long' });
+    expect(byLot.get(lot2.id)).toMatchObject({ basis: '600.00', net: '150.00', term: 'short' });
+    expect(body.realisedPnl.total).toBe('650.00');
+    expect(body.realisedPnl.shortTerm).toBe('150.00');
+    expect(body.realisedPnl.longTerm).toBe('500.00');
+    expectTermsSumToTotal(body);
+  });
+
+  it('US rows at 365 and 366 days held are short and long', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'US');
+
+    // 2025 is not a leap year: 2025-03-01 → 2026-03-01 is exactly 365 days.
+    await openAndClose(cookie, acct.id, {
+      symbol: 'D365',
+      entryPrice: '100',
+      exitPrice: '110',
+      openedAt: '2025-03-01T15:00:00Z',
+      closedAt: '2026-03-01T15:00:00Z',
+    });
+    await openAndClose(cookie, acct.id, {
+      symbol: 'D366',
+      entryPrice: '100',
+      exitPrice: '130',
+      openedAt: '2025-02-28T15:00:00Z',
+      closedAt: '2026-03-01T15:00:00Z',
+    });
+
+    const body = await taxSummary(cookie, 2026);
+    const bySymbol = new Map(
+      body.lotRealisations.map((r: { symbol: string; term: string }) => [r.symbol, r.term]),
+    );
+    expect(bySymbol.get('D365')).toBe('short');
+    expect(bySymbol.get('D366')).toBe('long');
+    expect(body.realisedPnl.shortTerm).toBe('10.00');
+    expect(body.realisedPnl.longTerm).toBe('30.00');
+    expectTermsSumToTotal(body);
+  });
+
+  it('a fully exited position: FIFO rows net to the ledger (average cost) figure', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+
+    const position = await createPositionFor(cookie, acct.id, { symbol: 'FULL' });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '1.00',
+      filledAt: '2026-01-10T15:00:00Z',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '120',
+      quantity: '10',
+      fees: '1.00',
+      filledAt: '2026-02-10T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-01-10T15:00:00Z');
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '130',
+      quantity: '15',
+      fees: '1.00',
+      filledAt: '2026-04-01T15:00:00Z',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '140',
+      quantity: '5',
+      fees: '1.00',
+      filledAt: '2026-05-01T15:00:00Z',
+    });
+    await closePositionFor(cookie, position.id, '2026-05-01T15:00:00Z');
+
+    const fifo = await taxSummary(cookie, 2026);
+    expect(fifo.lotMethod).toBe('fifo');
+    const rowNet = fifo.lotRealisations.reduce(
+      (sum: number, r: { net: string }) => sum + Number(r.net),
+      0,
+    );
+    expect(rowNet).toBeCloseTo(Number(fifo.realisedPnl.total), 2);
+
+    expect((await patchLotMethod(cookie, 'average')).status).toBe(200);
+    const average = await taxSummary(cookie, 2026);
+    expect(average.lotMethod).toBe('average');
+    expect(fifo.realisedPnl.total).toBe(average.realisedPnl.total);
+  });
+
+  it('a CA user with no stored method gets average cost, no lot rows and the ledger figures', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    await patchJurisdiction(cookie, 'CA');
+
+    await openAndClose(cookie, acct.id, {
+      symbol: 'CAAV',
+      entryPrice: '100',
+      exitPrice: '120',
+      openedAt: '2026-03-01T15:00:00Z',
+      closedAt: '2026-09-15T15:00:00Z',
+    });
+
+    const body = await taxSummary(cookie, 2026);
+    expect(body.lotMethod).toBe('average');
+    expect(body.lotRealisations).toEqual([]);
+    expect(body.realisedPnl.total).toBe('20.00');
+    expect(body.realisedPnl.shortTerm).toBeNull();
+    expect(body.realisedPnl.longTerm).toBeNull();
+  });
+
+  it('a stored lot selection is ignored under average cost and re-derived under FIFO (AC 3.12)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+
+    const position = await createPositionFor(cookie, acct.id, { symbol: 'PICK' });
+    const lot1 = await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-01-10T15:00:00Z',
+    });
+    const lot2 = await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '120',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-02-10T15:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-01-10T15:00:00Z');
+    // The first exit picks the later lot instead of the FIFO lot.
+    const pickedExit = await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '150',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-04-01T15:00:00Z',
+      lotSelection: [{ entryFillId: lot2.id, quantity: '10' }],
+    });
+    const lastExit = await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '150',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-05-01T15:00:00Z',
+    });
+    await closePositionFor(cookie, position.id, '2026-05-01T15:00:00Z');
+
+    expect((await patchLotMethod(cookie, 'average')).status).toBe(200);
+    const average = await taxSummary(cookie, 2026);
+    expect(average.lotMethod).toBe('average');
+    expect(average.lotRealisations).toEqual([]);
+    expect(average.realisedPnl.total).toBe('800.00'); // 20 × 150 − (1000 + 1200)
+
+    expect((await patchLotMethod(cookie, 'fifo')).status).toBe(200);
+    const fifo = await taxSummary(cookie, 2026);
+    expect(fifo.lotMethod).toBe('fifo');
+    const rows = fifo.lotRealisations as Array<{
+      exitFillId: string;
+      entryFillId: string;
+      basis: string;
+      net: string;
+    }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.exitFillId === pickedExit.id)).toMatchObject({
+      entryFillId: lot2.id,
+      basis: '1200.00',
+      net: '300.00',
+    });
+    expect(rows.find((r) => r.exitFillId === lastExit.id)).toMatchObject({
+      entryFillId: lot1.id,
+      basis: '1000.00',
+      net: '500.00',
+    });
+    expect(fifo.realisedPnl.total).toBe('800.00');
   });
 });
 
@@ -1309,6 +1668,9 @@ describe('boundary-year transition + invariants', () => {
   it('reversal-cancellation: paired (position_pnl debit, position_pnl_reversal credit) cancel to zero — both rows have positive amount (post-v3-fix #1)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1404,6 +1766,9 @@ describe('boundary-year transition + invariants', () => {
   it('orphaned reversal forward-compat probe: standalone position_pnl_reversal credit contributes +amount to the SUM (v2-8, fixture pinned by v3-7)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1460,6 +1825,9 @@ describe('boundary-year transition + invariants', () => {
   it('balance_adjustment rows are excluded from realised P&L (ledger-balances Req 8.10)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1530,6 +1898,9 @@ describe('boundary-year transition + invariants', () => {
   it('cash-movement rows are excluded from realised P&L and fees (ledger-cash-movements Req 5.1-5.4)', async () => {
     vi.useRealTimers();
     const { cookie } = await registerAndGetCookie();
+    // This test probes the ledger-based SUM directly (hand-inserted rows, no
+    // fills); force average cost so the FIFO default doesn't read empty lots.
+    await patchLotMethod(cookie, 'average');
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     const me = await getMe(cookie);
 
@@ -1609,6 +1980,119 @@ describe('boundary-year transition + invariants', () => {
     expect(feeRes.status).toBe(200);
     const feeBody = await feeRes.json();
     expect(feeBody.totalsByAccount).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET/PATCH /api/users/me/tax-lot-method
+// ---------------------------------------------------------------------------
+
+async function patchLotMethod(cookie: string, value: 'fifo' | 'average' | null) {
+  return authedRequest('PATCH', '/api/users/me/tax-lot-method', cookie, { taxLotMethod: value });
+}
+
+describe('GET/PATCH /api/users/me/tax-lot-method', () => {
+  it('defaults a new user (no jurisdiction, no stored method) to FIFO', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const res = await authedRequest('GET', '/api/users/me/tax-lot-method', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBeNull();
+    expect(body.effectiveMethod).toBe('fifo');
+    expect(body.isDefault).toBe(true);
+  });
+
+  it('defaults a CA user with no stored method to average cost', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchJurisdiction(cookie, 'CA');
+
+    const res = await authedRequest('GET', '/api/users/me/tax-lot-method', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBeNull();
+    expect(body.effectiveMethod).toBe('average');
+    expect(body.isDefault).toBe(true);
+  });
+
+  it('a stored method overrides the CA jurisdiction default', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchJurisdiction(cookie, 'CA');
+
+    const res = await patchLotMethod(cookie, 'fifo');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBe('fifo');
+    expect(body.effectiveMethod).toBe('fifo');
+    expect(body.isDefault).toBe(false);
+  });
+
+  it('PATCH null clears the stored method and returns to the jurisdiction default', async () => {
+    const { cookie } = await registerAndGetCookie();
+    await patchJurisdiction(cookie, 'CA');
+    await patchLotMethod(cookie, 'fifo');
+
+    const res = await patchLotMethod(cookie, null);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.taxLotMethod).toBeNull();
+    expect(body.effectiveMethod).toBe('average');
+    expect(body.isDefault).toBe(true);
+  });
+
+  it("PATCH 'lifo' is rejected with 400", async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const res = await authedRequest('PATCH', '/api/users/me/tax-lot-method', cookie, {
+      taxLotMethod: 'lifo',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('requires a session for both GET and PATCH', async () => {
+    const headers = { 'X-Forwarded-For': uniqueIp() };
+
+    const getRes = await app.request('/api/users/me/tax-lot-method', { headers });
+    expect(getRes.status).toBe(401);
+
+    const patchRes = await app.request('/api/users/me/tax-lot-method', {
+      method: 'PATCH',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taxLotMethod: 'fifo' }),
+    });
+    expect(patchRes.status).toBe(401);
+  });
+
+  it("a PATCH changes only the user's stored method, leaving fills and ledger rows unchanged", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'USD acct', 'USD');
+    const position = await openAndClose(cookie, acct.id, {
+      symbol: 'LOTM',
+      entryPrice: '100',
+      exitPrice: '110',
+      openedAt: '2026-01-10T15:00:00Z',
+      closedAt: '2026-02-10T15:00:00Z',
+    });
+
+    const fillsBeforeRes = await authedRequest('GET', `/api/positions/${position.id}`, cookie);
+    const fillsBefore = (await fillsBeforeRes.json()).fills;
+    const ledgerBefore = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, position.id));
+
+    const res = await patchLotMethod(cookie, 'fifo');
+    expect(res.status).toBe(200);
+
+    const fillsAfterRes = await authedRequest('GET', `/api/positions/${position.id}`, cookie);
+    const fillsAfter = (await fillsAfterRes.json()).fills;
+    const ledgerAfter = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.positionId, position.id));
+
+    expect(fillsAfter).toEqual(fillsBefore);
+    expect(ledgerAfter).toEqual(ledgerBefore);
   });
 });
 

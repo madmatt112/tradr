@@ -13,13 +13,16 @@
  * `@tradr/shared` so the assertions stay in sync with the runtime constants
  * — the whole point of this test is to catch tuple-vs-CHECK drift.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import postgres from 'postgres';
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 
 import { CURRENCY_CODES } from '@tradr/shared/constants/currencies';
 import { EXPENSE_CATEGORIES } from '@tradr/shared/constants/expense-categories';
 
-import { runMigrations, runPostMigrations } from './migrate';
+import { runMigrations, runPostMigrations, MIGRATIONS_DIR } from './migrate';
 
 const DATABASE_URL =
   process.env.MIGRATE_TEST_DATABASE_URL ||
@@ -122,5 +125,67 @@ describe('expenses migration — constraints', () => {
         `Expected users_tax_jurisdiction_chk def to contain '${value}'. ` + `Actual:\n  ${def}`,
       ).toBe(true);
     }
+  });
+
+  // tax-lots task 2 (design C2, Data Models; AC 2.2): the stored method lives
+  // in a users column beside tax_jurisdiction, with the same CHECK shape.
+  it('users_tax_lot_method_chk lists fifo, average', async () => {
+    const def = await getConstraintDef('users_tax_lot_method_chk');
+    expect(def, 'Expected users_tax_lot_method_chk in pg_constraint').not.toBeNull();
+    for (const value of ['fifo', 'average']) {
+      expect(
+        def!.includes(`'${value}'`),
+        `Expected users_tax_lot_method_chk def to contain '${value}'. ` + `Actual:\n  ${def}`,
+      ).toBe(true);
+    }
+  });
+});
+
+// tax-lots task 2 (design C3, Data Models; AC 3.9, AC 9.5): both fill
+// references on fill_lot_selections cascade, so removing an exit fill, or
+// removing its position (which cascades to its fills), removes the exit's
+// selection rows with it — and so does deleting the owning user, through the
+// pre-existing users -> positions -> fills cascade chain this task does not
+// change.
+describe('tax-lots migration — fill_lot_selections cascades', () => {
+  it('fill_lot_selections_exit_fill_id_fills_id_fk is ON DELETE CASCADE', async () => {
+    const def = await getConstraintDef('fill_lot_selections_exit_fill_id_fills_id_fk');
+    expect(
+      def,
+      'Expected fill_lot_selections_exit_fill_id_fills_id_fk in pg_constraint',
+    ).not.toBeNull();
+    expect(
+      def!.includes('ON DELETE CASCADE'),
+      `Expected fill_lot_selections_exit_fill_id_fills_id_fk to be ON DELETE CASCADE. ` +
+        `Actual:\n  ${def}`,
+    ).toBe(true);
+  });
+
+  it('fill_lot_selections_entry_fill_id_fills_id_fk is ON DELETE CASCADE', async () => {
+    const def = await getConstraintDef('fill_lot_selections_entry_fill_id_fills_id_fk');
+    expect(
+      def,
+      'Expected fill_lot_selections_entry_fill_id_fills_id_fk in pg_constraint',
+    ).not.toBeNull();
+    expect(
+      def!.includes('ON DELETE CASCADE'),
+      `Expected fill_lot_selections_entry_fill_id_fills_id_fk to be ON DELETE CASCADE. ` +
+        `Actual:\n  ${def}`,
+    ).toBe(true);
+  });
+});
+
+// tax-lots task 2 (AC 1.5): the migration adds the new column and table only —
+// no backfill, no write to an existing fills, positions or ledger_entries row.
+describe('tax-lots migration 0039 — no row rewrites', () => {
+  it('contains no INSERT, UPDATE or DELETE statement', () => {
+    const migrationPath = join(MIGRATIONS_DIR, '0039_tax_lots.sql');
+    const migrationSql = readFileSync(migrationPath, 'utf8');
+    expect(
+      /\b(INSERT\s+INTO|UPDATE\s+"|DELETE\s+FROM)\b/i.test(migrationSql),
+      `Expected ${migrationPath} to contain no INSERT, UPDATE or DELETE statement ` +
+        `(no backfill of fills, positions or ledger_entries rows). Actual contents:\n` +
+        migrationSql,
+    ).toBe(false);
   });
 });

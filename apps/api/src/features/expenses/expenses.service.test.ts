@@ -14,13 +14,14 @@ import {
 import { NotFoundError, ValidationError } from '@/lib/errors';
 
 import { aggregateFeesByAccountAndAssetType } from './expenses.fee-rollup';
-import type { CandidatePositionRow, FeeRollupRow, RealisedPositionRow } from './expenses.query';
+import type { FeeRollupRow, RealisedPositionRow } from './expenses.query';
 import {
   applyYearEndSpotConversion,
   classifyUSHoldPeriod,
   findSuperficialLossFlags,
   findWashSaleFlags,
 } from './expenses.tax';
+import type { CandidateLot, LossUnit } from './expenses.tax';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -203,15 +204,40 @@ function realisedRow(overrides: Partial<RealisedPositionRow>): RealisedPositionR
   };
 }
 
-function candidateRow(overrides: Partial<CandidatePositionRow>): CandidatePositionRow {
+// Task 10 — lot-grain inputs to `findWashSaleFlags` / `findSuperficialLossFlags`
+// (design C9). `lossUnit` defaults to the FIFO shape (a losing lot, with
+// `lotEntryFillId`/`lotOpenedAt` set); average-cost cases null those two
+// fields out explicitly, as `getTaxSummary` does for a position-grain row.
+function lossUnit(overrides: Partial<LossUnit>): LossUnit {
   return {
-    positionId: overrides.positionId ?? 'cand-x',
-    openedAt: overrides.openedAt ?? new Date('2026-06-20T00:00:00Z'),
-    closedAt: overrides.closedAt ?? null,
+    lossRowId: overrides.lossRowId ?? 'exit-x:entry-x',
+    positionId: overrides.positionId ?? 'pos-x',
     symbol: overrides.symbol ?? 'AAPL',
     assetType: overrides.assetType ?? 'stock',
     side: overrides.side ?? 'long',
     accountId: overrides.accountId ?? 'acct-a',
+    currency: overrides.currency ?? 'USD',
+    openedAt: overrides.openedAt ?? new Date('2026-01-01T00:00:00Z'),
+    // `in` rather than `??`: a case that deliberately passes `closedAt: null`
+    // (a loss realised on a still-open position) must keep the null.
+    closedAt: 'closedAt' in overrides ? overrides.closedAt! : new Date('2026-06-15T00:00:00Z'),
+    realisedAt: overrides.realisedAt ?? overrides.closedAt ?? new Date('2026-06-15T00:00:00Z'),
+    lotEntryFillId: 'lotEntryFillId' in overrides ? overrides.lotEntryFillId! : null,
+    lotOpenedAt: 'lotOpenedAt' in overrides ? overrides.lotOpenedAt! : null,
+    realisedPnl: overrides.realisedPnl ?? '-100',
+  };
+}
+
+function candidateLot(overrides: Partial<CandidateLot>): CandidateLot {
+  return {
+    entryFillId: overrides.entryFillId ?? 'entry-cand',
+    positionId: overrides.positionId ?? 'cand-x',
+    symbol: overrides.symbol ?? 'AAPL',
+    assetType: overrides.assetType ?? 'stock',
+    side: overrides.side ?? 'long',
+    accountId: overrides.accountId ?? 'acct-a',
+    openedAt: overrides.openedAt ?? new Date('2026-06-20T00:00:00Z'),
+    endedAt: 'endedAt' in overrides ? overrides.endedAt! : null,
   };
 }
 
@@ -281,12 +307,200 @@ describe('applyYearEndSpotConversion', () => {
   });
 });
 
-describe('findWashSaleFlags', () => {
+// ---------------------------------------------------------------------------
+// Task 10 (design C9) — flag helpers move from position-grain
+// `RealisedPositionRow` / `CandidatePositionRow` inputs to lot-grain
+// `LossUnit` / `CandidateLot`, with a new `method` parameter threaded through
+// matching. The suites below are split in two: "lot-grain" covers the new
+// FIFO/average matching nuances the lot shapes make possible; "average-cost
+// regression" moves every pre-existing scenario onto the new inputs under
+// `method: 'average'`, one candidate position mapped to one candidate lot,
+// keeping each scenario's original expected flags.
+// ---------------------------------------------------------------------------
+
+describe('findWashSaleFlags — lot-grain (Task 10, design C9)', () => {
   const log = { warn: vi.fn() };
 
-  it('stock match: candidate AAPL opened 5d after AAPL loss → flagged repurchase_within_30_days', () => {
+  it('FIFO: flag carries lossRowId, lotEntryFillId and lotOpenedAt through unchanged (AC 7.1, AC 7.8)', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'exit-1:entry-1',
+      positionId: 'loss-pos',
+      lotEntryFillId: 'entry-1',
+      lotOpenedAt: new Date('2026-01-01T00:00:00Z'),
+      realisedAt: new Date('2026-06-15T00:00:00Z'),
+    });
+    const candidate = candidateLot({
+      positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].lossRowId).toBe('exit-1:entry-1');
+    expect(flags[0].lotEntryFillId).toBe('entry-1');
+    expect(flags[0].lotOpenedAt).toEqual(new Date('2026-01-01T00:00:00Z'));
+  });
+
+  it('average cost: flag carries lossRowId position:currency with null lot fields (AC 7.2, AC 7.8)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({
+      lossRowId: 'loss-pos:USD',
+      positionId: 'loss-pos',
+      lotEntryFillId: null,
+      lotOpenedAt: null,
+      realisedAt: new Date('2026-06-15T00:00:00Z'),
+    });
+    const candidate = candidateLot({
+      positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].lossRowId).toBe('loss-pos:USD');
+    expect(flags[0].lotEntryFillId).toBeNull();
+    expect(flags[0].lotOpenedAt).toBeNull();
+  });
+
+  it('FIFO: an in-window lot of the same position flags, but the losing lot itself is excluded (AC 7.4)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({
+      lossRowId: 'exit-1:entry-loss',
+      positionId: 'P1',
+      lotEntryFillId: 'entry-loss',
+      realisedAt: new Date('2026-06-15T00:00:00Z'),
+    });
+    const losingLotItself = candidateLot({
+      positionId: 'P1',
+      entryFillId: 'entry-loss',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const otherLotSamePosition = candidateLot({
+      positionId: 'P1',
+      entryFillId: 'entry-other',
+      openedAt: new Date('2026-06-22T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags(
+      [loss],
+      [losingLotItself, otherLotSamePosition],
+      'fifo',
+      parseOccUnderlying,
+      log,
+    );
+    expect(flags).toHaveLength(1);
+    expect(flags[0].counterpartyLotIds).toEqual(['entry-other']);
+  });
+
+  it('average cost: lots on the losing position never flag (AC 7.4)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({
+      lossRowId: 'P1:USD',
+      positionId: 'P1',
+      lotEntryFillId: null,
+      lotOpenedAt: null,
+      realisedAt: new Date('2026-06-15T00:00:00Z'),
+    });
+    const candidate = candidateLot({
+      positionId: 'P1',
+      entryFillId: 'entry-other',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('a lot in another position held open through the window flags under FIFO (AC 7.5)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({ positionId: 'P1', realisedAt: new Date('2026-06-15T00:00:00Z') });
+    const candidate = candidateLot({
+      positionId: 'P2',
+      entryFillId: 'entry-held',
+      openedAt: new Date('2026-05-01T00:00:00Z'),
+      endedAt: null,
+    });
+    const flags = findWashSaleFlags([loss], [candidate], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].reason).toBe('held_open_in_30d_window');
+    expect(flags[0].counterpartyLotIds).toEqual(['entry-held']);
+  });
+
+  // "Held open in another position" under average cost is already covered by
+  // the "held-open window" case in the average-cost regression suite below
+  // (that branch is unaffected by method — design C9: "as today, under either
+  // method") — folding here rather than duplicating it.
+
+  it('FIFO: an older lot of the same position is not held open — only an in-window same-position lot counts (AC 7.5)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({ positionId: 'P1', realisedAt: new Date('2026-06-15T00:00:00Z') });
+    const candidate = candidateLot({
+      positionId: 'P1',
+      entryFillId: 'entry-older',
+      openedAt: new Date('2026-05-01T00:00:00Z'),
+      endedAt: null,
+    });
+    const flags = findWashSaleFlags([loss], [candidate], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(0);
+  });
+
+  // The same-UTC-day exclusion (AC 7.4) is unaffected by method or lot shape —
+  // it is covered by the "same-day re-open" case in the average-cost
+  // regression suite below; folding here rather than duplicating it.
+
+  it('options match on the underlying (AC 7.3)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({
+      positionId: 'P1',
+      symbol: 'AAPL 250320C150',
+      assetType: 'option',
+      lotEntryFillId: 'entry-loss-opt',
+      realisedAt: new Date('2026-06-15T00:00:00Z'),
+    });
+    const candidate = candidateLot({
+      positionId: 'P2',
+      entryFillId: 'entry-opt-cand',
+      symbol: 'AAPL 250417C200',
+      assetType: 'option',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candidate], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].underlying).toBe('AAPL');
+  });
+
+  // A loss realised on a still-open position being flagged (closedAt null) is
+  // unaffected by method or lot shape — covered by "flags a loss realized on
+  // a still-OPEN position" in the average-cost regression suite below.
+
+  it('counterpartyLotIds names the matched entry fills, distinct from counterpartyPositionIds (AC 7.8)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({ positionId: 'P1', realisedAt: new Date('2026-06-15T00:00:00Z') });
+    const candA = candidateLot({
+      positionId: 'cand-A',
+      entryFillId: 'entry-A',
+      openedAt: new Date('2026-05-01T00:00:00Z'),
+      endedAt: null,
+    });
+    const candB = candidateLot({
+      positionId: 'cand-B',
+      entryFillId: 'entry-B',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+    });
+    const flags = findWashSaleFlags([loss], [candA, candB], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].reason).toBe('repurchase_within_30_days');
+    expect([...flags[0].counterpartyPositionIds].sort()).toEqual(['cand-A', 'cand-B']);
+    expect([...flags[0].counterpartyLotIds].sort()).toEqual(['entry-A', 'entry-B']);
+  });
+});
+
+describe('findWashSaleFlags — average-cost regression (Task 10, moved from CandidatePositionRow inputs)', () => {
+  const log = { warn: vi.fn() };
+
+  it('stock match: candidate AAPL opened 5d after AAPL loss flags repurchase_within_30_days', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       assetType: 'stock',
@@ -294,156 +508,172 @@ describe('findWashSaleFlags', () => {
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       assetType: 'stock',
       side: 'long',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
     expect(flags[0].reason).toBe('repurchase_within_30_days');
     expect(flags[0].counterpartyPositionIds).toEqual(['cand-1']);
   });
 
-  it('same-day re-open: candidate opened on loss.closedAt day → NOT flagged', () => {
+  it('same-day re-open: candidate opened on the loss day is NOT flagged', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       closedAt: new Date('2026-06-15T12:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       openedAt: new Date('2026-06-15T18:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(0);
   });
 
-  it('direction mismatch: long loss + short candidate within 30d → NOT flagged', () => {
+  it('direction mismatch: long loss + short candidate within 30d is NOT flagged', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       side: 'long',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       side: 'short',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(0);
   });
 
-  it('cross-account: loss in acct A, candidate in acct B → flagged (taxpayer-wide)', () => {
+  it('cross-account: loss in acct A, candidate in acct B flags (taxpayer-wide)', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       accountId: 'acct-a',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       accountId: 'acct-b',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
     expect(flags[0].counterpartyPositionIds).toEqual(['cand-1']);
   });
 
-  it('held-open window: candidate opened 2026-05-01 never closed, loss closed 2026-06-15 → held_open_in_30d_window', () => {
+  it('held-open window: candidate opened 2026-05-01 never exited, loss realised 2026-06-15 flags held_open_in_30d_window', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       openedAt: new Date('2026-05-01T00:00:00Z'),
-      closedAt: null,
+      endedAt: null,
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
     expect(flags[0].reason).toBe('held_open_in_30d_window');
   });
 
-  it('mixed candidate: A held-open + B repurchase → repurchase_within_30_days + both counterparties', () => {
+  it('mixed candidate: A held-open + B repurchase flags repurchase_within_30_days with both counterparties', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candA = candidateRow({
+    const candA = candidateLot({
       positionId: 'cand-A',
+      entryFillId: 'entry-A',
       symbol: 'AAPL',
       openedAt: new Date('2026-05-01T00:00:00Z'),
-      closedAt: null,
+      endedAt: null,
     });
-    const candB = candidateRow({
+    const candB = candidateLot({
       positionId: 'cand-B',
+      entryFillId: 'entry-B',
       symbol: 'AAPL',
       openedAt: new Date('2026-06-20T00:00:00Z'),
-      closedAt: null,
+      endedAt: null,
     });
-    const flags = findWashSaleFlags([loss], [candA, candB], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candA, candB], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
     expect(flags[0].reason).toBe('repurchase_within_30_days');
     expect([...flags[0].counterpartyPositionIds].sort()).toEqual(['cand-A', 'cand-B'].sort());
   });
 
-  it('option underlying match: AAPL 250320C150 loss + AAPL 250417C200 candidate → flagged', () => {
+  it('option underlying match: AAPL 250320C150 loss + AAPL 250417C200 candidate flags', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL 250320C150',
       assetType: 'option',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL 250417C200',
       assetType: 'option',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
     expect(flags[0].underlying).toBe('AAPL');
   });
 
-  it('option parser returns null: candidate symbol "1234" → skipped + log emitted', () => {
+  it('option parser returns null: candidate symbol "1234" is skipped and logged', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL 250320C150',
       assetType: 'option',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-bad',
+      entryFillId: 'entry-cand-bad',
       symbol: '1234',
       assetType: 'option',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(0);
     expect(log.warn).toHaveBeenCalledWith({
       positionId: 'cand-bad',
@@ -451,22 +681,24 @@ describe('findWashSaleFlags', () => {
     });
   });
 
-  it('asset-type partition: stock AAPL loss + option AAPL candidate → NOT flagged', () => {
+  it('asset-type partition: stock AAPL loss + option AAPL candidate is NOT flagged', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       assetType: 'stock',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL 250417C200',
       assetType: 'option',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(0);
   });
 
@@ -479,7 +711,8 @@ describe('findWashSaleFlags', () => {
 
   it('flags a loss realized on a still-OPEN position (closedAt null)', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-open:USD',
       positionId: 'loss-open',
       symbol: 'AAPL',
       assetType: 'stock',
@@ -489,14 +722,15 @@ describe('findWashSaleFlags', () => {
       realisedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-open',
+      entryFillId: 'entry-cand-open',
       symbol: 'AAPL',
       assetType: 'stock',
       side: 'long',
       openedAt: new Date('2026-06-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     // Previously zero — the loss was skipped entirely for having no closedAt.
     expect(flags).toHaveLength(1);
     expect(flags[0].reason).toBe('repurchase_within_30_days');
@@ -509,7 +743,8 @@ describe('findWashSaleFlags', () => {
     // Loss realized 1 March by a partial exit; the position did not go flat
     // until 20 April. A repurchase on 10 March is 9 days after the REALIZATION
     // (inside the window) but 41 days before the CLOSE (outside it).
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-staged:USD',
       positionId: 'loss-staged',
       symbol: 'AAPL',
       assetType: 'stock',
@@ -518,14 +753,15 @@ describe('findWashSaleFlags', () => {
       closedAt: new Date('2026-04-20T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-staged',
+      entryFillId: 'entry-cand-staged',
       symbol: 'AAPL',
       assetType: 'stock',
       side: 'long',
       openedAt: new Date('2026-03-10T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
     expect(flags[0].reason).toBe('repurchase_within_30_days');
   });
@@ -535,7 +771,8 @@ describe('findWashSaleFlags', () => {
     // Mirror of the above: 15 May is inside +/-30d of the 20 April close but 75
     // days after the 1 March realization. Anchoring on the close date would
     // raise a false flag here.
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-stale:USD',
       positionId: 'loss-stale',
       symbol: 'AAPL',
       assetType: 'stock',
@@ -544,55 +781,91 @@ describe('findWashSaleFlags', () => {
       closedAt: new Date('2026-04-20T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-stale',
+      entryFillId: 'entry-cand-stale',
       symbol: 'AAPL',
       assetType: 'stock',
       side: 'long',
       openedAt: new Date('2026-05-15T00:00:00Z'),
-      closedAt: new Date('2026-05-20T00:00:00Z'),
+      endedAt: new Date('2026-05-20T00:00:00Z'),
     });
-    const flags = findWashSaleFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findWashSaleFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(0);
   });
 });
 
-describe('findSuperficialLossFlags', () => {
+describe('findSuperficialLossFlags — lot-grain (Task 10, design C9)', () => {
   const log = { warn: vi.fn() };
 
-  it('candidate acquired within 30d AND still open at +30d → flagged', () => {
+  it('CA: a lot in-window but fully exited before realisedAt + 30 days is NOT flagged (AC 7.6)', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({ positionId: 'P1', realisedAt: new Date('2026-06-15T00:00:00Z') });
+    const candidate = candidateLot({
+      positionId: 'P2',
+      entryFillId: 'entry-ca',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+      endedAt: new Date('2026-07-01T00:00:00Z'),
+    });
+    const flags = findSuperficialLossFlags([loss], [candidate], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(0);
+  });
+
+  it('CA: a lot in-window and still open past realisedAt + 30 days is flagged (AC 7.6)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({ positionId: 'P1', realisedAt: new Date('2026-06-15T00:00:00Z') });
+    const candidate = candidateLot({
+      positionId: 'P2',
+      entryFillId: 'entry-ca',
+      openedAt: new Date('2026-06-20T00:00:00Z'),
+      endedAt: null,
+    });
+    const flags = findSuperficialLossFlags([loss], [candidate], 'fifo', parseOccUnderlying, log);
+    expect(flags).toHaveLength(1);
+    expect(flags[0].counterpartyLotIds).toEqual(['entry-ca']);
+  });
+});
+
+describe('findSuperficialLossFlags — average-cost regression (Task 10, moved from CandidatePositionRow inputs)', () => {
+  const log = { warn: vi.fn() };
+
+  it('candidate acquired within 30d AND still open at +30d flags', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       openedAt: new Date('2026-06-20T00:00:00Z'),
-      closedAt: null,
+      endedAt: null,
     });
-    const flags = findSuperficialLossFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findSuperficialLossFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(1);
   });
 
-  it('candidate acquired within 30d but closed BEFORE +30d → NOT flagged', () => {
+  it('candidate acquired within 30d but closed BEFORE +30d is NOT flagged', () => {
     log.warn.mockClear();
-    const loss = realisedRow({
+    const loss = lossUnit({
+      lossRowId: 'loss-1:USD',
       positionId: 'loss-1',
       symbol: 'AAPL',
       closedAt: new Date('2026-06-15T00:00:00Z'),
       realisedPnl: '-100',
     });
-    const candidate = candidateRow({
+    const candidate = candidateLot({
       positionId: 'cand-1',
+      entryFillId: 'entry-cand-1',
       symbol: 'AAPL',
       openedAt: new Date('2026-06-20T00:00:00Z'),
-      closedAt: new Date('2026-07-01T00:00:00Z'),
+      endedAt: new Date('2026-07-01T00:00:00Z'),
     });
-    const flags = findSuperficialLossFlags([loss], [candidate], parseOccUnderlying, log);
+    const flags = findSuperficialLossFlags([loss], [candidate], 'average', parseOccUnderlying, log);
     expect(flags).toHaveLength(0);
   });
 });

@@ -36,6 +36,11 @@ export const users = pgTable(
     // Etc/* zones.
     timezone: varchar('timezone', { length: 64 }),
     taxJurisdiction: varchar('tax_jurisdiction', { length: 8 }),
+    // The user's stored lot-matching method for realised-gain reporting
+    // (tax-lots C2). NULL means "no explicit choice" and is resolved at read
+    // time to the jurisdiction default by resolveLotMethod — like
+    // tax_jurisdiction above, there is no DB default and no backfill (AC 1.5).
+    taxLotMethod: varchar('tax_lot_method', { length: 8 }),
     theme: varchar('theme', { length: 8 }).notNull().default('system'),
     // Which account figure the position-sizing calculator's buying-power cap is
     // computed against (calculator-balance-sizing). Defaults to 'cash' — including
@@ -81,6 +86,10 @@ export const users = pgTable(
     check(
       'users_tax_jurisdiction_chk',
       sql`${t.taxJurisdiction} IS NULL OR ${t.taxJurisdiction} IN ('US', 'CA', 'other')`,
+    ),
+    check(
+      'users_tax_lot_method_chk',
+      sql`${t.taxLotMethod} IS NULL OR ${t.taxLotMethod} IN ('fifo', 'average')`,
     ),
     check('users_theme_chk', sql`${t.theme} IN ('light','dark','system')`),
     check('users_buying_power_basis_chk', sql`${t.buyingPowerBasis} IN ('cash','balance')`),

@@ -11,6 +11,8 @@
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 
+import { EXPENSE_CATEGORIES } from '@tradr/shared/constants/expense-categories';
+
 import { mulberry32 } from '@/db/seed/rng';
 
 // COPY default text format escapes (tab, newline, CR, backslash). Our generated
@@ -24,6 +26,17 @@ function escapeTsv(value: string): string {
     .replace(/\t/g, '\\t')
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '\\r');
+}
+
+// `escapeTsv` must never run on `NULL_TOKEN` itself — it would double its one
+// backslash into `\\N`, which COPY decodes as the literal two-char string
+// "\N" rather than the SQL NULL marker. Harmless for a nullable `text`
+// column (stores the garbage string), but fatal for a `timestamp` or `uuid`
+// column — COPY rejects the value, and postgres.js's `.writable()` hangs
+// instead of rejecting on that error. Every `cells.map(...)` below must use
+// this, not `escapeTsv`, directly.
+function tsvCell(value: string): string {
+  return value === NULL_TOKEN ? NULL_TOKEN : escapeTsv(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -43,14 +56,11 @@ export const EXPENSES_COPY_COLUMNS = [
   'updated_at',
 ] as const;
 
-const EXPENSE_CATEGORIES_LITE = [
-  'software',
-  'subscriptions',
-  'education',
-  'hardware',
-  'office',
-  'other',
-] as const;
+// `expenses_category_chk` only allows `EXPENSE_CATEGORIES` (not the `'subscriptions'`
+// / `'office'` values this fixture used to emit — those violated the CHECK
+// constraint, so the Scenario 1 COPY never raised an error it could surface
+// through `pipeline()` and the bench's `beforeAll` hung indefinitely instead).
+const EXPENSE_CATEGORIES_LITE = EXPENSE_CATEGORIES;
 
 export interface ExpensesFixtureParams {
   userId: string;
@@ -111,7 +121,7 @@ export function buildExpensesCopyStream(params: ExpensesFixtureParams): Readable
           createdAt,
           createdAt,
         ];
-        chunk += cells.map(escapeTsv).join('\t') + '\n';
+        chunk += cells.map(tsvCell).join('\t') + '\n';
       }
       emitted = upper;
       if (chunk.length > 0) this.push(chunk);
@@ -225,7 +235,7 @@ export function buildPositionsCopyStream(params: PositionsFixtureParams): {
           openedAt, // created_at
           openedAt, // updated_at
         ];
-        chunk += cells.map(escapeTsv).join('\t') + '\n';
+        chunk += cells.map(tsvCell).join('\t') + '\n';
       }
       emitted = upper;
       if (chunk.length > 0) this.push(chunk);
@@ -303,11 +313,107 @@ export function buildFillsCopyStream(params: FillsFixtureParams): Readable {
           filledAt,
           filledAt, // created_at
         ];
-        chunk += cells.map(escapeTsv).join('\t') + '\n';
+        chunk += cells.map(tsvCell).join('\t') + '\n';
       }
       emitted = upper;
       if (chunk.length > 0) this.push(chunk);
       if (emitted >= count) this.push(null);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// tax fills fixture (Scenario 3 — entry/exit fills for the in-year cohort so
+// FIFO lot matching has real lots to walk, not just the ledger rows)
+// ---------------------------------------------------------------------------
+
+export interface TaxFillsFixtureParams {
+  /** One row per in-year position; `exitAt` matches that position's ledger
+   * `occurred_at` (its `closedAt`), so the exit fill lands in the same tax
+   * year as the ledger row it realises. */
+  positions: Array<{ positionId: string; exitAt: Date }>;
+  /** Indices into `positions` that get a second entry fill sized so the exit
+   * only partially consumes it — exercises the FIFO multi-lot split path
+   * (one full lot, one partial) rather than every position being a single
+   * entry/single exit round trip. */
+  twoEntryIndices: ReadonlySet<number>;
+  rngSeed: number;
+}
+
+const TAX_ENTRY_LEAD_MS = 180 * 24 * 60 * 60 * 1000;
+
+/**
+ * TSV stream for `COPY fills (...) FROM STDIN` emitting one entry (or two,
+ * for `twoEntryIndices`) and one exit per supplied position. The exit's
+ * `filled_at` equals `exitAt`; entries fall before it so lot order (oldest
+ * first) is unambiguous.
+ */
+export function buildTaxFillsCopyStream(params: TaxFillsFixtureParams): Readable {
+  const { positions, twoEntryIndices, rngSeed } = params;
+  const rng = mulberry32(rngSeed);
+
+  let emitted = 0;
+  return new Readable({
+    read() {
+      const BATCH = 500;
+      let chunk = '';
+      const upper = Math.min(emitted + BATCH, positions.length);
+      for (let i = emitted; i < upper; i++) {
+        const { positionId, exitAt } = positions[i]!;
+        const exitAtIso = exitAt.toISOString();
+        const exitPrice = (10 + rng() * 500).toFixed(8);
+        const exitFeeCents = 1 + Math.floor(rng() * 499);
+        const exitFees = (exitFeeCents / 100).toFixed(8);
+        const entryAt = new Date(
+          exitAt.getTime() - TAX_ENTRY_LEAD_MS - Math.floor(rng() * TAX_ENTRY_LEAD_MS),
+        );
+        const entryAtIso = entryAt.toISOString();
+
+        const emitFill = (
+          type: 'entry' | 'exit',
+          price: string,
+          quantity: string,
+          fees: string,
+          filledAt: string,
+        ): void => {
+          const cells = [
+            randomUUID(),
+            positionId,
+            type,
+            price,
+            quantity,
+            fees,
+            NULL_TOKEN,
+            filledAt,
+            filledAt,
+          ];
+          chunk += cells.map(tsvCell).join('\t') + '\n';
+        };
+
+        if (twoEntryIndices.has(i)) {
+          // entry1 (1.0) + entry2 (1.0) = 2.0 available; exit takes 1.5, so
+          // entry1 is fully consumed and entry2 only partially.
+          const entry1Price = (10 + rng() * 500).toFixed(8);
+          const entry2Price = (10 + rng() * 500).toFixed(8);
+          const entry1Fees = ((1 + Math.floor(rng() * 499)) / 100).toFixed(8);
+          const entry2Fees = ((1 + Math.floor(rng() * 499)) / 100).toFixed(8);
+          const entry2At = new Date(
+            entryAt.getTime() + Math.floor(rng() * TAX_ENTRY_LEAD_MS),
+          ).toISOString();
+
+          emitFill('entry', entry1Price, '1.00000000', entry1Fees, entryAtIso);
+          emitFill('entry', entry2Price, '1.00000000', entry2Fees, entry2At);
+          emitFill('exit', exitPrice, '1.50000000', exitFees, exitAtIso);
+        } else {
+          const entryPrice = (10 + rng() * 500).toFixed(8);
+          const entryFees = ((1 + Math.floor(rng() * 499)) / 100).toFixed(8);
+          emitFill('entry', entryPrice, '1.00000000', entryFees, entryAtIso);
+          emitFill('exit', exitPrice, '1.00000000', exitFees, exitAtIso);
+        }
+      }
+      emitted = upper;
+      if (chunk.length > 0) this.push(chunk);
+      if (emitted >= positions.length) this.push(null);
     },
   });
 }
@@ -384,7 +490,7 @@ export function buildLedgerPnlCopyStream(params: LedgerPnlFixtureParams): Readab
           randomUUID(), // group_id
           NULL_TOKEN, // reverses_group_id
         ];
-        chunk += cells.map(escapeTsv).join('\t') + '\n';
+        chunk += cells.map(tsvCell).join('\t') + '\n';
       }
       emitted = upper;
       if (chunk.length > 0) this.push(chunk);

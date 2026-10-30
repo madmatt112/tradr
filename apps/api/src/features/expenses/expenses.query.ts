@@ -1,10 +1,13 @@
-import { and, desc, eq, gte, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+
+import type { LotMethod } from '@tradr/shared/lib/tax-lots';
 
 import type { Database, Transaction } from '@/db';
 import { ledgerEntries } from '@/db/schema/accounting.schema';
 import { accounts } from '@/db/schema/accounts.schema';
 import { expenses } from '@/db/schema/expenses.schema';
-import { fills, positions } from '@/db/schema/positions.schema';
+import { fillLotSelections, fills, positions } from '@/db/schema/positions.schema';
 import { users } from '@/db/schema/users.schema';
 
 // ---------------------------------------------------------------------------
@@ -283,16 +286,147 @@ export async function listRealisedPositionsForYear(
     ) as Promise<RealisedPositionRow[]>;
 }
 
-/**
- * Wash-sale / superficial-loss candidate row — projections needed to key by
- * `(underlying, side)` and check the 30-day window in memory. `assetType` is
- * required so the in-memory helper can partition stock vs option before any
- * symbol matching (post-review fix #7).
- */
-export type CandidatePositionRow = {
+// ---------------------------------------------------------------------------
+// FIFO lot-matching queries (design C8 — `tax-lots.service.ts`'s
+// `getLotRealisationsForYear`). Each filters `positions.user_id` directly or
+// through a join; batched once per request, never per position (NFR
+// Performance).
+// ---------------------------------------------------------------------------
+
+export type LotYearPositionRow = {
   positionId: string;
-  openedAt: Date | null;
+  symbol: string;
+  side: 'long' | 'short';
+  assetType: 'stock' | 'option';
+  accountId: string;
+  currency: string;
+  openedAt: Date;
   closedAt: Date | null;
+};
+
+/**
+ * Positions with at least one exit fill inside the UTC calendar year
+ * (half-open `[year-01-01, year+1-01-01)`), with the account currency needed
+ * to format each position's lot rows. A position can have exits in other
+ * years too — the caller derives slices over the position's whole life and
+ * keeps only those realised in this year (AC 5.5). `openedAt`/`closedAt` are
+ * the position-level dates the wash-sale `LossUnit` shape still carries
+ * alongside the lot-level `lotOpenedAt` (design C9).
+ */
+export async function listPositionsWithExitInYear(
+  db: Database | Transaction,
+  userId: string,
+  year: number,
+): Promise<LotYearPositionRow[]> {
+  const windowStart = `${year}-01-01T00:00:00Z`;
+  const windowEnd = `${year + 1}-01-01T00:00:00Z`;
+
+  return db
+    .selectDistinct({
+      positionId: positions.id,
+      symbol: positions.symbol,
+      side: sql<'long' | 'short'>`${positions.side}`,
+      assetType: sql<'stock' | 'option'>`${positions.assetType}`,
+      accountId: positions.accountId,
+      currency: accounts.currency,
+      openedAt: positions.openedAt,
+      closedAt: positions.closedAt,
+    })
+    .from(positions)
+    .innerJoin(accounts, eq(positions.accountId, accounts.id))
+    .innerJoin(fills, eq(fills.positionId, positions.id))
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(accounts.userId, userId),
+        eq(fills.type, 'exit'),
+        sql`${fills.filledAt} >= ${windowStart}`,
+        sql`${fills.filledAt} < ${windowEnd}`,
+      ),
+    ) as Promise<LotYearPositionRow[]>;
+}
+
+export type LotYearFillRow = {
+  id: string;
+  positionId: string;
+  type: 'entry' | 'exit';
+  price: string;
+  quantity: string;
+  fees: string;
+  filledAt: Date;
+  createdAt: Date;
+};
+
+/**
+ * Every fill of the given positions (not just those in the tax year —
+ * matching needs a position's whole life). One query for every position in
+ * the batch, not one per position.
+ */
+export async function listFillsForPositions(
+  db: Database | Transaction,
+  userId: string,
+  positionIds: string[],
+): Promise<LotYearFillRow[]> {
+  if (positionIds.length === 0) return [];
+  return db
+    .select({
+      id: fills.id,
+      positionId: fills.positionId,
+      type: sql<'entry' | 'exit'>`${fills.type}`,
+      price: fills.price,
+      quantity: fills.quantity,
+      fees: fills.fees,
+      filledAt: fills.filledAt,
+      createdAt: fills.createdAt,
+    })
+    .from(fills)
+    .innerJoin(positions, eq(fills.positionId, positions.id))
+    .where(and(eq(positions.userId, userId), inArray(fills.positionId, positionIds))) as Promise<
+    LotYearFillRow[]
+  >;
+}
+
+export type LotYearSelectionRow = {
+  positionId: string;
+  exitFillId: string;
+  entryFillId: string;
+  quantity: string;
+};
+
+/**
+ * Every stored lot selection for the given positions, joined through the
+ * exit fill so a selection never crosses positions. One query for every
+ * position in the batch.
+ */
+export async function listLotSelectionsForPositions(
+  db: Database | Transaction,
+  userId: string,
+  positionIds: string[],
+): Promise<LotYearSelectionRow[]> {
+  if (positionIds.length === 0) return [];
+  return db
+    .select({
+      positionId: fills.positionId,
+      exitFillId: fillLotSelections.exitFillId,
+      entryFillId: fillLotSelections.entryFillId,
+      quantity: fillLotSelections.quantity,
+    })
+    .from(fillLotSelections)
+    .innerJoin(fills, eq(fills.id, fillLotSelections.exitFillId))
+    .innerJoin(positions, eq(fills.positionId, positions.id))
+    .where(and(eq(positions.userId, userId), inArray(fills.positionId, positionIds))) as Promise<
+    LotYearSelectionRow[]
+  >;
+}
+
+/**
+ * Candidate-lot position row (design C8) — the position-level projection
+ * `getCandidateLots` (`tax-lots.service.ts`) derives each entry fill's
+ * `CandidateLot` from. Carries no dates of its own: lot-level `openedAt` /
+ * `endedAt` come from the fills and `lotEndDates`, not from the position row.
+ */
+export type CandidateLotPositionRow = {
+  positionId: string;
   symbol: string;
   assetType: 'stock' | 'option';
   side: 'long' | 'short';
@@ -300,48 +434,63 @@ export type CandidatePositionRow = {
 };
 
 /**
- * Positions that could be wash-sale / superficial-loss counterparties for any
- * loss closed within `window`. Returns every position that either opened
- * inside `window` OR opened before `window.start` and was still open past
- * `window.start` (held-open-through-window).
- *
- * Single SQL statement — no per-symbol filter. The wash-sale helper
- * (Task 9) keys candidates by `(underlying, side)` in memory so we don't
- * round-trip the DB per loss.
+ * Positions that could hold wash-sale / superficial-loss candidate lots for
+ * any loss realised within `window`: an entry fill at or before `window.end`,
+ * and either still open (`closedAt IS NULL`) or with a fill at or after
+ * `window.start` (design C8) — a loose, position-level superset; the per-lot
+ * ±30d / held-open rules run in memory in `expenses.tax.ts`. Replaces
+ * `listCandidatePositionsByYear`, which keyed off position-level dates rather
+ * than fills.
  */
-export async function listCandidatePositionsByYear(
+export async function listCandidateLotPositions(
   db: Database | Transaction,
   userId: string,
   window: { start: Date; end: Date },
-): Promise<CandidatePositionRow[]> {
+): Promise<CandidateLotPositionRow[]> {
   // postgres-js cannot bind a `Date` directly through drizzle's `sql\`\``
   // template (it surfaces as "Received an instance of Date"). The typed
   // operators `gte`/`lte` handle Date → timestamp conversion themselves,
   // but the raw template comparisons need ISO strings.
   const startIso = window.start.toISOString();
+  const endIso = window.end.toISOString();
+  const laterFill = alias(fills, 'later_fill');
+
   return db
-    .select({
+    .selectDistinct({
       positionId: positions.id,
-      openedAt: positions.openedAt,
-      closedAt: positions.closedAt,
       symbol: positions.symbol,
       assetType: sql<'stock' | 'option'>`${positions.assetType}`,
       side: sql<'long' | 'short'>`${positions.side}`,
       accountId: positions.accountId,
     })
     .from(positions)
+    .innerJoin(
+      fills,
+      and(
+        eq(fills.positionId, positions.id),
+        eq(fills.type, 'entry'),
+        sql`${fills.filledAt} <= ${endIso}`,
+      ),
+    )
     .where(
       and(
         eq(positions.userId, userId),
         or(
-          and(gte(positions.openedAt, window.start), lte(positions.openedAt, window.end)),
-          and(
-            sql`${positions.openedAt} < ${startIso}`,
-            or(sql`${positions.closedAt} IS NULL`, sql`${positions.closedAt} > ${startIso}`),
+          sql`${positions.closedAt} IS NULL`,
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(laterFill)
+              .where(
+                and(
+                  eq(laterFill.positionId, positions.id),
+                  sql`${laterFill.filledAt} >= ${startIso}`,
+                ),
+              ),
           ),
         ),
       ),
-    ) as Promise<CandidatePositionRow[]>;
+    ) as Promise<CandidateLotPositionRow[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,4 +591,37 @@ export async function updateUserTaxJurisdiction(
   value: TaxJurisdiction | null,
 ): Promise<void> {
   await tx.update(users).set({ taxJurisdiction: value }).where(eq(users.id, userId));
+}
+
+/**
+ * Read the user's stored jurisdiction and lot method together. Both are
+ * returned NULL straight through — the service resolves the effective
+ * method via `resolveLotMethod`.
+ */
+export async function getUserTaxSettings(
+  db: Database | Transaction,
+  userId: string,
+): Promise<{ taxJurisdiction: TaxJurisdiction | null; taxLotMethod: LotMethod | null }> {
+  const rows = await db
+    .select({ taxJurisdiction: users.taxJurisdiction, taxLotMethod: users.taxLotMethod })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return {
+    taxJurisdiction: (rows[0]?.taxJurisdiction as TaxJurisdiction | null | undefined) ?? null,
+    taxLotMethod: (rows[0]?.taxLotMethod as LotMethod | null | undefined) ?? null,
+  };
+}
+
+/**
+ * Update the user's stored lot method. Write-side — Transaction only. The
+ * CHECK constraint on `users.tax_lot_method` enforces the allowed set
+ * (`'fifo' | 'average'` or NULL).
+ */
+export async function updateUserTaxLotMethod(
+  tx: Transaction,
+  userId: string,
+  value: LotMethod | null,
+): Promise<void> {
+  await tx.update(users).set({ taxLotMethod: value }).where(eq(users.id, userId));
 }

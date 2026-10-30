@@ -329,6 +329,7 @@ export function PositionDetailView({ positionId }: Props) {
               direction="auto"
               className="text-lg font-semibold"
             />
+            <p className="text-xs text-muted-foreground">Average cost</p>
           </CardContent>
         </Card>
         <Card>

@@ -19,6 +19,7 @@ import {
   type ArchiveFill,
   type ArchiveImagePart,
   type ArchiveLedgerEntry,
+  type ArchiveLotSelection,
   type ArchiveMessage,
   type ArchivePersona,
   type ArchivePersonaResolution,
@@ -72,6 +73,7 @@ import {
   insertArchiveExpenses,
   insertArchiveFills,
   insertArchiveLedgerEntries,
+  insertArchiveLotSelections,
   insertArchiveMessages,
   insertArchivePersonas,
   insertArchivePositionImages,
@@ -87,6 +89,7 @@ import {
   type ExpenseInsert,
   type FillInsert,
   type LedgerEntryInsert,
+  type LotSelectionInsert,
   type MessageInsert,
   type PersonaInsert,
   type PositionImageInsert,
@@ -543,6 +546,9 @@ async function restore(
     insertArchivePositions(tx, userId, rows),
   );
   const fillsF = makeFlusher<FillInsert>((rows) => insertArchiveFills(tx, rows));
+  const lotSelectionsF = makeFlusher<LotSelectionInsert>((rows) =>
+    insertArchiveLotSelections(tx, rows),
+  );
   const positionTagsF = makeFlusher<PositionTagInsert>((rows) =>
     insertArchivePositionTags(tx, rows),
   );
@@ -618,6 +624,7 @@ async function restore(
   await rulesF.drain();
   await positionsF.drain();
   await fillsF.drain();
+  await lotSelectionsF.drain();
   await positionTagsF.drain();
   await positionImagesF.drain();
   await ledgerF.drain();
@@ -660,6 +667,9 @@ async function restore(
         return;
       case 'fills.ndjson':
         await fillsF.drain();
+        return;
+      case 'lot-selections.ndjson':
+        await lotSelectionsF.drain();
         return;
       case 'position-tags.ndjson':
         await positionTagsF.drain();
@@ -800,6 +810,15 @@ async function restore(
           notes: r.notes,
           filledAt: r.filledAt,
           createdAt: r.createdAt,
+        });
+        return;
+      }
+      case 'lot-selections.ndjson': {
+        const r = value as ArchiveLotSelection;
+        await lotSelectionsF.push({
+          exitFillId: remapId(salt, r.exitFillId),
+          entryFillId: remapId(salt, r.entryFillId),
+          quantity: r.quantity,
         });
         return;
       }
@@ -975,6 +994,7 @@ async function applyPreferences(
       display_currency = ${prefs.displayCurrency},
       timezone = ${prefs.timezone},
       tax_jurisdiction = ${prefs.taxJurisdiction},
+      tax_lot_method = ${prefs.taxLotMethod ?? null},
       theme = ${prefs.theme},
       buying_power_basis = ${prefs.buyingPowerBasis},
       advisor_default_persona_id = ${advisorDefaultPersonaId},

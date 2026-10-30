@@ -45,6 +45,7 @@ describe('TaxSummaryResponseSchema strict()', () => {
   const validBase = {
     year: 2026,
     jurisdiction: 'other' as const,
+    lotMethod: 'fifo' as const,
     displayCurrency: null,
     realisedPnl: {
       total: null,
@@ -58,6 +59,7 @@ describe('TaxSummaryResponseSchema strict()', () => {
       perCategory: [],
     },
     flags: { washSales: [], superficialLosses: [] },
+    lotRealisations: [],
     missingRates: [],
     excludedCurrencies: [],
     ratesAsOf: null,
