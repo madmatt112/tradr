@@ -222,7 +222,7 @@ describe('GET /api/positions/:id/lots', () => {
     expect(Number(row2.available)).toBe(10);
   });
 
-  it('echoes fifo/other for a new user, then average/CA after PATCH jurisdiction CA', async () => {
+  it('echoes fifo/other for a new user, then acb/CA after PATCH jurisdiction CA (AC 2.5)', async () => {
     const { cookie } = await registerAndGetCookie();
     const account = await createTestAccount(cookie);
     const pos = await createDraftPosition(cookie, account.id);
@@ -239,7 +239,7 @@ describe('GET /api/positions/:id/lots', () => {
     const after = await authedRequest('GET', `/api/positions/${pos.id}/lots`, cookie);
     expect(after.status).toBe(200);
     const afterBody = await after.json();
-    expect(afterBody.method).toBe('average');
+    expect(afterBody.method).toBe('acb');
     expect(afterBody.jurisdiction).toBe('CA');
   });
 

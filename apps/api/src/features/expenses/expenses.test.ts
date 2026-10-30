@@ -1388,7 +1388,7 @@ describe('GET /api/expenses/tax-summary — FIFO lot realisations', () => {
     expect(fifo.realisedPnl.total).toBe(average.realisedPnl.total);
   });
 
-  it('a CA user with no stored method gets average cost, no lot rows and the ledger figures', async () => {
+  it('a CA user with no stored method gets acb reported, average-cost figures and no lot rows (AC 2.3)', async () => {
     const { cookie } = await registerAndGetCookie();
     const acct = await createAccount(cookie, 'USD acct', 'USD');
     await patchJurisdiction(cookie, 'CA');
@@ -1402,7 +1402,7 @@ describe('GET /api/expenses/tax-summary — FIFO lot realisations', () => {
     });
 
     const body = await taxSummary(cookie, 2026);
-    expect(body.lotMethod).toBe('average');
+    expect(body.lotMethod).toBe('acb');
     expect(body.lotRealisations).toEqual([]);
     expect(body.realisedPnl.total).toBe('20.00');
     expect(body.realisedPnl.shortTerm).toBeNull();
@@ -2003,7 +2003,7 @@ describe('GET/PATCH /api/users/me/tax-lot-method', () => {
     expect(body.isDefault).toBe(true);
   });
 
-  it('defaults a CA user with no stored method to average cost', async () => {
+  it('defaults a CA user with no stored method to the pooled acb method (AC 2.1)', async () => {
     const { cookie } = await registerAndGetCookie();
     await patchJurisdiction(cookie, 'CA');
 
@@ -2011,11 +2011,11 @@ describe('GET/PATCH /api/users/me/tax-lot-method', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.taxLotMethod).toBeNull();
-    expect(body.effectiveMethod).toBe('average');
+    expect(body.effectiveMethod).toBe('acb');
     expect(body.isDefault).toBe(true);
   });
 
-  it('a stored method overrides the CA jurisdiction default', async () => {
+  it('the stored method is kept under CA (effective method is acb) and applies again under US (AC 2.1, AC 2.2)', async () => {
     const { cookie } = await registerAndGetCookie();
     await patchJurisdiction(cookie, 'CA');
 
@@ -2023,11 +2023,19 @@ describe('GET/PATCH /api/users/me/tax-lot-method', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.taxLotMethod).toBe('fifo');
-    expect(body.effectiveMethod).toBe('fifo');
+    expect(body.effectiveMethod).toBe('acb');
     expect(body.isDefault).toBe(false);
+
+    await patchJurisdiction(cookie, 'US');
+    const afterUs = await authedRequest('GET', '/api/users/me/tax-lot-method', cookie);
+    expect(afterUs.status).toBe(200);
+    const afterUsBody = await afterUs.json();
+    expect(afterUsBody.taxLotMethod).toBe('fifo');
+    expect(afterUsBody.effectiveMethod).toBe('fifo');
+    expect(afterUsBody.isDefault).toBe(false);
   });
 
-  it('PATCH null clears the stored method and returns to the jurisdiction default', async () => {
+  it('PATCH null clears the stored method and returns to the jurisdiction default (AC 2.1)', async () => {
     const { cookie } = await registerAndGetCookie();
     await patchJurisdiction(cookie, 'CA');
     await patchLotMethod(cookie, 'fifo');
@@ -2036,7 +2044,7 @@ describe('GET/PATCH /api/users/me/tax-lot-method', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.taxLotMethod).toBeNull();
-    expect(body.effectiveMethod).toBe('average');
+    expect(body.effectiveMethod).toBe('acb');
     expect(body.isDefault).toBe(true);
   });
 
