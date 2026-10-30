@@ -25,6 +25,7 @@ import {
   ArchiveSystemBrokerageRefSchema,
   ArchiveTagSchema,
   ArchiveTradingRuleSchema,
+  ArchiveTransferLinkSchema,
   OnboardingStateSchema,
   PutDashboardLayoutRequestSchema,
   TRADING_RULE_LIMIT,
@@ -80,6 +81,7 @@ const COUNT_KEY: Record<string, keyof ArchiveCounts> = {
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
   'lot-selections.ndjson': 'lotSelections',
+  'transfer-links.ndjson': 'transferLinks',
   'position-tags.ndjson': 'positionTags',
   'position-images.ndjson': 'positionImages',
   'ledger-entries.ndjson': 'ledgerEntries',
@@ -102,6 +104,7 @@ const LABEL: Record<string, string> = {
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
   'lot-selections.ndjson': 'lot-selections',
+  'transfer-links.ndjson': 'transfer-links',
   'position-tags.ndjson': 'position-tags',
   'position-images.ndjson': 'position-images',
   'ledger-entries.ndjson': 'ledger-entries',
@@ -183,6 +186,7 @@ export async function validateArchive(
     positions: 0,
     fills: 0,
     lotSelections: 0,
+    transferLinks: 0,
     positionTags: 0,
     positionImages: 0,
     ledgerEntries: 0,
@@ -484,6 +488,44 @@ export async function validateArchive(
         }
         if (exit !== undefined && entry !== undefined && exit.position !== entry.position) {
           addFault(base, 'invariant', 'A lot selection pairs fills in different positions.');
+        }
+        return;
+      }
+      case 'transfer-links.ndjson': {
+        const r = ArchiveTransferLinkSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        const exit = fills.get(r.data.exitFillId);
+        const entry = fills.get(r.data.entryFillId);
+        if (exit === undefined) {
+          ref(
+            false,
+            `${base}.exitFillId`,
+            `exitFillId ${r.data.exitFillId} names no fill in the archive.`,
+          );
+        } else if (exit.type !== 'exit') {
+          addFault(
+            `${base}.exitFillId`,
+            'invariant',
+            `exitFillId ${r.data.exitFillId} is not an exit fill.`,
+          );
+        }
+        if (entry === undefined) {
+          ref(
+            false,
+            `${base}.entryFillId`,
+            `entryFillId ${r.data.entryFillId} names no fill in the archive.`,
+          );
+        } else if (entry.type !== 'entry') {
+          addFault(
+            `${base}.entryFillId`,
+            'invariant',
+            `entryFillId ${r.data.entryFillId} is not an entry fill.`,
+          );
+        }
+        // A transfer moves a holding between positions, so a link's fills must
+        // sit in DIFFERENT positions — the opposite invariant from a lot selection.
+        if (exit !== undefined && entry !== undefined && exit.position === entry.position) {
+          addFault(base, 'invariant', 'A transfer link pairs fills in the same position.');
         }
         return;
       }

@@ -20,7 +20,8 @@ import { RuleWeightSchema, TradingRuleDefinitionSchema } from './trading-rule';
 // The archive schema version. The manifest's `format` and `archiveVersion` field
 // are frozen across versions; the value increments when a payload shape changes.
 // Version 3 adds the lot-selections entry and the taxLotMethod preference (C12).
-export const ARCHIVE_VERSION = 3;
+// Version 4 adds the transfer-links entry and each account's taxTreatment (C8).
+export const ARCHIVE_VERSION = 4;
 
 // The fixed entry names, in the order they appear in the archive (Data Models).
 // Image entries (matching ARCHIVE_IMAGE_ENTRY_RE) come first, before
@@ -36,6 +37,7 @@ export const ARCHIVE_ENTRY_ORDER = [
   'positions.ndjson',
   'fills.ndjson',
   'lot-selections.ndjson',
+  'transfer-links.ndjson',
   'position-tags.ndjson',
   'position-images.ndjson',
   'ledger-entries.ndjson',
@@ -271,6 +273,9 @@ export const ArchiveCountsSchema = z
     // Optional so a version-1 or version-2 manifest (which has no lot-selections
     // entry) still parses; the reader treats an absent count as 0 (C12, D15).
     lotSelections: nonNegInt.optional(),
+    // Optional so a version-1, -2 or -3 manifest (which has no transfer-links
+    // entry) still parses; the reader treats an absent count as 0 (C8).
+    transferLinks: nonNegInt.optional(),
     positionTags: nonNegInt,
     positionImages: nonNegInt,
     ledgerEntries: nonNegInt,
@@ -314,8 +319,8 @@ export type ArchiveDegradation = z.infer<typeof ArchiveDegradationSchema>;
 export const ArchiveManifestSchema = z
   .object({
     format: z.literal('tradr-account-archive'),
-    // Accept every earlier payload this build reads and its own version (D4, C12 D5).
-    archiveVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    // Accept every earlier payload this build reads and its own version (D4, C12 D5, C8).
+    archiveVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     // APP_VERSION at export, or 'unknown'.
     sourceAppVersion: z.string(),
     exportedAt: timestamp,
@@ -361,6 +366,10 @@ export const ArchiveAccountSchema = z
     defaultRiskPercent: archiveDecimalString(5, 2, { signed: true }).nullable(),
     isDemo: z.boolean(),
     isDefault: z.boolean(),
+    // accounts_tax_treatment_chk; optional so a version-1, -2 or -3 account
+    // payload (which has no key) still parses, and the import reads an absent
+    // value as 'taxable' (C8, AC 9.3).
+    taxTreatment: z.enum(['taxable', 'registered']).optional(),
     createdAt: timestamp,
     updatedAt: timestamp,
   })
@@ -451,6 +460,20 @@ export const ArchiveLotSelectionSchema = z
   })
   .strict();
 export type ArchiveLotSelection = z.infer<typeof ArchiveLotSelectionSchema>;
+
+// A fill transfer link (fill_transfer_links, C8): the exit fill and the entry
+// fill it is paired with. No `id`, no `userId` and no `createdAt` — the import
+// owns the row (fresh id, default timestamp, importing user) and remaps both
+// fill references. The validator checks that both ids name archive fills, that
+// exit is an exit, entry is an entry, and the two sit in DIFFERENT positions (a
+// transfer moves a holding between positions — the opposite of a lot selection).
+export const ArchiveTransferLinkSchema = z
+  .object({
+    exitFillId: uuid,
+    entryFillId: uuid,
+  })
+  .strict();
+export type ArchiveTransferLink = z.infer<typeof ArchiveTransferLinkSchema>;
 
 export const ArchivePositionTagSchema = z.object({ positionId: uuid, tagId: uuid }).strict();
 export type ArchivePositionTag = z.infer<typeof ArchivePositionTagSchema>;

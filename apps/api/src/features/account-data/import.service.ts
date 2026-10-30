@@ -31,6 +31,7 @@ import {
   type ArchiveSystemBrokerageRef,
   type ArchiveTag,
   type ArchiveTradingRule,
+  type ArchiveTransferLink,
   type ImportPreview,
   type ImportResult,
 } from '@tradr/shared';
@@ -82,6 +83,7 @@ import {
   insertArchiveSummaries,
   insertArchiveTags,
   insertArchiveTradingRules,
+  insertArchiveTransferLinks,
   type AccountInsert,
   type BrokerageInsert,
   type ConversationInsert,
@@ -98,6 +100,7 @@ import {
   type RuleInsert,
   type SummaryInsert,
   type TagInsert,
+  type TransferLinkInsert,
 } from './import.query';
 import { newSalt, orderedMessageIds, remapId, createCoveredThroughResolver } from './remap';
 
@@ -549,6 +552,9 @@ async function restore(
   const lotSelectionsF = makeFlusher<LotSelectionInsert>((rows) =>
     insertArchiveLotSelections(tx, rows),
   );
+  const transferLinksF = makeFlusher<TransferLinkInsert>((rows) =>
+    insertArchiveTransferLinks(tx, userId, rows),
+  );
   const positionTagsF = makeFlusher<PositionTagInsert>((rows) =>
     insertArchivePositionTags(tx, rows),
   );
@@ -625,6 +631,7 @@ async function restore(
   await positionsF.drain();
   await fillsF.drain();
   await lotSelectionsF.drain();
+  await transferLinksF.drain();
   await positionTagsF.drain();
   await positionImagesF.drain();
   await ledgerF.drain();
@@ -670,6 +677,9 @@ async function restore(
         return;
       case 'lot-selections.ndjson':
         await lotSelectionsF.drain();
+        return;
+      case 'transfer-links.ndjson':
+        await transferLinksF.drain();
         return;
       case 'position-tags.ndjson':
         await positionTagsF.drain();
@@ -740,6 +750,9 @@ async function restore(
           defaultRiskPercent: r.defaultRiskPercent,
           isDemo: r.isDemo,
           isDefault: r.isDefault,
+          // A version 1-3 archive carries no treatment; the column default is
+          // taxable, so an absent value restores taxable (C8, AC 9.3).
+          taxTreatment: r.taxTreatment ?? 'taxable',
           createdAt: r.createdAt,
           updatedAt: r.updatedAt,
         });
@@ -819,6 +832,14 @@ async function restore(
           exitFillId: remapId(salt, r.exitFillId),
           entryFillId: remapId(salt, r.entryFillId),
           quantity: r.quantity,
+        });
+        return;
+      }
+      case 'transfer-links.ndjson': {
+        const r = value as ArchiveTransferLink;
+        await transferLinksF.push({
+          exitFillId: remapId(salt, r.exitFillId),
+          entryFillId: remapId(salt, r.entryFillId),
         });
         return;
       }

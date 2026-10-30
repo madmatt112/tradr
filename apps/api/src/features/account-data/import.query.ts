@@ -239,6 +239,7 @@ export interface AccountInsert {
   defaultRiskPercent: string | null;
   isDemo: boolean;
   isDefault: boolean;
+  taxTreatment: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -301,6 +302,14 @@ export interface LotSelectionInsert {
   exitFillId: string;
   entryFillId: string;
   quantity: string;
+}
+
+// The exit and entry fill ids are already remapped; `id` and `created_at` take
+// their column defaults and `user_id` is the importing user, so a link is never
+// carried by id (C8).
+export interface TransferLinkInsert {
+  exitFillId: string;
+  entryFillId: string;
 }
 
 export interface PositionTagInsert {
@@ -429,6 +438,7 @@ const ACCOUNT_COLUMNS: Column[] = [
   { name: 'default_risk_percent', cast: 'numeric' },
   { name: 'is_demo', cast: 'plain' },
   { name: 'is_default', cast: 'plain' },
+  { name: 'tax_treatment', cast: 'plain' },
   { name: 'created_at', cast: 'timestamptz' },
   { name: 'updated_at', cast: 'timestamptz' },
 ];
@@ -492,6 +502,12 @@ const LOT_SELECTION_COLUMNS: Column[] = [
   { name: 'exit_fill_id', cast: 'plain' },
   { name: 'entry_fill_id', cast: 'plain' },
   { name: 'quantity', cast: 'numeric' },
+];
+
+const TRANSFER_LINK_COLUMNS: Column[] = [
+  { name: 'user_id', cast: 'plain' },
+  { name: 'exit_fill_id', cast: 'plain' },
+  { name: 'entry_fill_id', cast: 'plain' },
 ];
 
 const POSITION_TAG_COLUMNS: Column[] = [
@@ -644,6 +660,7 @@ export async function insertArchiveAccounts(
       r.defaultRiskPercent,
       r.isDemo,
       r.isDefault,
+      r.taxTreatment,
       r.createdAt,
       r.updatedAt,
     ]),
@@ -747,6 +764,20 @@ export async function insertArchiveLotSelections(
     'fill_lot_selections',
     LOT_SELECTION_COLUMNS,
     rows.map((r) => [r.exitFillId, r.entryFillId, r.quantity]),
+  );
+}
+
+/** Insert fill transfer links; `id` and `created_at` take their defaults. */
+export async function insertArchiveTransferLinks(
+  tx: ImportDb,
+  userId: string,
+  rows: TransferLinkInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'fill_transfer_links',
+    TRANSFER_LINK_COLUMNS,
+    rows.map((r) => [userId, r.exitFillId, r.entryFillId]),
   );
 }
 
