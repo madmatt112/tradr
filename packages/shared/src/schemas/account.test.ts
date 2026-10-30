@@ -4,6 +4,7 @@ import {
   AccountSchema,
   CreateAccountSchema,
   SetDefaultAccountSchema,
+  TaxTreatmentEnum,
   UpdateAccountSchema,
 } from './account';
 
@@ -153,6 +154,82 @@ describe('AccountSchema.defaultRiskPercent', () => {
       expect(updated.success).toBe(true);
       if (updated.success) expect(updated.data).not.toHaveProperty('isDefault');
     });
+  });
+});
+
+// Account tax treatment (ca-acb-pooling design C1). Optional on create and
+// update — an omitted value takes the accounts.tax_treatment column default
+// 'taxable' server-side (AC 1.3) — and present on every account read.
+describe('TaxTreatmentEnum', () => {
+  it('accepts taxable and registered', () => {
+    expect(TaxTreatmentEnum.safeParse('taxable').success).toBe(true);
+    expect(TaxTreatmentEnum.safeParse('registered').success).toBe(true);
+  });
+
+  it.each(['rrsp', 'tfsa', 'Taxable', ''])('rejects %j', (v) => {
+    expect(TaxTreatmentEnum.safeParse(v).success).toBe(false);
+  });
+});
+
+describe('CreateAccountSchema.taxTreatment', () => {
+  it('is optional — omitting it means no value is sent', () => {
+    const result = CreateAccountSchema.safeParse(baseCreate);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.taxTreatment).toBeUndefined();
+  });
+
+  it.each(['taxable', 'registered'])('accepts %s', (v) => {
+    const result = CreateAccountSchema.safeParse({ ...baseCreate, taxTreatment: v });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.taxTreatment).toBe(v);
+  });
+
+  it('rejects a value outside the enum', () => {
+    expect(CreateAccountSchema.safeParse({ ...baseCreate, taxTreatment: 'rrsp' }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('UpdateAccountSchema.taxTreatment', () => {
+  it('accepts a new value', () => {
+    const result = UpdateAccountSchema.safeParse({ taxTreatment: 'registered' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.taxTreatment).toBe('registered');
+  });
+
+  it('omitting it leaves the stored value untouched (undefined)', () => {
+    const result = UpdateAccountSchema.safeParse({ name: 'Renamed' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.taxTreatment).toBeUndefined();
+  });
+
+  it('rejects a value outside the enum', () => {
+    expect(UpdateAccountSchema.safeParse({ taxTreatment: 'rrsp' }).success).toBe(false);
+  });
+});
+
+describe('AccountSchema.taxTreatment', () => {
+  const baseAccount = {
+    id: '11111111-1111-4111-8111-111111111111',
+    userId: '22222222-2222-4222-8222-222222222222',
+    name: 'Main',
+    currency: 'USD',
+    timezone: 'America/New_York',
+    brokerageId: null,
+    brokerageName: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('parses when the field is absent (existing fixtures keep working)', () => {
+    expect(AccountSchema.safeParse(baseAccount).success).toBe(true);
+  });
+
+  it.each(['taxable', 'registered'])('parses a stored value of %s', (v) => {
+    const result = AccountSchema.safeParse({ ...baseAccount, taxTreatment: v });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.taxTreatment).toBe(v);
   });
 });
 
