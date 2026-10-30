@@ -103,6 +103,9 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
     // The 2% preset seeds CREATE only. On edit the stored value is the truth,
     // including its absence.
     defaultRiskPercent: account ? (account.defaultRiskPercent ?? undefined) : DEFAULT_RISK_PRESET,
+    // An absent stored value reads as 'taxable' (the column default, AC 1.3) —
+    // the same reading on create and on an account that predates the column.
+    taxTreatment: account?.taxTreatment ?? 'taxable',
   });
 
   const form = useForm<CreateAccountInput>({
@@ -315,6 +318,31 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
               {form.formState.errors.timezone && (
                 <p className="text-sm text-destructive">{form.formState.errors.timezone.message}</p>
               )}
+            </div>
+            {/* Tax treatment (design C1 web bullet, requirements D13). Shown on
+                create AND edit, for every user — the CA pooled-ACB tax summary
+                is the only reader, but the field itself is not gated. */}
+            <div className="space-y-2">
+              <Label htmlFor="taxTreatment">Tax treatment</Label>
+              <Select
+                value={form.watch('taxTreatment') ?? 'taxable'}
+                onValueChange={(val) =>
+                  form.setValue('taxTreatment', val as CreateAccountInput['taxTreatment'])
+                }
+              >
+                <SelectTrigger id="taxTreatment" className="cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="taxable">Taxable</SelectItem>
+                  <SelectItem value="registered">
+                    Registered (TFSA, RRSP, FHSA and similar)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">
+                Only the Canadian tax summary uses this.
+              </p>
             </div>
             {!isEdit && (
               <div className="space-y-2">

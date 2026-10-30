@@ -100,6 +100,9 @@ export function useUpdateAccount() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['accounts'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard', 'totals'] });
+      // A changed tax treatment (ca-acb-pooling AC 1.4) moves the account
+      // in or out of the CA pooled-ACB summary, so the next read must refetch.
+      queryClient.invalidateQueries({ queryKey: ['expenses', 'tax-summary'] });
       toast.success('Account updated');
     },
     onError: (err: unknown) => {
