@@ -19,6 +19,7 @@ export const EXPORTED_TABLES = [
   'positions',
   'fills',
   'fill_lot_selections',
+  'fill_transfer_links',
   'tags',
   'position_tags',
   'trading_rules',
