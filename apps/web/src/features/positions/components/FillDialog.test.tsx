@@ -413,6 +413,30 @@ describe('FillDialog — lot picker sum mismatch (AC 4.3)', () => {
     fireEvent.click(addBtn);
     expect(addFillMutate).not.toHaveBeenCalled();
   });
+
+  it('does not flag a fractional pick that sums within tolerance (0.1 + 0.2 = 0.3)', async () => {
+    mockLots({ method: 'fifo', jurisdiction: 'US', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    fireEvent.change(field('Quantity'), { target: { value: '0.3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pick lots' }));
+    fireEvent.change(
+      within(screen.getByTestId(`lot-row-${LOT_A.entryFillId}`)).getByRole('textbox'),
+      { target: { value: '0.1' } },
+    );
+    fireEvent.change(
+      within(screen.getByTestId(`lot-row-${LOT_B.entryFillId}`)).getByRole('textbox'),
+      { target: { value: '0.2' } },
+    );
+
+    const addBtn = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement;
+    expect(addBtn.disabled).toBe(false);
+    // Float noise is absorbed, so the readout shows an exact match, not 4e-17.
+    expect(screen.getByTestId('lot-picker-difference').textContent).toContain('difference 0');
+
+    fireEvent.click(addBtn);
+    await waitFor(() => expect(addFillMutate).toHaveBeenCalled());
+  });
 });
 
 describe('FillDialog — lot picker submission (AC 4.4)', () => {

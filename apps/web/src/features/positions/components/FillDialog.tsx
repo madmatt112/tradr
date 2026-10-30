@@ -206,7 +206,9 @@ export function FillDialog({
   const lotPickMismatch =
     lotPickerTouched &&
     lotSelectionValue !== null &&
-    sumLotSelection(lotSelectionValue) !== (Number(watchedQuantity) || 0);
+    // Tolerance comparison: 0.1 + 0.2 !== 0.3 in float, so a strict !== would
+    // wrongly flag a valid fractional pick. The API re-validates the sum.
+    Math.abs(sumLotSelection(lotSelectionValue) - (Number(watchedQuantity) || 0)) > 1e-9;
   const setLotSelection = (next: LotSelectionItem[] | null) => {
     setLotSelectionValue(next);
     setLotPickerTouched(true);
