@@ -123,6 +123,9 @@ export function findAccountsByUser(db: Database | Transaction, userId: string) {
       // Which account pickers preselect. Read-only on the way out, like isDemo:
       // it moves via PUT /api/accounts/default, never via create/update bodies.
       isDefault: accounts.isDefault,
+      // How this account is taxed — see accounts.schema.ts. Present on every
+      // read (ca-acb-pooling design C1, AC 1.3).
+      taxTreatment: accounts.taxTreatment,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -154,6 +157,8 @@ export function findAccountById(db: Database | Transaction, id: string, userId: 
       // See findAccountsByUser. Carried here so the account the create endpoint
       // returns says whether it just became the default.
       isDefault: accounts.isDefault,
+      // See findAccountsByUser.
+      taxTreatment: accounts.taxTreatment,
       createdAt: accounts.createdAt,
       updatedAt: accounts.updatedAt,
       balance: balanceProjection,
@@ -178,6 +183,8 @@ export function insertAccount(
     startingBalance?: string;
     timezone?: string;
     defaultRiskPercent?: string | null;
+    // Omitted takes the accounts.tax_treatment column default 'taxable'.
+    taxTreatment?: string;
     // Only the sample-data seeder passes this. It is never derived from request
     // input: the column decides whether an account may be deleted along with
     // everything booked against it, so a client that could set it could talk
@@ -209,6 +216,7 @@ export function updateAccount(
     brokerageId: string | null;
     timezone: string;
     defaultRiskPercent: string | null;
+    taxTreatment: string;
   }>,
 ) {
   return tx

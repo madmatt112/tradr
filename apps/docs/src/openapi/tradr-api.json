@@ -283,6 +283,15 @@
                   "startingBalance": {
                     "type": "string"
                   },
+                  "taxTreatment": {
+                    "description": "How this account is taxed. A taxable account's dispositions enter the CA pooled-ACB summary; a registered account (TFSA, RRSP and the like) is sheltered and never enters it. Omitted defaults to `taxable`.\n",
+                    "enum": [
+                      "taxable",
+                      "registered"
+                    ],
+                    "example": "taxable",
+                    "type": "string"
+                  },
                   "timezone": {
                     "description": "IANA zone name (canonical spelling, e.g. `America/New_York`, `Etc/UTC`). Defines the account's trading day. Omitted defaults to `America/New_York`; an unknown zone is a 400.\n",
                     "example": "America/New_York",
@@ -495,6 +504,15 @@
                   },
                   "name": {
                     "minLength": 1,
+                    "type": "string"
+                  },
+                  "taxTreatment": {
+                    "description": "How this account is taxed. Omitting the key leaves the stored value untouched; unlike `defaultRiskPercent` there is no `null` case to clear — this field has no unset state.\n",
+                    "enum": [
+                      "taxable",
+                      "registered"
+                    ],
+                    "example": "registered",
                     "type": "string"
                   },
                   "timezone": {
