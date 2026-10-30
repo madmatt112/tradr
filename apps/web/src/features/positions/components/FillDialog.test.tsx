@@ -6,6 +6,7 @@ import { holdTerm, type FeeSchedule, type Fill } from '@tradr/shared';
 
 import { useAccountFeeSchedule } from '../hooks/useAccountFeeSchedule';
 import { usePositionLots } from '../hooks/usePositionLots';
+import { useTransferLink } from '../hooks/useTransferLink';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,6 +29,67 @@ vi.mock('../hooks/useAccountFeeSchedule', () => ({
 vi.mock('../hooks/usePositionLots', () => ({
   usePositionLots: vi.fn(() => ({ data: undefined, isLoading: false })),
 }));
+
+// useTransferLink.ts does not exist until task 10 is implemented, so every
+// test in this file fails to resolve this module until the implementer
+// creates it. Default to no link and no candidates so the pre-existing
+// suites above render no section and keep their current assertions.
+const linkMutateAsync = vi.fn().mockResolvedValue(undefined);
+const removeLinkMutateAsync = vi.fn().mockResolvedValue(undefined);
+vi.mock('../hooks/useTransferLink', () => ({
+  useTransferLink: vi.fn(() => ({ data: undefined, isLoading: false })),
+  useSetTransferLink: vi.fn(() => ({ mutateAsync: linkMutateAsync, isPending: false })),
+  useRemoveTransferLink: vi.fn(() => ({ mutateAsync: removeLinkMutateAsync, isPending: false })),
+}));
+
+const toastError = vi.fn();
+const toastSuccess = vi.fn();
+vi.mock('sonner', () => ({
+  toast: {
+    error: (...args: unknown[]) => toastError(...args),
+    success: (...args: unknown[]) => toastSuccess(...args),
+  },
+}));
+
+// AccountDialog.test.tsx's established stand-in: Radix Select's pointer-capture
+// machinery is browser-only, so the candidate picker is driven as a native
+// <select>. SelectTrigger's `id` (what the sibling <Label htmlFor> points at)
+// is lifted onto the <select> so the control stays reachable by its label.
+vi.mock('@/components/ui/select', async () => {
+  const { Children, isValidElement } = await import('react');
+  const triggerId = (children: React.ReactNode): string | undefined => {
+    let id: string | undefined;
+    Children.forEach(children, (child) => {
+      if (isValidElement<{ id?: string }>(child) && child.props.id) id = child.props.id;
+    });
+    return id;
+  };
+  return {
+    Select: ({
+      value,
+      onValueChange,
+      children,
+    }: {
+      value?: string;
+      onValueChange: (v: string) => void;
+      children: React.ReactNode;
+    }) => (
+      <select
+        id={triggerId(children)}
+        value={value ?? ''}
+        onChange={(e) => onValueChange(e.currentTarget.value)}
+      >
+        {children}
+      </select>
+    ),
+    SelectTrigger: () => null,
+    SelectValue: () => null,
+    SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => (
+      <option value={value}>{children}</option>
+    ),
+  };
+});
 
 import { FillDialog, type FillPositionContext } from './FillDialog';
 
@@ -59,6 +121,10 @@ afterEach(() => {
     data: undefined,
     isLoading: false,
   } as ReturnType<typeof usePositionLots>);
+  vi.mocked(useTransferLink).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+  } as ReturnType<typeof useTransferLink>);
 });
 
 function renderDialog(props: Partial<React.ComponentProps<typeof FillDialog>> = {}) {
@@ -98,7 +164,7 @@ const DIALOG_FILLED_AT = '2025-06-01T12:00';
 function mockLots(
   data:
     | {
-        method: 'fifo' | 'average';
+        method: 'fifo' | 'average' | 'acb';
         jurisdiction: 'US' | 'CA' | 'other';
         lots: Array<{
           entryFillId: string;
@@ -128,6 +194,64 @@ const editFillWithSelection: Fill = {
   createdAt: '2025-06-01T12:00:00.000Z',
   lotSelection: [{ entryFillId: LOT_A.entryFillId, quantity: '4' }],
 };
+
+// Fixtures for the transfer-link section (task 10; design C7; requirements.md
+// AC 6.5).
+const editExitFill: Fill = {
+  id: 'f2',
+  positionId: 'p1',
+  type: 'exit',
+  price: '160',
+  quantity: '10',
+  fees: '0',
+  notes: null,
+  filledAt: '2025-06-01T12:00:00.000Z',
+  createdAt: '2025-06-01T12:00:00.000Z',
+  lotSelection: null,
+};
+const editEntryFill: Fill = {
+  ...editExitFill,
+  id: 'f3',
+  type: 'entry',
+};
+
+const LINK = {
+  id: 'link-1',
+  exitFillId: editExitFill.id,
+  entryFillId: '00000000-0000-4000-a000-000000000201',
+  entryPositionId: 'p2',
+  entryAccountId: 'a2',
+  entryAccountName: 'TFSA',
+  createdAt: '2025-06-01T00:00:00.000Z',
+};
+const CANDIDATE_A = {
+  entryFillId: '00000000-0000-4000-a000-000000000301',
+  positionId: 'p3',
+  accountId: 'a3',
+  accountName: 'RRSP',
+  filledAt: '2025-05-15T00:00:00.000Z',
+  price: '100.00',
+  quantity: '10',
+};
+const CANDIDATE_B = {
+  entryFillId: '00000000-0000-4000-a000-000000000302',
+  positionId: 'p4',
+  accountId: 'a4',
+  accountName: 'Margin',
+  filledAt: '2025-05-20T00:00:00.000Z',
+  price: '105.00',
+  quantity: '10',
+};
+
+function mockTransferLink(data: {
+  link: typeof LINK | null;
+  candidates: Array<typeof CANDIDATE_A>;
+}) {
+  vi.mocked(useTransferLink).mockReturnValue({
+    data,
+    isLoading: false,
+  } as ReturnType<typeof useTransferLink>);
+}
 
 describe('FillDialog — price prefill differs by direction', () => {
   it('prefills an entry with the average entry price', () => {
@@ -588,6 +712,158 @@ describe('FillDialog — no lots network call when closed or on an entry (restri
 
     renderDialog({ defaultType: 'entry' });
     lastCall = vi.mocked(usePositionLots).mock.calls.at(-1);
+    expect(lastCall?.[2]).toBe(false);
+  });
+});
+
+// Contract block — task 10, FillDialog transfer-link section (design C7 web
+// bullet; requirements.md AC 6.5). Every case renders FillDialog with
+// useTransferLink mocked and reaches the behaviour through that render,
+// exactly as the task's Test line specifies.
+//
+// AC 6.5 (a) — Pre: exit edit, the fetched data carries a link. Call:
+//   render(FillDialog, {fill: editExitFill}). Observe: the linked account's
+//   name renders, and clicking "Remove link" calls the delete mutation.
+//   Source: task 10 Success ("an exit edit with a link shows the linked
+//   account and Remove link, which calls the delete mutation").
+// AC 6.5 (b) — Pre: exit edit, the fetched data carries two candidates and no
+//   link. Call: same render, pick a candidate in the Select, click
+//   "Link transfer". Observe: each candidate is listed as
+//   "account · date · quantity @ price"; the mutation is sent the chosen
+//   entryFillId. Source: task 10 Success ("lists each and Link transfer
+//   sends the chosen entryFillId") + design C7 web bullet (candidate label
+//   shape).
+// AC 6.5 (c) — Pre: exit edit, no link and no candidates. Call: same render.
+//   Observe: no "Link transfer" button. Source: task 10 Success ("an exit
+//   edit with no candidates and no link shows no Link transfer").
+// AC 6.5 (d) — Pre: (i) entry edit; (ii) a create (no fill). Call: same
+//   render. Observe: neither "Link transfer" nor "Remove link" renders in
+//   either case. Source: task 10 Success ("an entry edit and a create show
+//   no section").
+// AC 6.5 (e) — Pre: exit edit, one candidate, the link mutation rejects with
+//   a 409-shaped `{ error: { message } }`. Call: same render, click
+//   "Link transfer". Observe: the toast shows that message. Source: task 10
+//   Prompt ("A 409 shows its message in a toast").
+// Restriction — Pre: as AC 6.5 (a)/(b). Call: same renders. Observe: "Remove
+//   link" and "Link transfer" both carry cursor-pointer; the candidate
+//   Select resolves through `getByLabelText` (its Label is tied by htmlFor).
+//   Source: task 10 Restrictions line.
+// Restriction — Pre: exit edit, dialog closed. Call: render(FillDialog,
+//   {open:false, fill: editExitFill}). Observe: the query hook's third
+//   argument is false. Source: task 10 Restrictions line ("no network call
+//   on ... a closed dialog"); the entry/create halves of this restriction are
+//   covered by AC 6.5 (d) above — neither case renders the section (or calls
+//   the hook) at all.
+//
+// Regression guard, NOT red-first (RED-IMPOSSIBLE): FillDialog.tsx's existing
+// `showLotPicker` condition (line 198) already reads
+// `lotsData?.method === 'fifo'`, so a method of `acb` already fails that
+// check at base, before this task's code exists. No prior test in this file
+// set method to `acb` though, so this pins the branch the task note calls
+// out: "The hidden picker on acb (AC 2.5) holds at base ... regression
+// guard."
+describe('FillDialog — hidden lot picker on acb (AC 2.5, regression guard)', () => {
+  it('shows no lot picker when the effective method is acb, even with two available lots', () => {
+    mockLots({ method: 'acb', jurisdiction: 'CA', lots: [LOT_A, LOT_B] });
+    renderDialog({ defaultType: 'exit' });
+
+    expect(screen.queryByRole('button', { name: 'FIFO' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Pick lots' })).toBeNull();
+  });
+});
+
+describe('FillDialog — transfer-link section, an existing link (AC 6.5a)', () => {
+  it('shows the linked account and removes it through the delete mutation', async () => {
+    mockTransferLink({ link: LINK, candidates: [] });
+    renderDialog({ fill: editExitFill });
+
+    expect(screen.getByText(new RegExp(LINK.entryAccountName))).toBeTruthy();
+    const removeBtn = screen.getByRole('button', { name: 'Remove link' });
+    expect(removeBtn.className).toContain('cursor-pointer');
+
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => expect(removeLinkMutateAsync).toHaveBeenCalled());
+  });
+});
+
+describe('FillDialog — transfer-link section, candidates (AC 6.5b)', () => {
+  it('lists each candidate as "account · date · quantity @ price" and sends the chosen entryFillId', async () => {
+    mockTransferLink({ link: null, candidates: [CANDIDATE_A, CANDIDATE_B] });
+    renderDialog({ fill: editExitFill });
+
+    expect(
+      screen.getByText(
+        `${CANDIDATE_A.accountName} · ${CANDIDATE_A.filledAt} · ${CANDIDATE_A.quantity} @ ${CANDIDATE_A.price}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        `${CANDIDATE_B.accountName} · ${CANDIDATE_B.filledAt} · ${CANDIDATE_B.quantity} @ ${CANDIDATE_B.price}`,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Transfer candidate'), {
+      target: { value: CANDIDATE_B.entryFillId },
+    });
+    const linkBtn = screen.getByRole('button', { name: 'Link transfer' });
+    expect(linkBtn.className).toContain('cursor-pointer');
+    fireEvent.click(linkBtn);
+
+    await waitFor(() => expect(linkMutateAsync).toHaveBeenCalledWith(CANDIDATE_B.entryFillId));
+  });
+});
+
+describe('FillDialog — transfer-link section, nothing to show (AC 6.5c)', () => {
+  it('shows no Link transfer button when there is no link and no candidates', () => {
+    mockTransferLink({ link: null, candidates: [] });
+    renderDialog({ fill: editExitFill });
+
+    expect(screen.queryByRole('button', { name: 'Link transfer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove link' })).toBeNull();
+  });
+});
+
+describe('FillDialog — transfer-link section hidden on an entry edit or a create (AC 6.5d)', () => {
+  it('shows no section on an entry edit', () => {
+    mockTransferLink({ link: null, candidates: [CANDIDATE_A] });
+    renderDialog({ fill: editEntryFill });
+
+    expect(screen.queryByRole('button', { name: 'Link transfer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove link' })).toBeNull();
+  });
+
+  it('shows no section on a create', () => {
+    mockTransferLink({ link: null, candidates: [CANDIDATE_A] });
+    renderDialog({ defaultType: 'exit' });
+
+    expect(screen.queryByRole('button', { name: 'Link transfer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove link' })).toBeNull();
+  });
+});
+
+describe('FillDialog — transfer-link 409 surfaces its reason (AC 6.5e)', () => {
+  it('shows the mutation error message in a toast', async () => {
+    mockTransferLink({ link: null, candidates: [CANDIDATE_A] });
+    linkMutateAsync.mockRejectedValueOnce({
+      error: { message: 'same_account: entry already linked' },
+    });
+    renderDialog({ fill: editExitFill });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link transfer' }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith('same_account: entry already linked'),
+    );
+  });
+});
+
+describe('FillDialog — no transfer-link network call on a closed dialog (restriction)', () => {
+  it('passes enabled:false to the transfer-link query while the dialog is closed', () => {
+    mockTransferLink({ link: null, candidates: [] });
+    renderDialog({ open: false, fill: editExitFill });
+
+    const lastCall = vi.mocked(useTransferLink).mock.calls.at(-1);
     expect(lastCall?.[2]).toBe(false);
   });
 });
