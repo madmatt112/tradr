@@ -5,7 +5,7 @@ import app, { bootstrap } from '@/app';
 import { db } from '@/db';
 import { ledgerEntries } from '@/db/schema/accounting.schema';
 import { expenses } from '@/db/schema/expenses.schema';
-import { positions } from '@/db/schema/positions.schema';
+import { fillTransferLinks, positions } from '@/db/schema/positions.schema';
 import { sessions, users } from '@/db/schema/users.schema';
 import { unregisterCloseHook } from '@/features/positions/positions.service';
 
@@ -1253,6 +1253,192 @@ describe('GET /api/expenses/tax-summary', () => {
       'registered accounts (TFSA, RRSP, FHSA and similar) are excluded',
     );
     expect(body.disclaimer).not.toContain('held through that window');
+  });
+
+  it('acb superficial-loss end-to-end: a repurchase in a registered account flags, with lossRowId the exit fill id and null lot fields; an unpriced row raises none of its own (AC 7.1, 7.2, 7.3, 7.6)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const acct = await createAccount(cookie, 'CAD acct', 'CAD');
+    const registeredRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'TFSA',
+      currency: 'CAD',
+      taxTreatment: 'registered',
+    });
+    expect(registeredRes.status).toBe(201);
+    const acctR = await registeredRes.json();
+    await patchJurisdiction(cookie, 'CA');
+
+    // Taxable loss: entry 100@10, partial exit 50@8 -> gain 400-500=-100.00.
+    const position = await createPositionFor(cookie, acct.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, position.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '100',
+      fees: '0.00',
+      filledAt: '2026-02-01T14:00:00Z',
+    });
+    await openPositionFor(cookie, position.id, '2026-02-01T14:00:00Z');
+    const exitFill = await addFillFor(cookie, position.id, {
+      type: 'exit',
+      price: '8.00',
+      quantity: '50',
+      fees: '0.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+
+    // Repurchase in the TFSA, 9 days later, still held past +30d — the
+    // candidate the registered account's lack of a filter (AC 7.2) must
+    // still reach.
+    const positionR = await createPositionFor(cookie, acctR.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    const entryR = await addFillFor(cookie, positionR.id, {
+      type: 'entry',
+      price: '9.00',
+      quantity: '20',
+      fees: '0.00',
+      filledAt: '2026-03-10T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionR.id, '2026-03-10T14:00:00Z');
+
+    // An unpriced taxable disposition (no USD->CAD rate entered) — its gain
+    // is null, so it must never become a loss row of its own (AC 7.6).
+    const acctUsd = await createAccount(cookie, 'USD acct', 'USD');
+    const positionUsd = await createPositionFor(cookie, acctUsd.id, {
+      symbol: 'UNPRICED',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, positionUsd.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-03-01T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionUsd.id, '2026-03-01T14:00:00Z');
+    await addFillFor(cookie, positionUsd.id, {
+      type: 'exit',
+      price: '5.00',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-03-05T14:00:00Z',
+    });
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.lotMethod).toBe('acb');
+    expect(body.flags.superficialLosses).toHaveLength(1);
+    const flag = body.flags.superficialLosses[0];
+    expect(flag.lossRowId).toBe(exitFill.id);
+    expect(flag.lotEntryFillId).toBeNull();
+    expect(flag.lotOpenedAt).toBeNull();
+    expect(flag.reason).toBe('repurchase_within_30_days');
+    expect(flag.counterpartyLotIds).toEqual([entryR.id]);
+  });
+
+  it('acb superficial-loss end-to-end: a repurchase in the losing position itself flags (AC 7.3); the entry side of a taxable-to-taxable transfer link is not a repurchase candidate (D7)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const me = await getMe(cookie);
+    const acctA = await createAccount(cookie, 'CAD acct A', 'CAD');
+    const acctB = await createAccount(cookie, 'CAD acct B', 'CAD');
+    const acctC = await createAccount(cookie, 'CAD acct C', 'CAD');
+    await patchJurisdiction(cookie, 'CA');
+
+    // Account A: entry 100@10, partial exit 50@8 -> loss -100.00; position
+    // stays open.
+    const positionA = await createPositionFor(cookie, acctA.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, positionA.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '100',
+      fees: '0.00',
+      filledAt: '2026-02-01T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionA.id, '2026-02-01T14:00:00Z');
+    const exitFillA = await addFillFor(cookie, positionA.id, {
+      type: 'exit',
+      price: '8.00',
+      quantity: '50',
+      fees: '0.00',
+      filledAt: '2026-03-01T15:00:00Z',
+    });
+
+    // A second entry into the SAME losing position, 9 days later — on acb
+    // the same-position skip (which applies under average) does not apply.
+    const reEntryA = await addFillFor(cookie, positionA.id, {
+      type: 'entry',
+      price: '9.00',
+      quantity: '10',
+      fees: '0.00',
+      filledAt: '2026-03-10T14:00:00Z',
+    });
+
+    // Account B -> Account C: an in-kind transfer of the same symbol/side.
+    // Without D7's exclusion the entry side would also match as a
+    // repurchase, 9 days after the loss too.
+    const positionB = await createPositionFor(cookie, acctB.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    await addFillFor(cookie, positionB.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '20',
+      fees: '0.00',
+      filledAt: '2026-01-01T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionB.id, '2026-01-01T14:00:00Z');
+    const exitFillB = await addFillFor(cookie, positionB.id, {
+      type: 'exit',
+      price: '10.00',
+      quantity: '20',
+      fees: '0.00',
+      filledAt: '2026-03-10T13:00:00Z',
+    });
+
+    const positionC = await createPositionFor(cookie, acctC.id, {
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+    });
+    const entryFillC = await addFillFor(cookie, positionC.id, {
+      type: 'entry',
+      price: '10.00',
+      quantity: '20',
+      fees: '0.00',
+      filledAt: '2026-03-10T14:00:00Z',
+    });
+    await openPositionFor(cookie, positionC.id, '2026-03-10T14:00:00Z');
+
+    await db.insert(fillTransferLinks).values({
+      userId: me.id,
+      exitFillId: exitFillB.id,
+      entryFillId: entryFillC.id,
+    });
+
+    const res = await authedRequest('GET', '/api/expenses/tax-summary?year=2026', cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.flags.superficialLosses).toHaveLength(1);
+    const flag = body.flags.superficialLosses[0];
+    expect(flag.lossRowId).toBe(exitFillA.id);
+    expect(flag.counterpartyLotIds).toHaveLength(1);
+    expect(flag.counterpartyLotIds).toContain(reEntryA.id);
+    expect(flag.counterpartyLotIds).not.toContain(entryFillC.id);
   });
 
   it('US wash-sale end-to-end: loss + same-symbol re-open within 30d produces one washSales entry', async () => {
