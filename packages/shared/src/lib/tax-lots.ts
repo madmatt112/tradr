@@ -1,4 +1,5 @@
 export type LotMethod = 'fifo' | 'average';
+export type EffectiveLotMethod = LotMethod | 'acb';
 
 export function defaultLotMethod(jurisdiction: 'US' | 'CA' | 'other' | null): LotMethod {
   return jurisdiction === 'CA' ? 'average' : 'fifo';
@@ -7,7 +8,10 @@ export function defaultLotMethod(jurisdiction: 'US' | 'CA' | 'other' | null): Lo
 export function resolveLotMethod(
   stored: LotMethod | null,
   jurisdiction: 'US' | 'CA' | 'other' | null,
-): { method: LotMethod; isDefault: boolean } {
+): { method: EffectiveLotMethod; isDefault: boolean } {
+  // CA always resolves to acb regardless of the stored value (AC 2.1); the
+  // stored value is kept but never surfaced as the effective method (AC 2.2).
+  if (jurisdiction === 'CA') return { method: 'acb', isDefault: stored === null };
   if (stored !== null) return { method: stored, isDefault: false };
   return { method: defaultLotMethod(jurisdiction), isDefault: true };
 }

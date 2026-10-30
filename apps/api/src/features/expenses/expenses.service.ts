@@ -2,7 +2,12 @@ import Decimal from 'decimal.js';
 
 import { getCurrencyMinorUnits } from '@tradr/shared/constants/currencies';
 import { parseOccUnderlying } from '@tradr/shared/lib/occ';
-import { holdTerm, resolveLotMethod, type LotMethod } from '@tradr/shared/lib/tax-lots';
+import {
+  holdTerm,
+  resolveLotMethod,
+  type EffectiveLotMethod,
+  type LotMethod,
+} from '@tradr/shared/lib/tax-lots';
 import type {
   CreateExpenseInput,
   ExpenseListResponse,
@@ -395,9 +400,11 @@ export async function setTaxJurisdiction(
  * Read the user's stored lot method alongside its effective, resolved value.
  * A stored method overrides the jurisdiction default (AC 2.2).
  */
-export async function getTaxLotMethod(
-  userId: string,
-): Promise<{ taxLotMethod: LotMethod | null; effectiveMethod: LotMethod; isDefault: boolean }> {
+export async function getTaxLotMethod(userId: string): Promise<{
+  taxLotMethod: LotMethod | null;
+  effectiveMethod: EffectiveLotMethod;
+  isDefault: boolean;
+}> {
   const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
   const { method, isDefault } = resolveLotMethod(taxLotMethod, taxJurisdiction);
   return { taxLotMethod, effectiveMethod: method, isDefault };
@@ -518,7 +525,11 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   // Step 1: jurisdiction + effective lot method.
   const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
   const jurisdiction = taxJurisdiction ?? 'other';
-  const { method } = resolveLotMethod(taxLotMethod, taxJurisdiction);
+  const { method: effectiveMethod } = resolveLotMethod(taxLotMethod, taxJurisdiction);
+  // Bridge (design D2): acb pooling isn't implemented yet (task 7), so CA
+  // computes on the average-cost path below. Remove this mapping once task 7
+  // ships true ACB pooling; `lotMethod` in the response stays `effectiveMethod`.
+  const method: LotMethod = effectiveMethod === 'acb' ? 'average' : effectiveMethod;
 
   // Step 2 + 3 + 3b: data fetch (independent — issue in parallel). `lotRows`
   // stays empty, with no query issued, outside FIFO.
@@ -731,7 +742,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
     return {
       year,
       jurisdiction,
-      lotMethod: method,
+      lotMethod: effectiveMethod,
       displayCurrency: null,
       realisedPnl: {
         total: null,
@@ -818,7 +829,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   return {
     year,
     jurisdiction,
-    lotMethod: method,
+    lotMethod: effectiveMethod,
     displayCurrency,
     realisedPnl: {
       total:

@@ -3072,7 +3072,8 @@
                     "lotMethod": {
                       "enum": [
                         "fifo",
-                        "average"
+                        "average",
+                        "acb"
                       ],
                       "type": "string"
                     },
@@ -4669,7 +4670,8 @@
                     "method": {
                       "enum": [
                         "fifo",
-                        "average"
+                        "average",
+                        "acb"
                       ],
                       "type": "string"
                     }
@@ -5868,7 +5870,7 @@
     },
     "/api/users/me/tax-lot-method": {
       "get": {
-        "description": "Authed. The effective method is the stored value if one is set, otherwise the jurisdiction default (average cost for CA, FIFO otherwise).\n",
+        "description": "Authed. Under CA, the effective method is always acb, whatever the stored value; elsewhere it is the stored value if one is set, otherwise the jurisdiction default (FIFO).\n",
         "responses": {
           "200": {
             "content": {
@@ -5878,7 +5880,8 @@
                     "effectiveMethod": {
                       "enum": [
                         "fifo",
-                        "average"
+                        "average",
+                        "acb"
                       ],
                       "type": "string"
                     },

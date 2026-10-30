@@ -110,6 +110,11 @@ export const UpdateTaxJurisdictionInputSchema = z
 
 export const LotMethodEnum = z.enum(['fifo', 'average']);
 
+// The effective method actually applied, after jurisdiction resolution.
+// CA always resolves to acb (design C2) — LotMethodEnum stays the stored
+// and PATCH enum, unchanged by this.
+export const EffectiveLotMethodEnum = z.enum(['fifo', 'average', 'acb']);
+
 export const UpdateTaxLotMethodInputSchema = z
   .object({
     taxLotMethod: LotMethodEnum.nullable(),
@@ -216,7 +221,7 @@ export const TaxSummaryResponseSchema = z
   .object({
     year: z.number().int(),
     jurisdiction: TaxJurisdictionEnum,
-    lotMethod: LotMethodEnum,
+    lotMethod: EffectiveLotMethodEnum,
     displayCurrency: z.string().length(3).nullable(),
     realisedPnl: z.object({
       total: z.string().nullable(),
@@ -282,3 +287,4 @@ export type WashSaleFlag = z.infer<typeof WashSaleFlag>;
 export type SuperficialLossFlag = z.infer<typeof SuperficialLossFlag>;
 export type LotRealisationRow = z.infer<typeof LotRealisationRowSchema>;
 export type LotMethod = z.infer<typeof LotMethodEnum>;
+export type EffectiveLotMethod = z.infer<typeof EffectiveLotMethodEnum>;

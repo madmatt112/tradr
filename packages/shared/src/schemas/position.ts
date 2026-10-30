@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { parseOccSymbol } from '../options';
 
-import { LotMethodEnum, TaxJurisdictionEnum } from './expense';
+import { EffectiveLotMethodEnum, TaxJurisdictionEnum } from './expense';
 import { ClassificationSchema } from './performance';
 import { PositionImageSchema } from './position-image';
 import { TagSchema } from './tag';
@@ -305,7 +305,7 @@ export const PositionLotSchema = z
 
 export const PositionLotsResponseSchema = z
   .object({
-    method: LotMethodEnum,
+    method: EffectiveLotMethodEnum,
     jurisdiction: TaxJurisdictionEnum,
     lots: z.array(PositionLotSchema),
   })

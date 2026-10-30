@@ -55,7 +55,7 @@ const LotsQuerySchema = z.object({ exitFillId: z.string().uuid().optional() });
  *               properties:
  *                 method:
  *                   type: string
- *                   enum: [fifo, average]
+ *                   enum: [fifo, average, acb]
  *                 jurisdiction:
  *                   type: string
  *                   enum: [US, CA, other]

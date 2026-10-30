@@ -80,7 +80,7 @@ const TaxJurisdictionResponseSchema = z
 const TaxLotMethodResponseSchema = z
   .object({
     taxLotMethod: z.enum(['fifo', 'average']).nullable(),
-    effectiveMethod: z.enum(['fifo', 'average']),
+    effectiveMethod: z.enum(['fifo', 'average', 'acb']),
     isDefault: z.boolean(),
   })
   .strict();
@@ -379,7 +379,7 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *               properties:
  *                 year: { type: integer }
  *                 jurisdiction: { type: string, enum: [US, CA, other], nullable: true }
- *                 lotMethod: { type: string, enum: [fifo, average] }
+ *                 lotMethod: { type: string, enum: [fifo, average, acb] }
  *                 displayCurrency: { type: string, nullable: true }
  *                 realisedPnl: { type: object }
  *                 trackedExpenses: { type: object }
@@ -500,9 +500,9 @@ expensesRouter.patch(
  *   get:
  *     summary: Get the tax lot method.
  *     description: >
- *       Authed. The effective method is the stored value if one is set,
- *       otherwise the jurisdiction default (average cost for CA, FIFO
- *       otherwise).
+ *       Authed. Under CA, the effective method is always acb, whatever the
+ *       stored value; elsewhere it is the stored value if one is set,
+ *       otherwise the jurisdiction default (FIFO).
  *     tags: [Expenses]
  *     responses:
  *       200:
@@ -513,7 +513,7 @@ expensesRouter.patch(
  *               type: object
  *               properties:
  *                 taxLotMethod: { type: string, enum: [fifo, average], nullable: true }
- *                 effectiveMethod: { type: string, enum: [fifo, average] }
+ *                 effectiveMethod: { type: string, enum: [fifo, average, acb] }
  *                 isDefault: { type: boolean }
  */
 expensesRouter.get('/users/me/tax-lot-method', async (c) => {
