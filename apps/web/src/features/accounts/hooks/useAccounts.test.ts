@@ -13,6 +13,7 @@ import {
   useDeleteAccount,
   useSetDefaultAccount,
   useSetWritableAccount,
+  useUpdateAccount,
 } from './useAccounts';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -80,6 +81,25 @@ describe('useAccounts — tier-key invalidation (plan-tiers)', () => {
     expect(put).toHaveBeenCalledWith('/accounts/writable', { accountId: ACCOUNT_ID });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: billingKeys.tier() });
     expect(toast.success).toHaveBeenCalledWith('Writable account updated');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tax treatment (ca-acb-pooling AC 1.4): a changed treatment must make the
+// next tax summary read reflect it, so the mutation also invalidates the
+// expenses tax-summary prefix, not only the accounts list.
+// ---------------------------------------------------------------------------
+
+describe('useUpdateAccount — tax summary invalidation', () => {
+  it('invalidates the expenses tax-summary key on success', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue({ id: ACCOUNT_ID });
+    const qc = makeClient();
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    const { result } = renderHook(() => useUpdateAccount(), { wrapper: makeWrapper(qc) });
+    await result.current.mutateAsync({ id: ACCOUNT_ID, data: { name: 'A' } as never });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['expenses', 'tax-summary'] });
   });
 });
 
