@@ -85,9 +85,9 @@ describe('TaxSummaryResponseSchema strict()', () => {
       lotMethod: 'acb' as const,
       acbDispositions: [
         {
-          exitFillId: '11111111-1111-1111-1111-111111111111',
-          positionId: '22222222-2222-2222-2222-222222222222',
-          accountId: '33333333-3333-3333-3333-333333333333',
+          exitFillId: '11111111-1111-1111-a111-111111111111',
+          positionId: '22222222-2222-2222-a222-222222222222',
+          accountId: '33333333-3333-3333-a333-333333333333',
           symbol: 'XYZ',
           currency: 'CAD',
           tradeDate: '2026-03-01',
@@ -101,9 +101,9 @@ describe('TaxSummaryResponseSchema strict()', () => {
           unpricedReason: null,
         },
         {
-          exitFillId: '44444444-4444-4444-4444-444444444444',
-          positionId: '55555555-5555-5555-5555-555555555555',
-          accountId: '66666666-6666-6666-6666-666666666666',
+          exitFillId: '44444444-4444-4444-a444-444444444444',
+          positionId: '55555555-5555-5555-a555-555555555555',
+          accountId: '66666666-6666-6666-a666-666666666666',
           symbol: 'NRTE',
           currency: 'USD',
           tradeDate: '2026-04-01',

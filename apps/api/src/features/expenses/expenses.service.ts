@@ -22,6 +22,7 @@ import { NotFoundError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { withTransaction } from '@/lib/transaction';
 
+import { getAcbDispositionsForYear } from './acb.service';
 import {
   aggregateFeesByAccountAndAssetType,
   aggregatePerCurrencyFees,
@@ -41,6 +42,7 @@ import {
   updateUserTaxJurisdiction,
   updateUserTaxLotMethod,
   type ExpenseRow,
+  type RealisedPositionRow,
   type TaxJurisdiction,
 } from './expenses.query';
 import {
@@ -451,7 +453,7 @@ function toIsoOrNull(d: Date | string | null): string | null {
  */
 const JURISDICTION_CLAUSE: Record<TaxJurisdiction, string> = {
   US: 'Brokerage fees on closed positions are already deducted from the realised P&L figures here. Recorded fill fees for visibility live on the separate Fee Rollup page (filledAt-bucketed). Wash-sale flags below are heuristic; they do not adjust the P&L figures.',
-  CA: "Commission fees paid through fills are already incorporated into the realised gain/loss above (consistent with the CRA's adjusted cost base treatment). The 50% capital-gains inclusion rate is NOT applied by Tradr — the realised P&L shown is the pre-inclusion-rate figure.",
+  CA: "Commission fees paid through fills are already incorporated into the realised gain/loss above (consistent with the CRA's adjusted cost base treatment). The 50% capital-gains inclusion rate is NOT applied by Tradr — the realised P&L shown is the pre-inclusion-rate figure. Gains use one adjusted cost base pooled per security across your taxable accounts; registered accounts (TFSA, RRSP, FHSA and similar) are excluded. Fills in another currency convert to CAD at the rate you entered for each trade date; a sale with no rate is shown as unpriced and left out of the totals. A superficial loss is flagged only when the security was acquired in the 61-day window and still held 30 days after the sale.",
   other:
     'Tradr does not support jurisdiction-specific tax rules for your jurisdiction. The figures below are computational aggregates only; consult a local tax professional.',
 };
@@ -464,6 +466,12 @@ const DISCLAIMER_RECONCILIATION =
 
 const DISCLAIMER_HEURISTIC =
   'Wash-sale (US) and superficial-loss (CA) flags are a heuristic on lot dates: each entry fill is a lot, and a lot opened within 30 days either side of a loss, or held through that window, raises a flag. For options, matching uses the underlying — different strikes and expirations of the same underlying are flagged together. Flags aggregate across all of your accounts and never adjust the figures.';
+
+// CA variant: the pooled ACB never raises a held-open flag (design C5, AC
+// 7.5), so this drops the "held through that window" clause the shared
+// heuristic text carries for US wash sales.
+const DISCLAIMER_HEURISTIC_CA =
+  'Wash-sale (US) and superficial-loss (CA) flags are a heuristic on lot dates: each entry fill is a lot, and a lot opened within 30 days either side of a loss raises a flag. For options, matching uses the underlying — different strikes and expirations of the same underlying are flagged together. Flags aggregate across all of your accounts and never adjust the figures.';
 
 const DISCLAIMER_YEAR_BUCKETING =
   "All year-bucketing uses UTC calendar boundaries. A position closed after 19:00 ET on December 31 will appear in the following year's tax summary.";
@@ -490,7 +498,7 @@ function composeDisclaimer(
     DISCLAIMER_PREAMBLE,
     JURISDICTION_CLAUSE[jurisdiction],
     DISCLAIMER_RECONCILIATION,
-    DISCLAIMER_HEURISTIC,
+    jurisdiction === 'CA' ? DISCLAIMER_HEURISTIC_CA : DISCLAIMER_HEURISTIC,
     stability,
     DISCLAIMER_YEAR_BUCKETING,
     DISCLAIMER_FILING,
@@ -503,42 +511,50 @@ function composeDisclaimer(
  * Seven-step orchestration per design §Component 6 / §C8:
  *   1. Resolve jurisdiction (NULL → 'other') and the effective lot method.
  *   2. Per-position realised P&L rows for the year (signed; reversal-cancelled)
- *      — read unconditionally; still the source of truth for the average-cost
- *      path (steps 4/5). Under FIFO, realised-P&L totals instead come from lot
- *      rows (3b).
+ *      — the source of truth for the average-cost path (steps 4/5), skipped
+ *      on acb. Under FIFO, realised-P&L totals instead come from lot rows (3b).
  *   3. Per-(category, currency) expense aggregates for the year.
  *   3b. FIFO only: lot realisations for the year (design C8); average cost
- *       emits no rows (AC 6.2) and skips this query entirely.
+ *       and acb emit no rows (AC 6.2) and skip this query entirely.
  *   4. Per-currency realised P&L aggregation: today's ledger-based rows under
  *      average cost (AC 6.1, AC 6.3 regression guard); lot rows' `net` under
- *      FIFO.
+ *      FIFO; the pooled ACB loader's rows under acb — one CAD entry, the sum
+ *      of the year's priced disposition gains (design C5, AC 5.1).
  *   5. US short/long-term classification (CA/other → null totals): today's
  *      position-date rule under average cost (D6); per-row `holdTerm` under
- *      FIFO (AC 5.6).
+ *      FIFO (AC 5.6); always null under acb (never `US`).
  *   6. Wash-sale / superficial-loss heuristic on lot-grain `LossUnit` /
  *      `CandidateLot` inputs (design C9) — short-circuit when no losses;
  *      candidate window bounded to `[min(loss.realisedAt) - 30d, max + 30d]`.
+ *      acb emits no losses yet (design D3 bridge; task 8 ships the real
+ *      pooled matching, AC 7.1-7.6).
  *   7. Display-currency conversion via `applyYearEndSpotConversion` (twice —
- *      for realised P&L total and for tracked-expenses total). Compose response.
+ *      for realised P&L total and for tracked-expenses total); on acb the
+ *      dateless `missingRates`/`excludedCurrencies` are forced empty
+ *      regardless (`acbMissingRates` carries every missing pair instead, AC
+ *      5.1). Compose response.
  */
 export async function getTaxSummary(userId: string, year: number): Promise<TaxSummaryResponse> {
   // Step 1: jurisdiction + effective lot method.
   const { taxJurisdiction, taxLotMethod } = await getUserTaxSettings(db, userId);
   const jurisdiction = taxJurisdiction ?? 'other';
   const { method: effectiveMethod } = resolveLotMethod(taxLotMethod, taxJurisdiction);
-  // Bridge (design D2): acb pooling isn't implemented yet (task 7), so CA
-  // computes on the average-cost path below. Remove this mapping once task 7
-  // ships true ACB pooling; `lotMethod` in the response stays `effectiveMethod`.
-  const method: LotMethod = effectiveMethod === 'acb' ? 'average' : effectiveMethod;
+  const method: EffectiveLotMethod = effectiveMethod;
 
   // Step 2 + 3 + 3b: data fetch (independent — issue in parallel). `lotRows`
-  // stays empty, with no query issued, outside FIFO.
-  const [realisedRows, expensesByCategory, lotRows] = await Promise.all([
-    listRealisedPositionsForYear(db, userId, year),
+  // stays empty, with no query issued, outside FIFO; `realisedRows` and the
+  // acb loader are each skipped the same way outside their own method.
+  const [realisedRows, expensesByCategory, lotRows, acbResult] = await Promise.all([
+    method === 'acb'
+      ? Promise.resolve<RealisedPositionRow[]>([])
+      : listRealisedPositionsForYear(db, userId, year),
     aggregateExpensesByCategory(db, userId, year),
     method === 'fifo'
       ? getLotRealisationsForYear(db, userId, year)
       : Promise.resolve<LotRealisationForYear[]>([]),
+    method === 'acb'
+      ? getAcbDispositionsForYear(db, userId, year)
+      : Promise.resolve<Awaited<ReturnType<typeof getAcbDispositionsForYear>> | null>(null),
   ]);
 
   // Step 4 + 5: per-currency totals and US short/long-term classification.
@@ -546,6 +562,8 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   let shortTermPerCurrency = new Map<string, Decimal>();
   let longTermPerCurrency = new Map<string, Decimal>();
   const lotRealisations: TaxSummaryResponse['lotRealisations'] = [];
+  let acbDispositions: TaxSummaryResponse['acbDispositions'] = [];
+  let acbMissingRates: TaxSummaryResponse['acbMissingRates'] = [];
 
   if (method === 'fifo') {
     realisedPerCurrency = new Map<string, Decimal>();
@@ -586,6 +604,34 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
         term,
       });
     }
+  } else if (method === 'acb') {
+    // acb (design C5): one CAD entry, the sum of the year's priced
+    // disposition gains (zero when none); shortTerm/longTerm stay null
+    // (jurisdiction is always CA here, never 'US').
+    const cadMinorUnits = getCurrencyMinorUnits('CAD');
+    const { rows, missingRates } = acbResult!;
+    let gainSum = new Decimal(0);
+    for (const row of rows) {
+      if (row.gain !== null) gainSum = gainSum.plus(row.gain);
+    }
+    realisedPerCurrency = new Map<string, Decimal>([['CAD', gainSum]]);
+    acbDispositions = rows.map((row) => ({
+      exitFillId: row.exitFillId,
+      positionId: row.positionId,
+      accountId: row.accountId,
+      symbol: row.symbol,
+      currency: row.currency,
+      tradeDate: row.tradeDate,
+      realisedAt: row.realisedAt.toISOString(),
+      quantity: row.quantity.toString(),
+      cadRate: row.cadRate === null ? null : row.cadRate.toString(),
+      proceeds: row.proceeds === null ? null : row.proceeds.toFixed(cadMinorUnits),
+      outlays: row.outlays === null ? null : row.outlays.toFixed(cadMinorUnits),
+      acb: row.acb === null ? null : row.acb.toFixed(cadMinorUnits),
+      gain: row.gain === null ? null : row.gain.toFixed(cadMinorUnits),
+      unpricedReason: row.unpricedReason,
+    }));
+    acbMissingRates = missingRates;
   } else {
     // Average cost: today's ledger-based aggregation, unchanged (AC 6.1, AC 6.3).
     realisedPerCurrency = aggregatePerCurrencyRealisedPnl(realisedRows);
@@ -599,8 +645,10 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   // `CandidateLot` inputs (design C9). FIFO: one `LossUnit` per losing lot row
   // from step 3b, lot fields set (AC 7.1). Average cost: one per losing
   // `realisedRows` row (today's ledger-based source), lot fields null
-  // (AC 7.2). SHORT-CIRCUIT: skip the candidate query entirely when there are
-  // no losses or when jurisdiction === 'other' (no flags emitted at all).
+  // (AC 7.2). Bridge (design D3): acb emits no losses yet — task 8 ships the
+  // real pooled superficial-loss matching (AC 7.1-7.6). SHORT-CIRCUIT: skip
+  // the candidate query entirely when there are no losses or when
+  // jurisdiction === 'other' (no flags emitted at all).
   const losses: LossUnit[] =
     method === 'fifo'
       ? lotRows
@@ -620,28 +668,32 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
             lotOpenedAt: row.lotOpenedAt,
             realisedPnl: row.net.toFixed(getCurrencyMinorUnits(row.currency)),
           }))
-      : realisedRows
-          .filter((row) => new Decimal(row.realisedPnl).isNegative())
-          .map((row) => ({
-            lossRowId: `${row.positionId}:${row.currency}`,
-            positionId: row.positionId,
-            symbol: row.symbol,
-            assetType: row.assetType,
-            side: row.side,
-            accountId: row.accountId,
-            currency: row.currency,
-            openedAt: row.openedAt,
-            closedAt: row.closedAt,
-            realisedAt: row.realisedAt,
-            lotEntryFillId: null,
-            lotOpenedAt: null,
-            realisedPnl: row.realisedPnl,
-          }));
+      : method === 'acb'
+        ? []
+        : realisedRows
+            .filter((row) => new Decimal(row.realisedPnl).isNegative())
+            .map((row) => ({
+              lossRowId: `${row.positionId}:${row.currency}`,
+              positionId: row.positionId,
+              symbol: row.symbol,
+              assetType: row.assetType,
+              side: row.side,
+              accountId: row.accountId,
+              currency: row.currency,
+              openedAt: row.openedAt,
+              closedAt: row.closedAt,
+              realisedAt: row.realisedAt,
+              lotEntryFillId: null,
+              lotOpenedAt: null,
+              realisedPnl: row.realisedPnl,
+            }));
 
   let washSales: TaxSummaryResponse['flags']['washSales'] = [];
   let superficialLosses: TaxSummaryResponse['flags']['superficialLosses'] = [];
 
   if (jurisdiction !== 'other' && losses.length > 0) {
+    // Never 'acb' here — the bridge above always leaves `losses` empty on acb.
+    const candidateMethod: 'fifo' | 'average' = method === 'fifo' ? 'fifo' : 'average';
     // Window: [min(realisedAt) - 30d, max(realisedAt) + 30d] (AC 7.7) —
     // `realisedAt` is never null, unlike the old `closedAt`-anchored window.
     const realisedTimes = losses.map((l) => new Date(l.realisedAt).getTime());
@@ -651,11 +703,17 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
       db,
       userId,
       { start: windowStart, end: windowEnd },
-      method,
+      candidateMethod,
     );
 
     if (jurisdiction === 'US') {
-      const flags = findWashSaleFlags(losses, candidates, method, parseOccUnderlying, taxLog);
+      const flags = findWashSaleFlags(
+        losses,
+        candidates,
+        candidateMethod,
+        parseOccUnderlying,
+        taxLog,
+      );
       washSales = flags.map((f) => ({
         lossRowId: f.lossRowId,
         positionId: f.positionId,
@@ -677,7 +735,7 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
       const flags = findSuperficialLossFlags(
         losses,
         candidates,
-        method,
+        candidateMethod,
         parseOccUnderlying,
         taxLog,
       );
@@ -762,6 +820,8 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
       ratesAsOf: null,
       usedRates: [],
       disclaimer: composeDisclaimer(jurisdiction, year, null),
+      acbDispositions,
+      acbMissingRates,
     };
   }
 
@@ -817,6 +877,9 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
   }
 
   // Union the two conversion calls' missing-pair / excluded-currency lists.
+  // On acb these are forced empty regardless of what the conversion or
+  // tracked expenses would add — `acbMissingRates` carries every missing
+  // pair instead, so neither always-on notice renders (AC 5.1).
   const missingRatesMap = new Map<string, { base: string; quote: string }>();
   for (const m of [...realisedConv.missingPairs, ...expensesConv.missingPairs]) {
     missingRatesMap.set(`${m.base}->${m.quote}`, m);
@@ -825,6 +888,8 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
     ...realisedConv.excludedCurrencies,
     ...expensesConv.excludedCurrencies,
   ]);
+  const missingRatesResponse = method === 'acb' ? [] : Array.from(missingRatesMap.values());
+  const excludedCurrenciesResponse = method === 'acb' ? [] : Array.from(excludedSet);
 
   return {
     year,
@@ -846,10 +911,12 @@ export async function getTaxSummary(userId: string, year: number): Promise<TaxSu
     },
     flags: { washSales, superficialLosses },
     lotRealisations,
-    missingRates: Array.from(missingRatesMap.values()),
-    excludedCurrencies: Array.from(excludedSet),
+    missingRates: missingRatesResponse,
+    excludedCurrencies: excludedCurrenciesResponse,
     ratesAsOf,
     usedRates,
     disclaimer: composeDisclaimer(jurisdiction, year, ratesAsOf),
+    acbDispositions,
+    acbMissingRates,
   };
 }

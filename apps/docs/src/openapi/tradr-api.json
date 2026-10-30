@@ -3033,7 +3033,7 @@
     },
     "/api/expenses/tax-summary": {
       "get": {
-        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nUnder the FIFO lot method, `realisedPnl` is computed from matched lots and `lotRealisations` carries one row per (exit fill, lot) pair, each with its own term for `US`. Under average cost, `lotRealisations` is empty and the figures are the pooled per-position totals, as today.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
+        "description": "Authed. Realised P&L (split short- and long-term), tracked expenses by category, and wash-sale or superficial-loss flags for the user's jurisdiction. Deliberately reports no single net taxable figure: fees are already inside realised P&L, and combining the numbers correctly depends on rules Tradr does not model.\n\nUnder the FIFO lot method, `realisedPnl` is computed from matched lots and `lotRealisations` carries one row per (exit fill, lot) pair, each with its own term for `US`. Under average cost, `lotRealisations` is empty and the figures are the pooled per-position totals, as today.\n\nUnder `acb` (always the effective method for `CA`), `realisedPnl` holds one `CAD` entry (the sum of the year's priced disposition gains) and `acbDispositions` carries one row per disposition from the pooled adjusted cost base across the user's taxable accounts; registered accounts never join a pool. An unpriced row names its reason; its (currency, trade date) pair appears in `acbMissingRates`, never in the dateless `missingRates`, which — like `excludedCurrencies` — stays empty on this path.\n\nThis is a reporting aid, not tax advice, and it is not a filing.\n",
         "parameters": [
           {
             "in": "query",
@@ -3052,6 +3052,95 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "acbDispositions": {
+                      "description": "One row per pooled ACB disposition under `acb`; empty otherwise.",
+                      "items": {
+                        "properties": {
+                          "acb": {
+                            "description": "Decimal CAD.",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "accountId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "cadRate": {
+                            "description": "Decimal.",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "exitFillId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "gain": {
+                            "description": "Decimal CAD.",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "outlays": {
+                            "description": "Decimal CAD.",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "positionId": {
+                            "format": "uuid",
+                            "type": "string"
+                          },
+                          "proceeds": {
+                            "description": "Decimal CAD.",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "description": "Decimal.",
+                            "type": "string"
+                          },
+                          "realisedAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "symbol": {
+                            "type": "string"
+                          },
+                          "tradeDate": {
+                            "format": "date",
+                            "type": "string"
+                          },
+                          "unpricedReason": {
+                            "enum": [
+                              "missing_rate",
+                              "pool_unpriced",
+                              "insufficient_pool"
+                            ],
+                            "nullable": true,
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "acbMissingRates": {
+                      "description": "Distinct (currency, trade date) pairs with no CAD rate that unpriced an acb row; empty otherwise.",
+                      "items": {
+                        "properties": {
+                          "currency": {
+                            "type": "string"
+                          },
+                          "tradeDate": {
+                            "format": "date",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "displayCurrency": {
                       "nullable": true,
                       "type": "string"

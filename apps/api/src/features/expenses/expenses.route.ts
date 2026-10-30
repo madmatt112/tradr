@@ -362,6 +362,16 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *       empty and the figures are the pooled per-position totals, as today.
  *
  *
+ *       Under `acb` (always the effective method for `CA`), `realisedPnl`
+ *       holds one `CAD` entry (the sum of the year's priced disposition
+ *       gains) and `acbDispositions` carries one row per disposition from the
+ *       pooled adjusted cost base across the user's taxable accounts;
+ *       registered accounts never join a pool. An unpriced row names its
+ *       reason; its (currency, trade date) pair appears in `acbMissingRates`,
+ *       never in the dateless `missingRates`, which — like
+ *       `excludedCurrencies` — stays empty on this path.
+ *
+ *
  *       This is a reporting aid, not tax advice, and it is not a filing.
  *     tags: [Expenses]
  *     parameters:
@@ -406,6 +416,34 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *                       fees: { type: string, description: Decimal. }
  *                       net: { type: string, description: Decimal. }
  *                       term: { type: string, enum: [short, long], nullable: true }
+ *                 acbDispositions:
+ *                   type: array
+ *                   description: One row per pooled ACB disposition under `acb`; empty otherwise.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       exitFillId: { type: string, format: uuid }
+ *                       positionId: { type: string, format: uuid }
+ *                       accountId: { type: string, format: uuid }
+ *                       symbol: { type: string }
+ *                       currency: { type: string }
+ *                       tradeDate: { type: string, format: date }
+ *                       realisedAt: { type: string, format: date-time }
+ *                       quantity: { type: string, description: Decimal. }
+ *                       cadRate: { type: string, description: Decimal., nullable: true }
+ *                       proceeds: { type: string, description: Decimal CAD., nullable: true }
+ *                       outlays: { type: string, description: Decimal CAD., nullable: true }
+ *                       acb: { type: string, description: Decimal CAD., nullable: true }
+ *                       gain: { type: string, description: Decimal CAD., nullable: true }
+ *                       unpricedReason: { type: string, enum: [missing_rate, pool_unpriced, insufficient_pool], nullable: true }
+ *                 acbMissingRates:
+ *                   type: array
+ *                   description: Distinct (currency, trade date) pairs with no CAD rate that unpriced an acb row; empty otherwise.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       currency: { type: string }
+ *                       tradeDate: { type: string, format: date }
  *       400: { description: Missing or invalid year. }
  */
 expensesRouter.get('/expenses/tax-summary', validate('query', YearQuerySchema), async (c) => {
