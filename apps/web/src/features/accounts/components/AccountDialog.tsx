@@ -241,7 +241,7 @@ export function AccountDialog({ open, onOpenChange, account }: AccountDialogProp
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{isEdit ? 'Edit Account' : 'New Account'}</DialogTitle>
           </DialogHeader>
