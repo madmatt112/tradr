@@ -353,11 +353,18 @@ The tax summary reports your **realised P&L for the year, one figure per
 currency**. What else it shows depends on your tax jurisdiction and your lot
 method, both set in your profile.
 
+**Account tax treatment.** Every account has a tax treatment: **taxable** or
+**registered**. Set it when you create the account, or change it later from
+the account's edit dialog. A registered account is a tax-sheltered account,
+such as a TFSA, RRSP or FHSA. Only the Canadian tax summary uses this
+setting.
+
 **Lots.** Each fill that opens or adds to a position becomes one lot. A lot
 keeps its own price, fee and open date.
 
-**Lot method.** Tradr matches each sale against your lots with one of two
-methods.
+**Lot method.** Tradr builds the tax summary with one of three methods:
+FIFO, average cost, or — for a Canadian jurisdiction — a pooled adjusted
+cost base.
 
 - **FIFO** matches a sale against your oldest open lot first. It splits a
   sale across lots when one lot does not cover the whole sale. FIFO is the
@@ -365,10 +372,34 @@ methods.
   jurisdiction is stored.
 - **Average cost** pools every lot into one cost and one date per position.
   This is the same figure your journal, ledger and performance pages use.
-  Average cost is the default method for a Canadian jurisdiction.
+- **Pooled adjusted cost base (ACB)** is the method every Canadian tax
+  summary uses, described below.
 
-You can set your own method on the tax summary page. Your choice changes no
-fill, lot or ledger row; it only changes which method builds this page.
+You can set your own method, FIFO or average cost, on the tax summary page.
+A Canadian jurisdiction always uses pooled ACB instead, whatever method you
+have stored. Your choice changes no fill, lot or ledger row; it only changes
+which method builds this page.
+
+**Pooled ACB.** Tradr keeps one pool per security and side, long or short,
+across every taxable account. A sale in any of those accounts draws on that
+one pool, not on an account-by-account cost. An option pools by its own
+series, so a different strike or expiration starts a new pool. A registered
+account never joins the pool, so its trades never enter the Canadian tax
+summary.
+
+A sale in another currency converts to Canadian dollars at the rate you
+entered for that trade's own date. A sale can come back **unpriced**, with
+no dollar figures, for one of three reasons:
+
+- **Missing rate** — the sale itself has no CAD rate for its trade date.
+- **Pool unpriced** — an earlier purchase in the pool has no CAD rate, so
+  the pool's cost is unknown.
+- **Exceeds pool** — the sale's quantity is larger than the pool currently
+  holds.
+
+Tradr does not fetch or guess a CAD rate for you. Enter the missing rate
+under **Settings → Profile** to price the affected rows the next time you
+open this page.
 
 **Specific identification.** Under FIFO, you can pick which lots a sale
 closes instead of taking the oldest lots first. Pick lots in the fill dialog
@@ -378,26 +409,53 @@ again.
 **The per-lot split.** Under FIFO, each matched lot gets its own row, with
 its own gross, fees and net. For a US jurisdiction only, a row is short-term
 when its sale date falls 365 days or fewer after its lot's open date, and
-long-term after that. Canada and every other jurisdiction leave the term
-empty on every row.
+long-term after that. Every other jurisdiction leaves the term empty on
+every row.
 
 Under average cost, the tax summary keeps today's figures: one realised P&L
 row per position, no lot rows, and the US split on the position's own open
 and close dates.
 
-Losses can raise a flag. A **US wash sale** or a **Canadian superficial
-loss** is flagged when a matching trade sits within 30 days either side of
-the loss. Under FIFO, a flag uses the matched lot's own open and close dates;
-under average cost, it uses the position's dates, as before. For an option,
-a flag matches on the underlying only. It does not compare strike or
-expiration, so a replacement option on the same underlying can still raise a
-flag even at a different strike or expiration. The flag is a note only.
-**Tradr never adjusts your cost basis**, and jurisdiction "other" raises no
-flags.
+Under pooled ACB, the tax summary shows one row per sale instead of one row
+per position: its trade date, quantity, CAD rate, proceeds, outlays, cost
+base and gain, or its unpriced reason.
+
+**In-kind transfer links.** On a Canadian pooled ACB, moving a position from
+one account to another without a sale is an in-kind transfer. Link the exit
+fill in the old account to the entry fill in the new account from the fill
+dialog, on the exit fill's own edit screen.
+
+- A transfer between two **taxable** accounts realises nothing: neither
+  fill leaves or enters a pool.
+- A transfer with one **taxable** leg and one **registered** leg realises
+  on the taxable leg only, at that fill's own recorded price. The registered
+  leg was never part of a pool, linked or not.
+- A transfer between two **registered** accounts realises nothing, because
+  neither leg ever joins a pool.
+
+Tradr blocks a quantity edit on a linked fill until you remove the link.
+
+Losses can raise a flag. A **US wash sale** is flagged when a matching trade
+sits within 30 days either side of the loss. Under FIFO, the flag uses the
+matched lot's own open and close dates; under average cost, it uses the
+position's dates, as before.
+
+A **Canadian superficial loss** flags the pool itself, not one lot or
+position. The flag fires when you buy the same security back, in any of
+your taxable accounts, even the one that sold at a loss, inside the 61-day
+window around the sale: 30 days before it, the sale's own day, and 30 days
+after. You must also still hold that purchase 30 days after the sale, or no
+flag fires.
+
+For an option, either flag matches on the underlying only. It does not
+compare strike or expiration, so a replacement option on the same underlying
+can still raise a flag even at a different strike or expiration. The flag is
+a note only. **Tradr never adjusts your cost basis**, and jurisdiction
+"other" raises no flags.
 
 **The journal keeps average cost.** Your lot method changes only this page.
 Your journal, account balance and every performance figure always use
-average cost, even when your tax summary shows FIFO.
+average cost, even when your tax summary shows FIFO or pooled ACB.
 
 ### Black-Scholes
 
