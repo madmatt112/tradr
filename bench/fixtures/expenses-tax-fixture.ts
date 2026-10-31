@@ -329,9 +329,8 @@ export function buildFillsCopyStream(params: FillsFixtureParams): Readable {
 
 export interface TaxFillsFixtureParams {
   /** One row per in-year position; `exitAt` matches that position's ledger
-   * `occurred_at` (its `closedAt`), so the exit fill lands in the same tax
-   * year as the ledger row it realises. `accountId` is only read when
-   * `trackRatesForAccountId` is set (CA ACB bench — Scenario 4). */
+   * `occurred_at`, so the exit fill lands in the same tax year as the ledger
+   * row it realises. `accountId` is read only when `trackRatesForAccountId` is set. */
   positions: Array<{ positionId: string; exitAt: Date; accountId?: string }>;
   /** Indices into `positions` that get a second entry fill sized so the exit
    * only partially consumes it — exercises the FIFO multi-lot split path
@@ -339,10 +338,8 @@ export interface TaxFillsFixtureParams {
    * entry/single exit round trip. */
   twoEntryIndices: ReadonlySet<number>;
   rngSeed: number;
-  /** When set, every emitted fill whose position carries this `accountId` adds
-   * its `filled_at` calendar date (`YYYY-MM-DD`, UTC) to the returned
-   * `rateDates` set — the CA ACB bench uses it to seed exactly the CAD rates
-   * the USD account's trade dates need (no more, no fewer). */
+  /** When set, tracks each matching fill's `filled_at` date into the returned
+   * `rateDates` set (the CA ACB bench's CAD-rate seed list). */
   trackRatesForAccountId?: string;
 }
 
@@ -430,54 +427,6 @@ export function buildTaxFillsCopyStream(params: TaxFillsFixtureParams): {
     },
   });
   return { stream, rateDates };
-}
-
-// ---------------------------------------------------------------------------
-// exchange_rates fixture (Scenario 4 — one CAD rate per USD trade date)
-// ---------------------------------------------------------------------------
-
-export const EXCHANGE_RATES_COPY_COLUMNS = [
-  'user_id',
-  'base_currency',
-  'quote_currency',
-  'rate',
-  'effective_date',
-] as const;
-
-export interface ExchangeRatesFixtureParams {
-  userId: string;
-  baseCurrency: string;
-  quoteCurrency: string;
-  /** Fixed rate applied to every date — the bench measures query shape, not rate drift. */
-  rate: string;
-  /** Distinct `YYYY-MM-DD` dates to emit one row each for. */
-  dates: ReadonlySet<string>;
-}
-
-/**
- * TSV stream for `COPY exchange_rates (...) FROM STDIN` emitting one row per
- * distinct date in `dates` (the unique index is on `(user_id, base_currency,
- * quote_currency, effective_date)`, so a duplicate date would abort the COPY).
- */
-export function buildExchangeRatesCopyStream(params: ExchangeRatesFixtureParams): Readable {
-  const { userId, baseCurrency, quoteCurrency, rate, dates } = params;
-  const dateList = [...dates];
-
-  let emitted = 0;
-  return new Readable({
-    read() {
-      const BATCH = 500;
-      let chunk = '';
-      const upper = Math.min(emitted + BATCH, dateList.length);
-      for (let i = emitted; i < upper; i++) {
-        const cells = [userId, baseCurrency, quoteCurrency, rate, dateList[i]!];
-        chunk += cells.map(tsvCell).join('\t') + '\n';
-      }
-      emitted = upper;
-      if (chunk.length > 0) this.push(chunk);
-      if (emitted >= dateList.length) this.push(null);
-    },
-  });
 }
 
 // ---------------------------------------------------------------------------
