@@ -512,6 +512,61 @@ describe('AccountDialog — default risk %', () => {
   });
 });
 
+// Tax treatment — the control that marks an account taxable or registered for
+// the CA pooled-ACB tax summary (ca-acb-pooling design C1, requirements D13).
+describe('AccountDialog — tax treatment', () => {
+  it('shows Taxable selected with both items and the helper text on create', () => {
+    renderDialog();
+
+    expect(fieldValue('Tax treatment')).toBe('taxable');
+    const options = within(screen.getByLabelText('Tax treatment')).getAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      'Taxable',
+      'Registered (TFSA, RRSP, FHSA and similar)',
+    ]);
+    expect(screen.getByText('Only the Canadian tax summary uses this.')).toBeTruthy();
+  });
+
+  it('sends taxTreatment registered on create when chosen', async () => {
+    createMutateAsync.mockResolvedValue({ id: 'new' });
+    renderDialog();
+
+    fireEvent.change(screen.getByLabelText('Tax treatment'), {
+      target: { value: 'registered' },
+    });
+    submitCreate();
+
+    await waitFor(() => expect(createMutateAsync).toHaveBeenCalledTimes(1));
+    expect(createMutateAsync.mock.calls[0][0]).toMatchObject({ taxTreatment: 'registered' });
+  });
+
+  it('opens a registered account on Registered', () => {
+    renderDialog(vi.fn(), makeAccount({ taxTreatment: 'registered' }));
+
+    expect(fieldValue('Tax treatment')).toBe('registered');
+  });
+
+  it('opens an account with no stored treatment on Taxable', () => {
+    renderDialog(vi.fn(), makeAccount());
+
+    expect(fieldValue('Tax treatment')).toBe('taxable');
+  });
+
+  it('sends the newly chosen treatment in the update data', async () => {
+    updateMutateAsync.mockResolvedValue({ id: 'a' });
+    renderDialog(vi.fn(), makeAccount({ taxTreatment: 'taxable' }));
+
+    fireEvent.change(screen.getByLabelText('Tax treatment'), {
+      target: { value: 'registered' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateMutateAsync).toHaveBeenCalledTimes(1));
+    const { data } = updateMutateAsync.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data.taxTreatment).toBe('registered');
+  });
+});
+
 // This dialog is one of only two places both timezones are visible to the same
 // user; the settings control is the other, and disclaims this one in return.
 describe('AccountDialog — telling the two timezones apart', () => {

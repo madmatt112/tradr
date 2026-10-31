@@ -12,11 +12,16 @@ import { defaultLotMethod, holdTerm, resolveLotMethod } from './tax-lots';
 //   observable result is 'fifo' | 'average'; expected values are taken from
 //   requirements.md Req 2 AC 2.1 ("average cost if ... CA, FIFO if ... US, other
 //   or NULL").
-// - AC 2.2 — resolveLotMethod(stored, jurisdiction): pre-condition is a stored
-//   value (LotMethod | null) and a jurisdiction; call is
+// - AC 2.1, AC 2.2, AC 2.6 — resolveLotMethod(stored, jurisdiction): pre-condition
+//   is a stored value (LotMethod | null) and a jurisdiction; call is
 //   `resolveLotMethod(stored, jurisdiction)`; observable result is
 //   `{ method, isDefault }`; expected values are taken from requirements.md
-//   Req 2 AC 2.2 ("a stored value SHALL override the jurisdiction default").
+//   Req 2 AC 2.1 ("the effective method SHALL be acb" under CA, "whatever
+//   tax_lot_method holds"), AC 2.2 ("the stored method SHALL be kept
+//   unchanged" — isDefault false whenever stored is non-null, under CA
+//   included) and design C2 ("{ method: 'acb', isDefault: stored === null }"
+//   under CA). AC 2.6 pins US and other to today's unchanged result
+//   (regression guard).
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -77,19 +82,19 @@ describe('defaultLotMethod', () => {
 });
 
 describe('resolveLotMethod', () => {
-  it('stored value wins over the jurisdiction default (AC 2.2)', () => {
-    expect(resolveLotMethod('fifo', 'CA')).toEqual({ method: 'fifo', isDefault: false });
+  it('CA always resolves to acb; a stored fifo is kept but not the effective method (AC 2.1, AC 2.2)', () => {
+    expect(resolveLotMethod('fifo', 'CA')).toEqual({ method: 'acb', isDefault: false });
   });
 
-  it('stored value equal to the default is still not the default (AC 2.2)', () => {
-    expect(resolveLotMethod('average', 'CA')).toEqual({ method: 'average', isDefault: false });
+  it('CA always resolves to acb; a stored average is kept but not the effective method (AC 2.1, AC 2.2)', () => {
+    expect(resolveLotMethod('average', 'CA')).toEqual({ method: 'acb', isDefault: false });
   });
 
-  it('null stored value falls back to the jurisdiction default (AC 2.1, AC 2.2)', () => {
-    expect(resolveLotMethod(null, 'CA')).toEqual({ method: 'average', isDefault: true });
+  it('null stored value under CA resolves to acb as the default (AC 2.1, AC 2.2)', () => {
+    expect(resolveLotMethod(null, 'CA')).toEqual({ method: 'acb', isDefault: true });
   });
 
-  it('null stored value for a US user falls back to fifo (AC 2.1, AC 2.2)', () => {
+  it('null stored value for a US user falls back to fifo (AC 2.6 regression guard)', () => {
     expect(resolveLotMethod(null, 'US')).toEqual({ method: 'fifo', isDefault: true });
   });
 });

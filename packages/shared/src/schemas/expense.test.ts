@@ -65,6 +65,9 @@ describe('TaxSummaryResponseSchema strict()', () => {
     ratesAsOf: null,
     usedRates: [],
     disclaimer: '',
+    // Always-present, empty off the acb path (AC 5.1, AC 8.1, design D6).
+    acbDispositions: [],
+    acbMissingRates: [],
   };
 
   it('accepts a minimally-valid payload', () => {
@@ -74,5 +77,48 @@ describe('TaxSummaryResponseSchema strict()', () => {
   it('rejects the forbidden netTaxableIncome field (Req 4.1)', () => {
     const withForbidden = { ...validBase, netTaxableIncome: '100' };
     expect(TaxSummaryResponseSchema.safeParse(withForbidden).success).toBe(false);
+  });
+
+  it('accepts acb disposition rows carrying every AC 5.3 field, priced and unpriced', () => {
+    const withAcb = {
+      ...validBase,
+      lotMethod: 'acb' as const,
+      acbDispositions: [
+        {
+          exitFillId: '11111111-1111-1111-a111-111111111111',
+          positionId: '22222222-2222-2222-a222-222222222222',
+          accountId: '33333333-3333-3333-a333-333333333333',
+          symbol: 'XYZ',
+          currency: 'CAD',
+          tradeDate: '2026-03-01',
+          realisedAt: '2026-03-01T15:00:00.000Z',
+          quantity: '50',
+          cadRate: null,
+          proceeds: '600.00',
+          outlays: '0.00',
+          acb: '520.00',
+          gain: '80.00',
+          unpricedReason: null,
+        },
+        {
+          exitFillId: '44444444-4444-4444-a444-444444444444',
+          positionId: '55555555-5555-5555-a555-555555555555',
+          accountId: '66666666-6666-6666-a666-666666666666',
+          symbol: 'NRTE',
+          currency: 'USD',
+          tradeDate: '2026-04-01',
+          realisedAt: '2026-04-01T15:00:00.000Z',
+          quantity: '50',
+          cadRate: null,
+          proceeds: null,
+          outlays: null,
+          acb: null,
+          gain: null,
+          unpricedReason: 'missing_rate' as const,
+        },
+      ],
+      acbMissingRates: [{ currency: 'USD', tradeDate: '2026-04-01' }],
+    };
+    expect(TaxSummaryResponseSchema.safeParse(withAcb).success).toBe(true);
   });
 });

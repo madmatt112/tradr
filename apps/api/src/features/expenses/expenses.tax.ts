@@ -199,7 +199,7 @@ export function applyYearEndSpotConversion(
 
 type ParseUnderlying = (symbol: string) => string | null;
 
-type Method = 'fifo' | 'average';
+type Method = 'fifo' | 'average' | 'acb';
 
 type KeyedCandidate = CandidateLot & { matchKey: string };
 
@@ -302,8 +302,10 @@ function findMatchingCandidates(
     // Held-open-through-pre-window: opened before windowStart AND (still open
     // OR ended after windowStart). FIFO restricts a same-position lot to the
     // "opened in window" branch only — held-open never applies to a lot on
-    // the losing position itself (AC 7.5).
+    // the losing position itself (AC 7.5). On acb this never applies at all:
+    // only an entry opened inside the window matches (AC 7.5).
     const heldOpenThroughWindow =
+      method !== 'acb' &&
       !samePosition &&
       openedAtMs !== null &&
       openedAtMs < windowStartMs &&

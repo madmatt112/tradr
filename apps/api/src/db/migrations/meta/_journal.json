@@ -281,6 +281,13 @@
       "when": 1793289433706,
       "tag": "0039_tax_lots",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793376192498,
+      "tag": "0040_ca_acb_pooling",
+      "breakpoints": true
     }
   ]
 }

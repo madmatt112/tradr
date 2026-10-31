@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
-import { accounts as accountsTable, positions, users, ledgerEntries } from '@/db/schema';
+import { accounts as accountsTable, fills, positions, users, ledgerEntries } from '@/db/schema';
 import { config } from '@/lib/config';
 
 import { resolveWritableAccountId } from './accounts.query';
@@ -578,6 +578,174 @@ describe('accounts', () => {
 
     const getRes = await authedRequest('GET', `/api/accounts/${account.id}`, cookie);
     expect((await getRes.json()).defaultRiskPercent).toBeNull();
+  });
+
+  // 15c. Account tax treatment (ca-acb-pooling C1, AC 1.3). Optional on create;
+  // an omitted value takes the accounts.tax_treatment column default and is
+  // projected back on every read.
+  it('creates an account without taxTreatment and reads taxable everywhere', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Default Treatment Account',
+      currency: 'USD',
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.taxTreatment).toBe('taxable');
+
+    const getRes = await authedRequest('GET', `/api/accounts/${body.id}`, cookie);
+    expect((await getRes.json()).taxTreatment).toBe('taxable');
+
+    const listRes = await authedRequest('GET', '/api/accounts', cookie);
+    const list = await listRes.json();
+    expect(list[0].taxTreatment).toBe('taxable');
+  });
+
+  it('creates an account with taxTreatment registered and reads registered everywhere', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Registered Account',
+      currency: 'USD',
+      taxTreatment: 'registered',
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.taxTreatment).toBe('registered');
+
+    const getRes = await authedRequest('GET', `/api/accounts/${body.id}`, cookie);
+    expect((await getRes.json()).taxTreatment).toBe('registered');
+
+    const listRes = await authedRequest('GET', '/api/accounts', cookie);
+    const list = await listRes.json();
+    expect(list[0].taxTreatment).toBe('registered');
+  });
+
+  it('returns 400 for a taxTreatment value outside the enum on create', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const res = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Bad Treatment Account',
+      currency: 'USD',
+      taxTreatment: 'rrsp',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('updates taxTreatment to registered via PUT', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie, 'Treatment Edit');
+    expect(account.taxTreatment).toBe('taxable');
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      taxTreatment: 'registered',
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).taxTreatment).toBe('registered');
+
+    const getRes = await authedRequest('GET', `/api/accounts/${account.id}`, cookie);
+    expect((await getRes.json()).taxTreatment).toBe('registered');
+  });
+
+  it('leaves a stored taxTreatment untouched when the update omits it', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const createRes = await authedRequest('POST', '/api/accounts', cookie, {
+      name: 'Untouched Treatment',
+      currency: 'USD',
+      taxTreatment: 'registered',
+    });
+    const account = await createRes.json();
+    expect(account.taxTreatment).toBe('registered');
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      name: 'Untouched Treatment Renamed',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.name).toBe('Untouched Treatment Renamed');
+    expect(body.taxTreatment).toBe('registered');
+  });
+
+  it('returns 400 for a taxTreatment value outside the enum on update and leaves it stored unchanged', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie, 'Bad Treatment Update');
+    expect(account.taxTreatment).toBe('taxable');
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      taxTreatment: 'rrsp',
+    });
+    expect(res.status).toBe(400);
+
+    const getRes = await authedRequest('GET', `/api/accounts/${account.id}`, cookie);
+    expect((await getRes.json()).taxTreatment).toBe('taxable');
+  });
+
+  // AC 1.4: a treatment change writes only the accounts row — the user's
+  // fills, positions and ledger rows for that account are untouched.
+  it('leaves fills, positions and ledger rows unchanged when the treatment changes', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const meRes = await authedRequest('GET', '/api/auth/me', cookie);
+    const me = await meRes.json();
+
+    const account = await createTestAccount(cookie, 'Treatment Change Account', 'USD');
+
+    // performance-charts §8.2 audit: status='open' is CHECK-safe.
+    // eslint-disable-next-line no-restricted-syntax
+    const [position] = await db
+      .insert(positions)
+      .values({
+        userId: me.id,
+        accountId: account.id,
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'equity',
+        status: 'open',
+      })
+      .returning();
+
+    const [fill] = await db
+      .insert(fills)
+      .values({
+        positionId: position.id,
+        type: 'entry',
+        price: '100',
+        quantity: '10',
+        fees: '1',
+        filledAt: new Date('2026-03-01T15:00:00Z'),
+      })
+      .returning();
+
+    const [ledgerEntry] = await db
+      .insert(ledgerEntries)
+      .values({
+        userId: me.id,
+        accountId: account.id,
+        positionId: position.id,
+        entryType: 'position_pnl',
+        direction: 'credit',
+        amount: '50.0000',
+        currency: 'USD',
+        occurredAt: new Date('2026-03-01T15:00:00Z'),
+        groupId: crypto.randomUUID(),
+        reversesGroupId: null,
+      })
+      .returning();
+
+    const res = await authedRequest('PUT', `/api/accounts/${account.id}`, cookie, {
+      taxTreatment: 'registered',
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).taxTreatment).toBe('registered');
+
+    const [positionAfter] = await db.select().from(positions).where(eq(positions.id, position.id));
+    const [fillAfter] = await db.select().from(fills).where(eq(fills.id, fill.id));
+    const [ledgerAfter] = await db
+      .select()
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.id, ledgerEntry.id));
+
+    expect(positionAfter).toEqual(position);
+    expect(fillAfter).toEqual(fill);
+    expect(ledgerAfter).toEqual(ledgerEntry);
   });
 
   // 16. Position-count endpoint

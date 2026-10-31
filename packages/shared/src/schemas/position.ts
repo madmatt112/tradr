@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { parseOccSymbol } from '../options';
 
-import { LotMethodEnum, TaxJurisdictionEnum } from './expense';
+import { EffectiveLotMethodEnum, TaxJurisdictionEnum } from './expense';
 import { ClassificationSchema } from './performance';
 import { PositionImageSchema } from './position-image';
 import { TagSchema } from './tag';
@@ -305,7 +305,7 @@ export const PositionLotSchema = z
 
 export const PositionLotsResponseSchema = z
   .object({
-    method: LotMethodEnum,
+    method: EffectiveLotMethodEnum,
     jurisdiction: TaxJurisdictionEnum,
     lots: z.array(PositionLotSchema),
   })
@@ -315,3 +315,48 @@ export type PositionListItem = z.infer<typeof PositionListItemSchema>;
 export type PositionDetail = z.infer<typeof PositionDetailSchema>;
 export type PositionLot = z.infer<typeof PositionLotSchema>;
 export type PositionLotsResponse = z.infer<typeof PositionLotsResponseSchema>;
+
+// In-kind transfer link (design C7). Pairs an exit fill with an entry fill in
+// another account so the transfer realises nothing in the CA pooled-ACB
+// summary.
+export const SetTransferLinkSchema = z
+  .object({
+    entryFillId: z.string().uuid(),
+  })
+  .strict();
+
+export const TransferLinkViewSchema = z
+  .object({
+    id: z.string().uuid(),
+    exitFillId: z.string().uuid(),
+    entryFillId: z.string().uuid(),
+    entryPositionId: z.string().uuid(),
+    entryAccountId: z.string().uuid(),
+    entryAccountName: z.string(),
+    createdAt: z.string(),
+  })
+  .strict();
+
+export const TransferCandidateSchema = z
+  .object({
+    entryFillId: z.string().uuid(),
+    positionId: z.string().uuid(),
+    accountId: z.string().uuid(),
+    accountName: z.string(),
+    filledAt: z.string(),
+    price: z.string(),
+    quantity: z.string(),
+  })
+  .strict();
+
+export const TransferLinkResponseSchema = z
+  .object({
+    link: TransferLinkViewSchema.nullable(),
+    candidates: z.array(TransferCandidateSchema),
+  })
+  .strict();
+
+export type SetTransferLinkInput = z.infer<typeof SetTransferLinkSchema>;
+export type TransferLinkView = z.infer<typeof TransferLinkViewSchema>;
+export type TransferCandidate = z.infer<typeof TransferCandidateSchema>;
+export type TransferLinkResponse = z.infer<typeof TransferLinkResponseSchema>;

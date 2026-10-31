@@ -1416,3 +1416,85 @@ describe('return the stored selection on fill reads', () => {
     expect(clearedExit.lotSelection).toBeNull();
   });
 });
+
+/**
+ * Contract — task 9, design C7 post-condition 3, AC 6.4
+ *
+ * 1. Pre: an entry fill (posB) is transfer-linked to an exit fill (posA),
+ *    via PUT .../transfer-link.
+ *    Test: PUT /api/positions/:posB.id/fills/:entryB.id with a `quantity`
+ *    that differs from the stored one.
+ *    Observe: 409; `error.message` names the transfer link.
+ *    Expected value source: design C7 post-condition 3 ("when `data.quantity`
+ *    is sent and differs from the stored quantity, it ... throws
+ *    ConflictError('Fill … is in transfer link …; remove the link before
+ *    changing its quantity') before any write").
+ * 2. Same linked fill.
+ *    Test: PUT the same fill with only `price` changed (no `quantity`).
+ *    Observe: 200.
+ *    Expected value source: design C7 post-condition 3 ("Other edits run no
+ *    extra query") — a non-quantity edit is unaffected by the link.
+ *
+ * Red-first: the setup PUT to .../transfer-link 404s at base (the route does
+ * not exist yet, task 9), so both cases fail before reaching their own
+ * assertion; no existing assertion in this file changes value.
+ */
+async function setupLinkedFillPair(cookie: string) {
+  const accountA = await createTestAccount(cookie);
+  const accountB = await createTestAccount(cookie);
+
+  const posA = await createDraftPosition(cookie, accountA.id);
+  await addFill(
+    cookie,
+    posA.id,
+    makeFill({ type: 'entry', quantity: '15', filledAt: '2025-01-01T10:00:00Z' }),
+  );
+  await openPos(cookie, posA.id);
+  const exitA = await addFill(
+    cookie,
+    posA.id,
+    makeFill({ type: 'exit', quantity: '10', filledAt: '2025-02-01T10:00:00Z' }),
+  );
+
+  const posB = await createDraftPosition(cookie, accountB.id);
+  const entryB = await addFill(
+    cookie,
+    posB.id,
+    makeFill({ type: 'entry', quantity: '10', filledAt: '2025-01-05T10:00:00Z' }),
+  );
+  await openPos(cookie, posB.id);
+
+  const linkRes = await authedRequest(
+    'PUT',
+    `/api/positions/${posA.id}/fills/${exitA.id}/transfer-link`,
+    cookie,
+    { entryFillId: entryB.id },
+  );
+  expect(linkRes.status).toBe(200);
+
+  return { posA, exitA, posB, entryB };
+}
+
+describe('transfer-link guard on fill edits', () => {
+  it('rejects a quantity edit on a fill that is in a transfer link, naming the link', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const { posB, entryB } = await setupLinkedFillPair(cookie);
+
+    const res = await authedRequest('PUT', `/api/positions/${posB.id}/fills/${entryB.id}`, cookie, {
+      quantity: '9',
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.message.toLowerCase()).toContain('transfer link');
+  });
+
+  it('allows a price edit on a fill that is in a transfer link', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const { posB, entryB } = await setupLinkedFillPair(cookie);
+
+    const res = await authedRequest('PUT', `/api/positions/${posB.id}/fills/${entryB.id}`, cookie, {
+      price: '155.00',
+    });
+    expect(res.status).toBe(200);
+  });
+});

@@ -80,7 +80,7 @@ const TaxJurisdictionResponseSchema = z
 const TaxLotMethodResponseSchema = z
   .object({
     taxLotMethod: z.enum(['fifo', 'average']).nullable(),
-    effectiveMethod: z.enum(['fifo', 'average']),
+    effectiveMethod: z.enum(['fifo', 'average', 'acb']),
     isDefault: z.boolean(),
   })
   .strict();
@@ -362,6 +362,16 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *       empty and the figures are the pooled per-position totals, as today.
  *
  *
+ *       Under `acb` (always the effective method for `CA`), `realisedPnl`
+ *       holds one `CAD` entry (the sum of the year's priced disposition
+ *       gains) and `acbDispositions` carries one row per disposition from the
+ *       pooled adjusted cost base across the user's taxable accounts;
+ *       registered accounts never join a pool. An unpriced row names its
+ *       reason; its (currency, trade date) pair appears in `acbMissingRates`,
+ *       never in the dateless `missingRates`, which — like
+ *       `excludedCurrencies` — stays empty on this path.
+ *
+ *
  *       This is a reporting aid, not tax advice, and it is not a filing.
  *     tags: [Expenses]
  *     parameters:
@@ -379,13 +389,13 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *               properties:
  *                 year: { type: integer }
  *                 jurisdiction: { type: string, enum: [US, CA, other], nullable: true }
- *                 lotMethod: { type: string, enum: [fifo, average] }
+ *                 lotMethod: { type: string, enum: [fifo, average, acb] }
  *                 displayCurrency: { type: string, nullable: true }
  *                 realisedPnl: { type: object }
  *                 trackedExpenses: { type: object }
  *                 flags:
  *                   type: object
- *                   description: Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots.
+ *                   description: Wash sales (US) or superficial losses (CA), matched at the lot level (each entry fill is a lot), with the counterparty positions and lots. Under `CA`, a repurchase in any account of the user — registered accounts included — counts, and the losing position itself can supply the match; a flag never adjusts the figures.
  *                 lotRealisations:
  *                   type: array
  *                   description: One row per (exit fill, lot) pair under FIFO; empty under average cost.
@@ -406,6 +416,34 @@ expensesRouter.get('/expenses/fee-rollup', validate('query', YearQuerySchema), a
  *                       fees: { type: string, description: Decimal. }
  *                       net: { type: string, description: Decimal. }
  *                       term: { type: string, enum: [short, long], nullable: true }
+ *                 acbDispositions:
+ *                   type: array
+ *                   description: One row per pooled ACB disposition under `acb`; empty otherwise.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       exitFillId: { type: string, format: uuid }
+ *                       positionId: { type: string, format: uuid }
+ *                       accountId: { type: string, format: uuid }
+ *                       symbol: { type: string }
+ *                       currency: { type: string }
+ *                       tradeDate: { type: string, format: date }
+ *                       realisedAt: { type: string, format: date-time }
+ *                       quantity: { type: string, description: Decimal. }
+ *                       cadRate: { type: string, description: Decimal., nullable: true }
+ *                       proceeds: { type: string, description: Decimal CAD., nullable: true }
+ *                       outlays: { type: string, description: Decimal CAD., nullable: true }
+ *                       acb: { type: string, description: Decimal CAD., nullable: true }
+ *                       gain: { type: string, description: Decimal CAD., nullable: true }
+ *                       unpricedReason: { type: string, enum: [missing_rate, pool_unpriced, insufficient_pool], nullable: true }
+ *                 acbMissingRates:
+ *                   type: array
+ *                   description: Distinct (currency, trade date) pairs with no CAD rate that unpriced an acb row; empty otherwise.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       currency: { type: string }
+ *                       tradeDate: { type: string, format: date }
  *       400: { description: Missing or invalid year. }
  */
 expensesRouter.get('/expenses/tax-summary', validate('query', YearQuerySchema), async (c) => {
@@ -500,9 +538,9 @@ expensesRouter.patch(
  *   get:
  *     summary: Get the tax lot method.
  *     description: >
- *       Authed. The effective method is the stored value if one is set,
- *       otherwise the jurisdiction default (average cost for CA, FIFO
- *       otherwise).
+ *       Authed. Under CA, the effective method is always acb, whatever the
+ *       stored value; elsewhere it is the stored value if one is set,
+ *       otherwise the jurisdiction default (FIFO).
  *     tags: [Expenses]
  *     responses:
  *       200:
@@ -513,7 +551,7 @@ expensesRouter.patch(
  *               type: object
  *               properties:
  *                 taxLotMethod: { type: string, enum: [fifo, average], nullable: true }
- *                 effectiveMethod: { type: string, enum: [fifo, average] }
+ *                 effectiveMethod: { type: string, enum: [fifo, average, acb] }
  *                 isDefault: { type: boolean }
  */
 expensesRouter.get('/users/me/tax-lot-method', async (c) => {

@@ -319,6 +319,7 @@ describe('spoolAccountData', () => {
       positions: 1,
       fills: 1,
       lotSelections: 0,
+      transferLinks: 0,
       positionTags: 1,
       positionImages: 1,
       ledgerEntries: 1,
@@ -463,9 +464,11 @@ describe('spoolAccountData', () => {
     const summary = await runSpool(seed.userId);
 
     // Counts stay at exactly one per category — the decoy never leaks in.
-    // The seed stores no lot selection, so that one category is 0, not 1.
+    // The seed stores no lot selection or transfer link, so those two are 0, not 1.
     expect(
-      Object.entries(summary.counts).every(([k, n]) => n === (k === 'lotSelections' ? 0 : 1)),
+      Object.entries(summary.counts).every(
+        ([k, n]) => n === (k === 'lotSelections' || k === 'transferLinks' ? 0 : 1),
+      ),
     ).toBe(true);
 
     const accountRows = await readNdjson('accounts.ndjson');

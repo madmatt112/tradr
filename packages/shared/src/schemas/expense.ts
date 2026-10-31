@@ -110,6 +110,11 @@ export const UpdateTaxJurisdictionInputSchema = z
 
 export const LotMethodEnum = z.enum(['fifo', 'average']);
 
+// The effective method actually applied, after jurisdiction resolution.
+// CA always resolves to acb (design C2) — LotMethodEnum stays the stored
+// and PATCH enum, unchanged by this.
+export const EffectiveLotMethodEnum = z.enum(['fifo', 'average', 'acb']);
+
 export const UpdateTaxLotMethodInputSchema = z
   .object({
     taxLotMethod: LotMethodEnum.nullable(),
@@ -208,6 +213,27 @@ export const LotRealisationRowSchema = z.object({
   term: z.enum(['short', 'long']).nullable(),
 });
 
+// ACB disposition row (design C5 / AC 5.3). The AC 5.3 subset of the pure
+// engine's `AcbDisposition` (`apps/api/src/features/expenses/acb-pool.ts`) —
+// excludes the engine-internal `side`, `assetType`, `missingRates`,
+// `positionOpenedAt` and `positionClosedAt`, so none reach the strict response.
+export const AcbDispositionRowSchema = z.object({
+  exitFillId: z.string().uuid(),
+  positionId: z.string().uuid(),
+  accountId: z.string().uuid(),
+  symbol: z.string(),
+  currency: z.string().length(3),
+  tradeDate: occurredAtDate,
+  realisedAt: z.string(),
+  quantity: z.string(),
+  cadRate: z.string().nullable(),
+  proceeds: z.string().nullable(),
+  outlays: z.string().nullable(),
+  acb: z.string().nullable(),
+  gain: z.string().nullable(),
+  unpricedReason: z.enum(['missing_rate', 'pool_unpriced', 'insufficient_pool']).nullable(),
+});
+
 // Tax-summary response — encodes `requirements.md` §4.1 verbatim.
 // MUST NOT include `netTaxableIncome` or any recorded-fee field (Req 4.1
 // hard rule — fees live only on the fee-rollup response and are already
@@ -216,7 +242,7 @@ export const TaxSummaryResponseSchema = z
   .object({
     year: z.number().int(),
     jurisdiction: TaxJurisdictionEnum,
-    lotMethod: LotMethodEnum,
+    lotMethod: EffectiveLotMethodEnum,
     displayCurrency: z.string().length(3).nullable(),
     realisedPnl: z.object({
       total: z.string().nullable(),
@@ -267,6 +293,14 @@ export const TaxSummaryResponseSchema = z
       }),
     ),
     disclaimer: z.string(),
+    // Always present, empty off the acb path (AC 5.1, AC 8.1, design D6).
+    acbDispositions: z.array(AcbDispositionRowSchema),
+    acbMissingRates: z.array(
+      z.object({
+        currency: z.string().length(3),
+        tradeDate: occurredAtDate,
+      }),
+    ),
   })
   .strict();
 
@@ -282,3 +316,5 @@ export type WashSaleFlag = z.infer<typeof WashSaleFlag>;
 export type SuperficialLossFlag = z.infer<typeof SuperficialLossFlag>;
 export type LotRealisationRow = z.infer<typeof LotRealisationRowSchema>;
 export type LotMethod = z.infer<typeof LotMethodEnum>;
+export type EffectiveLotMethod = z.infer<typeof EffectiveLotMethodEnum>;
+export type AcbDispositionRow = z.infer<typeof AcbDispositionRowSchema>;

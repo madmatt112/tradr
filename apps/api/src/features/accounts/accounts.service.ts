@@ -59,6 +59,8 @@ export async function createAccount(
     // did before this column existed. Bounds are CreateAccountSchema's job —
     // never re-checked here.
     defaultRiskPercent?: string;
+    // Omitted takes the accounts.tax_treatment column default 'taxable'.
+    taxTreatment?: string;
   },
   // Routes pass `isAdmin` from AuthEnv — services never read Hono context
   // (plan-tiers D9).
@@ -168,6 +170,7 @@ export async function editAccount(
     brokerageId: string | null;
     timezone: string;
     defaultRiskPercent: string | null;
+    taxTreatment: string;
   }>,
 ) {
   return withTransaction(db, async (tx) => {

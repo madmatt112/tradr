@@ -217,6 +217,7 @@ function spoolAccounts(tx: Transaction, userId: string, dir: string): Promise<nu
         ${num('a.starting_balance')} AS "startingBalance",
         ${num('a.default_risk_percent')} AS "defaultRiskPercent",
         a.is_demo AS "isDemo", a.is_default AS "isDefault",
+        a.tax_treatment AS "taxTreatment",
         ${ts('a.created_at')} AS "createdAt", ${ts('a.updated_at')} AS "updatedAt"
       FROM accounts a
       LEFT JOIN brokerages br ON br.id = a.brokerage_id
@@ -240,6 +241,7 @@ function spoolAccounts(tx: Transaction, userId: string, dir: string): Promise<nu
         defaultRiskPercent: row.defaultRiskPercent,
         isDemo: row.isDemo,
         isDefault: row.isDefault,
+        taxTreatment: row.taxTreatment,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       };
@@ -550,6 +552,19 @@ export async function spoolAccountData(
         JOIN positions p ON p.id = f.position_id
         WHERE p.user_id = ${userId}
         ORDER BY ls.created_at, ls.id
+      `,
+    ),
+    transferLinks: await spoolFlat(
+      tx,
+      dir,
+      'transfer-links.ndjson',
+      sql`
+        SELECT tl.exit_fill_id AS "exitFillId", tl.entry_fill_id AS "entryFillId"
+        FROM fill_transfer_links tl
+        JOIN fills f ON f.id = tl.exit_fill_id
+        JOIN positions p ON p.id = f.position_id
+        WHERE p.user_id = ${userId}
+        ORDER BY tl.created_at, tl.id
       `,
     ),
     positionTags: await spoolFlat(

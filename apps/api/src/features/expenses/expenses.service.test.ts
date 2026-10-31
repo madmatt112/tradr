@@ -870,6 +870,33 @@ describe('findSuperficialLossFlags — average-cost regression (Task 10, moved f
   });
 });
 
+describe('findSuperficialLossFlags — acb pool (Task 8, design C6)', () => {
+  const log = { warn: vi.fn() };
+
+  // AC 7.3 (repurchase-within-window flags, any position including the
+  // losing one), the same-day exclusion, the +30d still-held rule, and
+  // option-underlying matching (AC 7.7) run through the same
+  // `findMatchingCandidates` branches regardless of `method` — they are
+  // exercised already by the 'fifo' cases above (lines 366-469, 798-826)
+  // and the 'average' cases (lines 450-469, 637-656, 829-870), which pass
+  // unchanged (RED-IMPOSSIBLE for 'acb'; no new runtime branch). Only
+  // `heldOpenThroughWindow` is gated by `method === 'average'` today and
+  // must additionally exclude 'acb' — the one branch below.
+  it('a lot opened before the window raises no flag; held_open_in_30d_window never appears on an acb flag (AC 7.5)', () => {
+    log.warn.mockClear();
+    const loss = lossUnit({ positionId: 'P1', realisedAt: new Date('2026-06-15T00:00:00Z') });
+    const candidate = candidateLot({
+      positionId: 'P2',
+      entryFillId: 'entry-before-window',
+      openedAt: new Date('2026-04-01T00:00:00Z'),
+      endedAt: null,
+    });
+    const flags = findSuperficialLossFlags([loss], [candidate], 'acb', parseOccUnderlying, log);
+    expect(flags).toHaveLength(0);
+    expect(flags.some((f) => f.reason === 'held_open_in_30d_window')).toBe(false);
+  });
+});
+
 describe('aggregateFeesByAccountAndAssetType', () => {
   function feeRow(o: Partial<FeeRollupRow>): FeeRollupRow {
     return {

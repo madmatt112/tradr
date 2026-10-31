@@ -8,6 +8,7 @@ import {
   boolean,
   index,
   uniqueIndex,
+  check,
 } from 'drizzle-orm/pg-core';
 
 import { brokerages } from './brokerages.schema';
@@ -63,6 +64,12 @@ export const accounts = pgTable(
     // is_demo — no request body can claim it — and never true on the sample
     // account, which is not an account the user chose.
     isDefault: boolean('is_default').notNull().default(false),
+    // How this account is taxed. A taxable account's dispositions enter the CA
+    // pooled-ACB summary; a registered account (TFSA, RRSP and the like) is
+    // sheltered, so its fills never enter the pool. Every existing account —
+    // the sample account included — reads 'taxable' from the column default; the
+    // value is only ever 'taxable' or 'registered' (accounts_tax_treatment_chk).
+    taxTreatment: varchar('tax_treatment', { length: 10 }).notNull().default('taxable'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -76,5 +83,6 @@ export const accounts = pgTable(
     uniqueIndex('accounts_one_default_per_user')
       .on(table.userId)
       .where(sql`is_default = true`),
+    check('accounts_tax_treatment_chk', sql`${table.taxTreatment} IN ('taxable', 'registered')`),
   ],
 );

@@ -115,3 +115,36 @@ export const fillLotSelections = pgTable(
     ),
   ],
 );
+
+// Transfer-in/transfer-out links (ca-acb-pooling C7, Data Models). Each row
+// pairs the exit fill that left one account with the entry fill that arrived in
+// another, so a transfer realises nothing in the pooled-ACB summary. Only the
+// pairing is stored; the quantity rides on the fills themselves. One link per
+// exit fill and one per entry fill (the two unique indexes), and the two fills
+// must differ (fill_transfer_links_distinct_fills_chk). Every reference
+// cascades, so removing a fill — or the position that owns it, or the user
+// above that — removes its link with it (AC 6.4, AC 9.5).
+export const fillTransferLinks = pgTable(
+  'fill_transfer_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    exitFillId: uuid('exit_fill_id')
+      .notNull()
+      .references(() => fills.id, { onDelete: 'cascade' }),
+    entryFillId: uuid('entry_fill_id')
+      .notNull()
+      .references(() => fills.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('fill_transfer_links_exit_unique').on(table.exitFillId),
+    uniqueIndex('fill_transfer_links_entry_unique').on(table.entryFillId),
+    check(
+      'fill_transfer_links_distinct_fills_chk',
+      sql`${table.exitFillId} <> ${table.entryFillId}`,
+    ),
+  ],
+);

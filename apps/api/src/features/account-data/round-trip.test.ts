@@ -17,6 +17,7 @@ import {
   expenses,
   feeSchedules,
   fillLotSelections,
+  fillTransferLinks,
   fills,
   ledgerEntries,
   positionImages,
@@ -1003,5 +1004,256 @@ describe('tax-lot archive carry (design C12, AC 9.1-9.3)', () => {
       .innerJoin(positions, eq(positions.id, fills.positionId))
       .where(eq(positions.userId, userB));
     expect(selectionRows).toHaveLength(0);
+  });
+});
+
+// Design C8, AC 9.1-9.3 — each account's tax treatment and every transfer
+// link travel with the archive and restore against the remapped fills.
+async function seedTransferLinkUser(prefix: string): Promise<{
+  userId: string;
+  exitFillId: string;
+  entryFillId: string;
+}> {
+  const userId = await seedBareUser(prefix);
+  await db.update(users).set({ taxJurisdiction: 'CA' }).where(eq(users.id, userId));
+  const [acctA] = await db
+    .insert(accounts)
+    .values({ userId, name: 'Taxable', currency: 'USD', startingBalance: '0' })
+    .returning({ id: accounts.id });
+  const [acctB] = await db
+    .insert(accounts)
+    .values({
+      userId,
+      name: 'Registered',
+      currency: 'USD',
+      startingBalance: '0',
+      taxTreatment: 'registered',
+    })
+    .returning({ id: accounts.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed fixed positions for the transfer-link round-trip test
+  const [posA] = await db
+    .insert(positions)
+    .values({ userId, accountId: acctA.id, symbol: 'XYZ', side: 'long', assetType: 'stock' })
+    .returning({ id: positions.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed fixed positions for the transfer-link round-trip test
+  const [posB] = await db
+    .insert(positions)
+    .values({ userId, accountId: acctB.id, symbol: 'XYZ', side: 'long', assetType: 'stock' })
+    .returning({ id: positions.id });
+  await db.insert(fills).values({
+    positionId: posA.id,
+    type: 'entry',
+    price: '10',
+    quantity: '100',
+    fees: '0',
+    filledAt: new Date('2026-01-01T00:00:00Z'),
+  });
+  const [exitA] = await db
+    .insert(fills)
+    .values({
+      positionId: posA.id,
+      type: 'exit',
+      price: '50',
+      quantity: '100',
+      fees: '0',
+      filledAt: new Date('2026-02-01T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  const [entryB] = await db
+    .insert(fills)
+    .values({
+      positionId: posB.id,
+      type: 'entry',
+      price: '50',
+      quantity: '100',
+      fees: '0',
+      filledAt: new Date('2026-02-01T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  await db.insert(fills).values({
+    positionId: posB.id,
+    type: 'exit',
+    price: '80',
+    quantity: '100',
+    fees: '0',
+    filledAt: new Date('2026-03-01T00:00:00Z'),
+  });
+  await db.insert(fillTransferLinks).values({
+    userId,
+    exitFillId: exitA.id,
+    entryFillId: entryB.id,
+  });
+  return { userId, exitFillId: exitA.id, entryFillId: entryB.id };
+}
+
+describe('transfer-link archive carry (design C8, AC 9.1-9.3)', () => {
+  it(
+    "carries each account's tax treatment and every transfer link; import restores them " +
+      'against the remapped fills and the tax summary matches (AC 9.1, AC 9.2)',
+    async () => {
+      const seedA = await seedTransferLinkUser('rt-link-a');
+      const bytesA = await exportBytes(seedA.userId);
+      const parsedA = parseArchive(bytesA);
+
+      const accountsA = rowsOf(parsedA, 'accounts.ndjson');
+      expect(accountsA.find((a) => a.name === 'Taxable')?.taxTreatment).toBe('taxable');
+      expect(accountsA.find((a) => a.name === 'Registered')?.taxTreatment).toBe('registered');
+
+      const linksA = rowsOf(parsedA, 'transfer-links.ndjson');
+      expect(linksA).toHaveLength(1);
+      expect(linksA[0]).toEqual({
+        exitFillId: seedA.exitFillId,
+        entryFillId: seedA.entryFillId,
+      });
+
+      const userB = await seedBareUser('rt-link-b');
+      await confirmImport(userB, streamOf(bytesA), digestOf(bytesA));
+
+      const bytesB = await exportBytes(userB);
+      const parsedB = parseArchive(bytesB);
+
+      const accountsB = rowsOf(parsedB, 'accounts.ndjson');
+      expect(accountsB.find((a) => a.name === 'Taxable')?.taxTreatment).toBe('taxable');
+      expect(accountsB.find((a) => a.name === 'Registered')?.taxTreatment).toBe('registered');
+
+      const linksB = rowsOf(parsedB, 'transfer-links.ndjson');
+      expect(linksB).toHaveLength(1);
+      const fillsB = rowsOf(parsedB, 'fills.ndjson');
+      const exitB = fillsB.find((f) => f.type === 'exit' && f.price === '50.00000000');
+      const entryB = fillsB.find((f) => f.type === 'entry' && f.price === '50.00000000');
+
+      // Remapped: fresh ids on B, never A's own ids, but the relation holds.
+      expect(linksB[0].exitFillId).toBe(exitB?.id);
+      expect(linksB[0].entryFillId).toBe(entryB?.id);
+      expect(linksB[0].exitFillId).not.toBe(linksA[0].exitFillId);
+      expect(linksB[0].entryFillId).not.toBe(linksA[0].entryFillId);
+
+      const normalize = (s: Awaited<ReturnType<typeof getTaxSummary>>) => ({
+        ...s,
+        acbDispositions: s.acbDispositions.map((r) => ({
+          ...r,
+          exitFillId: 'X',
+          positionId: 'X',
+          accountId: 'X',
+        })),
+      });
+      const summaryA = await getTaxSummary(seedA.userId, 2026);
+      const summaryB = await getTaxSummary(userB, 2026);
+      expect(normalize(summaryB)).toEqual(normalize(summaryA));
+    },
+  );
+
+  it('a version-3 archive imports with every account taxable and no link (AC 9.3)', async () => {
+    const accountId = randomUUID();
+    const positionId = randomUUID();
+    const counts = {
+      brokerages: 0,
+      systemBrokerages: 0,
+      accounts: 1,
+      tags: 0,
+      positions: 1,
+      fills: 0,
+      lotSelections: 0,
+      positionTags: 0,
+      positionImages: 0,
+      ledgerEntries: 0,
+      exchangeRates: 0,
+      expenses: 0,
+      personas: 0,
+      builtinPersonas: 0,
+      conversations: 0,
+      messages: 0,
+      summaries: 0,
+      images: 0,
+    };
+    const manifest = {
+      format: 'tradr-account-archive',
+      archiveVersion: 3,
+      sourceAppVersion: 'test',
+      exportedAt: LOT_TS,
+      counts,
+      degradations: [] as unknown[],
+    };
+    // A version-3 account row: no `taxTreatment` key at all.
+    const account = {
+      id: accountId,
+      name: 'Main',
+      currency: 'USD',
+      timezone: 'UTC',
+      brokerage: null,
+      startingBalance: '0.0000',
+      defaultRiskPercent: null,
+      isDemo: false,
+      isDefault: true,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const position = {
+      id: positionId,
+      accountId,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      status: 'open',
+      notes: null,
+      targetPrice: null,
+      stopLoss: null,
+      openedAt: null,
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const preferencesV3 = {
+      displayCurrency: null,
+      timezone: null,
+      taxJurisdiction: null,
+      taxLotMethod: null,
+      theme: 'system',
+      buyingPowerBasis: 'cash',
+      advisorDefaultPersona: null,
+      advisorTradeDataConsent: false,
+      writableAccountId: null,
+      onboarding: {},
+    };
+
+    function buildV3Archive(): Uint8Array {
+      const entries: Array<{ name: string; data: string }> = [
+        { name: 'manifest.json', data: JSON.stringify(manifest) },
+        { name: 'accounts.ndjson', data: `${JSON.stringify(account)}\n` },
+        { name: 'positions.ndjson', data: `${JSON.stringify(position)}\n` },
+        { name: 'preferences.json', data: JSON.stringify(preferencesV3) },
+        { name: 'dashboard-layout.json', data: 'null' },
+      ];
+      const out: Uint8Array[] = [];
+      const z = new Zip((err, data) => {
+        if (err) throw err;
+        out.push(data);
+      });
+      for (const e of entries) {
+        const f = new ZipDeflate(e.name, { level: 9 });
+        z.add(f);
+        f.push(new TextEncoder().encode(e.data), true);
+      }
+      z.end();
+      return concat(out);
+    }
+
+    const bytes = buildV3Archive();
+    const userB = await seedBareUser('rt-link-v3');
+    await confirmImport(userB, streamOf(bytes), digestOf(bytes));
+
+    const [row] = await db
+      .select({ taxTreatment: accounts.taxTreatment })
+      .from(accounts)
+      .where(eq(accounts.userId, userB));
+    expect(row.taxTreatment).toBe('taxable');
+
+    const linkRows = await db
+      .select({ id: fillTransferLinks.id })
+      .from(fillTransferLinks)
+      .where(eq(fillTransferLinks.userId, userB));
+    expect(linkRows).toHaveLength(0);
   });
 });

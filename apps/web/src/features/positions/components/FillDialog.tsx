@@ -28,10 +28,16 @@ import { Textarea } from '@/components/ui/textarea';
 import { useAccountFeeSchedule } from '../hooks/useAccountFeeSchedule';
 import { useAddFill, useUpdateFill } from '../hooks/usePosition';
 import { usePositionLots } from '../hooks/usePositionLots';
+import {
+  useRemoveTransferLink,
+  useSetTransferLink,
+  useTransferLink,
+} from '../hooks/useTransferLink';
 import { QUANTITY_PRESETS, defaultFillPrice, presetQuantity } from '../utils/fillDefaults';
 import { computeFillFee } from '../utils/fillFees';
 
 import { LotPicker, sumLotSelection, type LotSelectionItem } from './LotPicker';
+import { TransferLinkSection } from './TransferLinkSection';
 
 // A `datetime-local` input yields "YYYY-MM-DDTHH:mm", which the API schemas'
 // `.datetime()` rule rejects (it wants a full ISO instant). The form validates
@@ -214,6 +220,19 @@ export function FillDialog({
     setLotPickerTouched(true);
   };
 
+  // The transfer-link section only ever applies to editing an existing exit
+  // fill (design C7 web bullet) — never a create, never an entry edit — and
+  // only while the dialog is actually open (restriction: no network call on
+  // a create, an entry, or a closed dialog).
+  const isExitEdit = isEdit && fill!.type === 'exit';
+  const { data: transferLinkData } = useTransferLink(
+    positionId,
+    isEdit ? fill!.id : null,
+    open && isExitEdit,
+  );
+  const setTransferLink = useSetTransferLink(positionId, isEdit ? fill!.id : null);
+  const removeTransferLink = useRemoveTransferLink(positionId, isEdit ? fill!.id : null);
+
   // Recomputed on every keystroke so the preview tracks price and quantity.
   const previewFee =
     feeIsCalculable && feeSchedule && position
@@ -373,6 +392,15 @@ export function FillDialog({
             >
               Clear lot selection
             </Button>
+          )}
+
+          {isExitEdit && transferLinkData && (
+            <TransferLinkSection
+              link={transferLinkData.link}
+              candidates={transferLinkData.candidates}
+              onLink={(entryFillId) => setTransferLink.mutateAsync(entryFillId)}
+              onRemove={() => removeTransferLink.mutateAsync()}
+            />
           )}
 
           <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">

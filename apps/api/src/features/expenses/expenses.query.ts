@@ -1,14 +1,21 @@
-import { and, desc, eq, exists, gte, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, gte, inArray, lt, lte, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import type { LotMethod } from '@tradr/shared/lib/tax-lots';
 
 import type { Database, Transaction } from '@/db';
-import { ledgerEntries } from '@/db/schema/accounting.schema';
+import { exchangeRates, ledgerEntries } from '@/db/schema/accounting.schema';
 import { accounts } from '@/db/schema/accounts.schema';
 import { expenses } from '@/db/schema/expenses.schema';
-import { fillLotSelections, fills, positions } from '@/db/schema/positions.schema';
+import {
+  fillLotSelections,
+  fillTransferLinks,
+  fills,
+  positions,
+} from '@/db/schema/positions.schema';
 import { users } from '@/db/schema/users.schema';
+
+import type { AcbFill } from './acb-pool';
 
 // ---------------------------------------------------------------------------
 // Row / input types
@@ -624,4 +631,155 @@ export async function updateUserTaxLotMethod(
   value: LotMethod | null,
 ): Promise<void> {
   await tx.update(users).set({ taxLotMethod: value }).where(eq(users.id, userId));
+}
+
+// ---------------------------------------------------------------------------
+// ACB loader queries (design C4 — `acb.service.ts`'s `getAcbDispositionsForYear`).
+// Each is one statement, each filtered by `user_id`, batched once per request
+// rather than once per fill (NFR Performance).
+// ---------------------------------------------------------------------------
+
+/**
+ * Every taxable-account fill before `before`, projecting the `AcbFill`
+ * fields the pure engine (`acb-pool.ts`) needs. Registered fills never enter
+ * (AC 3.2). Deleted positions have no fills, so they leave the pool on the
+ * next read (AC 5.7).
+ */
+export async function listTaxableFillsForAcb(
+  db: Database | Transaction,
+  userId: string,
+  before: Date,
+): Promise<AcbFill[]> {
+  return db
+    .select({
+      id: fills.id,
+      positionId: fills.positionId,
+      accountId: positions.accountId,
+      symbol: positions.symbol,
+      side: sql<'long' | 'short'>`${positions.side}`,
+      assetType: sql<'stock' | 'option'>`${positions.assetType}`,
+      type: sql<'entry' | 'exit'>`${fills.type}`,
+      price: fills.price,
+      quantity: fills.quantity,
+      fees: fills.fees,
+      filledAt: fills.filledAt,
+      createdAt: fills.createdAt,
+      currency: accounts.currency,
+      timezone: accounts.timezone,
+      positionOpenedAt: positions.openedAt,
+      positionClosedAt: positions.closedAt,
+    })
+    .from(fills)
+    .innerJoin(positions, eq(fills.positionId, positions.id))
+    .innerJoin(accounts, eq(positions.accountId, accounts.id))
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(accounts.userId, userId),
+        eq(accounts.taxTreatment, 'taxable'),
+        lt(fills.filledAt, before),
+      ),
+    ) as Promise<AcbFill[]>;
+}
+
+export type CadRateRow = {
+  baseCurrency: string;
+  quoteCurrency: string;
+  rate: string;
+  effectiveDate: string;
+};
+
+/**
+ * Every CAD-paired exchange rate of the user before `before` (a `YYYY-MM-DD`
+ * string), either side of the pair — `cadRateFor` (`acb.service.ts`) resolves
+ * the direct or inverse row itself (design C4 post-condition 2). Reads the
+ * same table as `listExchangeRatesForUser`
+ * (`apps/api/src/features/accounting/accounting.query.ts:337-350`) and is not
+ * `findSpotRate` (`apps/api/src/features/accounting/accounting.query.ts:566-631`)
+ * — no "latest on or before" fallback.
+ */
+export async function listCadRatesForUser(
+  db: Database | Transaction,
+  userId: string,
+  before: string,
+): Promise<CadRateRow[]> {
+  return db
+    .select({
+      baseCurrency: exchangeRates.baseCurrency,
+      quoteCurrency: exchangeRates.quoteCurrency,
+      rate: exchangeRates.rate,
+      effectiveDate: exchangeRates.effectiveDate,
+    })
+    .from(exchangeRates)
+    .where(
+      and(
+        eq(exchangeRates.userId, userId),
+        or(eq(exchangeRates.quoteCurrency, 'CAD'), eq(exchangeRates.baseCurrency, 'CAD')),
+        sql`${exchangeRates.effectiveDate} < ${before}`,
+      ),
+    );
+}
+
+export type TransferLinkRow = {
+  linkId: string;
+  exitFillId: string;
+  entryFillId: string;
+  exitFillType: 'entry' | 'exit';
+  entryFillType: 'entry' | 'exit';
+  exitQuantity: string;
+  entryQuantity: string;
+  exitSymbol: string;
+  entrySymbol: string;
+  exitSide: 'long' | 'short';
+  entrySide: 'long' | 'short';
+  exitAccountId: string;
+  entryAccountId: string;
+  exitTaxTreatment: 'taxable' | 'registered';
+  entryTaxTreatment: 'taxable' | 'registered';
+};
+
+/**
+ * Every transfer link of the user, joined through both fills to their
+ * positions and accounts, projecting each side's fill type, quantity,
+ * symbol, side, account id and tax treatment — everything `acb.service.ts`
+ * needs to validate the link (design C4 post-condition 3) without a second
+ * read.
+ */
+export async function listTransferLinksForUser(
+  db: Database | Transaction,
+  userId: string,
+): Promise<TransferLinkRow[]> {
+  const exitFill = alias(fills, 'exit_fill');
+  const entryFill = alias(fills, 'entry_fill');
+  const exitPosition = alias(positions, 'exit_position');
+  const entryPosition = alias(positions, 'entry_position');
+  const exitAccount = alias(accounts, 'exit_account');
+  const entryAccount = alias(accounts, 'entry_account');
+
+  return db
+    .select({
+      linkId: fillTransferLinks.id,
+      exitFillId: fillTransferLinks.exitFillId,
+      entryFillId: fillTransferLinks.entryFillId,
+      exitFillType: sql<'entry' | 'exit'>`${exitFill.type}`,
+      entryFillType: sql<'entry' | 'exit'>`${entryFill.type}`,
+      exitQuantity: exitFill.quantity,
+      entryQuantity: entryFill.quantity,
+      exitSymbol: exitPosition.symbol,
+      entrySymbol: entryPosition.symbol,
+      exitSide: sql<'long' | 'short'>`${exitPosition.side}`,
+      entrySide: sql<'long' | 'short'>`${entryPosition.side}`,
+      exitAccountId: exitPosition.accountId,
+      entryAccountId: entryPosition.accountId,
+      exitTaxTreatment: sql<'taxable' | 'registered'>`${exitAccount.taxTreatment}`,
+      entryTaxTreatment: sql<'taxable' | 'registered'>`${entryAccount.taxTreatment}`,
+    })
+    .from(fillTransferLinks)
+    .innerJoin(exitFill, eq(exitFill.id, fillTransferLinks.exitFillId))
+    .innerJoin(entryFill, eq(entryFill.id, fillTransferLinks.entryFillId))
+    .innerJoin(exitPosition, eq(exitPosition.id, exitFill.positionId))
+    .innerJoin(entryPosition, eq(entryPosition.id, entryFill.positionId))
+    .innerJoin(exitAccount, eq(exitAccount.id, exitPosition.accountId))
+    .innerJoin(entryAccount, eq(entryAccount.id, entryPosition.accountId))
+    .where(eq(fillTransferLinks.userId, userId)) as Promise<TransferLinkRow[]>;
 }

@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 const TaxLotMethodResponseSchema = z
   .object({
     taxLotMethod: z.enum(['fifo', 'average']).nullable(),
-    effectiveMethod: z.enum(['fifo', 'average']),
+    effectiveMethod: z.enum(['fifo', 'average', 'acb']),
     isDefault: z.boolean(),
   })
   .strict();

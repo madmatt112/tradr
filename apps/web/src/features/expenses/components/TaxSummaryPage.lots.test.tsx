@@ -125,6 +125,8 @@ function baseSummary(overrides: Partial<TaxSummaryResponse> = {}): TaxSummaryRes
     ratesAsOf: null,
     usedRates: [],
     disclaimer: 'Tax figures are estimates only.',
+    acbDispositions: [],
+    acbMissingRates: [],
     ...overrides,
   };
 }

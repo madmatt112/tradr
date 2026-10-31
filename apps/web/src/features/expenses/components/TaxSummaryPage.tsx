@@ -26,6 +26,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useMissingRatePrompt } from '@/features/accounting/hooks/useMissingRatePrompt';
+import { AcbDispositionsTable } from '@/features/expenses/components/AcbDispositionsTable';
 import { LotRealisationsTable } from '@/features/expenses/components/LotRealisationsTable';
 import { WashSaleFlagsTable } from '@/features/expenses/components/WashSaleFlagsTable';
 import {
@@ -49,6 +50,11 @@ const LOT_METHOD_LABELS: Record<LotMethod, string> = {
   fifo: 'FIFO',
   average: 'Average cost',
 };
+
+// Not a stored value (design C2) — the Select renders this single, disabled
+// item when the effective method is `acb`, never adding a third entry to
+// LOT_METHOD_LABELS above.
+const ACB_METHOD_LABEL = 'Adjusted cost base (pooled)';
 
 // Mirrors `defaultLotMethod` in packages/shared/src/lib/tax-lots.ts — apps/web
 // cannot import `@tradr/shared/lib/*` (no-restricted-imports), so the
@@ -145,7 +151,8 @@ export function TaxSummaryPage() {
   // Same "server-confirmed, never local state" pattern as dropdownValue
   // above: 'default' sends null, and its label follows whichever jurisdiction
   // is currently selected (design C10, AC 2.3).
-  const methodDropdownValue = lotMethodData?.taxLotMethod ?? 'default';
+  const isAcbMethod = lotMethodData?.effectiveMethod === 'acb';
+  const methodDropdownValue = isAcbMethod ? 'acb' : (lotMethodData?.taxLotMethod ?? 'default');
   const defaultMethodLabel = `Default (${LOT_METHOD_LABELS[defaultLotMethodFor(jurisdiction)]})`;
 
   const isEmpty =
@@ -224,24 +231,35 @@ export function TaxSummaryPage() {
                 onValueChange={(val) => {
                   lotMethodMutation.mutate(val === 'default' ? null : (val as LotMethod));
                 }}
-                disabled={lotMethodMutation.isPending}
+                disabled={isAcbMethod || lotMethodMutation.isPending}
               >
                 <SelectTrigger id="tax-summary-lot-method" className="w-44 cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="default">{defaultMethodLabel}</SelectItem>
-                  {(Object.keys(LOT_METHOD_LABELS) as LotMethod[]).map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {LOT_METHOD_LABELS[m]}
-                    </SelectItem>
-                  ))}
+                  {isAcbMethod ? (
+                    <SelectItem value="acb">{ACB_METHOD_LABEL}</SelectItem>
+                  ) : (
+                    <>
+                      <SelectItem value="default">{defaultMethodLabel}</SelectItem>
+                      {(Object.keys(LOT_METHOD_LABELS) as LotMethod[]).map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {LOT_METHOD_LABELS[m]}
+                        </SelectItem>
+                      ))}
+                    </>
+                  )}
                 </SelectContent>
               </Select>
               {lotMethodMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               )}
             </div>
+            {isAcbMethod && (
+              <p className="text-xs text-muted-foreground">
+                Canada uses one pooled ACB per security across your taxable accounts.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -281,6 +299,24 @@ export function TaxSummaryPage() {
               Enter rate
             </a>
           )}
+        </div>
+      )}
+
+      {data && data.acbMissingRates.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">
+          <span className="font-medium text-warning">Missing CAD exchange rate(s):</span>
+          <ul className="flex flex-wrap gap-x-3 gap-y-1">
+            {data.acbMissingRates.map((p) => (
+              <li key={`${p.currency}-${p.tradeDate}`}>
+                <a
+                  href={`/settings/profile?base=${encodeURIComponent(p.currency)}&quote=CAD`}
+                  className="cursor-pointer text-primary underline-offset-4 hover:underline"
+                >
+                  {p.currency} on {p.tradeDate}
+                </a>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -329,6 +365,13 @@ export function TaxSummaryPage() {
               </p>
             )}
 
+            {data.lotMethod === 'acb' && (
+              <p className="text-xs text-muted-foreground">
+                Figures use the pooled ACB. The journal, ledger and performance use average cost per
+                position.
+              </p>
+            )}
+
             {data.realisedPnl.perCurrency.length > 0 && (
               <div>
                 <h3 className="mb-1 text-sm font-medium text-muted-foreground">Per currency</h3>
@@ -373,6 +416,18 @@ export function TaxSummaryPage() {
                 </CollapsibleTrigger>
                 <CollapsibleContent className="mt-2">
                   <LotRealisationsTable rows={data.lotRealisations} jurisdiction={jurisdiction} />
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+
+            {data.lotMethod === 'acb' && data.acbDispositions.length > 0 && (
+              <Collapsible>
+                <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between rounded-md border p-3 text-left text-sm font-medium hover:bg-muted/50 [&[data-state=open]>svg]:rotate-180">
+                  <span>Dispositions ({data.acbDispositions.length})</span>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2">
+                  <AcbDispositionsTable rows={data.acbDispositions} />
                 </CollapsibleContent>
               </Collapsible>
             )}

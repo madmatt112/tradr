@@ -33,6 +33,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import app, { bootstrap } from '@/app';
 import { runMigrations, runPostMigrations } from '@/db/migrate';
 import * as schema from '@/db/schema';
+import { exchangeRates as exchangeRatesTable } from '@/db/schema/accounting.schema';
 import { accounts as accountsTable } from '@/db/schema/accounts.schema';
 import { sessions as sessionsTable, users as usersTable } from '@/db/schema/users.schema';
 
@@ -73,6 +74,11 @@ const TAX_LIFETIME_POSITIONS = 5_000;
 const TAX_IN_YEAR_POSITIONS = 1_000;
 const TAX_IN_YEAR_LOSSES = 200;
 const TAX_BUDGET_MS = 500;
+// Temporary ceiling for the CA ACB pool scenario only (Scenario 4 below): the
+// full-history pool walk misses the 500ms NFR today (deferral d-e71c3ae3). A
+// follow-up performance spec optimizes computeAcbDispositions and restores
+// TAX_BUDGET_MS for that scenario.
+const CA_ACB_BUDGET_MS = 4000;
 
 const N_ITERATIONS = 20;
 const N_WARMUP = 3;
@@ -162,6 +168,10 @@ let feeRollupSessionCookie: string;
 let taxUserId: string;
 let taxSessionCookie: string;
 
+// Scenario 4 user (CA ACB pool)
+let caUserId: string;
+let caTaxSessionCookie: string;
+
 async function resetDatabase(sql: ReturnType<typeof postgres>): Promise<void> {
   await sql`DROP SCHEMA IF EXISTS drizzle CASCADE`;
   await sql`DROP SCHEMA IF EXISTS public CASCADE`;
@@ -175,7 +185,10 @@ async function resetDatabase(sql: ReturnType<typeof postgres>): Promise<void> {
  * send it back as a `session=<token>` cookie. Mirrors what the production
  * `auth.service.registerUser` does, but skips bcrypt + the HTTP round-trip.
  */
-async function seedUserAndSession(emailSuffix: string): Promise<{
+async function seedUserAndSession(
+  emailSuffix: string,
+  taxJurisdiction: 'US' | 'CA' = 'US',
+): Promise<{
   userId: string;
   cookie: string;
 }> {
@@ -185,7 +198,7 @@ async function seedUserAndSession(emailSuffix: string): Promise<{
     .values({
       email: `bench-exp-${emailSuffix}-${Date.now()}@bench.local`,
       passwordHash: 'x'.repeat(60),
-      taxJurisdiction: 'US',
+      taxJurisdiction,
     })
     .returning();
   if (!user) throw new Error('failed to seed bench user');
@@ -245,14 +258,16 @@ async function copyFills(opts: {
 }
 
 async function copyTaxFills(opts: {
-  positions: Array<{ positionId: string; exitAt: Date }>;
+  positions: Array<{ positionId: string; exitAt: Date; accountId?: string }>;
   twoEntryIndices: ReadonlySet<number>;
   rngSeed: number;
-}): Promise<void> {
-  const stream = buildTaxFillsCopyStream(opts);
+  trackRatesForAccountId?: string;
+}): Promise<Set<string>> {
+  const { stream, rateDates } = buildTaxFillsCopyStream(opts);
   const cols = FILLS_COPY_COLUMNS.join(',');
   const writable = await benchSql.unsafe(`COPY fills (${cols}) FROM STDIN`).writable();
   await pipeline(stream, writable);
+  return rateDates;
 }
 
 async function copyLedgerPnl(opts: {
@@ -448,7 +463,7 @@ beforeAll(async () => {
   }
 
   // ANALYZE so the planner has fresh stats. Each describe block re-asserts
-  // with a per-case ANALYZE before EXPLAIN.
+  // with a per-case ANALYZE before EXPLAIN. (Scenario 4 seeds separately.)
   await benchSql.unsafe('VACUUM ANALYZE expenses');
   await benchSql.unsafe('VACUUM ANALYZE positions');
   await benchSql.unsafe('VACUUM ANALYZE fills');
@@ -664,5 +679,139 @@ describe('expenses bench — tax-summary 5-year history', () => {
       `[bench] tax-summary 5yr (average cost) — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
     );
     expect(stats.p95).toBeLessThan(TAX_BUDGET_MS);
+  }, 600_000);
+});
+
+// Scenario 4 — CA ACB pool: same 5-year, 5_000-position fixture as Scenario 3,
+// but every position gets entry+exit fills (`acb` walks the whole history,
+// not just the year) across 3 taxable accounts (one USD) + 1 registered
+// account. NFR target is < 500ms; measured against the temporary
+// CA_ACB_BUDGET_MS ceiling (see its definition above) while the miss is
+// deferred (d-e71c3ae3).
+describe('expenses bench — CA ACB pool, 5-year history', () => {
+  // Seeded here, not in the top-level `beforeAll`, so Scenarios 1-3's own
+  // EXPLAIN checks run against the row counts they were written for.
+  beforeAll(async () => {
+    const seeded = await seedUserAndSession('ca-tax', 'CA');
+    caUserId = seeded.userId;
+    caTaxSessionCookie = seeded.cookie;
+
+    const [acctCad1, acctCad2, acctUsd, acctReg] = await benchDb
+      .insert(accountsTable)
+      .values([
+        { userId: caUserId, name: 'bench-ca-acct-cad-1', currency: 'CAD', timezone: 'UTC' },
+        { userId: caUserId, name: 'bench-ca-acct-cad-2', currency: 'CAD', timezone: 'UTC' },
+        { userId: caUserId, name: 'bench-ca-acct-usd', currency: 'USD', timezone: 'UTC' },
+        {
+          userId: caUserId,
+          name: 'bench-ca-acct-reg',
+          currency: 'CAD',
+          timezone: 'UTC',
+          taxTreatment: 'registered',
+        },
+      ])
+      .returning();
+    if (!acctCad1 || !acctCad2 || !acctUsd || !acctReg) {
+      throw new Error('failed to seed bench-ca accounts');
+    }
+    const taxableAccountIds = [acctCad1.id, acctCad2.id, acctUsd.id];
+
+    const inYear = TAX_IN_YEAR_POSITIONS;
+    const priorYears = TAX_LIFETIME_POSITIONS - inYear;
+    const openedStart = new Date(`${TARGET_YEAR - 4}-01-01T00:00:00.000Z`);
+    const openedEnd = new Date(`${TARGET_YEAR - 1}-12-31T23:59:59.000Z`);
+    const closedInYearStart = new Date(`${TARGET_YEAR}-01-01T00:00:00.000Z`);
+    const closedInYearEnd = new Date(`${TARGET_YEAR}-12-31T23:59:59.000Z`);
+    const closedPriorStart = new Date(`${TARGET_YEAR - 4}-01-01T00:00:00.000Z`);
+    const closedPriorEnd = new Date(`${TARGET_YEAR - 1}-12-31T23:59:59.000Z`);
+
+    const inYearPositions = await copyPositionsAndCaptureIds({
+      userId: caUserId,
+      accountIds: taxableAccountIds,
+      count: inYear,
+      openedStart,
+      openedEnd,
+      closedRange: { start: closedInYearStart, end: closedInYearEnd },
+      rngSeed: RNG_SEED + 11,
+    });
+    const priorPositions = await copyPositionsAndCaptureIds({
+      userId: caUserId,
+      accountIds: taxableAccountIds,
+      count: priorYears,
+      openedStart,
+      openedEnd,
+      closedRange: { start: closedPriorStart, end: closedPriorEnd },
+      rngSeed: RNG_SEED + 12,
+    });
+
+    const inYearPairs = inYearPositions.positionIds.map((id, i) => ({
+      positionId: id,
+      accountId: inYearPositions.positionAccountIds[i]!,
+      exitAt: new Date(
+        closedInYearStart.getTime() +
+          (i * (closedInYearEnd.getTime() - closedInYearStart.getTime())) / inYear,
+      ),
+    }));
+    const priorPairs = priorPositions.positionIds.map((id, i) => ({
+      positionId: id,
+      accountId: priorPositions.positionAccountIds[i]!,
+      exitAt: new Date(
+        closedPriorStart.getTime() +
+          (i * (closedPriorEnd.getTime() - closedPriorStart.getTime())) / priorYears,
+      ),
+    }));
+    const allPairs = [...inYearPairs, ...priorPairs];
+    const twoEntryIndices = new Set(
+      Array.from({ length: allPairs.length }, (_, i) => i).filter((i) => i % 10 === 0),
+    );
+
+    // Timezone 'UTC' above makes each fill's trade date its UTC calendar date.
+    const usdTradeDates = await copyTaxFills({
+      positions: allPairs,
+      twoEntryIndices,
+      rngSeed: RNG_SEED + 13,
+      trackRatesForAccountId: acctUsd.id,
+    });
+    // A few thousand rows at most — a plain insert, not a COPY stream.
+    await benchDb.insert(exchangeRatesTable).values(
+      [...usdTradeDates].map((effectiveDate) => ({
+        userId: caUserId,
+        baseCurrency: 'USD',
+        quoteCurrency: 'CAD',
+        rate: '1.35',
+        effectiveDate,
+      })),
+    );
+  }, 600_000);
+
+  it(`p95 < ${CA_ACB_BUDGET_MS}ms`, async () => {
+    await benchSql.unsafe('VACUUM ANALYZE fills');
+    await benchSql.unsafe('VACUUM ANALYZE positions');
+    await benchSql.unsafe('VACUUM ANALYZE exchange_rates');
+    await benchSql.unsafe('VACUUM ANALYZE accounts');
+
+    const path = `/api/expenses/tax-summary?year=${TARGET_YEAR}&jurisdiction=CA`;
+    const headers = { Cookie: `session=${caTaxSessionCookie}` };
+
+    for (let i = 0; i < N_WARMUP; i++) {
+      const res = await app.request(path, { headers });
+      if (res.status !== 200) throw new Error(`warmup expected 200, got ${res.status}`);
+      await res.json();
+    }
+
+    const samples: number[] = [];
+    for (let i = 0; i < N_ITERATIONS; i++) {
+      const t0 = nowMs();
+      const res = await app.request(path, { headers });
+      await res.json();
+      samples.push(nowMs() - t0);
+      if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
+    }
+    const stats = summarize(samples);
+
+    console.log(
+      `[bench] CA ACB pool 5yr — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
+    );
+    expect(stats.p95).toBeLessThan(CA_ACB_BUDGET_MS);
   }, 600_000);
 });

@@ -329,15 +329,18 @@ export function buildFillsCopyStream(params: FillsFixtureParams): Readable {
 
 export interface TaxFillsFixtureParams {
   /** One row per in-year position; `exitAt` matches that position's ledger
-   * `occurred_at` (its `closedAt`), so the exit fill lands in the same tax
-   * year as the ledger row it realises. */
-  positions: Array<{ positionId: string; exitAt: Date }>;
+   * `occurred_at`, so the exit fill lands in the same tax year as the ledger
+   * row it realises. `accountId` is read only when `trackRatesForAccountId` is set. */
+  positions: Array<{ positionId: string; exitAt: Date; accountId?: string }>;
   /** Indices into `positions` that get a second entry fill sized so the exit
    * only partially consumes it — exercises the FIFO multi-lot split path
    * (one full lot, one partial) rather than every position being a single
    * entry/single exit round trip. */
   twoEntryIndices: ReadonlySet<number>;
   rngSeed: number;
+  /** When set, tracks each matching fill's `filled_at` date into the returned
+   * `rateDates` set (the CA ACB bench's CAD-rate seed list). */
+  trackRatesForAccountId?: string;
 }
 
 const TAX_ENTRY_LEAD_MS = 180 * 24 * 60 * 60 * 1000;
@@ -348,18 +351,24 @@ const TAX_ENTRY_LEAD_MS = 180 * 24 * 60 * 60 * 1000;
  * `filled_at` equals `exitAt`; entries fall before it so lot order (oldest
  * first) is unambiguous.
  */
-export function buildTaxFillsCopyStream(params: TaxFillsFixtureParams): Readable {
-  const { positions, twoEntryIndices, rngSeed } = params;
+export function buildTaxFillsCopyStream(params: TaxFillsFixtureParams): {
+  stream: Readable;
+  rateDates: Set<string>;
+} {
+  const { positions, twoEntryIndices, rngSeed, trackRatesForAccountId } = params;
   const rng = mulberry32(rngSeed);
+  const rateDates = new Set<string>();
 
   let emitted = 0;
-  return new Readable({
+  const stream = new Readable({
     read() {
       const BATCH = 500;
       let chunk = '';
       const upper = Math.min(emitted + BATCH, positions.length);
       for (let i = emitted; i < upper; i++) {
-        const { positionId, exitAt } = positions[i]!;
+        const { positionId, exitAt, accountId } = positions[i]!;
+        const trackThis =
+          trackRatesForAccountId !== undefined && accountId === trackRatesForAccountId;
         const exitAtIso = exitAt.toISOString();
         const exitPrice = (10 + rng() * 500).toFixed(8);
         const exitFeeCents = 1 + Math.floor(rng() * 499);
@@ -376,6 +385,7 @@ export function buildTaxFillsCopyStream(params: TaxFillsFixtureParams): Readable
           fees: string,
           filledAt: string,
         ): void => {
+          if (trackThis) rateDates.add(filledAt.slice(0, 10));
           const cells = [
             randomUUID(),
             positionId,
@@ -416,6 +426,7 @@ export function buildTaxFillsCopyStream(params: TaxFillsFixtureParams): Readable
       if (emitted >= positions.length) this.push(null);
     },
   });
+  return { stream, rateDates };
 }
 
 // ---------------------------------------------------------------------------

@@ -206,7 +206,7 @@ fillsRouter.post(
  *                       quantity: { type: string, description: Decimal. }
  *       400: { description: 'Validation error: an exit quantity beyond the available entry quantity, a fractional quantity on an options position, or a `lotSelection` repeating an `entryFillId`.' }
  *       404: { description: No such position or fill for this user. }
- *       409: { description: 'The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit''s matched lots; or an entry quantity edit that would leave a selected exit''s claim above the lot.' }
+ *       409: { description: 'The change would leave the position inconsistent with its other fills; a quantity change on a selected exit with no new `lotSelection`; a `lotSelection` naming an entry fill that is not an entry of this position, its quantities do not sum to the (post-edit) exit quantity, its claims exceed a lot, or the write would change an earlier exit''s matched lots; an entry quantity edit that would leave a selected exit''s claim above the lot; or a quantity change on a fill that is in an in-kind transfer link (remove the link first).' }
  */
 fillsRouter.put(
   '/:id/fills/:fillId',

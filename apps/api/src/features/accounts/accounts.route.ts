@@ -114,6 +114,15 @@ accounts.get('/:id', validate('param', ParamSchema), async (c) => {
  *                   Unlike `PUT /api/accounts/{id}`, an explicit `null` is a 400
  *                   here — there is no rule to clear on create.
  *                 example: '1.00'
+ *               taxTreatment:
+ *                 type: string
+ *                 enum: [taxable, registered]
+ *                 description: >
+ *                   How this account is taxed. A taxable account's dispositions
+ *                   enter the CA pooled-ACB summary; a registered account (TFSA,
+ *                   RRSP and the like) is sheltered and never enters it. Omitted
+ *                   defaults to `taxable`.
+ *                 example: taxable
  *     responses:
  *       201: { description: 'The created account, with `isDemo: false`.' }
  *       400: { description: Validation error. }
@@ -299,6 +308,14 @@ accounts.put('/default', validate('json', SetDefaultAccountSchema), async (c) =>
  *                   key leaves the stored value untouched; sending an explicit
  *                   `null` clears the rule back to unset.
  *                 example: '1.00'
+ *               taxTreatment:
+ *                 type: string
+ *                 enum: [taxable, registered]
+ *                 description: >
+ *                   How this account is taxed. Omitting the key leaves the
+ *                   stored value untouched; unlike `defaultRiskPercent` there
+ *                   is no `null` case to clear — this field has no unset state.
+ *                 example: registered
  *     responses:
  *       200: { description: 'The updated account. `isDemo` is server-set and unchanged by this call.' }
  *       400: { description: Validation error (includes an unknown IANA timezone). }

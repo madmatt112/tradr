@@ -63,6 +63,7 @@ import {
   closeNotBeforeOpen,
   isWholeContracts,
 } from './segment-invariants';
+import { findTransferLinkByFillId } from './transfer-links.query';
 
 interface PgError {
   code?: string;
@@ -1440,6 +1441,21 @@ export async function editFill(
       throw new NotFoundError('Fill', fillId);
     }
     const fill = fillRows[0];
+
+    // Transfer-link guard (ca-acb-pooling C7 post-condition 3, AC 6.4): a
+    // quantity change on either half of a linked pair would desync it, so it
+    // is refused before any write. Other edits run no extra query.
+    if (
+      data.quantity !== undefined &&
+      !new Decimal(data.quantity).equals(new Decimal(fill.quantity))
+    ) {
+      const linkRows = await findTransferLinkByFillId(tx, fillId);
+      if (linkRows.length > 0) {
+        throw new ConflictError(
+          `Fill ${fillId} is in transfer link ${linkRows[0].id}; remove the link before changing its quantity`,
+        );
+      }
+    }
 
     // Validate option integer quantity
     if (data.quantity && position.asset_type === 'option') {

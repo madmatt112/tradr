@@ -73,6 +73,12 @@ const defaultRiskPercent = z.string().refine(
   { message: 'Must be a percentage above 0 and up to 100, with at most 2 decimal places' },
 );
 
+// Account tax treatment (ca-acb-pooling design C1). A taxable account's
+// dispositions enter the CA pooled-ACB summary; a registered account (TFSA,
+// RRSP and the like) is sheltered and never enters the pool. Bounded to the
+// accounts.tax_treatment column CHECK, which allows only these two values.
+export const TaxTreatmentEnum = z.enum(['taxable', 'registered']);
+
 export const CreateAccountSchema = z.object({
   name: z.string().min(1).max(100).trim(),
   currency: z.enum(CURRENCY_CODES as [string, ...string[]]),
@@ -86,6 +92,9 @@ export const CreateAccountSchema = z.object({
   // Optional — omitted means no rule is set, which preserves the calculator's
   // pre-existing behaviour exactly (empty field, user-supplied per calculation).
   defaultRiskPercent: defaultRiskPercent.optional(),
+  // Optional — omitted takes the accounts.tax_treatment column default
+  // 'taxable' server-side (AC 1.3).
+  taxTreatment: TaxTreatmentEnum.optional(),
 });
 
 export const UpdateAccountSchema = z.object({
@@ -98,6 +107,9 @@ export const UpdateAccountSchema = z.object({
   // null clears the rule back to unset. Without the null case a user who set a
   // percentage could never remove it.
   defaultRiskPercent: defaultRiskPercent.nullable().optional(),
+  // Optional, not nullable — unlike defaultRiskPercent there is no "unset"
+  // state to clear back to; omitted leaves the stored value untouched.
+  taxTreatment: TaxTreatmentEnum.optional(),
 });
 
 export const AccountSchema = z.object({
@@ -135,6 +147,9 @@ export const AccountSchema = z.object({
   // first account created takes it, and `PUT /api/accounts/default` moves it.
   // `.optional()` for the same reason as `balance` above.
   isDefault: z.boolean().optional(),
+  // Present on every account read (design C1). `.optional()` for the same
+  // reason as `balance` above — existing fixtures build accounts without it.
+  taxTreatment: TaxTreatmentEnum.optional(),
 });
 
 // Body of PUT /api/accounts/default — mirrors SetWritableAccountSchema

@@ -20,6 +20,7 @@ import {
   externalApiKeys,
   feeSchedules,
   fillLotSelections,
+  fillTransferLinks,
   fills,
   ledgerEntries,
   positionImages,
@@ -404,7 +405,7 @@ describe('createExport', () => {
       degradations: unknown[];
     };
     expect(manifest.format).toBe('tradr-account-archive');
-    expect(manifest.archiveVersion).toBe(3);
+    expect(manifest.archiveVersion).toBe(4);
     expect(manifest.sourceAppVersion).toBe('unknown'); // APP_VERSION unset in tests
     expect(manifest.exportedAt).toMatch(MICRO_TS_RE);
     expect(manifest.degradations).toEqual([]);
@@ -507,7 +508,7 @@ describe('createExport', () => {
       archiveVersion: number;
       counts: Record<string, number>;
     };
-    expect(manifest.archiveVersion).toBe(3);
+    expect(manifest.archiveVersion).toBe(4);
     expect(manifest.counts.lotSelections).toBe(1);
 
     const [selection] = ndjson(entries, 'lot-selections.ndjson');
@@ -521,6 +522,97 @@ describe('createExport', () => {
       taxLotMethod: string | null;
     };
     expect(preferences.taxLotMethod).toBe('average');
+  });
+
+  // Design C8, AC 9.1 — each account's tax treatment and every transfer link
+  // travel with the archive, and ARCHIVE_VERSION stays at 4.
+  it("carries each account's tax treatment and every transfer link (AC 9.1)", async () => {
+    const [u] = await db
+      .insert(users)
+      .values({ email: `export-links-${randomUUID()}@example.com`, passwordHash: PASSWORD_HASH })
+      .returning({ id: users.id });
+    const [acctA] = await db
+      .insert(accounts)
+      .values({ userId: u.id, name: 'Taxable', currency: 'USD', startingBalance: '0' })
+      .returning({ id: accounts.id });
+    const [acctB] = await db
+      .insert(accounts)
+      .values({
+        userId: u.id,
+        name: 'Registered',
+        currency: 'USD',
+        startingBalance: '0',
+        taxTreatment: 'registered',
+      })
+      .returning({ id: accounts.id });
+    // eslint-disable-next-line no-restricted-syntax -- seed fixed positions for the transfer-link export test
+    const [posA] = await db
+      .insert(positions)
+      .values({
+        userId: u.id,
+        accountId: acctA.id,
+        symbol: 'XYZ',
+        side: 'long',
+        assetType: 'stock',
+      })
+      .returning({ id: positions.id });
+    // eslint-disable-next-line no-restricted-syntax -- seed fixed positions for the transfer-link export test
+    const [posB] = await db
+      .insert(positions)
+      .values({
+        userId: u.id,
+        accountId: acctB.id,
+        symbol: 'XYZ',
+        side: 'long',
+        assetType: 'stock',
+      })
+      .returning({ id: positions.id });
+    const [exitFill] = await db
+      .insert(fills)
+      .values({
+        positionId: posA.id,
+        type: 'exit',
+        price: '50',
+        quantity: '100',
+        fees: '0',
+        filledAt: new Date('2026-02-01T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+    const [entryFill] = await db
+      .insert(fills)
+      .values({
+        positionId: posB.id,
+        type: 'entry',
+        price: '50',
+        quantity: '100',
+        fees: '0',
+        filledAt: new Date('2026-02-01T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+    await db.insert(fillTransferLinks).values({
+      userId: u.id,
+      exitFillId: exitFill.id,
+      entryFillId: entryFill.id,
+    });
+
+    const entries = await exportEntries(u.id);
+
+    const manifest = JSON.parse(decode(entries, 'manifest.json')) as {
+      archiveVersion: number;
+      counts: Record<string, number>;
+    };
+    expect(manifest.archiveVersion).toBe(4);
+    expect(manifest.counts.transferLinks).toBe(1);
+
+    const accountRows = ndjson(entries, 'accounts.ndjson') as Array<{
+      name: string;
+      taxTreatment: string;
+    }>;
+    expect(accountRows.find((a) => a.name === 'Taxable')?.taxTreatment).toBe('taxable');
+    expect(accountRows.find((a) => a.name === 'Registered')?.taxTreatment).toBe('registered');
+
+    const [link] = ndjson(entries, 'transfer-links.ndjson');
+    expect(link).toEqual({ exitFillId: exitFill.id, entryFillId: entryFill.id });
   });
 
   it('never writes a secret into the archive (Req 2.5)', async () => {
