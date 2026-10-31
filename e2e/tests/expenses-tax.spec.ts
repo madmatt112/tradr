@@ -1,4 +1,7 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import { openMobileNavIfPresent } from '../support/mobile-nav';
 
@@ -301,6 +304,127 @@ async function createOpenPositionWithTwoLots(
   const entry2 = (await entry2Res.json()) as { id: string };
 
   return { positionId: position.id, lot1FillId: entry1.id, lot2FillId: entry2.id };
+}
+
+interface OpenPositionInput {
+  accountId: string;
+  symbol: string;
+  side: 'long' | 'short';
+  price: string;
+  quantity: string;
+  filledAt: string;
+}
+
+/**
+ * An open position with one entry fill and no exit — a pool holding or a
+ * repurchase candidate (task 14's pooled-ACB and superficial-loss scenario),
+ * where the position is never closed.
+ */
+async function createOpenPosition(
+  req: APIRequestContext,
+  input: OpenPositionInput,
+): Promise<{ positionId: string }> {
+  const posRes = await req.post('/api/positions', {
+    data: {
+      accountId: input.accountId,
+      symbol: input.symbol,
+      side: input.side,
+      assetType: 'stock',
+    },
+  });
+  expect(posRes.status(), 'POST /positions').toBe(201);
+  const position = (await posRes.json()) as { id: string };
+
+  const entryRes = await req.post(`/api/positions/${position.id}/fills`, {
+    data: {
+      type: 'entry',
+      price: input.price,
+      quantity: input.quantity,
+      fees: '0.00',
+      filledAt: input.filledAt,
+    },
+  });
+  expect(entryRes.status(), 'POST entry fill').toBe(201);
+
+  const openRes = await req.post(`/api/positions/${position.id}/open`, {
+    data: { openedAt: input.filledAt },
+  });
+  expect(openRes.status(), 'POST /positions/:id/open').toBe(200);
+
+  return { positionId: position.id };
+}
+
+/** A further fill on an already-open position — a partial or full exit. */
+async function addExitFill(
+  req: APIRequestContext,
+  positionId: string,
+  input: { price: string; quantity: string; filledAt: string; fees?: string },
+): Promise<{ fillId: string }> {
+  const res = await req.post(`/api/positions/${positionId}/fills`, {
+    data: {
+      type: 'exit',
+      price: input.price,
+      quantity: input.quantity,
+      fees: input.fees ?? '0.00',
+      filledAt: input.filledAt,
+    },
+  });
+  expect(res.status(), 'POST exit fill').toBe(201);
+  const fill = (await res.json()) as { id: string };
+  return { fillId: fill.id };
+}
+
+/** Log in through the form. A unique forwarded IP keeps logins out of one bucket. */
+async function loginViaUi(page: Page, email: string): Promise<void> {
+  await page.setExtraHTTPHeaders({ 'X-Forwarded-For': uniqueIp() });
+  await page.goto('/login');
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(PASSWORD);
+  await page.getByRole('button', { name: 'Log in' }).click();
+  await expect(page).toHaveURL(/\/dashboard/);
+}
+
+const CURRENCY_OPTION_LABELS: Record<string, string> = {
+  CAD: 'CAD — Canadian Dollar',
+  USD: 'USD — US Dollar',
+};
+
+/**
+ * Create an account through the account dialog's own UI (task 14's
+ * restriction), driving the Tax treatment control rather than sending the
+ * field over the API. Exercises AC 1.5 on every call: the default selection,
+ * both items with their exact labels, and the helper text.
+ */
+async function createAccountViaUi(
+  page: Page,
+  input: { name: string; currency: 'CAD' | 'USD'; treatment?: 'taxable' | 'registered' },
+): Promise<void> {
+  await page.goto('/accounts');
+  await page.getByRole('button', { name: 'New Account' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'New Account' })).toBeVisible();
+
+  await dialog.getByLabel('Name').fill(input.name);
+
+  await dialog.locator('#currency').click();
+  await page.getByRole('option', { name: CURRENCY_OPTION_LABELS[input.currency] }).click();
+
+  await expect(dialog.locator('#taxTreatment')).toContainText('Taxable');
+  await dialog.locator('#taxTreatment').click();
+  await expect(page.getByRole('option', { name: 'Taxable', exact: true })).toBeVisible();
+  const registeredOption = page.getByRole('option', {
+    name: 'Registered (TFSA, RRSP, FHSA and similar)',
+  });
+  await expect(registeredOption).toBeVisible();
+  if (input.treatment === 'registered') {
+    await registeredOption.click();
+  } else {
+    await page.getByRole('option', { name: 'Taxable', exact: true }).click();
+  }
+  await expect(dialog.getByText('Only the Canadian tax summary uses this.')).toBeVisible();
+
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 }
 
 /**
@@ -933,5 +1057,350 @@ test.describe('Expenses-tax — CA default pooled ACB tax summary', () => {
       unpricedReason: null,
     });
     expect(body.acbMissingRates).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 8 — Task 14: the decomposition's end-to-end pooled-ACB scenario
+// (design Testing Strategy > End-to-End Testing; AC 1.5, 3.11, 4.8, 7.3, 8.1,
+// 9.1, 9.2)
+// ---------------------------------------------------------------------------
+
+test.describe('Expenses-tax — pooled ACB end-to-end (task 14)', () => {
+  test.beforeEach(async ({ page }) => {
+    await ensureStackOrSkip(page.request);
+  });
+
+  test('a sale in a multi-account pool, a registered repurchase flags as a superficial loss, and a missing CAD rate shows its notice', async ({
+    page,
+  }) => {
+    await registerUser(page.request, 'acb-pool');
+    await setTaxJurisdiction(page.request, 'CA');
+    await setDisplayCurrency(page.request, 'CAD');
+
+    // Three accounts, each through the account dialog's own Tax treatment
+    // control (AC 1.5) — A (CAD, taxable), B (USD, taxable) and a registered
+    // holding.
+    await createAccountViaUi(page, { name: 'A (CAD)', currency: 'CAD' });
+    await createAccountViaUi(page, { name: 'B (USD)', currency: 'USD' });
+    await createAccountViaUi(page, {
+      name: 'R (Registered)',
+      currency: 'CAD',
+      treatment: 'registered',
+    });
+
+    const accountsRes = await page.request.get('/api/accounts');
+    expect(accountsRes.status()).toBe(200);
+    const accounts = (await accountsRes.json()) as Array<{
+      id: string;
+      name: string;
+      taxTreatment: string;
+    }>;
+    const accountA = accounts.find((a) => a.name === 'A (CAD)')!;
+    const accountB = accounts.find((a) => a.name === 'B (USD)')!;
+    const accountR = accounts.find((a) => a.name === 'R (Registered)')!;
+    expect(accountA.taxTreatment).toBe('taxable');
+    expect(accountB.taxTreatment).toBe('taxable');
+    expect(accountR.taxTreatment).toBe('registered');
+
+    // --- AC 3.11 — the pooled ACB disposition across A, B and the
+    // registered holding. ---
+    await createExchangeRate(page.request, 'USD', 'CAD', '1.35', `${YEAR}-01-10`);
+
+    const posA = await createOpenPosition(page.request, {
+      accountId: accountA.id,
+      symbol: 'XYZ',
+      side: 'long',
+      price: '10.00',
+      quantity: '100',
+      filledAt: `${YEAR}-01-05T18:00:00.000Z`,
+    });
+    await createOpenPosition(page.request, {
+      accountId: accountB.id,
+      symbol: 'XYZ',
+      side: 'long',
+      price: '8.00',
+      quantity: '100',
+      filledAt: `${YEAR}-01-10T18:00:00.000Z`,
+    });
+    await createOpenPosition(page.request, {
+      accountId: accountR.id,
+      symbol: 'XYZ',
+      side: 'long',
+      price: '10.00',
+      quantity: '100',
+      filledAt: `${YEAR}-01-12T18:00:00.000Z`,
+    });
+    await addExitFill(page.request, posA.positionId, {
+      price: '12.00',
+      quantity: '50',
+      filledAt: `${YEAR}-01-20T18:00:00.000Z`,
+    });
+
+    // --- AC 7.3 — a loss sale in A, repurchased in the registered account R
+    // within 30 days. ---
+    const posLoss = await createOpenPosition(page.request, {
+      accountId: accountA.id,
+      symbol: 'LOSS1',
+      side: 'long',
+      price: '50.00',
+      quantity: '10',
+      filledAt: `${YEAR}-03-01T18:00:00.000Z`,
+    });
+    const lossExit = await addExitFill(page.request, posLoss.positionId, {
+      price: '40.00',
+      quantity: '10',
+      filledAt: `${YEAR}-03-10T18:00:00.000Z`,
+    });
+    await createOpenPosition(page.request, {
+      accountId: accountR.id,
+      symbol: 'LOSS1',
+      side: 'long',
+      price: '45.00',
+      quantity: '5',
+      filledAt: `${YEAR}-03-15T18:00:00.000Z`,
+    });
+
+    // --- AC 4.8 — a priced entry, then a USD exit with no CAD rate for its
+    // trade date. ---
+    await createExchangeRate(page.request, 'USD', 'CAD', '1.30', `${YEAR}-02-01`);
+    const posNoRate = await createOpenPosition(page.request, {
+      accountId: accountB.id,
+      symbol: 'NORATE',
+      side: 'long',
+      price: '20.00',
+      quantity: '10',
+      filledAt: `${YEAR}-02-01T18:00:00.000Z`,
+    });
+    await addExitFill(page.request, posNoRate.positionId, {
+      price: '25.00',
+      quantity: '10',
+      filledAt: `${YEAR}-02-15T18:00:00.000Z`,
+    });
+
+    // --- The figures through the response the page itself reads. ---
+    const summaryRes = await page.request.get(`/api/expenses/tax-summary?year=${YEAR}`);
+    expect(summaryRes.status()).toBe(200);
+    const summary = (await summaryRes.json()) as {
+      acbDispositions: Array<Record<string, unknown>>;
+      acbMissingRates: Array<{ currency: string; tradeDate: string }>;
+      flags: { superficialLosses: Array<Record<string, unknown>> };
+    };
+
+    const xyzRow = summary.acbDispositions.find((r) => r.symbol === 'XYZ');
+    expect(xyzRow).toMatchObject({
+      proceeds: '600.00',
+      acb: '520.00',
+      gain: '80.00',
+      unpricedReason: null,
+    });
+
+    const noRateRow = summary.acbDispositions.find((r) => r.symbol === 'NORATE');
+    expect(noRateRow).toMatchObject({
+      proceeds: null,
+      acb: null,
+      gain: null,
+      unpricedReason: 'missing_rate',
+    });
+    expect(summary.acbMissingRates).toEqual([{ currency: 'USD', tradeDate: `${YEAR}-02-15` }]);
+
+    const lossFlag = summary.flags.superficialLosses.find((f) => f.symbol === 'LOSS1');
+    expect(lossFlag).toMatchObject({
+      lossRowId: lossExit.fillId,
+      reason: 'repurchase_within_30_days',
+      lotEntryFillId: null,
+      lotOpenedAt: null,
+    });
+
+    // --- Through the real app: the notice and the flag render on the page. ---
+    await page.goto('/accounting/tax-summary');
+    await expect(page.getByRole('heading', { name: 'Tax Summary' })).toBeVisible();
+
+    const missingRateLink = page.getByRole('link', { name: `USD on ${YEAR}-02-15` });
+    await expect(missingRateLink).toBeVisible();
+    expect(await missingRateLink.getAttribute('href')).toBe('/settings/profile?base=USD&quote=CAD');
+
+    const superficialLossesSection = page.getByText(/^Superficial losses/);
+    await expect(superficialLossesSection).toBeVisible();
+    await superficialLossesSection.click();
+    const flagsTable = page
+      .getByRole('table')
+      .filter({ has: page.getByRole('columnheader', { name: 'Reason' }) });
+    await expect(flagsTable.getByRole('row').filter({ hasText: 'LOSS1' })).toContainText(
+      'Repurchase within 30 days',
+    );
+  });
+
+  test("a US user's figures for the same fills are unchanged by account tax treatment", async ({
+    page,
+  }) => {
+    await registerUser(page.request, 'acb-us');
+    await setTaxJurisdiction(page.request, 'US');
+    await setDisplayCurrency(page.request, 'USD');
+
+    await createAccountViaUi(page, { name: 'US Taxable', currency: 'USD' });
+    await createAccountViaUi(page, {
+      name: 'US Registered',
+      currency: 'USD',
+      treatment: 'registered',
+    });
+
+    const accountsRes = await page.request.get('/api/accounts');
+    const accounts = (await accountsRes.json()) as Array<{ id: string; name: string }>;
+    const taxableAccount = accounts.find((a) => a.name === 'US Taxable')!;
+    const registeredAccount = accounts.find((a) => a.name === 'US Registered')!;
+
+    await createClosedPosition(page.request, {
+      accountId: taxableAccount.id,
+      symbol: 'USFIG',
+      side: 'long',
+      entryPrice: '10.00',
+      exitPrice: '12.00',
+      quantity: '50',
+      entryAt: `${YEAR}-01-05T18:00:00.000Z`,
+      exitAt: `${YEAR}-01-20T18:00:00.000Z`,
+      fees: '0.00',
+    });
+
+    const beforeRes = await page.request.get(`/api/expenses/tax-summary?year=${YEAR}`);
+    const before = (await beforeRes.json()) as { realisedPnl: { total: string } };
+    expect(before.realisedPnl.total).toBe('100.00');
+
+    // A registered account's own closed position changes the US total — a
+    // treatment the pooled ACB path would exclude, but US figures ignore the
+    // field entirely (AC 8.1).
+    await createClosedPosition(page.request, {
+      accountId: registeredAccount.id,
+      symbol: 'USFIG',
+      side: 'long',
+      entryPrice: '100.00',
+      exitPrice: '50.00',
+      quantity: '1',
+      entryAt: `${YEAR}-02-01T18:00:00.000Z`,
+      exitAt: `${YEAR}-02-10T18:00:00.000Z`,
+      fees: '0.00',
+    });
+
+    const afterRes = await page.request.get(`/api/expenses/tax-summary?year=${YEAR}`);
+    const after = (await afterRes.json()) as {
+      realisedPnl: { total: string };
+      acbDispositions: unknown[];
+      acbMissingRates: unknown[];
+    };
+    expect(after.realisedPnl.total).toBe('50.00');
+    expect(after.acbDispositions).toEqual([]);
+    expect(after.acbMissingRates).toEqual([]);
+  });
+
+  test('export then import restores account tax treatments and the CA tax summary equals', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+
+    await registerUser(page.request, 'acb-export');
+    await setTaxJurisdiction(page.request, 'CA');
+
+    await createAccountViaUi(page, { name: 'Export Taxable', currency: 'CAD' });
+    await createAccountViaUi(page, {
+      name: 'Export Registered',
+      currency: 'CAD',
+      treatment: 'registered',
+    });
+
+    const sourceAccountsRes = await page.request.get('/api/accounts');
+    const sourceAccounts = (await sourceAccountsRes.json()) as Array<{
+      id: string;
+      name: string;
+    }>;
+    const taxableId = sourceAccounts.find((a) => a.name === 'Export Taxable')!.id;
+    const registeredId = sourceAccounts.find((a) => a.name === 'Export Registered')!.id;
+
+    const pos = await createOpenPosition(page.request, {
+      accountId: taxableId,
+      symbol: 'EXPORT1',
+      side: 'long',
+      price: '10.00',
+      quantity: '10',
+      filledAt: `${YEAR}-04-01T18:00:00.000Z`,
+    });
+    await addExitFill(page.request, pos.positionId, {
+      price: '15.00',
+      quantity: '10',
+      filledAt: `${YEAR}-04-10T18:00:00.000Z`,
+    });
+    await createOpenPosition(page.request, {
+      accountId: registeredId,
+      symbol: 'EXPORT1',
+      side: 'long',
+      price: '10.00',
+      quantity: '5',
+      filledAt: `${YEAR}-04-05T18:00:00.000Z`,
+    });
+
+    const sourceSummaryRes = await page.request.get(`/api/expenses/tax-summary?year=${YEAR}`);
+    const sourceSummary = (await sourceSummaryRes.json()) as {
+      acbDispositions: Array<Record<string, unknown>>;
+      acbMissingRates: unknown[];
+      realisedPnl: { total: string };
+    };
+    expect(sourceSummary.acbDispositions).toHaveLength(1);
+
+    // --- Export through the browser (the Data settings tab). ---
+    await page.goto('/settings/data');
+    await expect(page.getByRole('heading', { name: 'Data', exact: true })).toBeVisible();
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export data' }).click();
+    const download = await downloadPromise;
+    const archivePath = join(tmpdir(), `tradr-e2e-acb-export-${process.pid}-${Date.now()}.zip`);
+    await download.saveAs(archivePath);
+
+    // --- A second, empty user imports it. ---
+    const userB = await registerUser(page.request, 'acb-import');
+    await page.context().clearCookies();
+    await loginViaUi(page, userB.email);
+    await setTaxJurisdiction(page.request, 'CA');
+
+    await page.goto('/settings/data');
+    await page.locator('#import-archive-file').setInputFiles(archivePath);
+    const preview = page.locator('[data-slot="import-preview"]');
+    await expect(preview).toBeVisible();
+    await page.getByRole('button', { name: 'Import this archive' }).click();
+    const confirmDialog = page.locator('[data-slot="import-confirm-dialog"]');
+    await expect(confirmDialog).toBeVisible();
+    await confirmDialog.getByRole('button', { name: 'Import data' }).click();
+    const result = page.locator('[data-slot="import-result"]');
+    await expect(result).toBeVisible({ timeout: 30_000 });
+    await expect(result.getByText('Import complete')).toBeVisible();
+
+    // --- AC 9.1/9.2 — treatments restored, and the imported tax summary
+    // equals the exported one for the same year. ---
+    const importedAccountsRes = await page.request.get('/api/accounts');
+    const importedAccounts = (await importedAccountsRes.json()) as Array<{
+      name: string;
+      taxTreatment: string;
+    }>;
+    expect(importedAccounts.find((a) => a.name === 'Export Taxable')?.taxTreatment).toBe('taxable');
+    expect(importedAccounts.find((a) => a.name === 'Export Registered')?.taxTreatment).toBe(
+      'registered',
+    );
+
+    const importedSummaryRes = await page.request.get(`/api/expenses/tax-summary?year=${YEAR}`);
+    const importedSummary = (await importedSummaryRes.json()) as {
+      acbDispositions: Array<Record<string, unknown>>;
+      acbMissingRates: unknown[];
+      realisedPnl: { total: string };
+    };
+    expect(importedSummary.acbMissingRates).toEqual(sourceSummary.acbMissingRates);
+    expect(importedSummary.realisedPnl.total).toBe(sourceSummary.realisedPnl.total);
+    expect(importedSummary.acbDispositions).toHaveLength(1);
+    const idFields = ['exitFillId', 'positionId', 'accountId'];
+    const stripIds = (row: Record<string, unknown>) => {
+      const rest = { ...row };
+      for (const key of idFields) delete rest[key];
+      return rest;
+    };
+    expect(stripIds(importedSummary.acbDispositions[0])).toEqual(
+      stripIds(sourceSummary.acbDispositions[0]),
+    );
   });
 });
