@@ -601,6 +601,26 @@ describe('transfer-link routes', () => {
     expect(posBAfter).toEqual(posBBefore);
   });
 
+  it('404s when the path fillId is an entry fill, not an exit (AC 6.1)', async () => {
+    const { entryB, cookie } = await setupLinkablePair();
+    const stray = await createOwnEntryAndExit(cookie);
+
+    // The path fillId must be an exit of its position; here it names an entry,
+    // so the link write refuses it like the GET route does.
+    const res = await authedRequest('PUT', linkPath(stray.pos.id, stray.entry.id), cookie, {
+      entryFillId: entryB.id,
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error.code).toBe('NOT_FOUND');
+
+    const rows = await db
+      .select()
+      .from(fillTransferLinks)
+      .where(eq(fillTransferLinks.exitFillId, stray.entry.id));
+    expect(rows).toHaveLength(0);
+  });
+
   it('404s when the position belongs to another user', async () => {
     const { posA, exitA } = await setupLinkablePair();
     const { cookie: cookieB } = await registerAndGetCookie();
