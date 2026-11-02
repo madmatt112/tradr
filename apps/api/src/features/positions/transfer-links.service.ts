@@ -83,7 +83,9 @@ export async function setTransferLink(
     const entryPosition = lockedById.get(entryInfo.positionId)!;
 
     const exitFillRows = await findFillInPosition(tx, fillId, positionId);
-    if (exitFillRows.length === 0) throw new NotFoundError('Fill', fillId);
+    if (exitFillRows.length === 0 || exitFillRows[0].type !== 'exit') {
+      throw new NotFoundError('Fill', fillId);
+    }
     const exitFill = exitFillRows[0];
 
     if (exitPosition.account_id === entryPosition.account_id) {
