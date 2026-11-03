@@ -19,9 +19,11 @@
 //     performance` command — Vitest's native `bench()` API requires
 //     `vitest bench` mode, which the harness does not wire). The wall-clock
 //     budgets per scenario are documented in comments above each `it()` block.
-//   - For Scenarios 2 and 3 the bench also runs an `EXPLAIN ANALYZE` once
-//     during fixture setup and asserts the planner picked the expected
-//     indexes (no `Seq Scan` on `fills`/`positions`/`ledger_entries`).
+//   - For Scenario 3 the bench also runs an `EXPLAIN ANALYZE` once during
+//     fixture setup and asserts the planner picked the expected index (no
+//     `Seq Scan` on `ledger_entries`). Scenario 2's EXPLAIN ANALYZE is
+//     printed for evidence only — the planner correctly seq-scans `fills`/
+//     `positions` at that scenario's row count, so no plan is asserted.
 
 import { pipeline } from 'node:stream/promises';
 
@@ -597,10 +599,13 @@ describe('expenses bench — LIST 500 rows', () => {
 // Scenario 2 — Fee rollup
 // Budget: < 200 ms wall clock for `GET /api/expenses/fee-rollup?year=YYYY`
 // over 50 accounts × 10k fills/year (= 500k `fills` rows for the year).
-// Plan assertion: NO `Seq Scan on fills` and NO `Seq Scan on positions`.
+// No plan assertion on `fills`/`positions`: the year window keeps about 98%
+// of `fills`, and the same `Seq Scan` plan held at 1af0b7a with no candidate
+// index changing it (design M6, M7) — a selective window must not seq-scan,
+// and this one isn't selective. The EXPLAIN below is printed for evidence.
 // ---------------------------------------------------------------------------
 describe('expenses bench — fee-rollup 500k fills', () => {
-  it(`p95 < ${FEE_ROLLUP_BUDGET_MS}ms with index scans on fills + positions`, async () => {
+  it(`p95 < ${FEE_ROLLUP_BUDGET_MS}ms`, async () => {
     await benchSql.unsafe('VACUUM ANALYZE fills');
     await benchSql.unsafe('VACUUM ANALYZE positions');
     await benchSql.unsafe('VACUUM ANALYZE accounts');
@@ -627,11 +632,12 @@ describe('expenses bench — fee-rollup 500k fills', () => {
         GROUP BY accounts.id, accounts.name, positions.asset_type, accounts.currency
       `);
     const plan = parseExplain(explainRows as Array<Record<string, unknown>>);
-    assertNoSeqScanOn(plan, 'fills');
-    assertNoSeqScanOn(plan, 'positions');
-    // Defensive: confirm the expected indexes appear somewhere in the plan.
-    // (At 500k rows the planner may pick a hash join over an index-driven
-    //  nested-loop; what matters is "not a Seq Scan on fills/positions".)
+    // No assertion here: the same plan seq-scans at 1af0b7a, the year window
+    // keeps about 98% of `fills`, and no candidate index changed it (design
+    // M6, M7). A selective window must not seq-scan; this window isn't
+    // selective, so `Seq Scan on fills`/`positions` is the correct plan at
+    // this row count, not a regression.
+    console.log(`[bench] fee-rollup 500k — plan:\n${plan.text}`);
 
     const path = `/api/expenses/fee-rollup?year=${TARGET_YEAR}`;
     const headers = { Cookie: `session=${feeRollupSessionCookie}` };
