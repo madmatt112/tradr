@@ -65,6 +65,12 @@ function missingKey(pair: MissingCadRate): string {
   return `${pair.currency}|${pair.tradeDate}`;
 }
 
+// One Intl.DateTimeFormat per distinct timezone, reused across every call in
+// the process — construction is the measured ~800ms-per-request cost (design
+// C3, M2, M3). An invalid zone throws before it would be cached, so it throws
+// on every call, not just the first.
+const tradeDateFormatters = new Map<string, Intl.DateTimeFormat>();
+
 /**
  * Zone-local calendar date for a fill's trade date, same formula as
  * `zonedDateKey` (apps/api/src/features/positions/positions.service.ts:84-91).
@@ -72,12 +78,17 @@ function missingKey(pair: MissingCadRate): string {
  * midnight in a non-UTC market timezone (design C3 post-condition 1, AC 4.2).
  */
 export function tradeDateKey(at: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(at);
+  let formatter = tradeDateFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    tradeDateFormatters.set(timeZone, formatter);
+  }
+  return formatter.format(at);
 }
 
 /**

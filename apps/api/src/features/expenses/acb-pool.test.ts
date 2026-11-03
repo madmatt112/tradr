@@ -188,6 +188,29 @@ describe('tradeDateKey', () => {
     expect(tradeDateKey(at, 'America/New_York')).toBe('2026-03-02');
     expect(tradeDateKey(at, 'UTC')).toBe('2026-03-03');
   });
+
+  it("returns each zone's own local date across interleaved and repeated calls (design C3)", () => {
+    const earlyUtc = new Date('2026-03-03T02:30:00Z');
+    const lateUtc = new Date('2026-03-03T11:00:00Z');
+
+    expect(tradeDateKey(earlyUtc, 'UTC')).toBe('2026-03-03');
+    expect(tradeDateKey(earlyUtc, 'America/Toronto')).toBe('2026-03-02');
+    expect(tradeDateKey(earlyUtc, 'Pacific/Kiritimati')).toBe('2026-03-03');
+    expect(tradeDateKey(lateUtc, 'UTC')).toBe('2026-03-03');
+    expect(tradeDateKey(lateUtc, 'America/Toronto')).toBe('2026-03-03');
+    expect(tradeDateKey(lateUtc, 'Pacific/Kiritimati')).toBe('2026-03-04');
+
+    // Repeat each zone a second time, now served from the cached formatter.
+    expect(tradeDateKey(earlyUtc, 'UTC')).toBe('2026-03-03');
+    expect(tradeDateKey(earlyUtc, 'America/Toronto')).toBe('2026-03-02');
+    expect(tradeDateKey(earlyUtc, 'Pacific/Kiritimati')).toBe('2026-03-03');
+  });
+
+  it('throws RangeError on an invalid zone, on every call, caching nothing (design C3 post-condition 3)', () => {
+    const at = new Date('2026-03-03T02:30:00Z');
+    expect(() => tradeDateKey(at, 'Not/A_Zone')).toThrow(RangeError);
+    expect(() => tradeDateKey(at, 'Not/A_Zone')).toThrow(RangeError);
+  });
 });
 
 // ---------------------------------------------------------------------------
