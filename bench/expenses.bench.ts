@@ -30,6 +30,8 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import type { TaxSummaryResponse } from '@tradr/shared';
+
 import app, { bootstrap } from '@/app';
 import { runMigrations, runPostMigrations } from '@/db/migrate';
 import * as schema from '@/db/schema';
@@ -149,6 +151,88 @@ function assertContains(check: ExplainCheck, fragment: string): void {
     throw new Error(`EXPLAIN plan does not contain "${fragment}".\nFull plan:\n${check.text}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// CA figures digest (design C2, AC 3.2) — proves the CA tax figures over the
+// bench's large history do not change. Money fields are fixed two-decimal
+// strings (`expenses.service.ts:635`); sums run on BigInt minor units, never
+// a JS number, so the digest can't drift from float rounding (design D6).
+// ---------------------------------------------------------------------------
+interface CaFiguresDigest {
+  realisedCad: string;
+  dispositionCount: number;
+  unpricedCounts: {
+    priced: number;
+    missing_rate: number;
+    pool_unpriced: number;
+    insufficient_pool: number;
+  };
+  pricedGainSum: string;
+  superficialLossCount: number;
+  acbMissingRatesCount: number;
+}
+
+function parseMoneyMinorUnits(value: string): bigint {
+  const match = /^(-?)(\d+)\.(\d{2})$/.exec(value);
+  if (!match) throw new Error(`unexpected money format: ${value}`);
+  const [, sign, wholePart, fracPart] = match;
+  const magnitude = BigInt(wholePart) * 100n + BigInt(fracPart);
+  return sign === '-' ? -magnitude : magnitude;
+}
+
+function formatMoneyMinorUnits(minorUnits: bigint): string {
+  const sign = minorUnits < 0n ? '-' : '';
+  const abs = minorUnits < 0n ? -minorUnits : minorUnits;
+  const wholePart = abs / 100n;
+  const fracPart = abs % 100n;
+  return `${sign}${wholePart}.${fracPart.toString().padStart(2, '0')}`;
+}
+
+function caFiguresDigest(body: TaxSummaryResponse): CaFiguresDigest {
+  const realisedCad =
+    body.realisedPnl.perCurrency.find((row) => row.currency === 'CAD')?.amount ?? '0.00';
+
+  const unpricedCounts = {
+    priced: 0,
+    missing_rate: 0,
+    pool_unpriced: 0,
+    insufficient_pool: 0,
+  };
+  let pricedGainSumMinorUnits = 0n;
+  for (const row of body.acbDispositions) {
+    if (row.unpricedReason === null) {
+      unpricedCounts.priced++;
+      if (row.gain !== null) pricedGainSumMinorUnits += parseMoneyMinorUnits(row.gain);
+    } else {
+      unpricedCounts[row.unpricedReason]++;
+    }
+  }
+
+  return {
+    realisedCad,
+    dispositionCount: body.acbDispositions.length,
+    unpricedCounts,
+    pricedGainSum: formatMoneyMinorUnits(pricedGainSumMinorUnits),
+    superficialLossCount: body.flags.superficialLosses.length,
+    acbMissingRatesCount: body.acbMissingRates.length,
+  };
+}
+
+// Captured at base (see Implementation Log task 2) on two separate full bench
+// runs before C3 lands (design D8, AC 3.2).
+const CA_FIGURES_DIGEST_AT_BASE: CaFiguresDigest = {
+  realisedCad: '-6648.76',
+  dispositionCount: 1000,
+  unpricedCounts: {
+    priced: 1000,
+    missing_rate: 0,
+    pool_unpriced: 0,
+    insufficient_pool: 0,
+  },
+  pricedGainSum: '-6648.76',
+  superficialLossCount: 328,
+  acbMissingRatesCount: 0,
+};
 
 // ---------------------------------------------------------------------------
 // Bench DB lifecycle
@@ -800,10 +884,11 @@ describe('expenses bench — CA ACB pool, 5-year history', () => {
     }
 
     const samples: number[] = [];
+    let lastBody: TaxSummaryResponse | undefined;
     for (let i = 0; i < N_ITERATIONS; i++) {
       const t0 = nowMs();
       const res = await app.request(path, { headers });
-      await res.json();
+      lastBody = (await res.json()) as TaxSummaryResponse;
       samples.push(nowMs() - t0);
       if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     }
@@ -813,5 +898,9 @@ describe('expenses bench — CA ACB pool, 5-year history', () => {
       `[bench] CA ACB pool 5yr — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
     );
     expect(stats.p95).toBeLessThan(CA_ACB_BUDGET_MS);
+
+    const digest = caFiguresDigest(lastBody!);
+    console.log(`[bench] CA figures digest: ${JSON.stringify(digest)}`);
+    expect(digest).toEqual(CA_FIGURES_DIGEST_AT_BASE);
   }, 600_000);
 });
