@@ -38,7 +38,7 @@ import {
 import { matchExitsToLots, orderFills, availableByLot } from './lots';
 import type { LotConflict, LotFill, LotSlice } from './lots';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
-import type { FillTotals } from './pnl';
+import { assembleListEntries, buildGroupEntry } from './position-group-entries';
 import { findPositionImagesByPosition } from './position-images.query';
 import {
   insertPosition,
@@ -482,112 +482,19 @@ export async function listPositions(
   filters?: { status?: string; accountId?: string; tag?: string[]; classification?: string },
 ) {
   const rows = await findPositionListByUser(db, userId, filters);
+  return assembleListEntries(rows as RawRow[], filters ?? {});
+}
 
-  const mapped = (rows as RawRow[]).map((row) => {
-    const totals: FillTotals = {
-      entryQty: String(row.entry_qty),
-      exitQty: String(row.exit_qty),
-      entryCost: String(row.entry_cost),
-      exitCost: String(row.exit_cost),
-      entryFees: String(row.entry_fees),
-      exitFees: String(row.exit_fees),
-    };
-
-    const currencyMinorUnits = getCurrencyMinorUnits(row.account_currency);
-    const pnl = computePnlFromTotals(
-      totals,
-      row.side as 'long' | 'short',
-      row.asset_type as 'stock' | 'option',
-      currencyMinorUnits,
-    );
-
-    const brokerageName: string | null = row.brokerage_name ?? null;
-
-    // Net realized P&L is `computePnlFromTotals`, full stop — it has ALREADY
-    // subtracted `exitFees` and the pro-rated `allocatedEntryFees` recorded on
-    // the fills.
-    //
-    // This previously did `pnl.realizedPnl − calculateFees(feeSchedule)`, under
-    // the local name `grossPnl`. That name was the bug: the value is not gross,
-    // so the schedule was being subtracted a SECOND time on top of fees already
-    // stored on the fills. A brokerage fee schedule is an entry-time convenience
-    // (FillDialog computes the fee from it as the user types, overridable, and
-    // stores the result on `fills.fees`); it is not a reporting input, and
-    // re-applying it at read time double-counts.
-    const netPnl = pnl.realizedPnl;
-    const grossPnl = pnl.grossPnl;
-    // Fees actually recorded on the fills, not a schedule estimate.
-    const brokerageFees = pnl.fees ?? 0;
-
-    // Winning/losing/breakeven from the SAME formula the performance endpoint
-    // uses (classifyPosition rounds to currency minor units, then compares to
-    // zero — R9/R10). Only a closed row with a computed net P&L carries one.
-    const classification =
-      row.status === 'closed' && netPnl !== null
-        ? classifyPosition(new Decimal(netPnl), row.account_currency)
-        : null;
-
-    // Trade-plan fields & R/R (R14). `target_price`/`stop_loss` arrive via
-    // `p.*` as raw Drizzle numeric strings — pass them straight into
-    // computeRiskReward (numeric rule: no parseFloat/Number). The response
-    // fields are numbers, so convert the strings via decimal.js.
-    const targetPriceRaw: string | null = row.target_price ?? null;
-    const stopLossRaw: string | null = row.stop_loss ?? null;
-    const { targetRR, actualRR } = computeRiskReward({
-      avgEntryPrice: pnl.avgEntryPrice,
-      avgExitPrice: pnl.avgExitPrice,
-      side: row.side as 'long' | 'short',
-      targetPrice: targetPriceRaw,
-      stopLoss: stopLossRaw,
-    });
-
-    return {
-      id: row.id,
-      userId: row.user_id,
-      accountId: row.account_id,
-      symbol: row.symbol,
-      side: row.side,
-      assetType: row.asset_type,
-      status: row.status,
-      notes: row.notes,
-      openedAt: row.opened_at,
-      closedAt: row.closed_at,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      accountName: row.account_name,
-      accountCurrency: row.account_currency,
-      accountTimezone: row.account_timezone,
-      // Tags ordered category-then-name by the LATERAL's `array_position`; `[]`
-      // when the position carries none (design decision 7: tags never touch
-      // `updated_at`, so they ride the read paths only).
-      tags: row.tags ?? [],
-      classification,
-      ...pnl,
-      brokerageName,
-      grossPnl,
-      brokerageFees,
-      netPnl,
-      targetPrice: targetPriceRaw === null ? null : new Decimal(targetPriceRaw).toNumber(),
-      stopLoss: stopLossRaw === null ? null : new Decimal(stopLossRaw).toNumber(),
-      targetRR,
-      actualRR,
-      openUnits: pnl.totalEntryQuantity - pnl.totalExitQuantity,
-      closedUnits: pnl.totalExitQuantity,
-      openCostBasis: computeOpenCostBasis(
-        totals,
-        row.side as 'long' | 'short',
-        row.asset_type as 'stock' | 'option',
-        currencyMinorUnits,
-      ),
-    };
-  });
-
-  // Classification filter (DD10): applied in JS over each row's own computed
-  // field, never re-derived in SQL. `findPositionListByUser` has already
-  // narrowed to closed rows when no explicit status was given.
-  return filters?.classification
-    ? mapped.filter((p) => p.classification === filters.classification)
-    : mapped;
+/**
+ * One user's group entry by id, or null when the group has no legs left
+ * (e.g. concurrently deleted). Reuses `findPositionListByUser`'s `groupId`
+ * filter — no separate query — so a group read and the list read share one
+ * row shape and one derivation (`buildGroupEntry`, design C6).
+ */
+export async function getPositionGroupEntry(db: Database, userId: string, groupId: string) {
+  const rows = await findPositionListByUser(db, userId, { groupId });
+  if (rows.length === 0) return null;
+  return buildGroupEntry(groupId, rows as RawRow[]);
 }
 
 export async function getPositionDetail(db: Database, id: string, userId: string) {
@@ -655,6 +562,11 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   // (Requirement 6.1). Scoring never fails the read — a throw returns unscored.
   const compliance = await getPositionCompliance(db, userId, position.id, position.status);
 
+  // The group this position is a leg of, if any (design C6). `null` when the
+  // position carries no group, so the `group` key below is added only when
+  // it has a value — same convention as `compliance` above.
+  const group = position.groupId ? await getPositionGroupEntry(db, userId, position.groupId) : null;
+
   // Stored selections for this position's fills (design C6, Requirement 3.14):
   // one query for the whole detail read, not one per fill. Grouped by exit
   // fill id so each fill below picks up its own array, or null for an entry
@@ -703,7 +615,8 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     ),
   };
 
-  return compliance === undefined ? detail : { ...detail, compliance };
+  const withCompliance = compliance === undefined ? detail : { ...detail, compliance };
+  return group === null ? withCompliance : { ...withCompliance, group };
 }
 
 /**

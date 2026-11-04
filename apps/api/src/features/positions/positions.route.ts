@@ -108,11 +108,16 @@ positions.post('/', validate('json', CreatePositionSchema), async (c) => {
  *   get:
  *     summary: List the user's positions.
  *     description: >
- *       Authed. Returns the user's positions (newest first), each carrying its
- *       `tags` array ordered by category then case-insensitive name and its
+ *       Authed. Returns the user's positions and multi-leg groups (newest first,
+ *       one entry per group — no per-group query), each carrying its `tags`
+ *       array ordered by category then case-insensitive name and its
  *       `classification` (`winning`, `losing` or `breakeven` for a closed
- *       position, `null` for a draft or open one). Optional filters may be
- *       combined.
+ *       position or group, `null` otherwise). A grouped entry carries
+ *       `kind: "group"`, its legs (each shaped like an ungrouped item), and
+ *       group-level figures (`label`, `detectedLabel`, `netEntry`, `maxLoss`);
+ *       an ungrouped entry carries no `kind` key. `status`, `classification`
+ *       and `tag` filters match a group's own derived fields, not any one
+ *       leg's. Optional filters may be combined.
  *     tags: [Positions]
  *     parameters:
  *       - in: query
@@ -161,6 +166,9 @@ positions.get('/', validate('query', ListQuerySchema), async (c) => {
  *       `compliance` object (live rule score: `finality`, `score`, `status` and
  *       one `entries` element per applicable enabled rule) only when the user
  *       holds at least one trading rule, and omits the field when they hold none.
+ *       Carries a `group` object (the multi-leg group this position is a leg
+ *       of, with its other legs) only when the position belongs to one, and
+ *       omits the field for an ungrouped position.
  *     tags: [Positions]
  *     parameters:
  *       - in: path
