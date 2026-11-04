@@ -135,14 +135,14 @@ async function scoreComplianceStatuses(
 ): Promise<void> {
   if (population.length === 0) return;
 
+  // design C8: a group entry scores from its legs' own ids — never the
+  // synthetic group id, which `scorePosition` has no context for and throws
+  // on. An ungrouped entry falls back to its own id.
+  const legIdsOf = (p: BreakdownPosition): string[] => p.legIds ?? [p.id];
+
   try {
     const data = await db.transaction(
-      async (tx) =>
-        loadScoringData(
-          tx,
-          userId,
-          population.map((p) => p.id),
-        ),
+      async (tx) => loadScoringData(tx, userId, population.flatMap(legIdsOf)),
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );
 
@@ -157,7 +157,14 @@ async function scoreComplianceStatuses(
       if (Date.now() - startTime > SCORING_TIMEOUT_MS) throw new TimeoutError();
       if (abortSignal.reason instanceof TimeoutError) throw abortSignal.reason;
 
-      population[i]!.compliance = scorePosition(ctx, population[i]!.id).status;
+      // design C8: fold a group's legs — non-compliant beats compliant beats
+      // unscored.
+      const statuses = legIdsOf(population[i]!).map((legId) => scorePosition(ctx, legId).status);
+      population[i]!.compliance = statuses.includes('non_compliant')
+        ? 'non_compliant'
+        : statuses.includes('compliant')
+          ? 'compliant'
+          : 'unscored';
 
       if ((i + 1) % SCORING_CHUNK_SIZE === 0) {
         await new Promise<void>((resolve) => setImmediate(resolve));

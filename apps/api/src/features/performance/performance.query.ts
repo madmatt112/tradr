@@ -231,29 +231,46 @@ export async function fetchHistoryMetadata(
     -- Currency DISCOVERY must include positions that have realized P&L without
     -- being flat: a user whose only activity is partial exits has zero closed
     -- positions, and keying the currency list on closed_full_supported alone
-    -- would return no currencies at all — hiding bucket-B data entirely.
-    -- The historyRange aggregates below stay closed-only (they describe closed
-    -- positions), hence the FILTER clauses.
-    realized_full_supported AS (
-      SELECT p.id, p.closed_at, a.currency,
-             (p.status = 'closed' AND p.closed_at IS NOT NULL) AS is_flat
+    -- would return no currencies at all — hiding bucket-B data entirely. This
+    -- stays row-level (D10): one leg's own exit or close discovers the
+    -- currency regardless of whether that leg's group ever goes flat.
+    realized_rows AS (
+      SELECT p.id, p.group_id, p.closed_at, a.currency,
+             (p.status = 'closed' AND p.closed_at IS NOT NULL) AS is_row_flat,
+             EXISTS (
+               SELECT 1 FROM fills f WHERE f.position_id = p.id AND f.type = 'exit'
+             ) AS has_exit
       FROM positions p
       JOIN accounts a ON a.id = p.account_id AND a.user_id = p.user_id
       WHERE p.user_id = ${userId}
         AND a.currency = ANY(${supported}::text[])
-        AND (
-          (p.status = 'closed' AND p.closed_at IS NOT NULL)
-          OR EXISTS (SELECT 1 FROM fills f WHERE f.position_id = p.id AND f.type = 'exit')
-        )
+    ),
+    realized_full_supported AS (
+      SELECT DISTINCT currency FROM realized_rows WHERE is_row_flat OR has_exit
+    ),
+    -- The historyRange aggregates below stay closed-unit-only (AC 5.9, design
+    -- C8): the unit is COALESCE(group_id, id), aggregated over EVERY row
+    -- (open or closed) so a group's still-open leg vetoes the unit's is_flat
+    -- — a row-level filter would silently drop that leg before the bool_and
+    -- ever saw it, letting the rest of the group look flat on its own.
+    realized_units AS (
+      SELECT
+        COALESCE(group_id, id)                    AS unit_id,
+        currency,
+        bool_and(is_row_flat)                      AS is_flat,
+        MAX(closed_at) FILTER (WHERE is_row_flat)  AS closed_at
+      FROM realized_rows
+      GROUP BY COALESCE(group_id, id), currency
     ),
     per_currency AS (
       SELECT
-        currency,
-        MIN(closed_at) FILTER (WHERE is_flat)  AS earliest_closed_at,
-        MAX(closed_at) FILTER (WHERE is_flat)  AS most_recent_closed_at,
-        COUNT(*)       FILTER (WHERE is_flat)  AS total_closed_positions
-      FROM realized_full_supported
-      GROUP BY currency
+        r.currency,
+        MIN(u.closed_at) FILTER (WHERE u.is_flat)  AS earliest_closed_at,
+        MAX(u.closed_at) FILTER (WHERE u.is_flat)  AS most_recent_closed_at,
+        COUNT(*)         FILTER (WHERE u.is_flat)  AS total_closed_positions
+      FROM realized_full_supported r
+      LEFT JOIN realized_units u ON u.currency = r.currency
+      GROUP BY r.currency
     ),
     any_accounts AS (
       SELECT EXISTS (SELECT 1 FROM accounts WHERE user_id = ${userId}) AS has
