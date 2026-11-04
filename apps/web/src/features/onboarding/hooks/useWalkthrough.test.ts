@@ -374,6 +374,7 @@ describe('useWalkthrough — start and exit', () => {
   it('opens a set that needs a position on a group’s first open leg, not the group id', async () => {
     positions = [
       {
+        kind: 'group',
         id: 'group-1',
         status: 'open',
         legs: [

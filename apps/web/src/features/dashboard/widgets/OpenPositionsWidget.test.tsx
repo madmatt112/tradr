@@ -25,6 +25,12 @@ vi.mock('@/features/positions/components/PositionRowActions', () => ({
   PositionRowActions: () => null,
 }));
 
+// Same reason: PositionGroupRowActions pulls in useCloseGroup (useQueryClient)
+// through CloseGroupDialog, and there is no QueryClientProvider here.
+vi.mock('@/features/positions/components/PositionGroupRowActions', () => ({
+  PositionGroupRowActions: () => null,
+}));
+
 // Stub TanStack Router: <Link> becomes a plain anchor so href / text are
 // inspectable without a router context, and useNavigate is a no-op (no row is
 // clicked in these tests).

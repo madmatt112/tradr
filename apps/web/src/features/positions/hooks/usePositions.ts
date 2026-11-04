@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
-import type { CreatePositionInput, Position, PositionListItem } from '@tradr/shared';
+import type { CreatePositionInput, Position, PositionListEntry } from '@tradr/shared';
 
 import { billingKeys } from '@/features/billing/useWalletBalance';
 import { api, isUnauthorized } from '@/lib/api';
@@ -68,7 +68,7 @@ export function positionsListQuery(filters?: {
 
   return queryOptions({
     queryKey: ['positions', 'list', filters],
-    queryFn: () => api.get<PositionListItem[]>(`/positions${query ? `?${query}` : ''}`),
+    queryFn: () => api.get<PositionListEntry[]>(`/positions${query ? `?${query}` : ''}`),
   });
 }
 

@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { useDrawerStore } from '@/stores/drawer.store';
 
 import { usePositions } from '../hooks/usePositions';
+import { flattenEntries } from '../utils/listEntries';
 import { buildListFilters } from '../utils/listFilters';
 import { decodeOptionContract } from '../utils/optionContract';
 import { positionAgeDays } from '../utils/positionAge';
@@ -54,7 +55,11 @@ export function PositionList() {
   const filters = buildListFilters(search);
   const [dialogOpen, setDialogOpen] = useState(false);
   const { data: accounts } = useAccounts();
-  const { data: positions, isLoading } = usePositions(filters);
+  const { data: rawPositions, isLoading } = usePositions(filters);
+  // Bridge (design C12/C14): task 16 replaces this with group-aware row
+  // rendering. Until then, a group flattens into its legs so the table keeps
+  // rendering `PositionListItem` rows.
+  const positions = rawPositions ? flattenEntries(rawPositions) : rawPositions;
   const tagsQuery = useTags();
   const selectedTagIds = filters?.tag ?? [];
   const inspectPosition = useDrawerStore((s) => s.inspectPosition);

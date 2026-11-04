@@ -6,6 +6,7 @@ import type { PositionListItem } from '@tradr/shared';
 import { Numeric } from '@/components/Numeric';
 import { Alert } from '@/components/ui/alert';
 import { usePositions } from '@/features/positions/hooks/usePositions';
+import { firstOpenLegId, isGroupEntry } from '@/features/positions/utils/listEntries';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useDrawerStore } from '@/stores/drawer.store';
 
@@ -74,52 +75,84 @@ export function OpenPositionsTab() {
       <p className="text-muted-foreground text-xs px-4 py-2">
         Cost Basis only, fees included — live P&amp;L coming in a future release.
       </p>
-      {rows.map((p) => (
-        <Link
-          key={p.id}
-          to="/positions/$positionId"
-          params={{ positionId: p.id }}
-          onClick={() => {
-            if (isMobile) close();
-          }}
-          className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-accent cursor-pointer"
-        >
-          <div className="flex flex-col">
-            <span className="text-sm font-medium">{p.symbol}</span>
-            <span className="text-xs text-muted-foreground">
-              {directionLabel(p)} · {Math.abs(p.totalEntryQuantity - p.totalExitQuantity)}
-            </span>
-          </div>
-          <div className="flex flex-col items-end">
-            <Numeric
-              value={Number(p.avgEntryPrice ?? 0)}
-              kind="money"
-              currency={p.accountCurrency}
-              direction="none"
-              className="text-xs text-muted-foreground"
-            />
-            {/*
-              MAGNITUDE, deliberately. `openCostBasis` is signed — negative for
-              shorts — but this column is a per-row size and the row already
-              labels the direction ("Short · 10") two lines to the left. The sign
-              is load-bearing in the ACCOUNT aggregate, where cash + positions
-              must equal the balance; here it would only duplicate the label.
+      {rows.map((entry) => {
+        if (isGroupEntry(entry)) {
+          return (
+            <Link
+              key={entry.id}
+              to="/positions/$positionId"
+              params={{ positionId: firstOpenLegId(entry) }}
+              onClick={() => {
+                if (isMobile) close();
+              }}
+              className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-accent cursor-pointer"
+            >
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">
+                  {entry.underlying} {entry.label}
+                </span>
+              </div>
+              <div className="flex flex-col items-end">
+                <Numeric
+                  value={Math.abs(entry.openCostBasis)}
+                  kind="money"
+                  currency={entry.accountCurrency}
+                  direction="none"
+                  className="text-sm"
+                />
+              </div>
+            </Link>
+          );
+        }
 
-              Not left to `direction="none"` to hide: that renders a negative
-              with no sign at all, which would make this row silently
-              indistinguishable from a long's. Taking the absolute value says so
-              out loud.
-            */}
-            <Numeric
-              value={Math.abs(p.openCostBasis)}
-              kind="money"
-              currency={p.accountCurrency}
-              direction="none"
-              className="text-sm"
-            />
-          </div>
-        </Link>
-      ))}
+        const p = entry;
+        return (
+          <Link
+            key={p.id}
+            to="/positions/$positionId"
+            params={{ positionId: p.id }}
+            onClick={() => {
+              if (isMobile) close();
+            }}
+            className="flex items-center justify-between gap-2 px-4 py-2 hover:bg-accent cursor-pointer"
+          >
+            <div className="flex flex-col">
+              <span className="text-sm font-medium">{p.symbol}</span>
+              <span className="text-xs text-muted-foreground">
+                {directionLabel(p)} · {Math.abs(p.totalEntryQuantity - p.totalExitQuantity)}
+              </span>
+            </div>
+            <div className="flex flex-col items-end">
+              <Numeric
+                value={Number(p.avgEntryPrice ?? 0)}
+                kind="money"
+                currency={p.accountCurrency}
+                direction="none"
+                className="text-xs text-muted-foreground"
+              />
+              {/*
+                MAGNITUDE, deliberately. `openCostBasis` is signed — negative for
+                shorts — but this column is a per-row size and the row already
+                labels the direction ("Short · 10") two lines to the left. The sign
+                is load-bearing in the ACCOUNT aggregate, where cash + positions
+                must equal the balance; here it would only duplicate the label.
+
+                Not left to `direction="none"` to hide: that renders a negative
+                with no sign at all, which would make this row silently
+                indistinguishable from a long's. Taking the absolute value says so
+                out loud.
+              */}
+              <Numeric
+                value={Math.abs(p.openCostBasis)}
+                kind="money"
+                currency={p.accountCurrency}
+                direction="none"
+                className="text-sm"
+              />
+            </div>
+          </Link>
+        );
+      })}
     </div>
   );
 }

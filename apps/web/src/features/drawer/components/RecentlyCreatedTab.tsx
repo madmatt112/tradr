@@ -5,6 +5,7 @@ import type { PositionListItem } from '@tradr/shared';
 
 import { Alert } from '@/components/ui/alert';
 import { usePositions } from '@/features/positions/hooks/usePositions';
+import { firstOpenLegId, isGroupEntry } from '@/features/positions/utils/listEntries';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useNow } from '@/hooks/useNow';
 import { formatRelativeTime } from '@/lib/format';
@@ -91,20 +92,42 @@ export function RecentlyCreatedTab() {
       <p className="text-muted-foreground text-xs px-4 py-2">
         Sorted by creation date. Per-fill history coming in a future release.
       </p>
-      {rows.map((p) => (
-        <Link
-          key={p.id}
-          to="/positions/$positionId"
-          params={{ positionId: p.id }}
-          onClick={() => {
-            if (isMobile) close();
-          }}
-          className="block px-4 py-2 text-sm hover:bg-accent cursor-pointer"
-        >
-          {actionLabel(p.status, p.symbol)} ·{' '}
-          <span className="text-muted-foreground">{formatRelativeTime(p.createdAt, now)}</span>
-        </Link>
-      ))}
+      {rows.map((entry) => {
+        if (isGroupEntry(entry)) {
+          return (
+            <Link
+              key={entry.id}
+              to="/positions/$positionId"
+              params={{ positionId: firstOpenLegId(entry) }}
+              onClick={() => {
+                if (isMobile) close();
+              }}
+              className="block px-4 py-2 text-sm hover:bg-accent cursor-pointer"
+            >
+              {actionLabel(entry.status, entry.label)} ·{' '}
+              <span className="text-muted-foreground">
+                {formatRelativeTime(entry.createdAt, now)}
+              </span>
+            </Link>
+          );
+        }
+
+        const p = entry;
+        return (
+          <Link
+            key={p.id}
+            to="/positions/$positionId"
+            params={{ positionId: p.id }}
+            onClick={() => {
+              if (isMobile) close();
+            }}
+            className="block px-4 py-2 text-sm hover:bg-accent cursor-pointer"
+          >
+            {actionLabel(p.status, p.symbol)} ·{' '}
+            <span className="text-muted-foreground">{formatRelativeTime(p.createdAt, now)}</span>
+          </Link>
+        );
+      })}
     </div>
   );
 }

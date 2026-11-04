@@ -57,6 +57,7 @@ import { create } from 'zustand';
 
 import { accountsListQuery, useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { positionsListQuery, usePositions } from '@/features/positions/hooks/usePositions';
+import { flattenEntries } from '@/features/positions/utils/listEntries';
 import { eventBus } from '@/stores/event-bus.store';
 import type { EventName } from '@/stores/events.types';
 
@@ -537,7 +538,7 @@ async function resolveStartable(queryClient: QueryClient): Promise<Startable | n
     ]);
     // The checklist's own selector, for the reason given where it is defined:
     // "the user's data" has to mean here exactly what it means to completion.
-    const { ownAccounts, ownPositions } = selectOwnRows(accounts, positions);
+    const { ownAccounts, ownPositions } = selectOwnRows(accounts, flattenEntries(positions));
     const open = ownPositions.find((position) => position.status === 'open');
     return {
       from: {
@@ -1059,7 +1060,7 @@ export function useWalkthrough(): UseWalkthroughResult {
   // positions belong to the sample account is not knowable from the positions
   // list alone, and a half-answer here would offer buttons for one render.
   const own = useMemo(
-    () => (accounts && positions ? selectOwnRows(accounts, positions) : undefined),
+    () => (accounts && positions ? selectOwnRows(accounts, flattenEntries(positions)) : undefined),
     [accounts, positions],
   );
 
