@@ -17,6 +17,7 @@ export const EXPORTED_TABLES = [
   'brokerages',
   'fee_schedules',
   'positions',
+  'position_groups',
   'fills',
   'fill_lot_selections',
   'fill_transfer_links',
