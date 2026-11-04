@@ -4057,6 +4057,87 @@
         ]
       }
     },
+    "/api/position-groups/{id}/close": {
+      "post": {
+        "description": "Authed. In one transaction, writes one exit fill per open leg for its open units (carrying no lot selection) and closes it, all dated at `closedAt` or now; an already-closed leg is skipped even if named. Posts through the existing fill and close hooks per leg, under its own symbol — no group-level ledger row. An open leg missing from `exits` is a validation error naming it; any failure (including a `closedAt` before a leg's open date, or a leg refused by the reopen guard) rolls back every leg and names the offending leg.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "closedAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "exits": {
+                    "items": {
+                      "properties": {
+                        "fees": {
+                          "type": "string"
+                        },
+                        "positionId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "price": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "positionId",
+                        "price"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "exits"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group",
+            "with every leg closed.": null
+          },
+          "400": {
+            "description": "Validation error — a missing exit",
+            "or a closedAt before a leg's open date; names the leg.": null
+          },
+          "404": {
+            "description": "The group was not found",
+            "or an exits id is not a leg of it.": null
+          },
+          "409": {
+            "description": "Every leg is already closed",
+            "or a leg was refused by the reopen guard (names it).": null
+          }
+        },
+        "summary": "Close every open leg of a group at once.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
     "/api/position-groups/{id}/legs": {
       "post": {
         "description": "Authed. Adds one ungrouped, non-draft position to the group, subject to the same checks as linking and the 8-leg cap. A 9th leg is refused with 400, naming the cap, and carries no leg index.\n",

@@ -1,8 +1,14 @@
+import Decimal from 'decimal.js';
+
 import { MAX_GROUP_LEGS, validateLegSet } from '@tradr/shared/lib/strategy';
-import type { CreatePositionGroupInput, LinkPositionsInput } from '@tradr/shared/schemas/position';
+import type {
+  CloseGroupInput,
+  CreatePositionGroupInput,
+  LinkPositionsInput,
+} from '@tradr/shared/schemas/position';
 
 import type { Database, Transaction } from '@/db';
-import { ConflictError, NotFoundError, ValidationError } from '@/lib/errors';
+import { AppError, ConflictError, NotFoundError, ValidationError } from '@/lib/errors';
 import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
 
@@ -16,10 +22,11 @@ import {
   setPositionGroupLink,
   updateGroupLabelOverride,
 } from './position-groups.query';
-import { isAccountDemo } from './positions.query';
+import { isAccountDemo, sumFillQuantityByType } from './positions.query';
 import {
   addFillTx,
   assertPositionCreateAllowed,
+  closePositionTx,
   createPositionTx,
   getPositionGroupEntry,
   openPositionTx,
@@ -71,8 +78,8 @@ function assertLinkable(ordered: RawRow[], alreadyMemberOf?: string): void {
 }
 
 /**
- * Every group leg write except close-all (design C4, C5). `createPositionGroup`
- * and `linkPositions` own their transaction; `linkPositionsTx` is the bare
+ * Every group leg write (design C4, C5). `createPositionGroup` and
+ * `linkPositions` own their transaction; `linkPositionsTx` is the bare
  * tx-accepting core CSV import's group-commit step (C10) also calls.
  */
 export async function createPositionGroup(
@@ -257,6 +264,96 @@ export async function setGroupLabel(
 ) {
   const updated = await updateGroupLabelOverride(db, groupId, userId, labelOverride);
   if (updated.length === 0) throw new NotFoundError('Position group', groupId);
+
+  const entry = await getPositionGroupEntry(db, userId, groupId);
+  if (entry === null) throw new NotFoundError('Position group', groupId);
+  return entry;
+}
+
+/**
+ * Closes every open leg of a group in one transaction (design C4, Requirement
+ * 4). Locks every leg ascending (the Lock rule) before any fill, skips a leg
+ * already `closed` even when `exits` names it, and refuses (with no write) an
+ * open leg missing from `exits`, an `exits` id that is not a leg, or a group
+ * with nothing left open. For each remaining open leg this reuses
+ * `addFillTx`/`closePositionTx` — not `addFill`/`closePosition`, whose
+ * auto-close and fire-and-forget event firing are wrong here — so the
+ * existing fill/close hooks post per leg with no group-level ledger row. An
+ * `AppError` from a leg's own write is rethrown with its symbol prefixed onto
+ * the message (design C4 post-condition 4).
+ */
+export async function closeGroup(
+  db: Database,
+  userId: string,
+  groupId: string,
+  data: CloseGroupInput,
+) {
+  const closedAtInstant = data.closedAt ? new Date(data.closedAt) : new Date();
+  const closedAtIso = closedAtInstant.toISOString();
+
+  const closedLegs = await withTransaction(db, async (tx) => {
+    const groupRows = await findPositionGroupById(tx, groupId, userId);
+    if (groupRows.length === 0) throw new NotFoundError('Position group', groupId);
+
+    const rows = await lockGroupLegs(tx, userId, groupId);
+    const openLegs = rows.filter((row) => row.status === 'open');
+    if (openLegs.length === 0) {
+      throw new ConflictError('Every leg in this group is already closed');
+    }
+
+    const exitsByLeg = new Map(data.exits.map((exit) => [exit.positionId, exit]));
+    for (const leg of openLegs) {
+      if (!exitsByLeg.has(leg.id)) {
+        throw new ValidationError(`Missing a close price for open leg ${leg.symbol}`);
+      }
+    }
+    const legIds = new Set(rows.map((row) => row.id));
+    for (const exit of data.exits) {
+      if (!legIds.has(exit.positionId)) {
+        throw new NotFoundError('Position', exit.positionId);
+      }
+    }
+
+    for (const leg of openLegs) {
+      try {
+        const [{ total: entryTotal }] = await sumFillQuantityByType(tx, leg.id, 'entry');
+        const [{ total: exitTotal }] = await sumFillQuantityByType(tx, leg.id, 'exit');
+        const openUnits = new Decimal(entryTotal).minus(exitTotal);
+        if (openUnits.greaterThan(0)) {
+          const exit = exitsByLeg.get(leg.id)!;
+          await addFillTx(tx, leg.id, userId, {
+            type: 'exit',
+            price: exit.price,
+            quantity: openUnits.toString(),
+            fees: exit.fees,
+            filledAt: closedAtIso,
+          });
+        }
+        await closePositionTx(tx, leg.id, userId, closedAtIso);
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new AppError(err.statusCode, err.code, `${leg.symbol}: ${err.message}`);
+        }
+        throw err;
+      }
+    }
+
+    return openLegs.map((leg) => ({ assetType: leg.asset_type as string }));
+  });
+
+  // Fire-and-forget, AFTER commit, once per leg actually closed (design C4
+  // post-condition 5; requirements D16 — reuses `position_closed`, no new
+  // event). Same best-effort guard as `closePosition`'s own single event.
+  try {
+    for (const leg of closedLegs) {
+      captureServerEvent('position_closed', {
+        distinctId: userId,
+        properties: { assetType: leg.assetType },
+      });
+    }
+  } catch {
+    // ignore — capture is fire-and-forget
+  }
 
   const entry = await getPositionGroupEntry(db, userId, groupId);
   if (entry === null) throw new NotFoundError('Position group', groupId);

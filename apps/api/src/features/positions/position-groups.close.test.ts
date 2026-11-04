@@ -130,6 +130,7 @@ import { fills, ledgerEntries, positions } from '@/db/schema';
 import {
   insertPositionCloseLedgerEntries,
   postFillLedgerEntries,
+  reversePositionCloseLedgerEntries,
 } from '@/features/accounting/ledger-hook';
 import * as fillsQuery from '@/features/positions/fills.query';
 import * as positionsQuery from '@/features/positions/positions.query';
@@ -139,8 +140,10 @@ import {
   registerCloseHook,
   replaceCloseHook,
   replaceFillHook,
+  replaceReverseHook,
   unregisterCloseHook,
   unregisterFillHook,
+  unregisterReverseHook,
   type CloseHook,
 } from '@/features/positions/positions.service';
 import { withTransaction } from '@/lib/transaction';
@@ -332,13 +335,15 @@ describe('position-groups close-all — happy path (AC 4.1, 4.8)', () => {
     const detailA = await getPosition(cookie, legA.id);
     expect(detailA.fills).toHaveLength(2);
     const exitA = detailA.fills.find((f: { type: string }) => f.type === 'exit');
-    expect(exitA.quantity).toBe('1');
-    expect(exitA.price).toBe('7');
+    // `fills.quantity`/`fills.price` are numeric(18,8) — Postgres always
+    // returns the full fixed scale, so compare numerically, not by string.
+    expect(Number(exitA.quantity)).toBe(1);
+    expect(Number(exitA.price)).toBe(7);
     expect(exitA.lotSelection).toBeNull();
 
     const detailB = await getPosition(cookie, legB.id);
     const exitB = detailB.fills.find((f: { type: string }) => f.type === 'exit');
-    expect(exitB.price).toBe('1');
+    expect(Number(exitB.price)).toBe(1);
     expect(exitB.lotSelection).toBeNull();
 
     // AC 4.8 invariant: a selection stays settable on the exit afterward.
@@ -352,7 +357,11 @@ describe('position-groups close-all — happy path (AC 4.1, 4.8)', () => {
     expect(setSelRes.status).toBe(200);
     const afterSel = await getPosition(cookie, legA.id);
     const exitAAfter = afterSel.fills.find((f: { id: string }) => f.id === exitA.id);
-    expect(exitAAfter.lotSelection).toEqual([{ entryFillId: entryA.id, quantity: '1' }]);
+    expect(exitAAfter.lotSelection).toHaveLength(1);
+    expect(exitAAfter.lotSelection[0].entryFillId).toBe(entryA.id);
+    // `fill_lot_selections.quantity` is numeric(18,8) too — same fixed-scale
+    // formatting as above.
+    expect(Number(exitAAfter.lotSelection[0].quantity)).toBe(1);
   });
 
   it('defaults the instant to now when no closedAt is given', async () => {
@@ -537,6 +546,19 @@ describe('position-groups close-all — rollback on a bad date (AC 4.4, AC 4.7 p
 });
 
 describe('position-groups close-all — rollback on the reopen guard (AC 4.4)', () => {
+  // The reopen guard (`reopenedWithoutNewFills`) reads the `position_pnl_reversal`
+  // row the reverse hook posts on reopen, which only exists once a prior
+  // `position_pnl` row exists to reverse — so the close hook must be live for
+  // the fixture's plain close too. Both are registered for this block.
+  beforeAll(() => {
+    replaceCloseHook('ledger', insertPositionCloseLedgerEntries);
+    replaceReverseHook('ledger', reversePositionCloseLedgerEntries);
+  });
+  afterAll(() => {
+    unregisterCloseHook('ledger');
+    unregisterReverseHook('ledger');
+  });
+
   it('rolls back every leg when one is refused by the reopen guard, naming it', async () => {
     const { cookie } = await registerAndGetCookie();
     const account = await createTestAccount(cookie);

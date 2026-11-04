@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import {
   AddGroupLegSchema,
+  CloseGroupSchema,
   CreatePositionGroupSchema,
   LinkPositionsSchema,
   SetGroupLabelSchema,
@@ -14,6 +15,7 @@ import { authMiddleware } from '@/middleware/auth.middleware';
 
 import {
   addGroupLeg,
+  closeGroup,
   createPositionGroup,
   linkPositions,
   setGroupLabel,
@@ -245,6 +247,65 @@ positionGroups.patch(
     const { id } = c.req.valid('param');
     const { labelOverride } = c.req.valid('json');
     const group = await setGroupLabel(db, userId, id, labelOverride);
+    return c.json(group, 200);
+  },
+);
+
+/**
+ * @swagger
+ * /api/position-groups/{id}/close:
+ *   post:
+ *     summary: Close every open leg of a group at once.
+ *     description: >
+ *       Authed. In one transaction, writes one exit fill per open leg for its
+ *       open units (carrying no lot selection) and closes it, all dated at
+ *       `closedAt` or now; an already-closed leg is skipped even if named.
+ *       Posts through the existing fill and close hooks per leg, under its own
+ *       symbol — no group-level ledger row. An open leg missing from `exits`
+ *       is a validation error naming it; any failure (including a `closedAt`
+ *       before a leg's open date, or a leg refused by the reopen guard) rolls
+ *       back every leg and names the offending leg.
+ *     tags: [Position Groups]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [exits]
+ *             properties:
+ *               exits:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 8
+ *                 items:
+ *                   type: object
+ *                   required: [positionId, price]
+ *                   properties:
+ *                     positionId: { type: string, format: uuid }
+ *                     price: { type: string }
+ *                     fees: { type: string }
+ *               closedAt: { type: string, format: date-time }
+ *     responses:
+ *       200: { description: The group, with every leg closed. }
+ *       400: { description: Validation error — a missing exit, or a closedAt before a leg's open date; names the leg. }
+ *       404: { description: The group was not found, or an exits id is not a leg of it. }
+ *       409: { description: Every leg is already closed, or a leg was refused by the reopen guard (names it). }
+ */
+positionGroups.post(
+  '/:id/close',
+  validate('param', GroupParamSchema),
+  validate('json', CloseGroupSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { id } = c.req.valid('param');
+    const data = c.req.valid('json');
+    const group = await closeGroup(db, userId, id, data);
     return c.json(group, 200);
   },
 );
