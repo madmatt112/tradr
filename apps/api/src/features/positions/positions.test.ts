@@ -1,4 +1,5 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { sql } from 'drizzle-orm';
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -8,6 +9,7 @@ import {
   reversePositionCloseLedgerEntries,
 } from '@/features/accounting/ledger-hook';
 import { getTierLimits } from '@/features/billing/tier-limits.constants';
+import * as positionsQuery from '@/features/positions/positions.query';
 import {
   replaceCloseHook,
   unregisterCloseHook,
@@ -1865,5 +1867,103 @@ describe('positions classification (R9/R10)', () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// multi-leg-positions task 4 — groups on the list and detail reads
+// (design.md C6; NFR Performance; requirements.md AC 6.1). Task 5 (group
+// create/link) does not exist yet, so legs are linked into a group by raw SQL
+// against `position_groups`/`positions.group_id`, the same fixture pattern
+// `position-groups.schema.test.ts` uses for task 1.
+//
+// Contract:
+//  1. "the list issues one list query however many groups exist" (NFR
+//     Performance — "The list SHALL add no per-group query"). Pre: two
+//     groups of two legs each under one account. Call: authedRequest('GET',
+//     '/api/positions', cookie). Observe: findPositionListByUser — the one
+//     list query — is called exactly once. Source: requirements.md
+//     Non-Functional Requirements, Performance.
+//  2. "a grouped position's detail carries group and an ungrouped one's
+//     carries none" (design.md C6 — "getPositionDetail adds group when the
+//     row has one"). Pre: two legs linked into a group, plus one standalone
+//     position. Call: authedRequest('GET', `/api/positions/${id}`, cookie)
+//     for each. Observe: the grouped leg's detail carries a `group` object
+//     naming the group id and both leg ids; the standalone position's detail
+//     carries no `group` key. Source: design.md C6 post-conditions.
+// ---------------------------------------------------------------------------
+describe('positions — multi-leg groups on list/detail (task 4)', () => {
+  async function getUserId(cookie: string): Promise<string> {
+    const res = await authedRequest('GET', '/api/auth/me', cookie);
+    const me = await res.json();
+    return me.id;
+  }
+
+  async function linkIntoGroup(
+    userId: string,
+    positionIds: string[],
+    labelOverride: string | null = null,
+  ): Promise<string> {
+    const [group] = await db.execute<{ id: string }>(sql`
+      INSERT INTO position_groups (user_id, label_override)
+      VALUES (${userId}, ${labelOverride})
+      RETURNING id
+    `);
+    const groupId = group!.id;
+    for (const positionId of positionIds) {
+      await db.execute(sql`UPDATE positions SET group_id = ${groupId} WHERE id = ${positionId}`);
+    }
+    return groupId;
+  }
+
+  it('collapses two groups into two list entries over exactly one list query', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const userId = await getUserId(cookie);
+    const account = await createTestAccount(cookie);
+
+    const legs = [];
+    for (let i = 0; i < 4; i++) {
+      legs.push(await createTestPosition(cookie, account.id, { symbol: `SYM${i}` }));
+    }
+    await linkIntoGroup(userId, [legs[0].id, legs[1].id]);
+    await linkIntoGroup(userId, [legs[2].id, legs[3].id]);
+
+    const spy = vi.spyOn(positionsQuery, 'findPositionListByUser');
+    try {
+      const res = await authedRequest('GET', '/api/positions', cookie);
+      expect(res.status).toBe(200);
+      // Four legs across two groups collapse to two entries — proof the merge
+      // actually ran, so the accompanying one-query count means something
+      // (NFR Performance: "The list SHALL add no per-group query").
+      const body = await res.json();
+      expect(body).toHaveLength(2);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("adds group to a grouped leg's detail and omits it for an ungrouped position", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const userId = await getUserId(cookie);
+    const account = await createTestAccount(cookie);
+
+    const legA = await createTestPosition(cookie, account.id, { symbol: 'AAPL' });
+    const legB = await createTestPosition(cookie, account.id, { symbol: 'MSFT' });
+    const groupId = await linkIntoGroup(userId, [legA.id, legB.id]);
+
+    const detailRes = await authedRequest('GET', `/api/positions/${legA.id}`, cookie);
+    expect(detailRes.status).toBe(200);
+    const detail = await detailRes.json();
+    expect(detail.group).toBeDefined();
+    expect(detail.group.id).toBe(groupId);
+    expect(detail.group.legs.map((l: { id: string }) => l.id).sort()).toEqual(
+      [legA.id, legB.id].sort(),
+    );
+
+    const standalone = await createTestPosition(cookie, account.id, { symbol: 'TSLA' });
+    const standaloneRes = await authedRequest('GET', `/api/positions/${standalone.id}`, cookie);
+    const standaloneDetail = await standaloneRes.json();
+    expect(standaloneDetail.group).toBeUndefined();
   });
 });
