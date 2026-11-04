@@ -441,6 +441,45 @@ describe('QuickStatsTab', () => {
     unmount(container, root);
   });
 
+  // Regression guard (AC 7.3): the excluded count reads over entries, not
+  // flattened legs — a multi-leg EUR group counts once, not once per leg.
+  it('counts a multi-leg EUR group once in the excluded-currency footnote', () => {
+    mockUSDDisplayCurrency();
+    vi.mocked(usePerformance).mockReturnValue({
+      data: makePerformanceData([{ code: 'USD', stats: makeStats() }]),
+      isLoading: false,
+      error: null,
+    } as unknown as PerformanceResult);
+
+    const legA = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000e1',
+        accountCurrency: 'EUR',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000300',
+    };
+    const legB = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000e2',
+        accountCurrency: 'EUR',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000300',
+    };
+    const group = makePositionGroup({ accountCurrency: 'EUR', status: 'open', legs: [legA, legB] });
+
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<QuickStatsTab />);
+    expect(container.textContent).toContain('1 position(s) in other currencies excluded.');
+    unmount(container, root);
+  });
+
   it('renders all 4 skeletons when displayCurrency resolves to null', () => {
     vi.mocked(useDisplayCurrencyQuery).mockReturnValue({
       data: { currency: null },
