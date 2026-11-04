@@ -24,6 +24,7 @@ import {
   type ArchivePersona,
   type ArchivePersonaResolution,
   type ArchivePosition,
+  type ArchivePositionGroup,
   type ArchivePositionImage,
   type ArchivePositionTag,
   type ArchivePreferences,
@@ -77,6 +78,7 @@ import {
   insertArchiveLotSelections,
   insertArchiveMessages,
   insertArchivePersonas,
+  insertArchivePositionGroups,
   insertArchivePositionImages,
   insertArchivePositions,
   insertArchivePositionTags,
@@ -94,6 +96,7 @@ import {
   type LotSelectionInsert,
   type MessageInsert,
   type PersonaInsert,
+  type PositionGroupInsert,
   type PositionImageInsert,
   type PositionInsert,
   type PositionTagInsert,
@@ -545,6 +548,10 @@ async function restore(
   const accountsF = makeFlusher<AccountInsert>((rows) => insertArchiveAccounts(tx, userId, rows));
   const tagsF = makeFlusher<TagInsert>((rows) => insertArchiveTags(tx, userId, rows));
   const rulesF = makeFlusher<RuleInsert>((rows) => insertArchiveTradingRules(tx, userId, rows));
+  // Drained before positions: a leg's group_id references a group row (C11).
+  const positionGroupsF = makeFlusher<PositionGroupInsert>((rows) =>
+    insertArchivePositionGroups(tx, userId, rows),
+  );
   const positionsF = makeFlusher<PositionInsert>((rows) =>
     insertArchivePositions(tx, userId, rows),
   );
@@ -628,6 +635,7 @@ async function restore(
   await accountsF.drain();
   await tagsF.drain();
   await rulesF.drain();
+  await positionGroupsF.drain();
   await positionsF.drain();
   await fillsF.drain();
   await lotSelectionsF.drain();
@@ -668,6 +676,9 @@ async function restore(
         return;
       case 'rules.ndjson':
         await rulesF.drain();
+        return;
+      case 'position-groups.ndjson':
+        await positionGroupsF.drain();
         return;
       case 'positions.ndjson':
         await positionsF.drain();
@@ -790,11 +801,23 @@ async function restore(
         });
         return;
       }
+      case 'position-groups.ndjson': {
+        const r = value as ArchivePositionGroup;
+        await positionGroupsF.push({
+          id: remapId(salt, r.id),
+          labelOverride: r.labelOverride,
+          createdAt: r.createdAt,
+        });
+        return;
+      }
       case 'positions.ndjson': {
         const r = value as ArchivePosition;
         await positionsF.push({
           id: remapId(salt, r.id),
           accountId: remapId(salt, r.accountId),
+          // Absent/null means ungrouped (a version 1-4 archive); a set groupId
+          // remaps to the fresh group id (C11, AC 9.3).
+          groupId: r.groupId == null ? null : remapId(salt, r.groupId),
           symbol: r.symbol,
           side: r.side,
           assetType: r.assetType,

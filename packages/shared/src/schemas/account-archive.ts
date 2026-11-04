@@ -21,7 +21,8 @@ import { RuleWeightSchema, TradingRuleDefinitionSchema } from './trading-rule';
 // are frozen across versions; the value increments when a payload shape changes.
 // Version 3 adds the lot-selections entry and the taxLotMethod preference (C12).
 // Version 4 adds the transfer-links entry and each account's taxTreatment (C8).
-export const ARCHIVE_VERSION = 4;
+// Version 5 adds the position-groups entry and each leg's groupId (C11).
+export const ARCHIVE_VERSION = 5;
 
 // The fixed entry names, in the order they appear in the archive (Data Models).
 // Image entries (matching ARCHIVE_IMAGE_ENTRY_RE) come first, before
@@ -34,6 +35,7 @@ export const ARCHIVE_ENTRY_ORDER = [
   'accounts.ndjson',
   'tags.ndjson',
   'rules.ndjson',
+  'position-groups.ndjson',
   'positions.ndjson',
   'fills.ndjson',
   'lot-selections.ndjson',
@@ -268,6 +270,9 @@ export const ArchiveCountsSchema = z
     // Optional so a version-1 manifest (which has no rules entry) still parses;
     // the reader treats an absent count as 0 (D4).
     rules: nonNegInt.optional(),
+    // Optional so a version-1 through -4 manifest (which has no position-groups
+    // entry) still parses; the reader treats an absent count as 0 (C11).
+    positionGroups: nonNegInt.optional(),
     positions: nonNegInt,
     fills: nonNegInt,
     // Optional so a version-1 or version-2 manifest (which has no lot-selections
@@ -319,8 +324,8 @@ export type ArchiveDegradation = z.infer<typeof ArchiveDegradationSchema>;
 export const ArchiveManifestSchema = z
   .object({
     format: z.literal('tradr-account-archive'),
-    // Accept every earlier payload this build reads and its own version (D4, C12 D5, C8).
-    archiveVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    // Accept every earlier payload this build reads and its own version (D4, C12 D5, C8, C11).
+    archiveVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
     // APP_VERSION at export, or 'unknown'.
     sourceAppVersion: z.string(),
     exportedAt: timestamp,
@@ -410,10 +415,27 @@ export const ArchiveTradingRuleSchema = z
   .strict();
 export type ArchiveTradingRule = z.infer<typeof ArchiveTradingRuleSchema>;
 
+// A strategy group (position_groups, C1): its id and optional label override. The
+// legs are not carried here — each leg's `groupId` points back at this row
+// (C11). `label_override` is varchar(40) nullable. No `userId` — the import owns
+// the row for the importing user.
+export const ArchivePositionGroupSchema = z
+  .object({
+    id: uuid,
+    labelOverride: z.string().max(40).nullable(),
+    createdAt: timestamp,
+  })
+  .strict();
+export type ArchivePositionGroup = z.infer<typeof ArchivePositionGroupSchema>;
+
 export const ArchivePositionSchema = z
   .object({
     id: uuid,
     accountId: uuid,
+    // The group this position is a leg of, or absent/null when ungrouped. Optional
+    // so a version-1 through -4 position payload (which has no key) still parses and
+    // the import restores it ungrouped (C11, AC 9.3).
+    groupId: uuid.nullable().optional(),
     symbol: z.string().max(20),
     side: z.enum(['long', 'short']),
     assetType: z.enum(['stock', 'option']),

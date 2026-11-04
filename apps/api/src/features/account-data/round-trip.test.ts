@@ -1350,4 +1350,122 @@ describe('position-group archive carry (design C11, AC 9.1-9.2)', () => {
       expect(pnlB).toEqual(pnlA);
     },
   );
+
+  // Design C11, AC 9.3 — a version-4 archive carries no position-groups entry and
+  // its positions have no groupId key; import restores each position ungrouped.
+  it('a version-4 archive imports its positions ungrouped (AC 9.3)', async () => {
+    const accountId = randomUUID();
+    const positionId = randomUUID();
+    const counts = {
+      brokerages: 0,
+      systemBrokerages: 0,
+      accounts: 1,
+      tags: 0,
+      positions: 1,
+      fills: 0,
+      lotSelections: 0,
+      transferLinks: 0,
+      positionTags: 0,
+      positionImages: 0,
+      ledgerEntries: 0,
+      exchangeRates: 0,
+      expenses: 0,
+      personas: 0,
+      builtinPersonas: 0,
+      conversations: 0,
+      messages: 0,
+      summaries: 0,
+      images: 0,
+    };
+    const manifest = {
+      format: 'tradr-account-archive',
+      archiveVersion: 4,
+      sourceAppVersion: 'test',
+      exportedAt: LOT_TS,
+      counts,
+      degradations: [] as unknown[],
+    };
+    const account = {
+      id: accountId,
+      name: 'Main',
+      currency: 'USD',
+      timezone: 'UTC',
+      brokerage: null,
+      startingBalance: '0.0000',
+      defaultRiskPercent: null,
+      isDemo: false,
+      isDefault: true,
+      taxTreatment: 'taxable',
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    // A version-4 position row: no `groupId` key at all.
+    const position = {
+      id: positionId,
+      accountId,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      status: 'open',
+      notes: null,
+      targetPrice: null,
+      stopLoss: null,
+      openedAt: null,
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const preferencesV4 = {
+      displayCurrency: null,
+      timezone: null,
+      taxJurisdiction: null,
+      taxLotMethod: null,
+      theme: 'system',
+      buyingPowerBasis: 'cash',
+      advisorDefaultPersona: null,
+      advisorTradeDataConsent: false,
+      writableAccountId: null,
+      onboarding: {},
+    };
+
+    function buildV4Archive(): Uint8Array {
+      const entries: Array<{ name: string; data: string }> = [
+        { name: 'manifest.json', data: JSON.stringify(manifest) },
+        { name: 'accounts.ndjson', data: `${JSON.stringify(account)}\n` },
+        { name: 'positions.ndjson', data: `${JSON.stringify(position)}\n` },
+        { name: 'preferences.json', data: JSON.stringify(preferencesV4) },
+        { name: 'dashboard-layout.json', data: 'null' },
+      ];
+      const out: Uint8Array[] = [];
+      const z = new Zip((err, data) => {
+        if (err) throw err;
+        out.push(data);
+      });
+      for (const e of entries) {
+        const f = new ZipDeflate(e.name, { level: 9 });
+        z.add(f);
+        f.push(new TextEncoder().encode(e.data), true);
+      }
+      z.end();
+      return concat(out);
+    }
+
+    const bytes = buildV4Archive();
+    const userB = await seedBareUser('rt-group-v4');
+    await confirmImport(userB, streamOf(bytes), digestOf(bytes));
+
+    const [row] = await db
+      .select({ groupId: positions.groupId })
+      .from(positions)
+      .where(eq(positions.userId, userB));
+    expect(row.groupId).toBeNull();
+
+    const groupRows = await db
+      .select({ id: positionGroups.id })
+      .from(positionGroups)
+      .where(eq(positionGroups.userId, userB));
+    expect(groupRows).toHaveLength(0);
+  });
 });
