@@ -24,7 +24,6 @@ import { useTierState } from '@/features/billing/useTierState';
 
 import { getPositionErrorCode, useCreatePosition } from '../hooks/usePositions';
 import { encodeContract, occErrorField, type OptionContractInputs } from '../utils/occForm';
-import { TIER_REFUSAL_MESSAGES } from '../utils/tierRefusalMessages';
 
 import { MultiLegEntryForm } from './MultiLegEntryForm';
 import { OptionContractFields } from './OptionContractFields';
@@ -122,6 +121,14 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
+
+// The plan-tiers refusal codes this dialog maps (REQ-11.5). Branching is on
+// the machine-readable CODE only, never on message text.
+const TIER_REFUSAL_MESSAGES: Record<string, string> = {
+  TIER_LIMIT_POSITIONS: "You've reached your plan's position limit.",
+  TIER_ACCOUNT_NOT_WRITABLE:
+    'This account is read-only on your plan — pick your writable account, or change it on the Accounts page.',
+};
 
 export function CreatePositionDialog({ open, onOpenChange }: Props) {
   const { data: accounts } = useAccounts();

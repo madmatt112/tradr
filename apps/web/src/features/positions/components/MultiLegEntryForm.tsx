@@ -26,11 +26,19 @@ import { useCreatePositionGroup } from '../hooks/usePositionGroups';
 import { getPositionErrorCode } from '../hooks/usePositions';
 import { maxLossReasonText } from '../utils/listEntries';
 import { encodeContract, type OptionContractInputs } from '../utils/occForm';
-import { TIER_REFUSAL_MESSAGES } from '../utils/tierRefusalMessages';
 
 import { OptionContractFields } from './OptionContractFields';
 
 const MIN_LEGS = 2;
+
+// Mirrors CreatePositionDialog's TIER_REFUSAL_MESSAGES (REQ-11.5). Kept local
+// rather than imported to avoid a circular import with that dialog, which
+// renders this form.
+const TIER_REFUSAL_MESSAGES: Record<string, string> = {
+  TIER_LIMIT_POSITIONS: "You've reached your plan's position limit.",
+  TIER_ACCOUNT_NOT_WRITABLE:
+    'This account is read-only on your plan — pick your writable account, or change it on the Accounts page.',
+};
 
 interface LegRow {
   assetType: 'stock' | 'option';
