@@ -25,6 +25,7 @@ const EXECUTION_FIELDS: TargetField[] = [
   { field: 'side', label: 'Side (long/short)', required: false },
   { field: 'fees', label: 'Fees', required: false },
   { field: 'notes', label: 'Notes', required: false },
+  { field: 'orderId', label: 'Order ID', required: false },
 ];
 
 const ROUND_TRIP_FIELDS: TargetField[] = [
@@ -39,6 +40,7 @@ const ROUND_TRIP_FIELDS: TargetField[] = [
   { field: 'exitDate', label: 'Exit date', required: true },
   { field: 'fees', label: 'Fees', required: false },
   { field: 'notes', label: 'Notes', required: false },
+  { field: 'orderId', label: 'Order ID', required: false },
 ];
 
 // Optional contract columns the `composed` option form offers on top of the

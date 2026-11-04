@@ -59,6 +59,8 @@ export function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [mapper, setMapper] = useState<ColumnMapperValue>(initialMapper);
+  const [declinedProposalIds, setDeclinedProposalIds] = useState<string[]>([]);
+  const [labelOverrides, setLabelOverrides] = useState<Record<string, string>>({});
 
   const preview = useCsvPreview();
   const { data: accounts } = useAccounts();
@@ -129,7 +131,27 @@ export function ImportPage() {
       dateFormat: mapper.dateFormat,
       numberFormat: mapper.numberFormat,
     };
+    setDeclinedProposalIds([]);
+    setLabelOverrides({});
     preview.mutate({ file, request });
+  }
+
+  // A declined proposal imports as ungrouped positions (AC 8.8), so any label
+  // edit it was carrying is dropped rather than sent for a group that won't
+  // be created.
+  function handleDecline(id: string) {
+    setDeclinedProposalIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setLabelOverrides((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
+  function handleLabelChange(id: string, label: string) {
+    if (declinedProposalIds.includes(id)) return;
+    setLabelOverrides((prev) => ({ ...prev, [id]: label }));
   }
 
   // NOTE: the import timezone stays UTC by default — it describes the CSV's own
@@ -267,12 +289,17 @@ export function ImportPage() {
             errors={preview.data.errors}
             warnings={preview.data.warnings}
             currencyCode={currencyCode}
+            groupProposals={preview.data.groupProposals}
+            onDecline={handleDecline}
+            onLabelChange={handleLabelChange}
           />
           <CommitPanel
             key={preview.data.token}
             preview={preview.data}
             onRePreview={runPreview}
             isRePreviewing={preview.isPending}
+            declinedProposalIds={declinedProposalIds}
+            labelOverrides={labelOverrides}
           />
         </div>
       )}
