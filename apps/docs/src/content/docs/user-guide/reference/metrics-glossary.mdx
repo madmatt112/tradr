@@ -95,6 +95,9 @@ open quantity. That includes a position that went flat inside the range, and one
 that had a fill inside the range but went flat outside it. When none are in range
 the count reads 0, never blank.
 
+A strategy group counts as one position. The group goes flat when its last open
+leg goes flat. A leg of a group never counts on its own.
+
 ### Total net P&L
 
 The sum of the realised net P&L of every fill in the range, one currency at a
