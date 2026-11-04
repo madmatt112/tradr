@@ -432,6 +432,8 @@ export function PositionDetailView({ positionId }: Props) {
               {isClosed
                 ? `Deleting the closed position "${position.symbol}" removes its realized P&L from the account balance and from tax and performance summaries — including prior tax years — and may change other positions' wash-sale classification. This cannot be undone.`
                 : `Are you sure you want to delete "${position.symbol}"? This cannot be undone.`}
+              {/* AC 1.5: a grouped leg leaves its group on delete. */}
+              {position.groupId && ' This leg leaves its group.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
