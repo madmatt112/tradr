@@ -2,14 +2,16 @@ import Decimal from 'decimal.js';
 import { sql } from 'drizzle-orm';
 import { describe, it, expect } from 'vitest';
 
-import { PerformanceResponseSchema, type PerformanceQueryInput } from '@tradr/shared';
+import { PerformanceResponseSchema, type PerformanceQueryInput, type Tag } from '@tradr/shared';
+import { symbolKey } from '@tradr/shared/lib/breakdown';
 
 import { db } from '@/db';
 import { accounts, fills, positions, users } from '@/db/schema';
 import { seedFills, seedPositions } from '@/db/seed';
 import { InvalidTimezoneError, TimeoutError } from '@/lib/errors';
 
-import { getPerformance } from './performance.service';
+import type { SnapshotPosition } from './performance.query';
+import { classifyGroup, getPerformance } from './performance.service';
 
 let counter = 0;
 function uniqueEmail() {
@@ -583,5 +585,162 @@ describe('getPerformance', () => {
     await expect(
       getPerformance(db, user.id, defaultInput(), freshController().signal, startTime),
     ).rejects.toBeInstanceOf(TimeoutError);
+  });
+});
+
+/**
+ * classifyGroup (design C8 — multi-leg-positions task 8). Pure function: one
+ * `BreakdownPosition` per group, derived fresh from each leg's own latch via
+ * `classifyOne`, never from stored group state.
+ *
+ * Contract block — one entry per success criterion this suite covers.
+ *
+ * AC 5.1 (a closed two-leg group gives one combined entry)
+ *   Pre: two flat legs sharing a groupId, their own flat latches at distinct
+ *     instants.
+ *   Call: classifyGroup([legA, legB]).
+ *   Result: one BreakdownPosition; closedAt the LATER leg's flat instant;
+ *     netPnl the sum of both legs' own last-flat figures; fees equal
+ *     grossPnl minus netPnl; classification derived from that netPnl.
+ *   Source: requirements.md AC 5.1; design.md C8 post-conditions.
+ *
+ * design C8's null guard, the mechanism behind AC 5.2
+ *   Pre: one flat leg, one leg with no flat latch and a live 'open' status.
+ *   Call: classifyGroup([legFlat, legNeverFlat]).
+ *   Result: null — `classifyOne` is null for the never-flat leg, so the pair
+ *     is not yet a completed trade. (This is the mechanism the integration
+ *     suite's AC 5.2 test in performance.test.ts relies on to keep a lone
+ *     flat leg from counting alone.)
+ *   Source: design.md C8 ("classifyGroup returns null unless classifyOne is
+ *     non-null for every leg").
+ *
+ * AC 5.8 (symbol/assetType from the first leg; tags the distinct union; legIds the legs)
+ *   Pre: two flat legs with different symbols/assetTypes and overlapping tag sets.
+ *   Call: classifyGroup([legA, legB]).
+ *   Result: symbol/assetType equal the FIRST leg's own fields (so symbolKey
+ *     keys the underlying from legA's symbol, never legB's); tags the
+ *     distinct union by id; legIds the two leg ids.
+ *   Source: requirements.md AC 5.8; design.md C8 post-conditions.
+ */
+describe('classifyGroup', () => {
+  function tag(id: string, name: string): Tag {
+    return { id, name, category: 'general', color: null };
+  }
+
+  // Loosely typed on purpose: `groupId` is not yet a field of
+  // `SnapshotPosition` before this task's implementation lands it, and this
+  // helper must compile and build a usable fixture either way.
+  function buildLeg(overrides: Record<string, unknown> & { id: string }): SnapshotPosition {
+    return {
+      side: 'long',
+      assetType: 'option',
+      symbol: 'AAPL250320C150',
+      currency: 'USD',
+      closedAt: null,
+      status: 'open',
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      fills: [],
+      tags: [],
+      ...overrides,
+    } as unknown as SnapshotPosition;
+  }
+
+  it('sums figures and dates at the latest leg flat for a closed two-leg group (AC 5.1)', () => {
+    const legA = buildLeg({
+      id: 'leg-a',
+      groupId: 'group-1',
+      symbol: 'AAPL250320C150',
+      side: 'long',
+      status: 'closed',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      lastFlatAt: '2026-01-10T00:00:00.000Z',
+      lastFlatNetPnl: '200',
+    });
+    const legB = buildLeg({
+      id: 'leg-b',
+      groupId: 'group-1',
+      symbol: 'AAPL250320C155',
+      side: 'short',
+      status: 'closed',
+      closedAt: '2026-01-12T00:00:00.000Z',
+      lastFlatAt: '2026-01-12T00:00:00.000Z',
+      lastFlatNetPnl: '100',
+    });
+
+    const group = classifyGroup([legA, legB]);
+
+    expect(group).not.toBeNull();
+    expect(group!.id).toBe('group-1');
+    expect(group!.closedAt.toISOString()).toBe('2026-01-12T00:00:00.000Z');
+    expect(group!.netPnl.toString()).toBe('300');
+    expect(group!.classification).toBe('winning');
+    expect(group!.fees.equals(group!.grossPnl.minus(group!.netPnl))).toBe(true);
+  });
+
+  it('returns null unless every leg is currently flat', () => {
+    const legFlat = buildLeg({
+      id: 'leg-a',
+      groupId: 'group-2',
+      status: 'closed',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      lastFlatAt: '2026-01-10T00:00:00.000Z',
+      lastFlatNetPnl: '200',
+    });
+    const legNeverFlat = buildLeg({
+      id: 'leg-b',
+      groupId: 'group-2',
+      status: 'open',
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      fills: [
+        {
+          type: 'entry',
+          price: '5',
+          quantity: '1',
+          fees: '0',
+          filledAt: '2026-01-05T00:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(classifyGroup([legFlat, legNeverFlat])).toBeNull();
+  });
+
+  it('takes symbol and assetType from the first leg and unions tags and legIds (AC 5.8)', () => {
+    const tagX = tag('11111111-1111-1111-1111-111111111111', 'Tag X');
+    const tagY = tag('22222222-2222-2222-2222-222222222222', 'Tag Y');
+    const legA = buildLeg({
+      id: 'leg-a',
+      groupId: 'group-3',
+      symbol: 'AAPL250320C150',
+      assetType: 'option',
+      status: 'closed',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      lastFlatAt: '2026-01-10T00:00:00.000Z',
+      lastFlatNetPnl: '200',
+      tags: [tagX],
+    });
+    const legB = buildLeg({
+      id: 'leg-b',
+      groupId: 'group-3',
+      symbol: 'MSFT',
+      assetType: 'stock',
+      status: 'closed',
+      closedAt: '2026-01-12T00:00:00.000Z',
+      lastFlatAt: '2026-01-12T00:00:00.000Z',
+      lastFlatNetPnl: '100',
+      tags: [tagX, tagY],
+    });
+
+    const group = classifyGroup([legA, legB]);
+
+    expect(group).not.toBeNull();
+    expect(group!.symbol).toBe(legA.symbol);
+    expect(group!.assetType).toBe(legA.assetType);
+    expect(symbolKey(group!)).toBe('AAPL');
+    expect(group!.tags.map((t) => t.id).sort()).toEqual([tagX.id, tagY.id].sort());
+    expect(group!.legIds?.slice().sort()).toEqual(['leg-a', 'leg-b']);
   });
 });
