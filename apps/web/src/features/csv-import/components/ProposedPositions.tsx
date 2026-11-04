@@ -175,6 +175,7 @@ export function ProposedPositions({
                   type="text"
                   defaultValue={proposal.label}
                   onChange={(e) => onLabelChange?.(proposal.id, e.target.value)}
+                  maxLength={40}
                   data-testid={`group-proposal-label-${proposal.id}`}
                   className="h-8 w-40 rounded-md border border-input bg-transparent px-2 text-sm"
                 />

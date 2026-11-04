@@ -149,9 +149,22 @@ export function ImportPage() {
     });
   }
 
+  // Trimmed to match server validation (labelOverrideSchema = trim().min(1).max(40))
+  // and collapsed to an omitted key — not an empty string — when blank, since
+  // `labelOverrides` has no nullable variant here; the service already reads a
+  // missing id as "no override" (`labelOverrides[proposal.id] ?? null`).
   function handleLabelChange(id: string, label: string) {
     if (declinedProposalIds.includes(id)) return;
-    setLabelOverrides((prev) => ({ ...prev, [id]: label }));
+    const trimmed = label.trim().slice(0, 40);
+    setLabelOverrides((prev) => {
+      if (trimmed === '') {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      return { ...prev, [id]: trimmed };
+    });
   }
 
   // NOTE: the import timezone stays UTC by default — it describes the CSV's own
