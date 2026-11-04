@@ -1,0 +1,3 @@
+Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees
+TSTA260620C100,Option,Buy,1,4.50,2024-03-15T09:30:00,0.65
+TSTA260620C110,Option,Sell,1,1.75,2024-03-15T09:33:00,0.65
