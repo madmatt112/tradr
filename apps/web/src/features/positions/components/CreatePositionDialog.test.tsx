@@ -32,6 +32,12 @@ vi.mock('@/features/accounts/hooks/useAccounts', () => ({
   useAccounts: () => ({ data: accountsData.current }),
 }));
 
+// MultiLegEntryForm (task 17) owns its own create mutation; stub it so the
+// switch test mounts the real component without hitting the network.
+vi.mock('../hooks/usePositionGroups', () => ({
+  useCreatePositionGroup: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+}));
+
 // Tier state is test-configurable; `undefined` (default) = self-host/loading,
 // so the pre-tier tests run with zero tier UI (parity).
 vi.mock('@/features/billing/useTierState', () => ({
@@ -588,5 +594,26 @@ describe('CreatePositionDialog — plan tiers', () => {
     renderDialog();
 
     expect(screen.queryByTestId('tier-positions-hint')).toBeNull();
+  });
+});
+
+/**
+ * Contract block — task 17 (multi-leg entry switch).
+ *
+ * | Criterion                          | Pre-condition      | Call (seam)                                             | Observable result                            | Source of expected value |
+ * |---------------------------------------|---------------------|------------------------------------------------------------|-------------------------------------------------|---------------------------|
+ * | The switch shows the multi-leg form    | dialog open, default (single) mode | select "multi-leg" on the entry-mode control    | the "Add leg" button (MultiLegEntryForm-only) renders | tasks.md task 17 Prompt "CreatePositionDialog gains a single or multi-leg switch"; design.md C13 |
+ *
+ * "single mode still submits as before" (the other half of this Success line) is a
+ * regression guard already held by the existing tests above ("stock mode submits...",
+ * "option mode submits...") — not re-asserted here.
+ */
+describe('CreatePositionDialog — multi-leg switch (task 17)', () => {
+  it('shows MultiLegEntryForm once multi-leg entry is chosen', () => {
+    renderDialog();
+
+    fireEvent.change(selectByOptionValue('multi-leg'), { target: { value: 'multi-leg' } });
+
+    expect(screen.getByRole('button', { name: 'Add leg' })).toBeTruthy();
   });
 });
