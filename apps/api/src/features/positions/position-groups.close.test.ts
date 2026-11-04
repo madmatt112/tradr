@@ -102,6 +102,18 @@
  *   Result: 500; both legs stay open with their original fill count.
  *   Source: requirements.md AC 4.7; positions.service.ts closeHooks registry.
  *
+ * AC 1.8 (existing per-position fill-add, fill-remove and same-day-reopen
+ * rules apply unchanged to a grouped leg; the edit branch is covered by the
+ * happy-path PUT above)
+ *   Pre: a 2-leg open group.
+ *   Call: add an entry fill to one leg, remove it, then close and reopen that
+ *     leg same-day — all through the plain per-position routes, naming the
+ *     leg directly rather than the group.
+ *   Result: 201/204/200 at each step, with the same recomputed quantity and
+ *     status as an ungrouped position would show.
+ *   Source: requirements.md AC 1.8; design.md "Regression guards, holding at
+ *     base".
+ *
  * Folded/out-of-scope criteria (recorded, not retested here):
  *   - AC 4.8's second half (a selection stays settable on an exit fill
  *     afterwards) is folded into the happy-path test above — it PUTs a
@@ -112,12 +124,6 @@
  *     green-tested at `position-group-entries.test.ts:243-254` ("derives
  *     group status: open unless every leg is closed"), independent of how a
  *     leg reaches 'closed'. RED-IMPOSSIBLE.
- *   - AC 1.8 (existing per-position fill-add/edit/remove and same-day-reopen
- *     rules apply unchanged to a leg) needs no code: `fills.ts`/
- *     `positions.service.ts`'s per-fill and reopen paths never read
- *     `group_id`. RED-IMPOSSIBLE; a regression guard exercising a grouped
- *     leg through those unchanged routes is named for the implementer brief
- *     rather than committed here (it would be green from the first run).
  *   - The checklist items "`pnpm vitest run ...` passes", "tradr-api.json and
  *     _how-its-built.json are committed" and "`pnpm check-types` is clean"
  *     are implementer-side checks, not test-authorable criteria.
@@ -791,5 +797,57 @@ describe('position-groups close-all — rollback on a throwing close hook (AC 4.
     expect(await getStatus(legB.id)).toBe('open');
     expect(await countFills(legA.id)).toBe(fillsBeforeA);
     expect(await countFills(legB.id)).toBe(fillsBeforeB);
+  });
+});
+
+describe('position-groups close-all — regression guard: per-position fill/reopen rules unchanged on a leg (AC 1.8)', () => {
+  it('adds a fill, removes it, and reopens same-day on a grouped leg, exactly as on an ungrouped position', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const openedAt = '2025-03-10T14:00:00.000Z';
+    const legA = await createOpenLeg(cookie, account.id, 'AAPL260116C970', {
+      price: '5',
+      filledAt: openedAt,
+    });
+    const legB = await createOpenLeg(cookie, account.id, 'AAPL260116C971', {
+      side: 'short',
+      price: '2',
+    });
+    await linkLegs(cookie, [legA.id, legB.id]);
+
+    // Add: scale legA in with a second entry fill, through the plain route.
+    const addRes = await authedRequest('POST', `/api/positions/${legA.id}/fills`, cookie, {
+      type: 'entry',
+      price: '6',
+      quantity: '1',
+      fees: '0',
+      filledAt: '2025-03-10T15:00:00.000Z',
+    });
+    expect(addRes.status).toBe(201);
+    const addedFill = await addRes.json();
+    let detail = await getPosition(cookie, legA.id);
+    expect(detail.fills).toHaveLength(2);
+    expect(detail.openUnits).toBe(2);
+
+    // Remove: delete the fill just added, through the plain route.
+    const removeRes = await authedRequest(
+      'DELETE',
+      `/api/positions/${legA.id}/fills/${addedFill.id}`,
+      cookie,
+    );
+    expect(removeRes.status).toBe(204);
+    detail = await getPosition(cookie, legA.id);
+    expect(detail.fills).toHaveLength(1);
+    expect(detail.openUnits).toBe(1);
+
+    // Same-day reopen: close then reopen within the same account-local day,
+    // through the plain routes.
+    await closeLegPlain(cookie, legA.id, '1', { price: '7', filledAt: '2025-03-10T16:00:00.000Z' });
+    expect(await getStatus(legA.id)).toBe('closed');
+    const reopenRes = await authedRequest('POST', `/api/positions/${legA.id}/reopen`, cookie, {
+      reopenedAt: '2025-03-10T17:00:00.000Z',
+    });
+    expect(reopenRes.status).toBe(200);
+    expect(await getStatus(legA.id)).toBe('open');
   });
 });
