@@ -169,6 +169,21 @@ describe('PositionDetail — delete confirmation copy', () => {
     expect(screen.getByText(/Are you sure you want to delete "AAPL"\?/i)).toBeTruthy();
     expect(screen.queryByText(/wash-sale classification/i)).toBeNull();
   });
+
+  // AC 1.5: the detail page's own delete dialog states that the leg leaves its group.
+  it('adds a sentence that the leg leaves its group when groupId is set', () => {
+    mockDetail({
+      status: 'open',
+      openedAt: `${TODAY_UTC}T09:00:00.000Z`,
+      closedAt: null,
+      groupId: 'group-1',
+    });
+    renderDetail();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(screen.getByText(/leaves its group/i)).toBeTruthy();
+  });
 });
 
 // R11-AC4/AC5: Open/Close are shown for their status and disabled until the

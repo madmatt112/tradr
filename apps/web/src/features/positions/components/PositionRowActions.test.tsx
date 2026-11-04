@@ -370,3 +370,16 @@ describe('PositionRowActions — delete confirmation', () => {
     expect(screen.queryByText(/wash-sale classification/i)).toBeNull();
   });
 });
+
+// AC 1.5: the delete dialog states that the leg leaves its group.
+describe('PositionRowActions — leg-leaves-group warning (AC 1.5)', () => {
+  it('adds a sentence that the leg leaves its group when groupId is set', async () => {
+    const position = { ...makePosition({ status: 'open' }), groupId: 'group-1' };
+    render(<PositionRowActions position={position} />);
+
+    await openMenu();
+    await userEvent.click(menuItem('Delete'));
+
+    expect(screen.getByText(/leaves its group/i)).toBeTruthy();
+  });
+});
