@@ -3,7 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
+import {
+  makePosition,
+  makePositionGroup,
+} from '@/features/positions/__fixtures__/position-fixtures';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useNow } from '@/hooks/useNow';
@@ -214,6 +217,36 @@ describe('RecentlyCreatedTab', () => {
     const expectedHrefs = expectedTop20Ids.map((id) => `/positions/${id}`);
     expect(renderedHrefs).toEqual(expectedHrefs);
 
+    unmount(container, root);
+  });
+
+  // Contract (design C14, AC 7.2): a group is one row showing its label,
+  // linking to its first open leg.
+  it('shows a group as one row with its label, linking to its first open leg', () => {
+    const closedLeg = {
+      ...makePosition({ id: '00000000-0000-4000-a000-0000000000f1', status: 'closed' }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const openLeg = {
+      ...makePosition({ id: '00000000-0000-4000-a000-0000000000f2', status: 'open' }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const group = makePositionGroup({
+      label: 'BCS',
+      status: 'open',
+      createdAt: '2026-05-27T11:00:00.000Z',
+      legs: [closedLeg, openLeg],
+    });
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+
+    const { container, root } = mountWith(<RecentlyCreatedTab />);
+    expect(container.textContent).toContain('Active: BCS');
+    const link = container.querySelector('a');
+    expect(link?.getAttribute('href')).toBe(`/positions/${openLeg.id}`);
     unmount(container, root);
   });
 

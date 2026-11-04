@@ -369,6 +369,27 @@ describe('useWalkthrough — start and exit', () => {
     });
   });
 
+  // Contract (design D16, AC 7.4): selectOwnRows reads flattened legs, so the
+  // close set's fallback position id is a real leg id, never the group's id.
+  it('opens a set that needs a position on a group’s first open leg, not the group id', async () => {
+    positions = [
+      {
+        id: 'group-1',
+        status: 'open',
+        legs: [
+          { id: 'leg-closed', status: 'closed' },
+          { id: 'leg-open', status: 'open' },
+        ],
+      } as unknown as { id: string; status: string; accountId?: string },
+    ];
+    await start('close');
+
+    expect(navigate).toHaveBeenCalledWith({
+      to: '/positions/$positionId',
+      params: { positionId: 'leg-open' },
+    });
+  });
+
   it('never falls back onto a position the sample account owns', async () => {
     accounts = [{ id: 'demo-acct', isDemo: true }];
     positions = [{ id: 'demo-open', status: 'open', accountId: 'demo-acct' }];
