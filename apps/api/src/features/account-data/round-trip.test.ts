@@ -20,6 +20,7 @@ import {
   fillTransferLinks,
   fills,
   ledgerEntries,
+  positionGroups,
   positionImages,
   positionTags,
   positions,
@@ -1255,5 +1256,216 @@ describe('transfer-link archive carry (design C8, AC 9.1-9.3)', () => {
       .from(fillTransferLinks)
       .where(eq(fillTransferLinks.userId, userB));
     expect(linkRows).toHaveLength(0);
+  });
+});
+
+async function seedGroupUser(prefix: string): Promise<{
+  userId: string;
+  groupId: string;
+  legAId: string;
+  legBId: string;
+}> {
+  const userId = await seedBareUser(prefix);
+  const [acct] = await db
+    .insert(accounts)
+    .values({ userId, name: 'Main', currency: 'USD', startingBalance: '0' })
+    .returning({ id: accounts.id });
+  const [group] = await db
+    .insert(positionGroups)
+    .values({ userId, labelOverride: 'Iron Condor' })
+    .returning({ id: positionGroups.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed fixed grouped legs for the group round-trip test
+  const [legA] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId: acct.id,
+      groupId: group.id,
+      symbol: 'XYZ',
+      side: 'short',
+      assetType: 'stock',
+      status: 'closed',
+      openedAt: new Date('2026-01-01T00:00:00Z'),
+      closedAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatNetPnl: '125.0000',
+    })
+    .returning({ id: positions.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed fixed grouped legs for the group round-trip test
+  const [legB] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId: acct.id,
+      groupId: group.id,
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+      status: 'closed',
+      openedAt: new Date('2026-01-01T00:00:00Z'),
+      closedAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatNetPnl: '-75.0000',
+    })
+    .returning({ id: positions.id });
+  return { userId, groupId: group.id, legAId: legA.id, legBId: legB.id };
+}
+
+describe('position-group archive carry (design C11, AC 9.1-9.2)', () => {
+  it(
+    "carries a group, its legs' groupId and label override; import restores them " +
+      'against remapped ids and the latched figures match (AC 9.1, AC 9.2)',
+    async () => {
+      const seedA = await seedGroupUser('rt-group-a');
+      const bytesA = await exportBytes(seedA.userId);
+      const parsedA = parseArchive(bytesA);
+
+      const groupsA = rowsOf(parsedA, 'position-groups.ndjson');
+      expect(groupsA).toHaveLength(1);
+      expect(groupsA[0].labelOverride).toBe('Iron Condor');
+
+      const legsA = rowsOf(parsedA, 'positions.ndjson');
+      expect(legsA.every((p) => p.groupId === seedA.groupId)).toBe(true);
+
+      const userB = await seedBareUser('rt-group-b');
+      await confirmImport(userB, streamOf(bytesA), digestOf(bytesA));
+
+      const bytesB = await exportBytes(userB);
+      const parsedB = parseArchive(bytesB);
+
+      const groupsB = rowsOf(parsedB, 'position-groups.ndjson');
+      expect(groupsB).toHaveLength(1);
+      expect(groupsB[0].labelOverride).toBe('Iron Condor');
+      // Remapped: a fresh id on B, never A's own group id.
+      expect(groupsB[0].id).not.toBe(seedA.groupId);
+
+      const legsB = rowsOf(parsedB, 'positions.ndjson');
+      expect(legsB).toHaveLength(2);
+      expect(legsB.every((p) => p.groupId === groupsB[0].id)).toBe(true);
+
+      // Latches travel on positions unchanged, so the legs' figures match
+      // after import (AC 9.2).
+      const pnlA = legsA.map((p) => p.lastFlatNetPnl).sort();
+      const pnlB = legsB.map((p) => p.lastFlatNetPnl).sort();
+      expect(pnlB).toEqual(pnlA);
+    },
+  );
+
+  // Design C11, AC 9.3 — a version-4 archive carries no position-groups entry and
+  // its positions have no groupId key; import restores each position ungrouped.
+  it('a version-4 archive imports its positions ungrouped (AC 9.3)', async () => {
+    const accountId = randomUUID();
+    const positionId = randomUUID();
+    const counts = {
+      brokerages: 0,
+      systemBrokerages: 0,
+      accounts: 1,
+      tags: 0,
+      positions: 1,
+      fills: 0,
+      lotSelections: 0,
+      transferLinks: 0,
+      positionTags: 0,
+      positionImages: 0,
+      ledgerEntries: 0,
+      exchangeRates: 0,
+      expenses: 0,
+      personas: 0,
+      builtinPersonas: 0,
+      conversations: 0,
+      messages: 0,
+      summaries: 0,
+      images: 0,
+    };
+    const manifest = {
+      format: 'tradr-account-archive',
+      archiveVersion: 4,
+      sourceAppVersion: 'test',
+      exportedAt: LOT_TS,
+      counts,
+      degradations: [] as unknown[],
+    };
+    const account = {
+      id: accountId,
+      name: 'Main',
+      currency: 'USD',
+      timezone: 'UTC',
+      brokerage: null,
+      startingBalance: '0.0000',
+      defaultRiskPercent: null,
+      isDemo: false,
+      isDefault: true,
+      taxTreatment: 'taxable',
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    // A version-4 position row: no `groupId` key at all.
+    const position = {
+      id: positionId,
+      accountId,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      status: 'open',
+      notes: null,
+      targetPrice: null,
+      stopLoss: null,
+      openedAt: null,
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const preferencesV4 = {
+      displayCurrency: null,
+      timezone: null,
+      taxJurisdiction: null,
+      taxLotMethod: null,
+      theme: 'system',
+      buyingPowerBasis: 'cash',
+      advisorDefaultPersona: null,
+      advisorTradeDataConsent: false,
+      writableAccountId: null,
+      onboarding: {},
+    };
+
+    function buildV4Archive(): Uint8Array {
+      const entries: Array<{ name: string; data: string }> = [
+        { name: 'manifest.json', data: JSON.stringify(manifest) },
+        { name: 'accounts.ndjson', data: `${JSON.stringify(account)}\n` },
+        { name: 'positions.ndjson', data: `${JSON.stringify(position)}\n` },
+        { name: 'preferences.json', data: JSON.stringify(preferencesV4) },
+        { name: 'dashboard-layout.json', data: 'null' },
+      ];
+      const out: Uint8Array[] = [];
+      const z = new Zip((err, data) => {
+        if (err) throw err;
+        out.push(data);
+      });
+      for (const e of entries) {
+        const f = new ZipDeflate(e.name, { level: 9 });
+        z.add(f);
+        f.push(new TextEncoder().encode(e.data), true);
+      }
+      z.end();
+      return concat(out);
+    }
+
+    const bytes = buildV4Archive();
+    const userB = await seedBareUser('rt-group-v4');
+    await confirmImport(userB, streamOf(bytes), digestOf(bytes));
+
+    const [row] = await db
+      .select({ groupId: positions.groupId })
+      .from(positions)
+      .where(eq(positions.userId, userB));
+    expect(row.groupId).toBeNull();
+
+    const groupRows = await db
+      .select({ id: positionGroups.id })
+      .from(positionGroups)
+      .where(eq(positionGroups.userId, userB));
+    expect(groupRows).toHaveLength(0);
   });
 });

@@ -4,6 +4,7 @@ import {
   CURRENCY_CODES,
   type CsvPreviewRequest,
   type CsvPreviewResponse,
+  type GroupProposal,
   type LocatedError,
   type LocatedWarning,
   type ProposedPosition,
@@ -16,6 +17,7 @@ import {
   resolveWritableAccountId,
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
+import { linkPositionsTx } from '@/features/positions/position-groups.service';
 import { countPositionsByUser } from '@/features/positions/positions.query';
 import {
   addFillTx,
@@ -252,6 +254,7 @@ export async function previewImport(
     timezone: request.timezone,
     committable,
     requiresDuplicateAffirmation,
+    groupProposals: pipeline.groupProposals,
   };
 
   // Enforce the staged-byte cap (Component 8) → 413.
@@ -294,6 +297,7 @@ export async function previewImport(
     timezone: stagedResult.timezone,
     committable: stagedResult.committable,
     requiresDuplicateAffirmation: stagedResult.requiresDuplicateAffirmation,
+    groupProposals: stagedResult.groupProposals,
   };
 }
 
@@ -312,11 +316,20 @@ export async function previewImport(
 // `AND status='committing'` guard closes the lazy-recovery race.
 // ---------------------------------------------------------------------------
 
-/** The staged `result` payload shape, as written by `previewImport`. */
+/** The staged `result` payload shape, as written by `previewImport`.
+ * `groupProposals` is optional: a preview staged before this field shipped
+ * has no key for it, and commits ungrouped (design C10). */
 interface StagedResult {
   positions: ProposedPosition[];
   committable: boolean;
   requiresDuplicateAffirmation: boolean;
+  groupProposals?: GroupProposal[];
+}
+
+/** Commit-time choices on a staged import's group proposals (design C10). */
+export interface GroupChoices {
+  declinedProposalIds: string[];
+  labelOverrides: Record<string, string>;
 }
 
 /**
@@ -341,6 +354,7 @@ export async function commitImport(
   // Routes pass `isAdmin` from AuthEnv (plan-tiers D9) — required so no call
   // site can silently skip the admin/gating pass-through.
   gate: { isAdmin: boolean },
+  groupChoices?: GroupChoices,
 ): Promise<CommittedResult> {
   type ClaimOutcome = { idempotent: CommittedResult } | { result: StagedResult; accountId: string };
 
@@ -516,11 +530,26 @@ export async function commitImport(
         fillsCreated += proposed.fills.length;
       }
 
+      // Link the undeclined proposals (design C10, AC 8.9) — inside the bulk
+      // tx, so a link failure (bad leg set, foreign id) rolls back every
+      // position, fill and group written by this import. An unknown declined
+      // id matches nothing and is silently ignored.
+      const declinedIds = new Set(groupChoices?.declinedProposalIds ?? []);
+      const labelOverrides = groupChoices?.labelOverrides ?? {};
+      let groupsCreated = 0;
+      for (const proposal of result.groupProposals ?? []) {
+        if (declinedIds.has(proposal.id)) continue;
+        const legIds = proposal.legRefs.map((ref) => positionIds[ref]!);
+        await linkPositionsTx(tx, userId, legIds, labelOverrides[proposal.id] ?? null);
+        groupsCreated += 1;
+      }
+
       const summary: CommittedResult = {
         positionsCreated: positionIds.length,
         fillsCreated,
         positionIds,
         accountId,
+        groupsCreated,
       };
 
       // L6 lifetime counter increment (plan-tiers C8, REQ-10.2/10.4) — inside

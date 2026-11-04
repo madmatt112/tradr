@@ -2334,6 +2334,22 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "declinedProposalIds": {
+                    "default": [],
+                    "description": "Ids from the preview's `groupProposals` to import ungrouped instead of linked. An id not in the staged proposals is ignored.\n",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "labelOverrides": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "default": {},
+                    "description": "Proposal id -> label override (1-40 trimmed characters), stored on the group it creates.\n",
+                    "type": "object"
+                  },
                   "token": {
                     "format": "uuid",
                     "type": "string"
@@ -2350,7 +2366,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary."
+            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId, groupsCreated }` — the import summary."
           },
           "400": {
             "description": "Malformed body (invalid token / confirmDuplicates)."
@@ -2401,7 +2417,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`.\n"
+            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation, groupProposals }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`. `groupProposals` is an array of `{ id, legRefs, label, basis }` — each a proposed multi-leg group, pre-selected; pass its `id` in the commit's `declinedProposalIds` to import it ungrouped instead. The order id that seeded a proposal is never included.\n"
           },
           "400": {
             "description": "Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS)."
@@ -3847,9 +3863,398 @@
         ]
       }
     },
+    "/api/position-groups": {
+      "post": {
+        "description": "Authed. Creates 2 to 8 legs sharing one account and one fill date, in one transaction: every leg is written with its entry fill and opened at that date, then linked into a new group. A bad OCC symbol, a symbol repeated across legs, or a leg whose underlying differs from the first writes nothing and names the offending leg's index. When feature gating is enforced, the whole batch is checked against the position cap (`positionCount + legs > limit`) and the account writability rule, same as a single create.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "type": "string"
+                  },
+                  "filledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "labelOverride": {
+                    "maxLength": 40,
+                    "minLength": 1,
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "legs": {
+                    "items": {
+                      "properties": {
+                        "assetType": {
+                          "enum": [
+                            "stock",
+                            "option"
+                          ],
+                          "type": "string"
+                        },
+                        "fees": {
+                          "type": "string"
+                        },
+                        "price": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "string"
+                        },
+                        "side": {
+                          "enum": [
+                            "long",
+                            "short"
+                          ],
+                          "type": "string"
+                        },
+                        "symbol": {
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "symbol",
+                        "side",
+                        "assetType",
+                        "quantity",
+                        "price"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 2,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "accountId",
+                  "filledAt",
+                  "legs"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created group",
+            "with its legs.": null
+          },
+          "400": {
+            "description": "Validation error — bad OCC symbol",
+            "naming the leg index.": null,
+            "or differing underlying": null,
+            "repeated symbol": null
+          },
+          "403": {
+            "description": "TIER_LIMIT_POSITIONS (batched position cap reached) or TIER_ACCOUNT_NOT_WRITABLE."
+          },
+          "404": {
+            "description": "Account not found (or not owned by the user)."
+          }
+        },
+        "summary": "Create a multi-leg strategy group.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
+    "/api/position-groups/link": {
+      "post": {
+        "description": "Authed. Links 2 to 8 existing `open` or `closed`, ungrouped positions sharing one account and underlying into a new group. Writes only the group row and each leg's `groupId` — no fill or ledger row, and each leg's `updatedAt` is left unchanged. Refuses a `draft` leg or one already in a group (409, naming the symbol), legs in different accounts or with a bad leg set (400, naming the leg index), or a foreign position id (404), before any write.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "labelOverride": {
+                    "maxLength": 40,
+                    "minLength": 1,
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "positionIds": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "maxItems": 8,
+                    "minItems": 2,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "positionIds"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The new group",
+            "with its legs.": null
+          },
+          "400": {
+            "description": "Validation error",
+            "naming the leg index.": null
+          },
+          "404": {
+            "description": "A position id was not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "A leg is a draft or already grouped; names its symbol."
+          }
+        },
+        "summary": "Link ungrouped positions into a group.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
+    "/api/position-groups/{id}": {
+      "patch": {
+        "description": "Authed. Setting `labelOverride` stores it trimmed, 1 to 40 characters; detection never replaces it while it is set. Setting it to `null` clears it, so the label follows the current legs again.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "labelOverride": {
+                    "maxLength": 40,
+                    "minLength": 1,
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "labelOverride"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "cleared": null,
+            "description": "The group",
+            "the detected label).": null,
+            "with the label reflecting the override (or": null
+          },
+          "404": {
+            "description": "The group was not found (or not owned by the user)."
+          }
+        },
+        "summary": "Set or clear a group's label override.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
+    "/api/position-groups/{id}/close": {
+      "post": {
+        "description": "Authed. In one transaction, writes one exit fill per open leg for its open units (carrying no lot selection) and closes it, all dated at `closedAt` or now; an already-closed leg is skipped even if named. Posts through the existing fill and close hooks per leg, under its own symbol — no group-level ledger row. An open leg missing from `exits` is a validation error naming it; any failure (including a `closedAt` before a leg's open date, or a leg refused by the reopen guard) rolls back every leg and names the offending leg.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "closedAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "exits": {
+                    "items": {
+                      "properties": {
+                        "fees": {
+                          "type": "string"
+                        },
+                        "positionId": {
+                          "format": "uuid",
+                          "type": "string"
+                        },
+                        "price": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "positionId",
+                        "price"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "exits"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group",
+            "with every leg closed.": null
+          },
+          "400": {
+            "description": "Validation error — a missing exit",
+            "or a closedAt before a leg's open date; names the leg.": null
+          },
+          "404": {
+            "description": "The group was not found",
+            "or an exits id is not a leg of it.": null
+          },
+          "409": {
+            "description": "Every leg is already closed",
+            "or a leg was refused by the reopen guard (names it).": null
+          }
+        },
+        "summary": "Close every open leg of a group at once.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
+    "/api/position-groups/{id}/legs": {
+      "post": {
+        "description": "Authed. Adds one ungrouped, non-draft position to the group, subject to the same checks as linking and the 8-leg cap. A 9th leg is refused with 400, naming the cap, and carries no leg index.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "positionId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "positionId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The group",
+            "with the new leg.": null
+          },
+          "400": {
+            "description": "Validation error",
+            "or the group is already at 8 legs.": null
+          },
+          "404": {
+            "description": "The group or the position was not found (or not owned by the user)."
+          },
+          "409": {
+            "description": "The position is a draft or already grouped",
+            "or the group changed under the lock.": null
+          }
+        },
+        "summary": "Add one leg to an existing group.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
+    "/api/position-groups/{id}/legs/{positionId}": {
+      "delete": {
+        "description": "Authed. Removes the leg from the group; the leg keeps its own lifecycle and figures unchanged. When one leg or fewer remains, the group dissolves and the last leg behaves as a plain, ungrouped position.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "positionId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The leg was unlinked (and the group dissolved",
+            "if it fell to one leg).": null
+          },
+          "404": {
+            "description": "The group or the position was not found (or not owned by the user)",
+            "or the position is not a member of this group.": null
+          },
+          "409": {
+            "description": "The group changed under the lock; retry."
+          }
+        },
+        "summary": "Unlink one leg from a group.",
+        "tags": [
+          "Position Groups"
+        ]
+      }
+    },
     "/api/positions": {
       "get": {
-        "description": "Authed. Returns the user's positions (newest first), each carrying its `tags` array ordered by category then case-insensitive name and its `classification` (`winning`, `losing` or `breakeven` for a closed position, `null` for a draft or open one). Optional filters may be combined.\n",
+        "description": "Authed. Returns the user's positions and multi-leg groups (newest first, one entry per group — no per-group query), each carrying its `tags` array ordered by category then case-insensitive name and its `classification` (`winning`, `losing` or `breakeven` for a closed position or group, `null` otherwise). A grouped entry carries `kind: \"group\"`, its legs (each shaped like an ungrouped item), and group-level figures (`label`, `detectedLabel`, `netEntry`, `maxLoss`); an ungrouped entry carries no `kind` key. `status`, `classification` and `tag` filters match a group's own derived fields, not any one leg's. Optional filters may be combined.\n",
         "parameters": [
           {
             "in": "query",
@@ -4016,7 +4421,7 @@
         ]
       },
       "get": {
-        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name. Carries a `compliance` object (live rule score: `finality`, `score`, `status` and one `entries` element per applicable enabled rule) only when the user holds at least one trading rule, and omits the field when they hold none.\n",
+        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name. Carries a `compliance` object (live rule score: `finality`, `score`, `status` and one `entries` element per applicable enabled rule) only when the user holds at least one trading rule, and omits the field when they hold none. Carries a `group` object (the multi-leg group this position is a leg of, with its other legs) only when the position belongs to one, and omits the field for an ungrouped position.\n",
         "parameters": [
           {
             "in": "path",

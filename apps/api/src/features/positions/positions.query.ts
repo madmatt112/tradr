@@ -15,6 +15,7 @@ export function insertPosition(
     notes?: string | null;
     targetPrice?: string | null;
     stopLoss?: string | null;
+    groupId?: string;
   },
 ) {
   return tx.insert(positions).values(data).returning();
@@ -40,7 +41,13 @@ export async function countPositionsByUser(
 export function findPositionListByUser(
   db: Database | Transaction,
   userId: string,
-  filters?: { status?: string; accountId?: string; tag?: string[]; classification?: string },
+  filters?: {
+    status?: string;
+    accountId?: string;
+    tag?: string[];
+    classification?: string;
+    groupId?: string;
+  },
 ) {
   const conditions = [eq(positions.userId, userId)];
   if (filters?.status) {
@@ -66,11 +73,13 @@ export function findPositionListByUser(
       agg.entry_qty, agg.exit_qty,
       agg.entry_cost, agg.exit_cost,
       agg.entry_fees, agg.exit_fees,
-      tg.tags
+      tg.tags,
+      pg.label_override
     FROM positions p
     JOIN accounts a ON a.id = p.account_id
     LEFT JOIN brokerages b ON b.id = a.brokerage_id
     LEFT JOIN fee_schedules fs ON fs.brokerage_id = b.id
+    LEFT JOIN position_groups pg ON pg.id = p.group_id
     LEFT JOIN LATERAL (
       SELECT
         COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0) AS entry_qty,
@@ -92,15 +101,20 @@ export function findPositionListByUser(
       FROM position_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.position_id = p.id
     ) tg ON true
     WHERE p.user_id = ${userId}
-    ${filters?.status ? sql`AND p.status = ${filters.status}` : sql``}
-    ${filters?.classification && !filters?.status ? sql`AND p.status = 'closed'` : sql``}
+    ${filters?.groupId ? sql`AND p.group_id = ${filters.groupId}` : sql``}
+    ${filters?.status ? sql`AND (p.group_id IS NOT NULL OR p.status = ${filters.status})` : sql``}
+    ${
+      filters?.classification && !filters?.status
+        ? sql`AND (p.group_id IS NOT NULL OR p.status = 'closed')`
+        : sql``
+    }
     ${filters?.accountId ? sql`AND p.account_id = ${filters.accountId}` : sql``}
     ${
       filters?.tag?.length
         ? sql.join(
             filters.tag.map(
               (id) =>
-                sql`AND EXISTS (SELECT 1 FROM position_tags pt WHERE pt.position_id = p.id AND pt.tag_id = ${id})`,
+                sql`AND (p.group_id IS NOT NULL OR EXISTS (SELECT 1 FROM position_tags pt WHERE pt.position_id = p.id AND pt.tag_id = ${id}))`,
             ),
             sql` `,
           )

@@ -25,6 +25,7 @@ const EXECUTION_FIELDS: TargetField[] = [
   { field: 'side', label: 'Side (long/short)', required: false },
   { field: 'fees', label: 'Fees', required: false },
   { field: 'notes', label: 'Notes', required: false },
+  { field: 'orderId', label: 'Order ID', required: false },
 ];
 
 const ROUND_TRIP_FIELDS: TargetField[] = [
@@ -39,6 +40,7 @@ const ROUND_TRIP_FIELDS: TargetField[] = [
   { field: 'exitDate', label: 'Exit date', required: true },
   { field: 'fees', label: 'Fees', required: false },
   { field: 'notes', label: 'Notes', required: false },
+  { field: 'orderId', label: 'Order ID', required: false },
 ];
 
 // Optional contract columns the `composed` option form offers on top of the
@@ -85,6 +87,16 @@ export function targetFieldsForShape(
  * asset-type column is needed (REQ-2.8 client half). Every other field is
  * satisfied only by a mapped column.
  */
+/**
+ * Trims a user-entered group label override to the server's
+ * `labelOverrideSchema` (`trim().min(1).max(40)`), returning `null` when the
+ * result is empty so the caller can drop the key rather than send "".
+ */
+export function sanitizeLabelOverride(label: string): string | null {
+  const trimmed = label.trim().slice(0, 40);
+  return trimmed === '' ? null : trimmed;
+}
+
 export function isRequiredFieldSatisfied(field: string, mapping: Mapping): boolean {
   if (
     field === 'assetType' &&

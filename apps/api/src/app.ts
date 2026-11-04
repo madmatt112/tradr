@@ -38,6 +38,7 @@ import optionsRouter from '@/features/options/options.route';
 import performance from '@/features/performance/performance.route';
 import fillsRouter from '@/features/positions/fills.route';
 import lotsRouter from '@/features/positions/lots.route';
+import positionGroupsRouter from '@/features/positions/position-groups.route';
 import positionImagesRouter from '@/features/positions/position-images.route';
 import positions from '@/features/positions/positions.route';
 import {
@@ -162,6 +163,7 @@ app.route('/api/account-data', accountDataRouter);
 app.route('/api/dashboard', dashboardRoute);
 app.route('/api/options', optionsRouter);
 app.route('/api/positions', positions);
+app.route('/api/position-groups', positionGroupsRouter);
 app.route('/api/positions', fillsRouter);
 app.route('/api/positions', lotsRouter);
 app.route('/api/positions', transferLinksRouter);

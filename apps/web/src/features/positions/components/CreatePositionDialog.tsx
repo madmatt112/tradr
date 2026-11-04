@@ -25,6 +25,7 @@ import { useTierState } from '@/features/billing/useTierState';
 import { getPositionErrorCode, useCreatePosition } from '../hooks/usePositions';
 import { encodeContract, occErrorField, type OptionContractInputs } from '../utils/occForm';
 
+import { MultiLegEntryForm } from './MultiLegEntryForm';
 import { OptionContractFields } from './OptionContractFields';
 
 /**
@@ -133,6 +134,9 @@ export function CreatePositionDialog({ open, onOpenChange }: Props) {
   const { data: accounts } = useAccounts();
   const createPosition = useCreatePosition();
   const { data: tierState } = useTierState();
+  // Single or multi-leg entry (design C13). Single by default; the dialog
+  // switches its whole body based on this, never both at once.
+  const [entryMode, setEntryMode] = useState<'single' | 'multi-leg'>('single');
   // The rare non-field encoder error (e.g. OCC_COMPACT_TOO_LONG) lives here and
   // renders in OptionContractFields' form slot — not as an RHF field error.
   const [formError, setFormError] = useState<string | null>(null);
@@ -255,30 +259,48 @@ export function CreatePositionDialog({ open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>New Position</DialogTitle>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
-          {tierRefusalCode && (
-            <div
-              data-testid="position-tier-refusal"
-              data-error-code={tierRefusalCode}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-3"
-            >
-              <span className="text-sm text-destructive">
-                {TIER_REFUSAL_MESSAGES[tierRefusalCode]}
-              </span>
-              {tierState?.purchasable && <UpgradeLink surface="position-dialog" />}
-            </div>
-          )}
+        <div className="space-y-2">
+          <Label>Entry mode</Label>
+          <Select
+            value={entryMode}
+            onValueChange={(val) => setEntryMode(val as 'single' | 'multi-leg')}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="single">Single position</SelectItem>
+              <SelectItem value="multi-leg">Multi-leg strategy</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {entryMode === 'multi-leg' ? (
+          <MultiLegEntryForm accounts={accounts} onOpenChange={onOpenChange} />
+        ) : (
+          <form onSubmit={onSubmit} className="space-y-4">
+            {tierRefusalCode && (
+              <div
+                data-testid="position-tier-refusal"
+                data-error-code={tierRefusalCode}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-3"
+              >
+                <span className="text-sm text-destructive">
+                  {TIER_REFUSAL_MESSAGES[tierRefusalCode]}
+                </span>
+                {tierState?.purchasable && <UpgradeLink surface="position-dialog" />}
+              </div>
+            )}
 
-          {positionsHint !== null && (
-            <p data-testid="tier-positions-hint" className="text-xs text-muted-foreground">
-              {positionsHint} position{positionsHint === 1 ? '' : 's'} left on your plan
-            </p>
-          )}
+            {positionsHint !== null && (
+              <p data-testid="tier-positions-hint" className="text-xs text-muted-foreground">
+                {positionsHint} position{positionsHint === 1 ? '' : 's'} left on your plan
+              </p>
+            )}
 
-          {assetType === 'stock' ? (
-            <div className="space-y-2">
-              <Label htmlFor="symbol">Symbol</Label>
-              {/* The same control the calculator uses, for the reason above the
+            {assetType === 'stock' ? (
+              <div className="space-y-2">
+                <Label htmlFor="symbol">Symbol</Label>
+                {/* The same control the calculator uses, for the reason above the
                   import.
 
                   BOTH HANDLERS ARE WIRED, AND THE SECOND ONE IS NOT OPTIONAL
@@ -291,128 +313,131 @@ export function CreatePositionDialog({ open, onOpenChange }: Props) {
                   plain-text-entry behaviour this input had before the dropdown
                   was added; selecting a result still overwrites it with the
                   canonical ticker. */}
-              <SymbolAutocomplete
-                id="symbol"
-                value={form.watch('symbol') ?? ''}
-                onQueryChange={(raw) =>
-                  form.setValue('symbol', raw.toUpperCase(), { shouldDirty: true })
-                }
-                onChange={(ticker) =>
-                  form.setValue('symbol', ticker, { shouldValidate: true, shouldDirty: true })
-                }
-                placeholder="e.g., AAPL"
+                <SymbolAutocomplete
+                  id="symbol"
+                  value={form.watch('symbol') ?? ''}
+                  onQueryChange={(raw) =>
+                    form.setValue('symbol', raw.toUpperCase(), { shouldDirty: true })
+                  }
+                  onChange={(ticker) =>
+                    form.setValue('symbol', ticker, { shouldValidate: true, shouldDirty: true })
+                  }
+                  placeholder="e.g., AAPL"
+                />
+                {form.formState.errors.symbol && (
+                  <p className="text-sm text-destructive">{form.formState.errors.symbol.message}</p>
+                )}
+              </div>
+            ) : (
+              <OptionContractFields
+                value={optionInputs}
+                onChange={(next) => {
+                  form.setValue('underlying', next.underlying);
+                  form.setValue('expiry', next.expiry);
+                  form.setValue('optionType', next.type);
+                  form.setValue('strike', next.strike);
+                }}
+                errors={{
+                  underlying: form.formState.errors.underlying?.message,
+                  expiry: form.formState.errors.expiry?.message,
+                  strike: form.formState.errors.strike?.message,
+                  form: formError ?? undefined,
+                }}
               />
-              {form.formState.errors.symbol && (
-                <p className="text-sm text-destructive">{form.formState.errors.symbol.message}</p>
-              )}
-            </div>
-          ) : (
-            <OptionContractFields
-              value={optionInputs}
-              onChange={(next) => {
-                form.setValue('underlying', next.underlying);
-                form.setValue('expiry', next.expiry);
-                form.setValue('optionType', next.type);
-                form.setValue('strike', next.strike);
-              }}
-              errors={{
-                underlying: form.formState.errors.underlying?.message,
-                expiry: form.formState.errors.expiry?.message,
-                strike: form.formState.errors.strike?.message,
-                form: formError ?? undefined,
-              }}
-            />
-          )}
+            )}
 
-          <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Side</Label>
+                <Select
+                  value={form.watch('side')}
+                  onValueChange={(val) => form.setValue('side', val as 'long' | 'short')}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="long">Long</SelectItem>
+                    <SelectItem value="short">Short</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Asset Type</Label>
+                <Select
+                  value={assetType}
+                  onValueChange={(val) => handleAssetTypeChange(val as 'stock' | 'option')}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="stock">Stock</SelectItem>
+                    <SelectItem value="option">Option</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             <div className="space-y-2">
-              <Label>Side</Label>
+              <Label>Account</Label>
               <Select
-                value={form.watch('side')}
-                onValueChange={(val) => form.setValue('side', val as 'long' | 'short')}
+                value={form.watch('accountId')}
+                onValueChange={(val) => form.setValue('accountId', val)}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Select account" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="long">Long</SelectItem>
-                  <SelectItem value="short">Short</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Asset Type</Label>
-              <Select
-                value={assetType}
-                onValueChange={(val) => handleAssetTypeChange(val as 'stock' | 'option')}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="stock">Stock</SelectItem>
-                  <SelectItem value="option">Option</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Account</Label>
-            <Select
-              value={form.watch('accountId')}
-              onValueChange={(val) => form.setValue('accountId', val)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select account" />
-              </SelectTrigger>
-              <SelectContent>
-                {/* Non-writable accounts are disabled + badged instead of
+                  {/* Non-writable accounts are disabled + badged instead of
                     inviting a 403 (plan-tiers D18) — writable on self-host,
                     Pro, and under the cap. */}
-                {accounts?.map((a) => {
-                  const writable = isAccountWritable(tierState, a.id);
-                  return (
-                    <SelectItem key={a.id} value={a.id} disabled={!writable}>
-                      {a.name} ({a.currency}){writable ? '' : ' — read-only on your plan'}
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-            {form.formState.errors.accountId && (
-              <p className="text-sm text-destructive">{form.formState.errors.accountId.message}</p>
-            )}
-          </div>
+                  {accounts?.map((a) => {
+                    const writable = isAccountWritable(tierState, a.id);
+                    return (
+                      <SelectItem key={a.id} value={a.id} disabled={!writable}>
+                        {a.name} ({a.currency}){writable ? '' : ' — read-only on your plan'}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              {form.formState.errors.accountId && (
+                <p className="text-sm text-destructive">
+                  {form.formState.errors.accountId.message}
+                </p>
+              )}
+            </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="notes">Notes</Label>
-            <Textarea id="notes" {...form.register('notes')} placeholder="Optional notes..." />
-          </div>
+            <div className="space-y-2">
+              <Label htmlFor="notes">Notes</Label>
+              <Textarea id="notes" {...form.register('notes')} placeholder="Optional notes..." />
+            </div>
 
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              className="cursor-pointer"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              // The walkthrough's anchor for its "Choose Create" step — the
-              // account dialog's `account-submit` precedent. Without it the
-              // position set had no step for the action it was waiting on, so
-              // the tour described four fields and then appeared to stall.
-              data-tour="position-submit"
-              className="cursor-pointer"
-              disabled={createPosition.isPending}
-            >
-              {createPosition.isPending ? 'Creating...' : 'Create'}
-            </Button>
-          </div>
-        </form>
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="cursor-pointer"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                // The walkthrough's anchor for its "Choose Create" step — the
+                // account dialog's `account-submit` precedent. Without it the
+                // position set had no step for the action it was waiting on, so
+                // the tour described four fields and then appeared to stall.
+                data-tour="position-submit"
+                className="cursor-pointer"
+                disabled={createPosition.isPending}
+              >
+                {createPosition.isPending ? 'Creating...' : 'Create'}
+              </Button>
+            </div>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

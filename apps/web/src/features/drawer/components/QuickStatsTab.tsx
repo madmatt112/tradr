@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { usePresetPerformance } from '@/features/performance/hooks/usePresetPerformance';
 import { usePositions } from '@/features/positions/hooks/usePositions';
+import { flattenEntries } from '@/features/positions/utils/listEntries';
 import { useUserTimezone } from '@/hooks/useUserTimezone';
 
 function openNotional(positions: PositionListItem[], displayCurrency: string): number {
@@ -103,7 +104,10 @@ export function QuickStatsTab() {
   const avgLossNum = avgLossRaw != null ? Number(avgLossRaw) : null;
 
   const positions = positionsQuery.data ?? [];
-  const openNotionalValue = displayCurrency !== null ? openNotional(positions, displayCurrency) : 0;
+  const openNotionalValue =
+    displayCurrency !== null ? openNotional(flattenEntries(positions), displayCurrency) : 0;
+  // Over entries, not flattened legs (design C14): a multi-leg group in
+  // another currency counts once, not once per leg.
   const excludedCount =
     displayCurrency !== null
       ? positions.filter((p) => p.status === 'open' && p.accountCurrency !== displayCurrency).length

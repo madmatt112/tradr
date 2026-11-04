@@ -204,6 +204,30 @@ describe('normalizeRow — dates (REQ-5.3, REQ-7.4)', () => {
   });
 });
 
+/**
+ * Contract block.
+ *
+ * | Criterion                                    | Pre-condition                                              | Call (seam)                                              | Observable result                | Source of expected value |
+ * |-----------------------------------------------|--------------------------------------------------------------|------------------------------------------------------------|------------------------------------|---------------------------|
+ * | AC 8.5 real midnight fill is not date-only    | `filledAt` is a bare date (no time) vs. an explicit midnight datetime, both `iso-datetime` | normalizeRow(row, { ...opts, dateFormat: 'iso-datetime' }) | bare date -> `dateOnly: true`; explicit-time midnight -> falsy | design.md C10 "plus an iso-datetime cell that is a bare date"; multi-leg-positions Success list |
+ */
+describe('normalizeRow — dateOnly flag for the heuristic import group proposer (AC 8.5, design C10)', () => {
+  it('an iso-datetime bare date is date-only, but a real midnight fill (explicit time) is not', () => {
+    const bareDate = ok(
+      normalizeRow(row({ filledAt: '2024-03-10' }), { ...US, dateFormat: 'iso-datetime' }),
+    );
+    expect(bareDate.row.dateOnly).toBe(true);
+
+    const realMidnight = ok(
+      normalizeRow(row({ filledAt: '2024-03-10T00:00:00.000Z' }), {
+        ...US,
+        dateFormat: 'iso-datetime',
+      }),
+    );
+    expect(realMidnight.row.dateOnly).toBeFalsy();
+  });
+});
+
 describe('normalizeRow — expiry (REQ-2.2)', () => {
   // A non-UTC timezone proves the expiry is a plain calendar date, never shifted.
   const TOKYO: NormalizeOptions = { ...US, timezone: 'Asia/Tokyo' };

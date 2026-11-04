@@ -3,6 +3,7 @@ import {
   CreatePositionSchema,
   getCurrencyMinorUnits,
   type CsvPreviewRequest,
+  type GroupProposal,
   type LocatedError,
   type LocatedWarning,
   type ProposedPosition,
@@ -15,6 +16,7 @@ import {
 } from '@/features/positions/segment-invariants';
 
 import { resolveContracts } from './csv-contract';
+import { proposeGroups } from './csv-group-proposals';
 import { applyMapping, validateMappingShape } from './csv-mapping';
 import { normalizeRow, type NormalizedRow } from './csv-normalize';
 import type { ParsedCsv } from './csv-parse';
@@ -40,6 +42,8 @@ export interface PipelineResult {
   totalFills: number;
   /** Rows dropped by the mapping's row filter (design C8/D9); 0 with no filter. */
   rowsSkipped: number;
+  /** Proposed multi-leg groups (design C10); legRefs index into proposedPositions. */
+  groupProposals: GroupProposal[];
 }
 
 /**
@@ -156,6 +160,11 @@ export function runPipeline(
     totalFills += seg.executions.length;
   }
 
+  // Group proposals (design C10, Requirement 8) — legRefs index into
+  // `proposedPositions`, built above in the same `segResult.segments` order.
+  const groupResult = proposeGroups(segResult.segments, request.timezone);
+  warnings.push(...groupResult.warnings);
+
   return {
     proposedPositions,
     segments: segResult.segments,
@@ -163,6 +172,7 @@ export function runPipeline(
     warnings,
     totalFills,
     rowsSkipped: filtered.rowsSkipped,
+    groupProposals: groupResult.proposals,
   };
 }
 

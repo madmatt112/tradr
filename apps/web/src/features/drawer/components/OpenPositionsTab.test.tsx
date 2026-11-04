@@ -3,7 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
+import {
+  makePosition,
+  makePositionGroup,
+} from '@/features/positions/__fixtures__/position-fixtures';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { formatCurrency } from '@/lib/format';
@@ -227,6 +230,41 @@ describe('OpenPositionsTab', () => {
       (a) => a.querySelector('.font-medium')?.textContent,
     );
     expect(symbols).toEqual(['NEW', 'OLD', 'NULLROW']);
+    unmount(container, root);
+  });
+
+  // Contract (design C14, AC 7.2): a group is one row showing its label and
+  // the magnitude of its open cost basis, linking to its first open leg.
+  it('shows a group as one row with its label and |openCostBasis|, linking to its first open leg', () => {
+    const closedLeg = {
+      ...makePosition({ id: '00000000-0000-4000-a000-0000000000e1', status: 'closed' }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const openLeg = {
+      ...makePosition({ id: '00000000-0000-4000-a000-0000000000e2', status: 'open' }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const group = makePositionGroup({
+      label: 'BCS',
+      openCostBasis: -301.3,
+      accountCurrency: 'USD',
+      openedAt: '2026-05-26T10:00:00.000Z',
+      legs: [closedLeg, openLeg],
+    });
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+    const text = container.textContent ?? '';
+
+    expect(text).toContain('BCS');
+    expect(text).toContain(formatCurrency(301.3, 'USD'));
+    const link = container.querySelector('a');
+    expect(link?.getAttribute('href')).toBe(`/positions/${openLeg.id}`);
+
     unmount(container, root);
   });
 

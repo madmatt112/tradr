@@ -302,6 +302,50 @@ describe('useOnboarding — derived checklist', () => {
       ['close', false],
     ]);
   });
+
+  // Contract (design C14, AC 7.4): selectOwnRows reads flattened legs, so a
+  // group with one closed leg ticks item 4 the same as an ungrouped closed
+  // position would — and a group entirely on the sample account still counts
+  // for nothing.
+  it('counts a group’s legs individually, and still excludes an entire sample-account group', async () => {
+    mockServer({
+      accounts: [aDemoAccount, anAccount],
+      positions: [
+        {
+          kind: 'group',
+          id: 'g-demo',
+          accountId: aDemoAccount.id,
+          status: 'closed',
+          legs: [{ id: 'dleg1', status: 'closed', accountId: aDemoAccount.id }],
+        },
+        {
+          kind: 'group',
+          id: 'g-own',
+          accountId: anAccount.id,
+          status: 'open',
+          legs: [
+            { id: 'leg1', status: 'closed', accountId: anAccount.id },
+            { id: 'leg2', status: 'open', accountId: anAccount.id },
+          ],
+        },
+      ] as unknown as PositionListItem[],
+    });
+    const { result } = renderHook(() => useOnboarding(), {
+      wrapper: makeWrapper(makeQueryClient()),
+    });
+
+    await waitFor(() => expect(result.current.checklist).toBeDefined());
+
+    // "close" ticks true because `leg1` of the user's own group is closed —
+    // the group's own top-level status is 'open', so this only holds if the
+    // legs are counted individually.
+    expect(doneVector(result.current.checklist!.items)).toEqual([
+      ['account', true],
+      ['calculator', false],
+      ['position', true],
+      ['close', true],
+    ]);
+  });
 });
 
 // --- the in-flight window ---------------------------------------------------

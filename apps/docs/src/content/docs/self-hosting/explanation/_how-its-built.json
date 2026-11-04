@@ -3,11 +3,11 @@
   "vitestProjects": [
     {
       "name": "shared",
-      "testFiles": 28
+      "testFiles": 29
     },
     {
       "name": "api",
-      "testFiles": 196
+      "testFiles": 201
     },
     {
       "name": "migrations",
@@ -15,7 +15,7 @@
     },
     {
       "name": "web",
-      "testFiles": 221
+      "testFiles": 231
     },
     {
       "name": "web-scripts",
@@ -26,9 +26,9 @@
       "testFiles": 3
     }
   ],
-  "testFilesTotal": 457,
-  "e2eSpecFiles": 39,
-  "migrations": 42,
+  "testFilesTotal": 473,
+  "e2eSpecFiles": 40,
+  "migrations": 43,
   "ciJobs": [
     "checks",
     "test-api",

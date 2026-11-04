@@ -59,6 +59,7 @@ import type { OnboardingPatch, OnboardingState, OnboardingStatus } from '@tradr/
 
 import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { usePositions } from '@/features/positions/hooks/usePositions';
+import { flattenEntries } from '@/features/positions/utils/listEntries';
 import { api } from '@/lib/api';
 
 import {
@@ -261,7 +262,7 @@ export function useOnboarding(): UseOnboardingResult {
     // whole of that rule, and the reasoning for it lives there. With item 1
     // already excluded, `allComplete` cannot become true on seeded data alone,
     // so the checklist cannot retire itself over trades the user never made.
-    const { ownAccounts, ownPositions } = selectOwnRows(accounts, positions);
+    const { ownAccounts, ownPositions } = selectOwnRows(accounts, flattenEntries(positions));
     const counts = {
       account: ownAccounts.length,
       position: ownPositions.length,

@@ -98,9 +98,13 @@ function surfaceCodedPreviewError(err: unknown): never {
  *       200:
  *         description: >
  *           `{ token, summary, positions, errors, warnings, timezone,
- *           committable, requiresDuplicateAffirmation }`. `token` is consumed by
- *           the commit endpoint. A file-level `rows_skipped` warning reports rows
- *           dropped by `mapping.rowFilter`.
+ *           committable, requiresDuplicateAffirmation, groupProposals }`. `token`
+ *           is consumed by the commit endpoint. A file-level `rows_skipped`
+ *           warning reports rows dropped by `mapping.rowFilter`. `groupProposals`
+ *           is an array of `{ id, legRefs, label, basis }` — each a proposed
+ *           multi-leg group, pre-selected; pass its `id` in the commit's
+ *           `declinedProposalIds` to import it ungrouped instead. The order id
+ *           that seeded a proposal is never included.
  *       400: { description: 'Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS).' }
  *       413: { description: 'File over CSV_IMPORT_MAX_FILE_BYTES (PAYLOAD_TOO_LARGE), too many rows (CSV_IMPORT_TOO_MANY_ROWS), or staged result too large (CSV_IMPORT_RESULT_TOO_LARGE).' }
  *       409: { description: 'An import is already in progress for this user (CSV_IMPORT_IN_PROGRESS).' }
@@ -152,9 +156,24 @@ csvImport.post('/preview', async (c) => {
  *             properties:
  *               token: { type: string, format: uuid }
  *               confirmDuplicates: { type: boolean, default: false }
+ *               declinedProposalIds:
+ *                 type: array
+ *                 items: { type: string }
+ *                 default: []
+ *                 description: >
+ *                   Ids from the preview's `groupProposals` to import ungrouped
+ *                   instead of linked. An id not in the staged proposals is
+ *                   ignored.
+ *               labelOverrides:
+ *                 type: object
+ *                 additionalProperties: { type: string }
+ *                 default: {}
+ *                 description: >
+ *                   Proposal id -> label override (1-40 trimmed characters),
+ *                   stored on the group it creates.
  *     responses:
  *       200:
- *         description: '`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary.'
+ *         description: '`{ positionsCreated, fillsCreated, positionIds, accountId, groupsCreated }` — the import summary.'
  *       400: { description: Malformed body (invalid token / confirmDuplicates). }
  *       403: { description: 'Tier refusal (never 429, no Retry-After) with a stable code: TIER_LIMIT_CSV_IMPORTS (lifetime import allowance exhausted), TIER_ACCOUNT_NOT_WRITABLE (target account not writable while over the account cap), or TIER_LIMIT_POSITIONS (batch would exceed the position cap; message names cap and batch size). The staged preview stays intact and re-committable.' }
  *       404: { description: No staged preview matches this token (or not owned). }
@@ -163,9 +182,19 @@ csvImport.post('/preview', async (c) => {
 csvImport.post('/commit', validate('json', CsvCommitRequestSchema), async (c) => {
   const userId = c.get('userId');
   const isAdmin = c.get('isAdmin');
-  const { token, confirmDuplicates } = c.req.valid('json');
+  const { token, confirmDuplicates, declinedProposalIds, labelOverrides } = c.req.valid('json');
 
-  const summary = await commitImport(db, userId, token, confirmDuplicates, { isAdmin });
+  const summary = await commitImport(
+    db,
+    userId,
+    token,
+    confirmDuplicates,
+    { isAdmin },
+    {
+      declinedProposalIds,
+      labelOverrides,
+    },
+  );
 
   captureServerEvent('csv_import_completed', {
     distinctId: userId,

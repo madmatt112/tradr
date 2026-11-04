@@ -26,6 +26,7 @@ import {
   ArchiveManifestSchema,
   ArchiveMessageSchema,
   ArchivePersonaSchema,
+  ArchivePositionGroupSchema,
   ArchivePositionImageSchema,
   ArchivePositionSchema,
   ArchivePositionTagSchema,
@@ -140,6 +141,10 @@ const rows = {
       createdAt: TS,
       updatedAt: TS,
     },
+  },
+  positionGroup: {
+    schema: ArchivePositionGroupSchema,
+    value: { id: U(8), labelOverride: 'Iron Condor', createdAt: TS },
   },
   position: {
     schema: ArchivePositionSchema,
@@ -304,7 +309,7 @@ const rows = {
 
 describe('account-archive contract constants', () => {
   it('freezes the version, entry order and caps', () => {
-    expect(ARCHIVE_VERSION).toBe(4);
+    expect(ARCHIVE_VERSION).toBe(5);
     expect(ARCHIVE_ENTRY_ORDER[0]).toBe('manifest.json');
     expect(ARCHIVE_ENTRY_ORDER).toContain('dashboard-layout.json');
     // rules.ndjson sits directly after tags.ndjson (design C8).
@@ -318,6 +323,10 @@ describe('account-archive contract constants', () => {
     // transfer-links.ndjson sits directly after lot-selections.ndjson (design C8).
     expect(ARCHIVE_ENTRY_ORDER.indexOf('transfer-links.ndjson')).toBe(
       ARCHIVE_ENTRY_ORDER.indexOf('lot-selections.ndjson') + 1,
+    );
+    // position-groups.ndjson sits directly before positions.ndjson (design C11).
+    expect(ARCHIVE_ENTRY_ORDER.indexOf('position-groups.ndjson')).toBe(
+      ARCHIVE_ENTRY_ORDER.indexOf('positions.ndjson') - 1,
     );
     expect(Object.keys(ARCHIVE_CAPS)).toHaveLength(10);
     expect(ARCHIVE_CAPS.maxUploadBytes).toBe(536_870_912);
@@ -555,6 +564,47 @@ describe('archive version 4 additions (design C8, AC 9.1)', () => {
   it('ArchiveManifestSchema accepts archiveVersion 4', () => {
     expect(
       ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 4 }).success,
+    ).toBe(true);
+  });
+});
+
+// Design C11 (AC 9.1) — the version-5 archive additions: the position-groups
+// entry, the positionGroups count, a leg's nullable groupId and the widened
+// manifest version union.
+describe('archive version 5 additions (design C11, AC 9.1)', () => {
+  it('ArchiveCountsSchema accepts an explicit positionGroups count', () => {
+    expect(ArchiveCountsSchema.safeParse({ ...counts, positionGroups: 2 }).success).toBe(true);
+    expect(ArchiveCountsSchema.safeParse({ ...counts, positionGroups: -1 }).success).toBe(false);
+  });
+
+  it('ArchivePositionGroupSchema accepts id/labelOverride/createdAt, a null override, and is strict', () => {
+    expect(ArchivePositionGroupSchema.safeParse(rows.positionGroup.value).success).toBe(true);
+    expect(
+      ArchivePositionGroupSchema.safeParse({ ...rows.positionGroup.value, labelOverride: null })
+        .success,
+    ).toBe(true);
+    expect(
+      ArchivePositionGroupSchema.safeParse({ ...rows.positionGroup.value, somethingNew: 1 })
+        .success,
+    ).toBe(false);
+  });
+
+  it("ArchivePositionSchema accepts a leg's nullable optional groupId and rejects a non-uuid", () => {
+    expect(ArchivePositionSchema.safeParse(rows.position.value).success).toBe(true);
+    expect(ArchivePositionSchema.safeParse({ ...rows.position.value, groupId: U(8) }).success).toBe(
+      true,
+    );
+    expect(ArchivePositionSchema.safeParse({ ...rows.position.value, groupId: null }).success).toBe(
+      true,
+    );
+    expect(
+      ArchivePositionSchema.safeParse({ ...rows.position.value, groupId: 'not-a-uuid' }).success,
+    ).toBe(false);
+  });
+
+  it('ArchiveManifestSchema accepts archiveVersion 5', () => {
+    expect(
+      ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 5 }).success,
     ).toBe(true);
   });
 });

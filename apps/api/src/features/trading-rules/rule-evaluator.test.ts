@@ -105,6 +105,33 @@ function losingPosition(id: string, net: number, openAt: string, exitAt: string)
   });
 }
 
+// A flat, grouped leg that realises `net` (can be positive or negative) at
+// `flatAt`, so a group of these can be summed by `classifyGroup` (task 8
+// exports) into one unit's winning/losing figure (design C9).
+function leg(
+  id: string,
+  groupId: string,
+  net: number,
+  openAt: string,
+  flatAt: string,
+  tags: Tag[] = [],
+): ScoringPosition {
+  const perShare = 10 + net / 100;
+  return pos({
+    id,
+    groupId,
+    status: 'closed',
+    openedAt: openAt,
+    createdAt: openAt,
+    closedAt: flatAt,
+    lastFlatAt: flatAt,
+    lastFlatNetPnl: String(net),
+    stopLoss: null,
+    tags,
+    fills: [entry('10', '100', openAt), exit(String(perShare), '100', flatAt)],
+  });
+}
+
 // --- Per-type: at the limit passes (daily/weekly loss breach), one over breaches ---
 
 describe('per-type limit and breach boundaries', () => {
@@ -599,5 +626,191 @@ describe('createdAt fallback', () => {
       { openedAt: null, createdAt: OPEN },
     );
     expect(e).toMatchObject({ outcome: 'breach', measured: '0' });
+  });
+});
+
+// --- Group-aware rules (AC 5.10, design C9) ---
+
+describe('group-aware rules', () => {
+  it('max_trades_per_day counts a two-leg group once toward another same-day position, and each leg scores the same count', () => {
+    const legA = pos({
+      id: 'legA',
+      groupId: 'g1',
+      openedAt: '2026-01-04T14:00:00Z',
+      createdAt: '2026-01-04T14:00:00Z',
+    });
+    const legB = pos({
+      id: 'legB',
+      groupId: 'g1',
+      openedAt: '2026-01-04T14:05:00Z',
+      createdAt: '2026-01-04T14:05:00Z',
+    });
+    const other = pos({
+      id: 'other',
+      openedAt: '2026-01-04T15:00:00Z',
+      createdAt: '2026-01-04T15:00:00Z',
+    });
+    const r = rule({ type: 'max_trades_per_day', params: { count: 5 } });
+    const ctx = buildScoringContext({ rules: [r], positions: [legA, legB, other], ledger: [] }, 0);
+
+    // The group opened before `other`, same day, and counts once: 1 earlier
+    // unit (the group) + itself = 2, not 3 (one per leg).
+    expect(evaluateRule(r, other, ctx)).toMatchObject({ measured: '2' });
+
+    // Each leg skips its own sibling, so both score the same count.
+    const forA = evaluateRule(r, legA, ctx);
+    const forB = evaluateRule(r, legB, ctx);
+    expect(forA?.measured).toBe(forB?.measured);
+    expect(forA?.measured).toBe('1');
+  });
+
+  it("max_trades_per_day uses a group's earliest leg open for the day, even when scoring a leg that opened the next day", () => {
+    const legA = pos({
+      id: 'legA',
+      groupId: 'g2',
+      openedAt: '2026-01-04T14:00:00Z', // NY 2026-01-04
+      createdAt: '2026-01-04T14:00:00Z',
+    });
+    const legB = pos({
+      id: 'legB',
+      groupId: 'g2',
+      openedAt: '2026-01-05T15:00:00Z', // NY 2026-01-05 — opened the next day
+      createdAt: '2026-01-05T15:00:00Z',
+    });
+    const posD = pos({
+      id: 'posD',
+      openedAt: '2026-01-04T13:00:00Z', // NY 2026-01-04, before legA
+      createdAt: '2026-01-04T13:00:00Z',
+    });
+    const r = rule({ type: 'max_trades_per_day', params: { count: 5 } });
+    const ctx = buildScoringContext({ rules: [r], positions: [legA, legB, posD], ledger: [] }, 0);
+
+    // legB's own day is NY 2026-01-05, but its group's earliest leg (legA)
+    // opened NY 2026-01-04, so legB counts on 2026-01-04 and sees posD.
+    expect(evaluateRule(r, legB, ctx)).toMatchObject({ measured: '2' });
+  });
+
+  it("cooldown_after_loss triggers at a losing group's flat instant, even when one leg won", () => {
+    const legLose = leg('legLose', 'g3', -200, '2026-01-04T23:00:00Z', '2026-01-05T00:00:00Z');
+    const legWin = leg('legWin', 'g3', 50, '2026-01-04T23:30:00Z', '2026-01-05T01:00:00Z');
+    const target = pos({ openedAt: '2026-01-05T01:30:00Z', createdAt: '2026-01-05T01:30:00Z' });
+    const r = rule({ type: 'cooldown_after_loss', params: { minutes: 60 } });
+    const ctx = buildScoringContext(
+      { rules: [r], positions: [target, legLose, legWin], ledger: [] },
+      0,
+    );
+
+    // Group net = -200 + 50 = -150 (losing); its flat instant is the LATEST
+    // leg flat (legWin's, 01:00), 30 minutes before the target opens.
+    expect(evaluateRule(r, target, ctx)).toMatchObject({ outcome: 'breach', measured: '30' });
+  });
+
+  it('cooldown_after_loss does not trigger for a winning group, even when one leg lost', () => {
+    const legLose = leg('legLose2', 'g4', -50, '2026-01-04T23:00:00Z', '2026-01-05T00:00:00Z');
+    const legWin = leg('legWin2', 'g4', 200, '2026-01-04T23:15:00Z', '2026-01-05T00:15:00Z');
+    const target = pos({ openedAt: '2026-01-05T00:30:00Z', createdAt: '2026-01-05T00:30:00Z' });
+    const r = rule({ type: 'cooldown_after_loss', params: { minutes: 60 } });
+    const ctx = buildScoringContext(
+      { rules: [r], positions: [target, legLose, legWin], ledger: [] },
+      0,
+    );
+
+    // Group net = -50 + 200 = 150 (winning): no losing flat for this unit,
+    // even though legLose alone realised a loss 30 minutes before the target.
+    expect(evaluateRule(r, target, ctx)).toMatchObject({ outcome: 'pass', measured: null });
+  });
+
+  it('cooldown_after_loss adds no losing flat for a group that has never gone flat', () => {
+    const legLose = leg('legLose3', 'g5', -100, '2026-01-04T23:00:00Z', '2026-01-05T00:00:00Z');
+    const legOpen = pos({
+      id: 'legOpen3',
+      groupId: 'g5',
+      status: 'open',
+      openedAt: '2026-01-04T23:30:00Z',
+      createdAt: '2026-01-04T23:30:00Z',
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+    });
+    const target = pos({ openedAt: '2026-01-05T00:30:00Z', createdAt: '2026-01-05T00:30:00Z' });
+    const r = rule({ type: 'cooldown_after_loss', params: { minutes: 60 } });
+    const ctx = buildScoringContext(
+      { rules: [r], positions: [target, legLose, legOpen], ledger: [] },
+      0,
+    );
+
+    // legOpen is still open, so the group has never gone flat: classifyGroup
+    // returns null and nothing is added, even though legLose alone realised a
+    // loss 30 minutes before the target.
+    expect(evaluateRule(r, target, ctx)).toMatchObject({ outcome: 'pass', measured: null });
+  });
+
+  it("cooldown_after_loss reads a group's whole sum even when a rule's tag scope matches only one leg", () => {
+    const legWinTagged = leg(
+      'legWinTagged',
+      'g6',
+      50,
+      '2026-01-04T22:00:00Z',
+      '2026-01-05T00:00:00Z',
+      [tag('tag-1')],
+    );
+    const legLoseUntagged = leg(
+      'legLoseUntagged',
+      'g6',
+      -200,
+      '2026-01-04T22:30:00Z',
+      '2026-01-05T00:50:00Z',
+    );
+    const target = pos({
+      tags: [tag('tag-1')],
+      openedAt: '2026-01-05T01:20:00Z',
+      createdAt: '2026-01-05T01:20:00Z',
+    });
+    const r = rule({ type: 'cooldown_after_loss', params: { minutes: 60 } }, { tagId: 'tag-1' });
+    const ctx = buildScoringContext(
+      { rules: [r], positions: [target, legWinTagged, legLoseUntagged], ledger: [] },
+      0,
+    );
+
+    // Only legWinTagged carries the rule's tag, but the group's sum (-150,
+    // losing) and its flat instant (legLoseUntagged's, the later one) still
+    // govern the cooldown — the tag scope cannot truncate it to one leg.
+    expect(evaluateRule(r, target, ctx)).toMatchObject({ outcome: 'breach', measured: '30' });
+  });
+
+  // Regression guard (retro P10/P12): no existing assertion compares a
+  // grouped leg against an otherwise-identical ungrouped one for a rule type
+  // task 10 does not change. `max_daily_loss` shares `getPopulation`'s
+  // `events`, which must stay summed per leg (design C9, "events stay per
+  // leg") even when two of its positions are grouped — this already holds on
+  // the current, un-group-aware code and must keep holding.
+  it('max_daily_loss sums every leg of a group separately, unaffected by grouping (regression guard)', () => {
+    const r = rule({ type: 'max_daily_loss', params: { amount: '1000', currency: 'USD' } });
+
+    const targetUngrouped = pos();
+    const otherUngrouped = losingPosition(
+      'otherX',
+      -50,
+      '2026-01-04T20:00:00Z',
+      '2026-01-04T23:00:00Z',
+    );
+    const ctxUngrouped = buildScoringContext(
+      { rules: [r], positions: [targetUngrouped, otherUngrouped], ledger: [] },
+      0,
+    );
+    const ungrouped = evaluateRule(r, targetUngrouped, ctxUngrouped);
+
+    const targetGrouped = pos({ groupId: 'gY' });
+    const otherGrouped = {
+      ...losingPosition('otherX', -50, '2026-01-04T20:00:00Z', '2026-01-04T23:00:00Z'),
+      groupId: 'gY',
+    };
+    const ctxGrouped = buildScoringContext(
+      { rules: [r], positions: [targetGrouped, otherGrouped], ledger: [] },
+      0,
+    );
+    const grouped = evaluateRule(r, targetGrouped, ctxGrouped);
+
+    expect(grouped).toEqual(ungrouped);
   });
 });

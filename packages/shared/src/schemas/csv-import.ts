@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { labelOverrideSchema } from './position';
+
 export const RowShapeSchema = z.enum(['execution', 'round-trip']);
 
 export const DateFormatSchema = z.enum(['iso', 'us', 'eu', 'iso-datetime']);
@@ -75,8 +77,17 @@ export const LocatedWarningSchema = z.object({
     'rounded',
     'derived_expiry',
     'rows_skipped',
+    'group_heuristic_skipped',
+    'group_proposal_dropped',
   ]),
   message: z.string(),
+});
+
+export const GroupProposalSchema = z.object({
+  id: z.string(),
+  legRefs: z.array(z.number().int()),
+  label: z.string(),
+  basis: z.enum(['order_id', 'inferred']),
 });
 
 export const ProposedFillSchema = z.object({
@@ -114,11 +125,14 @@ export const CsvPreviewResponseSchema = z.object({
   timezone: z.string(),
   committable: z.boolean(),
   requiresDuplicateAffirmation: z.boolean(),
+  groupProposals: z.array(GroupProposalSchema),
 });
 
 export const CsvCommitRequestSchema = z.object({
   token: z.string().uuid(),
   confirmDuplicates: z.boolean().default(false),
+  declinedProposalIds: z.array(z.string()).default([]),
+  labelOverrides: z.record(z.string(), labelOverrideSchema).default({}),
 });
 
 export const CsvCommitResponseSchema = z.object({
@@ -126,6 +140,7 @@ export const CsvCommitResponseSchema = z.object({
   fillsCreated: z.number().int(),
   positionIds: z.array(z.string().uuid()),
   accountId: z.string().uuid(),
+  groupsCreated: z.number().int().optional(),
 });
 
 export const CsvPresetSchema = z.object({
@@ -148,9 +163,12 @@ export type Mapping = z.infer<typeof MappingSchema>;
 export type CsvPreviewRequest = z.infer<typeof CsvPreviewRequestSchema>;
 export type LocatedError = z.infer<typeof LocatedErrorSchema>;
 export type LocatedWarning = z.infer<typeof LocatedWarningSchema>;
+export type GroupProposal = z.infer<typeof GroupProposalSchema>;
 export type ProposedFill = z.infer<typeof ProposedFillSchema>;
 export type ProposedPosition = z.infer<typeof ProposedPositionSchema>;
 export type CsvPreviewResponse = z.infer<typeof CsvPreviewResponseSchema>;
-export type CsvCommitRequest = z.infer<typeof CsvCommitRequestSchema>;
+// z.input (not z.infer): declinedProposalIds/labelOverrides default server-side,
+// so a caller building a request body may omit them.
+export type CsvCommitRequest = z.input<typeof CsvCommitRequestSchema>;
 export type CsvCommitResponse = z.infer<typeof CsvCommitResponseSchema>;
 export type CsvPreset = z.infer<typeof CsvPresetSchema>;

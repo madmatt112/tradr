@@ -15,6 +15,8 @@ interface CommitPanelProps {
   /** Re-run preview with the current (unchanged) mapping — used by the superseded refusal. */
   onRePreview: () => void;
   isRePreviewing: boolean;
+  declinedProposalIds?: string[];
+  labelOverrides?: Record<string, string>;
 }
 
 const SUPERSEDED_COPY = 'This preview was replaced by a newer one — re-preview to import it.';
@@ -44,7 +46,13 @@ function refusalMessage(err: unknown): string {
  * - Failure keeps the preview/mapping intact; a SUPERSEDED 409 shows the specific
  *   re-preview message rather than a generic error.
  */
-export function CommitPanel({ preview, onRePreview, isRePreviewing }: CommitPanelProps) {
+export function CommitPanel({
+  preview,
+  onRePreview,
+  isRePreviewing,
+  declinedProposalIds,
+  labelOverrides,
+}: CommitPanelProps) {
   const commit = useCsvCommit();
   const { data: tierState } = useTierState();
   const [confirmDuplicates, setConfirmDuplicates] = useState(false);
@@ -71,6 +79,12 @@ export function CommitPanel({ preview, onRePreview, isRePreviewing }: CommitPane
             <span className="font-medium">{result.fillsCreated}</span> fill
             {result.fillsCreated === 1 ? '' : 's'} to the target account.
           </p>
+          {Boolean(result.groupsCreated) && (
+            <p data-testid="groups-created" className="text-sm">
+              Created <span className="font-medium">{result.groupsCreated}</span> group
+              {result.groupsCreated === 1 ? '' : 's'}.
+            </p>
+          )}
           <Button asChild className="cursor-pointer">
             <Link to="/positions">View imported positions</Link>
           </Button>
@@ -84,7 +98,12 @@ export function CommitPanel({ preview, onRePreview, isRePreviewing }: CommitPane
   const canCommit = !blocked && (!needsDupAffirmation || confirmDuplicates) && !commit.isPending;
 
   function runCommit() {
-    commit.mutate({ token: preview.token, confirmDuplicates });
+    commit.mutate({
+      token: preview.token,
+      confirmDuplicates,
+      declinedProposalIds,
+      labelOverrides,
+    });
   }
 
   return (

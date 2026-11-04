@@ -44,6 +44,7 @@ const NDJSON_ORDER: Array<[keyof Spec, string, string]> = [
   ['accounts', 'accounts.ndjson', 'accounts'],
   ['tags', 'tags.ndjson', 'tags'],
   ['rules', 'rules.ndjson', 'rules'],
+  ['positionGroups', 'position-groups.ndjson', 'positionGroups'],
   ['positions', 'positions.ndjson', 'positions'],
   ['fills', 'fills.ndjson', 'fills'],
   ['lotSelections', 'lot-selections.ndjson', 'lot-selections'],
@@ -67,6 +68,7 @@ interface Spec {
   accounts?: unknown[];
   tags?: unknown[];
   rules?: unknown[];
+  positionGroups?: unknown[];
   positions?: unknown[];
   fills?: unknown[];
   lotSelections?: unknown[];
@@ -86,6 +88,7 @@ interface Spec {
   degradations?: unknown[];
   countsOverride?: Record<string, number>;
   omitManifest?: boolean;
+  archiveVersionOverride?: number;
 }
 
 function makeArchive(spec: Spec): Buffer {
@@ -115,6 +118,7 @@ function makeArchive(spec: Spec): Buffer {
   // when the spec carries that category, so a spec with none exercises the
   // absent-count path.
   if (spec.rules) counts.rules = spec.rules.length;
+  if (spec.positionGroups) counts.positionGroups = spec.positionGroups.length;
   if (spec.lotSelections) counts.lotSelections = spec.lotSelections.length;
   if (spec.transferLinks) counts.transferLinks = spec.transferLinks.length;
   Object.assign(counts, spec.countsOverride ?? {});
@@ -124,7 +128,7 @@ function makeArchive(spec: Spec): Buffer {
       name: 'manifest.json',
       data: JSON.stringify({
         format: 'tradr-account-archive',
-        archiveVersion: 1,
+        archiveVersion: spec.archiveVersionOverride ?? 1,
         sourceAppVersion: 'test',
         exportedAt: TS,
         counts,
@@ -195,6 +199,12 @@ const rule = (o: Obj = {}): Obj => ({
   tagId: null,
   createdAt: TS,
   updatedAt: TS,
+  ...o,
+});
+const positionGroup = (o: Obj = {}): Obj => ({
+  id: rid(),
+  labelOverride: null,
+  createdAt: TS,
   ...o,
 });
 const position = (o: Obj = {}): Obj => ({
@@ -449,6 +459,27 @@ describe('validateArchive — happy path', () => {
     expect(result.coveredThroughMessageIds.has(m2.id as string)).toBe(true);
     expect(result.userBrokerageNames).toEqual(['My Broker']);
   });
+
+  // Design C11, AC 9.1 — the position-groups.ndjson entry and a leg naming it.
+  it('accepts a position group and a leg naming it, and counts it', async () => {
+    const a = account({ isDefault: true });
+    const g = positionGroup({ labelOverride: 'Iron Condor' });
+    const p = position({ accountId: a.id, groupId: g.id });
+
+    const result = await validateArchive(
+      await save(
+        makeArchive({
+          accounts: [a],
+          positionGroups: [g],
+          positions: [p],
+          preferences: preferences(),
+          dashboardLayout: null,
+        }),
+      ),
+    );
+
+    expect(result.counts.positionGroups).toBe(1);
+  });
 });
 
 describe('validateArchive — schema and counts', () => {
@@ -468,9 +499,29 @@ describe('validateArchive — schema and counts', () => {
     expect(has(f, 'count', 'manifest.counts.images')).toBe(true);
   });
 
+  // Design C11, AC 9.1 — the positionGroups count joins the same manifest-count
+  // check every other category uses.
+  it('rejects a position-groups row-count mismatch against the manifest', async () => {
+    const f = await faults({
+      ...validSpec(),
+      positionGroups: [positionGroup()],
+      countsOverride: { positionGroups: 5 },
+    });
+    expect(has(f, 'count', 'manifest.counts.positionGroups')).toBe(true);
+  });
+
   it('rejects a missing manifest', async () => {
     const f = await faults({ ...validSpec(), omitManifest: true });
     expect(has(f, 'missing_manifest')).toBe(true);
+  });
+
+  // Design C11, AC 9.1 — ARCHIVE_VERSION becomes 5 and the manifest union
+  // accepts it.
+  it('accepts a manifest declaring archiveVersion 5', async () => {
+    const result = await validateArchive(
+      await save(makeArchive({ ...validSpec(), archiveVersionOverride: 5 })),
+    );
+    expect(result.manifest.archiveVersion).toBe(5);
   });
 });
 
@@ -668,6 +719,17 @@ describe('validateArchive — references', () => {
       preferences: preferences(),
     });
     expect(has(f, 'reference', 'fills[0].positionId')).toBe(true);
+  });
+
+  // Design C11, AC 9.1 — a leg's groupId must name an archive position group.
+  it('rejects a position whose groupId names no archive group', async () => {
+    const a = acct();
+    const f = await faults({
+      accounts: [a],
+      positions: [position({ accountId: a.id, groupId: rid() })],
+      preferences: preferences(),
+    });
+    expect(has(f, 'reference', 'groupId')).toBe(true);
   });
 
   // Design C12 — the lot-selections.ndjson case: both ids must name archive

@@ -5,7 +5,7 @@ import { parseOccSymbol } from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
-import { fills, ledgerEntries, positions, subscriptions, users } from '@/db/schema';
+import { fills, ledgerEntries, positionGroups, positions, subscriptions, users } from '@/db/schema';
 import { csvImportCounters, csvImportStaging } from '@/db/schema/csv-import.schema';
 import { insertPositionCloseLedgerEntries } from '@/features/accounting/ledger-hook';
 import { getTierLimits } from '@/features/billing/tier-limits.constants';
@@ -155,13 +155,14 @@ async function postPreview(cookie: string, csv: string, request: unknown): Promi
   });
 }
 
-/** POST a JSON commit. */
+/** POST a JSON commit. `extra` merges in body fields task 12 adds (declinedProposalIds, labelOverrides). */
 async function postCommit(
   cookie: string,
   token: string,
   confirmDuplicates?: boolean,
+  extra?: Record<string, unknown>,
 ): Promise<Response> {
-  const body: Record<string, unknown> = { token };
+  const body: Record<string, unknown> = { token, ...extra };
   if (confirmDuplicates !== undefined) body.confirmDuplicates = confirmDuplicates;
   return app.request('/api/csv-import/commit', {
     method: 'POST',
@@ -1013,5 +1014,218 @@ describe('POST /api/csv-import/commit — tier enforcement (plan-tiers L6/L1/L2)
     expect(second.status).toBe(200);
     expect(await second.json()).toEqual(firstSummary);
     expect(await getCommittedCount(userId)).toBe(FREE_IMPORT_CAP);
+  });
+});
+
+// ===========================================================================
+// Group proposals carried through commit (design C10, AC 8.9, 8.10, 2.3,
+// 10.1). `commitImport(db, userId, token, confirmDuplicates, gate,
+// groupChoices)` — the undeclined proposals from the staged preview link at
+// commit, inside the same bulk transaction that creates the legs.
+//
+// AC 8.10 (invariant: the L2 cap, scanDuplicates and replaySegment keep
+// working one position per segment) is a regression guard already covered —
+// `it('a second commit of a committed token returns the original summary...')`
+// above (line ~379, `expect(secondSummary).toEqual(firstSummary)`) compares
+// two summaries to each other rather than a fixed shape, so an added
+// `groupsCreated` field changes nothing it asserts; no new test needed.
+//
+// Contract block — one row per success criterion this block covers.
+//
+// | Criterion                                                              | Pre-condition                                                                 | Call (seam)                                              | Observable result                                                             | Source of expected value |
+// |---------------------------------------------------------------------------|----------------------------------------------------------------------------------|-------------------------------------------------------------|----------------------------------------------------------------------------------|---------------------------|
+// | AC 8.9 — commit with no choices links the undeclined proposal             | a staged two-leg order-id group, no declinedProposalIds                        | POST /api/csv-import/commit                              | summary.groupsCreated === 1; both legs share one non-null groupId; one position_groups row, labelOverride null | requirements.md AC 8.9; design.md C10 |
+// | AC 8.9 / 2.3 — declining imports ungrouped                                | same staged group, declinedProposalIds names the proposal                      | POST /api/csv-import/commit                              | summary.groupsCreated === 0; both legs' groupId null                            | requirements.md AC 8.8 "the user SHALL be able to decline one, and a declined proposal imports as ungrouped positions" |
+// | AC 2.3 — a label override is stored on the group                          | same staged group, labelOverrides names the proposal                           | POST /api/csv-import/commit                              | the created group's labelOverride equals the override text                      | requirements.md AC 2.3 "the user SHALL be able to replace it"; design.md D9 |
+// | AC 8.9 bridge — a preview staged with no groupProposals commits ungrouped | a staged single-leg import with the groupProposals key stripped (pre-deploy shape) | commitImport(db, userId, token, confirmDuplicates, gate) | commit succeeds; the position's groupId is null; summary.groupsCreated === 0    | design.md C10 "StagedResult.groupProposals is optional, so a preview staged before deploy commits ungrouped" |
+// | AC 8.9 — a link failure rolls back every position, fill and group         | a staged two-position import whose result.groupProposals is tampered to repeat one leg's index | POST /api/csv-import/commit                              | 400 VALIDATION_ERROR; zero positions, zero fills and zero position_groups rows for the import | requirements.md AC 8.9 "any failure SHALL roll them back"; design.md Component 7 bulk-tx atomicity |
+// ===========================================================================
+
+describe('POST /api/csv-import/commit — group proposals (AC 8.9, 2.3, 10.1)', () => {
+  beforeAll(registerLedgerHook);
+  afterAll(() => unregisterCloseHook('ledger'));
+
+  async function getUserId(cookie: string): Promise<string> {
+    const res = await app.request('/api/auth/me', {
+      headers: { Cookie: `session=${cookie}`, 'X-Forwarded-For': uniqueIp() },
+    });
+    expect(res.status).toBe(200);
+    const me = await res.json();
+    return me.id as string;
+  }
+
+  const GROUP_ORDER_ID = 'ORD-GROUP-1';
+  const GROUPED_CSV = [
+    'Symbol,Type,Side,Price,Quantity,Date,Fees,OrderId',
+    `AAPL,STOCK,BUY,100,10,2026-01-01,1,${GROUP_ORDER_ID}`,
+    `AAPL260320C250,OPTION,BUY,1.75,1,2026-01-01,0.65,${GROUP_ORDER_ID}`,
+  ].join('\n');
+
+  function groupedExecRequest(accountId: string) {
+    const base = execRequest(accountId);
+    return {
+      ...base,
+      mapping: {
+        ...base.mapping,
+        columns: { ...base.mapping.columns, orderId: 'OrderId' },
+        contractForm: 'occ-symbol',
+      },
+    };
+  }
+
+  /** Stage the two-leg order-id group and return its token + proposal id. */
+  async function stageGroup(
+    cookie: string,
+    accountId: string,
+  ): Promise<{ token: string; proposalId: string }> {
+    const res = await postPreview(cookie, GROUPED_CSV, groupedExecRequest(accountId));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.committable).toBe(true);
+    expect(body.groupProposals).toHaveLength(1);
+    return { token: body.token as string, proposalId: body.groupProposals[0].id as string };
+  }
+
+  /** Read + rewrite the staged `result` JSON column directly (established
+   * precedent in this file for simulating pre-/post-deploy and corrupted
+   * staged states by writing `csvImportStaging` columns straight, e.g. the
+   * `status`/`claimedAt` tampering above). */
+  async function mutateStagedResult(
+    token: string,
+    mutate: (result: Record<string, unknown>) => void,
+  ): Promise<void> {
+    const [row] = await db
+      .select({ result: csvImportStaging.result })
+      .from(csvImportStaging)
+      .where(eq(csvImportStaging.id, token));
+    const result = row!.result as Record<string, unknown>;
+    mutate(result);
+    await db.update(csvImportStaging).set({ result }).where(eq(csvImportStaging.id, token));
+  }
+
+  it('commits with no choices: links the two legs into one group, groupsCreated 1', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const { token } = await stageGroup(cookie, accountId);
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+    const summary = await res.json();
+    expect(summary.positionsCreated).toBe(2);
+    expect(summary.groupsCreated).toBe(1);
+
+    const rows = await db.select().from(positions).where(eq(positions.accountId, accountId));
+    expect(rows).toHaveLength(2);
+    const groupIds = new Set(rows.map((r) => r.groupId));
+    expect(groupIds.size).toBe(1);
+    expect(rows.every((r) => r.groupId !== null)).toBe(true);
+
+    const groupId = rows[0]!.groupId as string;
+    const groups = await db.select().from(positionGroups).where(eq(positionGroups.id, groupId));
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.labelOverride).toBeNull();
+  });
+
+  it('declining the proposal imports two ungrouped positions, groupsCreated 0', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const { token, proposalId } = await stageGroup(cookie, accountId);
+
+    const res = await postCommit(cookie, token, undefined, {
+      declinedProposalIds: [proposalId],
+    });
+    expect(res.status).toBe(200);
+    const summary = await res.json();
+    expect(summary.positionsCreated).toBe(2);
+    expect(summary.groupsCreated).toBe(0);
+
+    const rows = await db.select().from(positions).where(eq(positions.accountId, accountId));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row.groupId).toBeNull();
+  });
+
+  it('a label override on the proposal is stored on the created group', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const { token, proposalId } = await stageGroup(cookie, accountId);
+
+    const res = await postCommit(cookie, token, undefined, {
+      labelOverrides: { [proposalId]: 'My Custom Spread' },
+    });
+    expect(res.status).toBe(200);
+    const summary = await res.json();
+    expect(summary.groupsCreated).toBe(1);
+
+    const rows = await db.select().from(positions).where(eq(positions.accountId, accountId));
+    const groupId = rows[0]!.groupId as string;
+    const groups = await db.select().from(positionGroups).where(eq(positionGroups.id, groupId));
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.labelOverride).toBe('My Custom Spread');
+  });
+
+  it('a preview staged with no groupProposals key (pre-deploy shape) commits ungrouped', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const token = await stageToken(cookie, CLEAN_CSV, execRequest(accountId));
+
+    // Simulate a row staged before this change deployed: the key is ABSENT,
+    // not merely empty, proving StagedResult.groupProposals is read optional.
+    await mutateStagedResult(token, (result) => {
+      delete result.groupProposals;
+    });
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+    const summary = await res.json();
+    expect(summary.positionsCreated).toBe(1);
+    expect(summary.groupsCreated).toBe(0);
+
+    const posId = summary.positionIds[0] as string;
+    const [pos] = await db.select().from(positions).where(eq(positions.id, posId));
+    expect(pos!.groupId).toBeNull();
+  });
+
+  it('a link failure rolls back every position, fill and group written in the import', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getUserId(cookie);
+    const accountId = await createAccount(cookie);
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL,STOCK,BUY,100,10,2026-01-01,0',
+      'MSFT,STOCK,BUY,50,5,2026-01-03,0',
+    ].join('\n');
+    const token = await stageToken(cookie, csv, execRequest(accountId));
+
+    // Inject a group proposal that repeats one leg's index — the real
+    // proposer never emits this (validateLegSet already runs at proposal
+    // time), so this simulates a stale/corrupted staged payload reaching
+    // commit. It drives the REAL link seam (linkPositionsTx -> assertLinkable
+    // -> validateLegSet), not a mock: the same leg twice is a repeated
+    // symbol, which validateLegSet refuses for real.
+    await mutateStagedResult(token, (result) => {
+      result.groupProposals = [
+        { id: 'gp-test', legRefs: [0, 0], label: 'Multi-leg', basis: 'inferred' },
+      ];
+    });
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+
+    const rows = await db.select().from(positions).where(eq(positions.accountId, accountId));
+    expect(rows).toHaveLength(0);
+    const importFills = await db
+      .select({ id: fills.id })
+      .from(fills)
+      .innerJoin(positions, eq(fills.positionId, positions.id))
+      .where(eq(positions.accountId, accountId));
+    expect(importFills).toHaveLength(0);
+    const groups = await db.select().from(positionGroups).where(eq(positionGroups.userId, userId));
+    expect(groups).toHaveLength(0);
+
+    // Compensating delete, same atomicity contract as the Phase-B test above.
+    const staged = await db.select().from(csvImportStaging).where(eq(csvImportStaging.id, token));
+    expect(staged).toHaveLength(0);
   });
 });

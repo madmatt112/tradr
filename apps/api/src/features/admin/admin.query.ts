@@ -24,6 +24,7 @@ import {
   wallets,
 } from '@/db/schema';
 import type { AdminAuditDetail } from '@/db/schema/admin.schema';
+import { deletePositionGroupsByUser } from '@/features/positions/position-groups.query';
 
 import { currentPeriodKeyUtc, getTurnCount } from './gating.query';
 
@@ -771,6 +772,11 @@ export async function deleteTradingData(
   counts.positions = (
     await tx.delete(positions).where(eq(positions.userId, userId)).returning({ id: positions.id })
   ).length;
+
+  // 2a. Groups — design C7: deleted after their legs so a reset leaves no
+  //     stranded position_groups row (the user_id cascade only fires on an
+  //     actual user delete, not this row-by-row reset).
+  counts.position_groups = (await deletePositionGroupsByUser(tx, userId)).length;
 
   // 2b. Tags — the join rows already went with the positions; the vocabulary
   //     goes here so a reset returns to zero tags (REQ-1.7).

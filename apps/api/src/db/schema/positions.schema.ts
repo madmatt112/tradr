@@ -14,6 +14,21 @@ import {
 import { accounts } from './accounts.schema';
 import { users } from './users.schema';
 
+// Strategy groups (multi-leg-positions C1, Data Models). A group links two or
+// more positions as one strategy's legs. The only stored data is the link and
+// an optional label override; status, label, figures and the flat event are
+// derived on read. `user_id` cascades, so deleting the user removes the group
+// (AC 9.5); `positions.group_id` is set null on group delete, so ungrouping a
+// leg leaves the leg behaving as today (AC 1.7).
+export const positionGroups = pgTable('position_groups', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  labelOverride: varchar('label_override', { length: 40 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const positions = pgTable(
   'positions',
   {
@@ -24,6 +39,7 @@ export const positions = pgTable(
     accountId: uuid('account_id')
       .notNull()
       .references(() => accounts.id, { onDelete: 'restrict' }),
+    groupId: uuid('group_id').references(() => positionGroups.id, { onDelete: 'set null' }),
     symbol: varchar('symbol', { length: 20 }).notNull(),
     side: varchar('side', { length: 5 }).notNull(),
     assetType: varchar('asset_type', { length: 6 }).notNull(),
@@ -55,6 +71,7 @@ export const positions = pgTable(
   (table) => [
     index('positions_user_id_idx').on(table.userId),
     index('positions_account_id_idx').on(table.accountId),
+    index('positions_group_id_idx').on(table.groupId),
     index('positions_user_id_status_updated_at_idx').on(
       table.userId,
       table.status,

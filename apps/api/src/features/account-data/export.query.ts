@@ -512,12 +512,22 @@ export async function spoolAccountData(
         updatedAt: row.updatedAt,
       }),
     ),
+    positionGroups: await spoolFlat(
+      tx,
+      dir,
+      'position-groups.ndjson',
+      sql`
+        SELECT id, label_override AS "labelOverride", ${ts('created_at')} AS "createdAt"
+        FROM position_groups WHERE user_id = ${userId} ORDER BY created_at, id
+      `,
+    ),
     positions: await spoolFlat(
       tx,
       dir,
       'positions.ndjson',
       sql`
-        SELECT id, account_id AS "accountId", symbol, side, asset_type AS "assetType", status, notes,
+        SELECT id, account_id AS "accountId", group_id AS "groupId",
+          symbol, side, asset_type AS "assetType", status, notes,
           ${num('target_price')} AS "targetPrice", ${num('stop_loss')} AS "stopLoss",
           ${ts('opened_at')} AS "openedAt", ${ts('closed_at')} AS "closedAt",
           ${ts('last_flat_at')} AS "lastFlatAt", ${num('last_flat_net_pnl')} AS "lastFlatNetPnl",

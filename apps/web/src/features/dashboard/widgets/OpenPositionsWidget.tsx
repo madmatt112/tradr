@@ -11,8 +11,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { PositionGroupRowActions } from '@/features/positions/components/PositionGroupRowActions';
 import { PositionRowActions } from '@/features/positions/components/PositionRowActions';
 import { usePositions } from '@/features/positions/hooks/usePositions';
+import { firstOpenLegId, isGroupEntry } from '@/features/positions/utils/listEntries';
 import { shouldNavigateFromRowClick } from '@/features/positions/utils/rowNavigation';
 
 export const OPEN_POSITIONS_ROW_CAP = 5;
@@ -70,41 +72,76 @@ function OpenPositionsWidget() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((pos) => (
-            <TableRow
-              key={pos.id}
-              className="cursor-pointer"
-              onClick={(e) => {
-                if (!shouldNavigateFromRowClick(e)) return;
-                navigate({ to: '/positions/$positionId', params: { positionId: pos.id } });
-              }}
-            >
-              <TableCell className="font-medium">
-                <Link
-                  to="/positions/$positionId"
-                  params={{ positionId: pos.id }}
-                  className="hover:underline max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
+          {rows.map((entry) => {
+            if (isGroupEntry(entry)) {
+              const targetId = firstOpenLegId(entry);
+              return (
+                <TableRow
+                  key={entry.id}
+                  className="cursor-pointer"
+                  onClick={(e) => {
+                    if (!shouldNavigateFromRowClick(e)) return;
+                    navigate({ to: '/positions/$positionId', params: { positionId: targetId } });
+                  }}
                 >
-                  {pos.symbol}
-                </Link>
-              </TableCell>
-              <TableCell className="capitalize">{pos.side}</TableCell>
-              <TableCell className="capitalize">{pos.assetType}</TableCell>
-              <TableCell className="text-right">
-                <Numeric
-                  value={pos.totalEntryQuantity - pos.totalExitQuantity}
-                  kind="integer"
-                  direction="none"
-                />
-              </TableCell>
-              <TableCell>
-                {pos.openedAt ? new Date(pos.openedAt).toLocaleDateString() : '—'}
-              </TableCell>
-              <TableCell>
-                <PositionRowActions position={pos} />
-              </TableCell>
-            </TableRow>
-          ))}
+                  <TableCell className="font-medium">
+                    <Link
+                      to="/positions/$positionId"
+                      params={{ positionId: targetId }}
+                      className="hover:underline max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
+                    >
+                      {entry.underlying} {entry.label}
+                    </Link>
+                  </TableCell>
+                  <TableCell>—</TableCell>
+                  <TableCell>—</TableCell>
+                  <TableCell className="text-right">—</TableCell>
+                  <TableCell>
+                    {entry.openedAt ? new Date(entry.openedAt).toLocaleDateString() : '—'}
+                  </TableCell>
+                  <TableCell>
+                    <PositionGroupRowActions group={entry} />
+                  </TableCell>
+                </TableRow>
+              );
+            }
+
+            return (
+              <TableRow
+                key={entry.id}
+                className="cursor-pointer"
+                onClick={(e) => {
+                  if (!shouldNavigateFromRowClick(e)) return;
+                  navigate({ to: '/positions/$positionId', params: { positionId: entry.id } });
+                }}
+              >
+                <TableCell className="font-medium">
+                  <Link
+                    to="/positions/$positionId"
+                    params={{ positionId: entry.id }}
+                    className="hover:underline max-md:inline-flex max-md:min-h-6 max-md:min-w-6 max-md:items-center"
+                  >
+                    {entry.symbol}
+                  </Link>
+                </TableCell>
+                <TableCell className="capitalize">{entry.side}</TableCell>
+                <TableCell className="capitalize">{entry.assetType}</TableCell>
+                <TableCell className="text-right">
+                  <Numeric
+                    value={entry.totalEntryQuantity - entry.totalExitQuantity}
+                    kind="integer"
+                    direction="none"
+                  />
+                </TableCell>
+                <TableCell>
+                  {entry.openedAt ? new Date(entry.openedAt).toLocaleDateString() : '—'}
+                </TableCell>
+                <TableCell>
+                  <PositionRowActions position={entry} />
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
       <div className="text-right">

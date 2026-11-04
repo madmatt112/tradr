@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDisplayCurrencyQuery } from '@/features/accounting/hooks/useDisplayCurrency';
 import { usePerformance } from '@/features/performance/hooks/usePerformance';
-import { makePosition } from '@/features/positions/__fixtures__/position-fixtures';
+import {
+  makePosition,
+  makePositionGroup,
+} from '@/features/positions/__fixtures__/position-fixtures';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { formatCurrency } from '@/lib/format';
 
@@ -304,6 +307,109 @@ describe('QuickStatsTab', () => {
     unmount(container, root);
   });
 
+  // Contract (design C14, AC 7.3): openNotional reads flattened legs, keeping
+  // its status === 'open' filter — a group's open legs sum the same as the
+  // same legs ungrouped.
+  it('computes Open Notional for a group the same as its two open legs ungrouped', () => {
+    mockUSDDisplayCurrency();
+    vi.mocked(usePerformance).mockReturnValue({
+      data: makePerformanceData([{ code: 'USD', stats: makeStats() }]),
+      isLoading: false,
+      error: null,
+    } as unknown as PerformanceResult);
+
+    const legA = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000f1',
+        assetType: 'stock',
+        totalEntryQuantity: 100,
+        totalExitQuantity: 0,
+        avgEntryPrice: 10,
+        accountCurrency: 'USD',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const legB = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000f2',
+        assetType: 'option',
+        totalEntryQuantity: 5,
+        totalExitQuantity: 0,
+        avgEntryPrice: 2,
+        accountCurrency: 'USD',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const group = makePositionGroup({ accountCurrency: 'USD', status: 'open', legs: [legA, legB] });
+
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<QuickStatsTab />);
+    // legA: 100 x $10 = 1000; legB: 5 x $2 x 100 (option multiplier) = 1000.
+    expect(
+      container.querySelector('[data-testid="quick-stats-open-notional-value"]')?.textContent,
+    ).toBe(formatCurrency(2000, 'USD'));
+    unmount(container, root);
+  });
+
+  it('excludes a closed leg of an open group from Open Notional', () => {
+    mockUSDDisplayCurrency();
+    vi.mocked(usePerformance).mockReturnValue({
+      data: makePerformanceData([{ code: 'USD', stats: makeStats() }]),
+      isLoading: false,
+      error: null,
+    } as unknown as PerformanceResult);
+
+    const closedLeg = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000f3',
+        assetType: 'stock',
+        totalEntryQuantity: 100,
+        totalExitQuantity: 100,
+        avgEntryPrice: 10,
+        accountCurrency: 'USD',
+        status: 'closed',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const openLeg = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000f4',
+        assetType: 'stock',
+        totalEntryQuantity: 50,
+        totalExitQuantity: 0,
+        avgEntryPrice: 10,
+        accountCurrency: 'USD',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000200',
+    };
+    const group = makePositionGroup({
+      accountCurrency: 'USD',
+      status: 'open',
+      legs: [closedLeg, openLeg],
+    });
+
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<QuickStatsTab />);
+    // Only the open leg counts: 50 x $10 = 500.
+    expect(
+      container.querySelector('[data-testid="quick-stats-open-notional-value"]')?.textContent,
+    ).toBe(formatCurrency(500, 'USD'));
+    unmount(container, root);
+  });
+
   it('renders the excluded-currency footnote when other-currency open positions exist', () => {
     mockUSDDisplayCurrency();
     vi.mocked(usePerformance).mockReturnValue({
@@ -332,6 +438,45 @@ describe('QuickStatsTab', () => {
 
     const { container, root } = mountWith(<QuickStatsTab />);
     expect(container.textContent).toContain('2 position(s) in other currencies excluded.');
+    unmount(container, root);
+  });
+
+  // Regression guard (AC 7.3): the excluded count reads over entries, not
+  // flattened legs — a multi-leg EUR group counts once, not once per leg.
+  it('counts a multi-leg EUR group once in the excluded-currency footnote', () => {
+    mockUSDDisplayCurrency();
+    vi.mocked(usePerformance).mockReturnValue({
+      data: makePerformanceData([{ code: 'USD', stats: makeStats() }]),
+      isLoading: false,
+      error: null,
+    } as unknown as PerformanceResult);
+
+    const legA = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000e1',
+        accountCurrency: 'EUR',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000300',
+    };
+    const legB = {
+      ...makePosition({
+        id: '00000000-0000-4000-a000-0000000000e2',
+        accountCurrency: 'EUR',
+        status: 'open',
+      }),
+      groupId: '00000000-0000-4000-a000-000000000300',
+    };
+    const group = makePositionGroup({ accountCurrency: 'EUR', status: 'open', legs: [legA, legB] });
+
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<QuickStatsTab />);
+    expect(container.textContent).toContain('1 position(s) in other currencies excluded.');
     unmount(container, root);
   });
 

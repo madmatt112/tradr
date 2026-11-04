@@ -17,6 +17,7 @@ import {
   ArchiveManifestSchema,
   ArchiveMessageSchema,
   ArchivePersonaSchema,
+  ArchivePositionGroupSchema,
   ArchivePositionImageSchema,
   ArchivePositionSchema,
   ArchivePositionTagSchema,
@@ -78,6 +79,7 @@ const COUNT_KEY: Record<string, keyof ArchiveCounts> = {
   'accounts.ndjson': 'accounts',
   'tags.ndjson': 'tags',
   'rules.ndjson': 'rules',
+  'position-groups.ndjson': 'positionGroups',
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
   'lot-selections.ndjson': 'lotSelections',
@@ -101,6 +103,7 @@ const LABEL: Record<string, string> = {
   'accounts.ndjson': 'accounts',
   'tags.ndjson': 'tags',
   'rules.ndjson': 'rules',
+  'position-groups.ndjson': 'position-groups',
   'positions.ndjson': 'positions',
   'fills.ndjson': 'fills',
   'lot-selections.ndjson': 'lot-selections',
@@ -183,6 +186,7 @@ export async function validateArchive(
     accounts: 0,
     tags: 0,
     rules: 0,
+    positionGroups: 0,
     positions: 0,
     fills: 0,
     lotSelections: 0,
@@ -205,6 +209,7 @@ export async function validateArchive(
   const accountIds = new Set<string>();
   const tagIds = new Set<string>();
   const ruleIds = new Set<string>();
+  const positionGroupIds = new Set<string>();
   const positionIds = new Set<string>();
   // Fill id → its type and owning position, so a lot selection can be checked
   // against the archive's fills (C12): exit is an exit, entry is an entry, same
@@ -428,6 +433,12 @@ export async function validateArchive(
         );
         return;
       }
+      case 'position-groups.ndjson': {
+        const r = ArchivePositionGroupSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        uniqueId(positionGroupIds, r.data.id, `${base}.id`);
+        return;
+      }
       case 'positions.ndjson': {
         const r = ArchivePositionSchema.safeParse(value);
         if (!r.success) return void addZodFaults(base, r.error);
@@ -437,6 +448,15 @@ export async function validateArchive(
           `${base}.accountId`,
           `accountId ${r.data.accountId} names no account in the archive.`,
         );
+        // A leg's group must be present in the archive; position-groups.ndjson
+        // precedes positions.ndjson, so the set is already populated (C11).
+        if (r.data.groupId != null) {
+          ref(
+            positionGroupIds.has(r.data.groupId),
+            `${base}.groupId`,
+            `groupId ${r.data.groupId} names no position group in the archive.`,
+          );
+        }
         if (r.data.status === 'closed') closedPositionIds.add(r.data.id);
         return;
       }

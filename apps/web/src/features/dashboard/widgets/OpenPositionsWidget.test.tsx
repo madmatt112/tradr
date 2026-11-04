@@ -9,7 +9,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { PositionListItem } from '@tradr/shared';
+import type { PositionListEntry, PositionListItem } from '@tradr/shared';
 
 import { usePositions } from '@/features/positions/hooks/usePositions';
 
@@ -23,6 +23,12 @@ vi.mock('@/features/positions/hooks/usePositions', () => ({
 // does not touch it, so render nothing.
 vi.mock('@/features/positions/components/PositionRowActions', () => ({
   PositionRowActions: () => null,
+}));
+
+// Same reason: PositionGroupRowActions pulls in useCloseGroup (useQueryClient)
+// through CloseGroupDialog, and there is no QueryClientProvider here.
+vi.mock('@/features/positions/components/PositionGroupRowActions', () => ({
+  PositionGroupRowActions: () => null,
 }));
 
 // Stub TanStack Router: <Link> becomes a plain anchor so href / text are
@@ -108,6 +114,47 @@ describe('OpenPositionsWidget — five-row cap', () => {
     expect(container.querySelectorAll('tbody tr')).toHaveLength(5);
     expect(container.textContent).not.toContain('SYM0');
     expect(container.textContent).toContain('View all 6 open positions');
+
+    unmount(container, root);
+  });
+
+  // Contract (design C14, AC 7.1): a group takes one of the five rows and
+  // counts once in "View all N open positions" — the five-row list runs over
+  // entries, not flattened legs.
+  it('shows a group as one row with its label, counted once among the five rows', () => {
+    const plainPositions = Array.from({ length: 4 }, (_, i) =>
+      makePosition({
+        id: `id-${i}`,
+        symbol: `SYM${i}`,
+        updatedAt: `2026-01-0${i + 1}T00:00:00.000Z`,
+      }),
+    );
+    // A raw group entry — fields a group row needs the widget to read instead
+    // of `symbol`/`side`/`assetType`/`totalEntryQuantity`.
+    const group = {
+      kind: 'group',
+      id: 'group-1',
+      label: 'BCS',
+      underlying: 'AAPL',
+      status: 'open',
+      openedAt: '2026-01-10T00:00:00.000Z',
+      updatedAt: '2026-01-10T00:00:00.000Z',
+      legs: [
+        { id: 'leg-1', status: 'closed' },
+        { id: 'leg-2', status: 'open' },
+      ],
+    } as unknown as PositionListEntry;
+
+    vi.mocked(usePositions).mockReturnValue({
+      data: [...plainPositions, group],
+      isLoading: false,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<OpenPositionsWidget />);
+
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(5);
+    expect(container.textContent).toContain('BCS');
+    expect(container.textContent).toContain('View all 5 open positions');
 
     unmount(container, root);
   });

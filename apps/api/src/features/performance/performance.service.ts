@@ -6,6 +6,7 @@ import {
   type PerformanceQueryInput,
   type PerformanceResponse,
   type SeriesBucket,
+  type Tag,
   PerformanceResponseSchema,
 } from '@tradr/shared';
 import type { BreakdownPosition } from '@tradr/shared/lib/breakdown';
@@ -13,6 +14,7 @@ import {
   buildCumulativeSeries,
   classifyPosition,
   computePositionSetStatistics,
+  decimalSum,
   generateBucketSeries,
   type ClassifiedPosition,
 } from '@tradr/shared/lib/performance';
@@ -154,6 +156,9 @@ export async function classifyTimeframePositions(
 ): Promise<{ flat: BreakdownPosition[]; realizations: CurrencyRealization[] }> {
   const flat: BreakdownPosition[] = [];
   const realizations: CurrencyRealization[] = [];
+  // design C8/D2: a grouped leg skips the per-leg flat push; its group is
+  // classified once after the loop, from the legs collected here.
+  const legsByGroup = new Map<string, SnapshotPosition[]>();
 
   for (let i = 0; i < positions.length; i++) {
     if (abortSignal.reason instanceof ClientAbortError) throw abortSignal.reason;
@@ -162,9 +167,17 @@ export async function classifyTimeframePositions(
 
     const position = positions[i]!;
 
-    const classified = classifyOne(position);
-    if (classified !== null) flat.push(classified);
+    if (position.groupId != null) {
+      const legs = legsByGroup.get(position.groupId);
+      if (legs) legs.push(position);
+      else legsByGroup.set(position.groupId, [position]);
+    } else {
+      const classified = classifyOne(position);
+      if (classified !== null) flat.push(classified);
+    }
 
+    // The realization loop stays per leg regardless of grouping (AC 5.3):
+    // out-of-window events already fall outside every bucket.
     for (const event of computeRealizationEvents(
       position.fills.map((f) => ({ ...f, filledAt: new Date(f.filledAt) })),
       position.side as 'long' | 'short',
@@ -178,7 +191,57 @@ export async function classifyTimeframePositions(
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
+
+  for (const legs of legsByGroup.values()) {
+    const group = classifyGroup(legs);
+    if (group !== null) flat.push(group);
+  }
+
   return { flat, realizations };
+}
+
+/**
+ * design C8: the group is the statistics unit. Derives one flat event from
+ * each leg's own latch (`classifyOne`) — never from stored group state, so
+ * reopen, unlink and §48's unsettle need no group write (D2). Returns null
+ * unless every leg is currently flat (AC 5.2): one unlatched leg means the
+ * group has never gone flat, so nothing counts yet.
+ */
+export function classifyGroup(legs: readonly SnapshotPosition[]): BreakdownPosition | null {
+  const classifiedLegs: BreakdownPosition[] = [];
+  for (const leg of legs) {
+    const classified = classifyOne(leg);
+    if (classified === null) return null;
+    classifiedLegs.push(classified);
+  }
+
+  const firstLeg = legs[0]!;
+  const netPnl = decimalSum(classifiedLegs.map((c) => c.netPnl));
+  const grossPnl = decimalSum(classifiedLegs.map((c) => c.grossPnl));
+  const fees = grossPnl.minus(netPnl);
+  const closedAt = classifiedLegs.reduce<Date>(
+    (latest, c) => (c.closedAt.getTime() > latest.getTime() ? c.closedAt : latest),
+    classifiedLegs[0]!.closedAt,
+  );
+
+  const tagsById = new Map<string, Tag>();
+  for (const c of classifiedLegs) {
+    for (const t of c.tags) tagsById.set(t.id, t);
+  }
+
+  return {
+    id: firstLeg.groupId!,
+    currency: firstLeg.currency,
+    netPnl,
+    grossPnl,
+    fees,
+    closedAt,
+    classification: classifyPosition(netPnl, firstLeg.currency),
+    symbol: firstLeg.symbol,
+    assetType: firstLeg.assetType as 'stock' | 'option',
+    tags: [...tagsById.values()],
+    legIds: legs.map((leg) => leg.id),
+  };
 }
 
 interface CurrencyRealization {

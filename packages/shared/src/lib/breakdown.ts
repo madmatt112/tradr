@@ -17,6 +17,8 @@ export interface BreakdownPosition extends ClassifiedPosition {
   // C7: the trading-rule compliance status at request time. Absent means the
   // position is grouped as `unscored`.
   compliance?: 'compliant' | 'non_compliant' | 'unscored';
+  // C8: present only on a multi-leg-group entry, the member legs' position ids.
+  legIds?: string[];
 }
 
 // D3: an option keys on its parsed underlying (falling back to the stored symbol

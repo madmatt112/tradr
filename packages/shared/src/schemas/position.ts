@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { MaxLossReason } from '../lib/strategy';
 import { parseOccSymbol } from '../options';
 
 import { EffectiveLotMethodEnum, TaxJurisdictionEnum } from './expense';
@@ -11,6 +12,59 @@ import { PositionComplianceSchema } from './trading-rule';
 const sideEnum = z.enum(['long', 'short']);
 const assetTypeEnum = z.enum(['stock', 'option']);
 const statusEnum = z.enum(['draft', 'open', 'closed']);
+const groupStatusEnum = z.enum(['open', 'closed']);
+const maxLossReasonValues: [MaxLossReason, ...MaxLossReason[]] = [
+  'multiple_expiries',
+  'unbounded',
+  'nothing_open',
+];
+const MaxLossReasonSchema = z.enum(maxLossReasonValues);
+
+// A group's override is a short free-text label (design C3/Data Models),
+// stored trimmed, 1 to 40 characters (AC 2.4). Exported so csv-import.ts's
+// commit-time `labelOverrides` values are validated under the same rule.
+export const labelOverrideSchema = z.string().trim().min(1).max(40);
+
+// One leg of a group create (design C3). Price, quantity and fee rules match
+// `CreateFillSchema` above, so a price of 0 is accepted (AC 4.5); unlike
+// `CreatePositionSchema`, no OCC refine runs here — the service refuses a bad
+// contract and names the leg index (AC 1.2, design D2, Error Handling 1).
+const createGroupLegSchema = z
+  .object({
+    symbol: z.string().min(1).max(20).trim().toUpperCase(),
+    side: sideEnum,
+    assetType: assetTypeEnum,
+    quantity: z.string().refine((v) => !isNaN(Number(v)) && Number(v) > 0, {
+      message: 'Quantity must be a positive number',
+    }),
+    price: z.string().refine((v) => !isNaN(Number(v)) && Number(v) >= 0, {
+      message: 'Price must be a non-negative number',
+    }),
+    fees: z
+      .string()
+      .refine((v) => !isNaN(Number(v)) && Number(v) >= 0, {
+        message: 'Fees must be a non-negative number',
+      })
+      .default('0'),
+  })
+  .strict();
+
+// One leg of a close-all (design C3). Price and fee rules match
+// `CreateFillSchema`, so a price of 0 is accepted (AC 4.5/4.1).
+const closeGroupExitSchema = z
+  .object({
+    positionId: z.string().uuid(),
+    price: z.string().refine((v) => !isNaN(Number(v)) && Number(v) >= 0, {
+      message: 'Price must be a non-negative number',
+    }),
+    fees: z
+      .string()
+      .refine((v) => !isNaN(Number(v)) && Number(v) >= 0, {
+        message: 'Fees must be a non-negative number',
+      })
+      .default('0'),
+  })
+  .strict();
 
 // Option-gated OCC validation. Fires only when both `assetType` and `symbol`
 // are present and the asset type is option — stock symbols keep only
@@ -228,6 +282,54 @@ export const PositionListItemSchema = z.object({
   classification: ClassificationSchema.nullable().optional(),
 });
 
+// One leg of a group, as read (design Data Models): a list item plus the
+// group it belongs to.
+export const PositionGroupLegSchema = PositionListItemSchema.extend({
+  groupId: z.string().uuid(),
+});
+
+// A multi-leg position group, as read (design Data Models/C6). Figures are
+// sums over the legs (Requirement 2); `label`/`detectedLabel`/`labelOverride`
+// and `maxLoss`/`maxLossReason` follow Requirement 3.
+export const PositionGroupEntrySchema = z.object({
+  kind: z.literal('group'),
+  id: z.string().uuid(),
+  userId: z.string().uuid(),
+  accountId: z.string().uuid(),
+  accountName: z.string(),
+  accountCurrency: z.string(),
+  accountTimezone: z.string(),
+  underlying: z.string(),
+  label: z.string(),
+  detectedLabel: z.string(),
+  labelOverride: z.string().nullable(),
+  status: groupStatusEnum,
+  openedAt: z.string().nullable(),
+  closedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  tags: z.array(TagSchema),
+  classification: ClassificationSchema.nullable(),
+  netEntry: z.number(),
+  grossPnl: z.number().nullable(),
+  netPnl: z.number().nullable(),
+  brokerageFees: z.number(),
+  openCostBasis: z.number(),
+  maxLoss: z.number().nullable(),
+  maxLossReason: MaxLossReasonSchema.nullable(),
+  legs: z.array(PositionGroupLegSchema),
+});
+
+// One row of `GET /api/positions` (design Data Models/C6): an ungrouped item
+// keeps `PositionListItemSchema`'s shape unchanged (AC 6.1); a group reads as
+// `PositionGroupEntrySchema`, checked first so its `kind: 'group'` literal
+// decides the branch.
+export const PositionListEntrySchema = z.union([PositionGroupEntrySchema, PositionListItemSchema]);
+
+export type PositionGroupLeg = z.infer<typeof PositionGroupLegSchema>;
+export type PositionGroupEntry = z.infer<typeof PositionGroupEntrySchema>;
+export type PositionListEntry = z.infer<typeof PositionListEntrySchema>;
+
 export const PositionDetailSchema = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
@@ -281,7 +383,64 @@ export const PositionDetailSchema = z.object({
   // (Requirement 6.1); absent otherwise. Optional so the shape stays
   // backward-compatible and callers that do not score can omit the key.
   compliance: PositionComplianceSchema.optional(),
+  // The group this position is a leg of, if any (design C6). Optional and
+  // nullable so the shape stays backward-compatible for an ungrouped position.
+  groupId: z.string().uuid().nullable().optional(),
+  group: PositionGroupEntrySchema.optional(),
 });
+
+// Create a multi-leg group in one write (design C3/C4, Requirement 1). Legs
+// share the account and fill date; `.min(2).max(8)` bounds the leg count
+// (AC 1.1).
+export const CreatePositionGroupSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    filledAt: z.string().datetime(),
+    labelOverride: labelOverrideSchema.nullable().optional(),
+    legs: z.array(createGroupLegSchema).min(2).max(8),
+  })
+  .strict();
+
+// Link existing ungrouped positions into a group, or add one to an existing
+// group (design C3/C4, Requirement 1.4). `.min(2).max(8)` matches the create
+// bound (AC 1.1/1.4).
+export const LinkPositionsSchema = z
+  .object({
+    positionIds: z.array(z.string().uuid()).min(2).max(8),
+    labelOverride: labelOverrideSchema.nullable().optional(),
+  })
+  .strict();
+
+// Add one more leg to an existing group (design C3/C4).
+export const AddGroupLegSchema = z
+  .object({
+    positionId: z.string().uuid(),
+  })
+  .strict();
+
+// Set or clear a group's label override (design C3/C4, Requirement 3.4).
+// `null` clears it, so detection takes over again.
+export const SetGroupLabelSchema = z
+  .object({
+    labelOverride: labelOverrideSchema.nullable(),
+  })
+  .strict();
+
+// Close every open leg of a group in one transaction, one exit fill per leg
+// (design C3/C4, Requirement 4). `.min(1).max(8)` bounds the exit count to
+// the group's leg cap.
+export const CloseGroupSchema = z
+  .object({
+    exits: z.array(closeGroupExitSchema).min(1).max(8),
+    closedAt: z.string().datetime().optional(),
+  })
+  .strict();
+
+export type CreatePositionGroupInput = z.infer<typeof CreatePositionGroupSchema>;
+export type LinkPositionsInput = z.infer<typeof LinkPositionsSchema>;
+export type AddGroupLegInput = z.infer<typeof AddGroupLegSchema>;
+export type SetGroupLabelInput = z.infer<typeof SetGroupLabelSchema>;
+export type CloseGroupInput = z.infer<typeof CloseGroupSchema>;
 
 export type CreatePositionInput = z.infer<typeof CreatePositionSchema>;
 export type UpdatePositionInput = z.infer<typeof UpdatePositionSchema>;

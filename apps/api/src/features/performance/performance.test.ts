@@ -2,7 +2,11 @@ import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BreakdownResponseSchema, PerformanceQuerySchema } from '@tradr/shared';
+import {
+  BreakdownResponseSchema,
+  PerformanceQuerySchema,
+  type PerformanceQueryInput,
+} from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
@@ -779,5 +783,496 @@ describe('GET /api/performance/breakdown', () => {
     const gated = BreakdownResponseSchema.parse(await gatedRes.json());
 
     expect(gated).toEqual(ungated);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Requirement 5 / design C8 (multi-leg-positions task 8) — the group is the
+// statistics unit. `getPerformance` called directly, over positions and
+// position_groups rows inserted directly by raw SQL (db.insert(positions) is
+// lint-forbidden outside the positions feature, matching
+// breakdown.service.test.ts's insertClosedPosition/insertReopenedPosition).
+//
+// Contract block — one entry per success criterion this suite covers.
+//
+// AC 5.1 (closed two-leg group -> one flat entry, summed, latest-dated)
+//   Pre: a group of two closed legs, flat at distinct instants.
+//   Call: getPerformance over a window covering both instants.
+//   Result: stats.totalPositions=1 (not 2); stats.expectancy is the sum of
+//     both legs' latched net P&L; the day-bucket at the EARLIER leg's flat
+//     date counts zero positions, the LATER leg's day-bucket counts one.
+//   Source: requirements.md AC 5.1; design.md C8.
+//
+// AC 5.2 + AC 5.3 (a flat leg in a never-flat group; its fill still reaches
+// Total net P&L at the fill's date — AC 5.3 is a regression guard, newly
+// exercised here on a GROUPED leg, which no existing test covers)
+//   Pre: a group of two legs — one flat with a real exit fill, one still
+//     open (never flat).
+//   Call: getPerformance over a window covering both legs' fills.
+//   Result: stats.totalPositions=0 and expectancy=null (the flat leg does
+//     not count alone); the flat leg's own exit-fill day-bucket still shows
+//     zero positions but the realized P&L from that fill.
+//   Source: requirements.md AC 5.2, AC 5.3; design.md C8.
+//
+// AC 5.4a (a group flat in range reads a leg whose fills all precede the range)
+//   Pre: a group of two closed legs — one flat well before the window (no
+//     fills in range at all), one flat inside the window (the group's
+//     overall flat-in-range instant).
+//   Call: getPerformance over the window.
+//   Result: stats.totalPositions=1; expectancy is the SUM of both legs'
+//     figures, proving the early leg was read, not dropped.
+//   Source: requirements.md AC 5.4; design.md C8 ("all legs of a touched
+//     group are read").
+//
+// AC 5.4b (a fill in range on a group with a flat event reads all legs)
+//   Pre: a group of two closed legs whose own flat dates are BOTH outside
+//     the window, but one leg has an (entry) fill inside the window.
+//   Call: getPerformance over the window.
+//   Result: stats.totalPositions=1; expectancy is the SUM of both legs'
+//     figures, proving the sibling with no in-window fill was still read.
+//   Source: requirements.md AC 5.4; design.md C8.
+//
+// AC 5.5 (a reopened leg keeps the group's last figures; a re-close replaces
+// them with no second event)
+//   Pre: a group of two closed legs.
+//   Call: getPerformance once; reopen one leg (status -> open, closed_at ->
+//     NULL, latch columns untouched) and call again; re-close that leg with
+//     new latch figures and call a third time.
+//   Result: totalPositions stays 1 across all three calls; the combined
+//     figure and day-bucket are unchanged after the reopen (the latch
+//     survives); after the re-close, the figure and day-bucket both move to
+//     the new values, with no leftover event at the old date.
+//   Source: requirements.md AC 5.5; design.md C8, D2.
+//
+// AC 5.6 (an unlink recomputes from the current legs)
+//   Pre: a group of two closed legs.
+//   Call: getPerformance once; unlink one leg (group_id -> NULL) directly;
+//     call again.
+//   Result: before, one combined entry; after, two separate entries (one
+//     lone-leg group, one ungrouped position), each with its own figure.
+//   Source: requirements.md AC 5.6; design.md C8.
+//
+// AC 5.7 (restoring a leg's latch to its prior value moves the group event,
+// with no group-specific write — simulating §48's unsettle)
+//   Pre: a group of two closed legs.
+//   Call: getPerformance once; directly restore one leg's last_flat_at/
+//     last_flat_net_pnl to an earlier prior value (no write to
+//     position_groups); call again.
+//   Result: the combined figure and day-bucket move to reflect the restored
+//     leg's new instant/value; the position_groups row is byte-for-byte
+//     unchanged across the two calls.
+//   Source: requirements.md AC 5.7; design.md C8, D2.
+//
+// AC 5.11 (regression guard, invariant: a user with no groups gets today's
+// figures) is RED-IMPOSSIBLE — every existing assertion in this file and in
+// performance.service.test.ts already exercises the ungrouped path end to
+// end with zero grouping code involved, branch by branch:
+//   - snapshot row selection (own-date-in-window / fill-in-window): every
+//     seedPositions-based test above, e.g. "(a) six presets" in
+//     performance.service.test.ts.
+//   - per-position flat push into bucket A: "(b) Multi-currency isolation".
+//   - bucket-B realization at the fill's date: "(b2) serves expectancy as
+//     the flat mean... (D1)" and "(g) REQ-3.7 invariants".
+//   - empty/no-accounts and unsupported-currency branches: "(c)" and "(d)".
+//   - dataQuality overlap accounting: "(e)".
+//   - defaultCurrency tie-breaks: "(f)" sub-tests.
+//   - timeout/abort branches: the real-timer and client-abort tests above.
+// Design C8 changes nothing on this path (groupId is optional and every new
+// branch is reached only when a row's group_id is non-null), so no new test
+// is needed to pin it; a regression here would already fail one of the
+// tests named above.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/performance — the group is the statistics unit (Requirement 5, design C8)', () => {
+  async function createGroup(userId: string): Promise<string> {
+    const result = await db.execute<{ id: string }>(sql`
+      INSERT INTO position_groups (user_id) VALUES (${userId}) RETURNING id
+    `);
+    return result[0]!.id;
+  }
+
+  interface LegOpts {
+    symbol: string;
+    side?: 'long' | 'short';
+    assetType?: 'stock' | 'option';
+    status?: 'open' | 'closed';
+    openedAt: string;
+    closedAt?: string | null;
+    lastFlatAt?: string | null;
+    netPnl?: string | null;
+    groupId?: string | null;
+  }
+
+  // Direct insert is intentional: db.insert(positions) is lint-forbidden
+  // outside the positions feature. Leaving lastFlatAt null and setting only
+  // closedAt + netPnl relies on classifyOne's documented fallback
+  // (flatAt = lastFlatAt ?? closedAt), matching
+  // breakdown.service.test.ts's insertClosedPosition.
+  async function insertLeg(userId: string, accountId: string, opts: LegOpts): Promise<string> {
+    const result = await db.execute<{ id: string }>(sql`
+      INSERT INTO positions
+        (user_id, account_id, group_id, symbol, side, asset_type, status, opened_at, closed_at,
+         last_flat_at, last_flat_net_pnl)
+      VALUES
+        (${userId}, ${accountId}, ${opts.groupId ?? null}, ${opts.symbol}, ${opts.side ?? 'long'},
+         ${opts.assetType ?? 'stock'}, ${opts.status ?? 'closed'}, ${opts.openedAt}::timestamptz,
+         ${opts.closedAt ?? null}::timestamptz, ${opts.lastFlatAt ?? null}::timestamptz,
+         ${opts.netPnl ?? null}::numeric)
+      RETURNING id
+    `);
+    return result[0]!.id;
+  }
+
+  async function insertFill(
+    positionId: string,
+    type: 'entry' | 'exit',
+    price: string,
+    quantity: string,
+    filledAt: string,
+  ): Promise<void> {
+    await db.execute(sql`
+      INSERT INTO fills (position_id, type, price, quantity, fees, filled_at)
+      VALUES (${positionId}, ${type}, ${price}, ${quantity}, '0', ${filledAt}::timestamptz)
+    `);
+  }
+
+  function perfInput(overrides: Partial<PerformanceQueryInput> = {}): PerformanceQueryInput {
+    return {
+      granularity: 'day',
+      start: '2026-01-01T00:00:00.000Z',
+      end: '2026-02-01T00:00:00.000Z',
+      tz: 'UTC',
+      ...overrides,
+    };
+  }
+
+  function freshSignal(): AbortSignal {
+    return new AbortController().signal;
+  }
+
+  it('AC 5.1: a closed two-leg group gives one flat entry, summed, dated at the latest leg flat', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL250320C150',
+      assetType: 'option',
+      openedAt: '2026-01-05T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      netPnl: '200',
+      groupId,
+    });
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL250320C155',
+      assetType: 'option',
+      side: 'short',
+      openedAt: '2026-01-06T00:00:00.000Z',
+      closedAt: '2026-01-12T00:00:00.000Z',
+      netPnl: '100',
+      groupId,
+    });
+
+    const result = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usd = result.currencies.find((c) => c.code === 'USD')!;
+
+    expect(usd.stats.totalPositions).toBe(1);
+    expect(usd.stats.expectancy).toBe('300');
+    expect(usd.series.find((b) => b.bucketStart === '2026-01-10')!.totalPositions).toBe(0);
+    expect(usd.series.find((b) => b.bucketStart === '2026-01-12')!.totalPositions).toBe(1);
+  });
+
+  it('AC 5.2/5.3: a flat leg in a never-flat group counts nothing alone, but its fill still reaches Total net P&L at the fill date', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    const legA = await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-05T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      groupId,
+    });
+    await insertFill(legA, 'entry', '10', '100', '2026-01-05T00:00:00.000Z');
+    await insertFill(legA, 'exit', '12', '100', '2026-01-10T00:00:00.000Z');
+
+    const legB = await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      status: 'open',
+      openedAt: '2026-01-06T00:00:00.000Z',
+      closedAt: null,
+      groupId,
+    });
+    await insertFill(legB, 'entry', '50', '10', '2026-01-08T00:00:00.000Z');
+
+    const result = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usd = result.currencies.find((c) => c.code === 'USD')!;
+
+    expect(usd.stats.totalPositions).toBe(0);
+    expect(usd.stats.hasWins).toBe(false);
+    expect(usd.stats.expectancy).toBeNull();
+
+    const day10 = usd.series.find((b) => b.bucketStart === '2026-01-10')!;
+    expect(day10.totalPositions).toBe(0);
+    expect(day10.netPnl).toBe('200');
+  });
+
+  it('AC 5.4: a group flat in range still reads a leg whose fills all precede the range', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2025-12-01T00:00:00.000Z',
+      closedAt: '2025-12-15T00:00:00.000Z',
+      netPnl: '100',
+      groupId,
+    });
+    await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-01-10T00:00:00.000Z',
+      closedAt: '2026-01-15T00:00:00.000Z',
+      netPnl: '50',
+      groupId,
+    });
+
+    const result = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usd = result.currencies.find((c) => c.code === 'USD')!;
+
+    expect(usd.stats.totalPositions).toBe(1);
+    expect(usd.stats.expectancy).toBe('150');
+  });
+
+  it('AC 5.4: a fill in range on a group whose flat event falls outside it still reads every leg', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    const legA = await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-15T00:00:00.000Z',
+      closedAt: '2026-02-05T00:00:00.000Z',
+      netPnl: '100',
+      groupId,
+    });
+    await insertFill(legA, 'entry', '10', '10', '2026-01-15T00:00:00.000Z');
+
+    await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-02-01T00:00:00.000Z',
+      closedAt: '2026-02-06T00:00:00.000Z',
+      netPnl: '50',
+      groupId,
+    });
+
+    const result = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usd = result.currencies.find((c) => c.code === 'USD')!;
+
+    expect(usd.stats.totalPositions).toBe(1);
+    expect(usd.stats.expectancy).toBe('150');
+  });
+
+  it('AC 5.5: a reopened leg keeps the group figures; a re-close replaces them with no second event', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-03T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      lastFlatAt: '2026-01-10T00:00:00.000Z',
+      netPnl: '100',
+      groupId,
+    });
+    const legB = await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-01-04T00:00:00.000Z',
+      closedAt: '2026-01-12T00:00:00.000Z',
+      lastFlatAt: '2026-01-12T00:00:00.000Z',
+      netPnl: '50',
+      groupId,
+    });
+
+    const before = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdBefore = before.currencies.find((c) => c.code === 'USD')!;
+    expect(usdBefore.stats.totalPositions).toBe(1);
+    expect(usdBefore.stats.expectancy).toBe('150');
+
+    // Reopen leg B: live status/closed_at change, latch columns untouched.
+    await db.execute(sql`
+      UPDATE positions SET status = 'open', closed_at = NULL WHERE id = ${legB}
+    `);
+
+    const afterReopen = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdReopen = afterReopen.currencies.find((c) => c.code === 'USD')!;
+    expect(usdReopen.stats.totalPositions).toBe(1);
+    expect(usdReopen.stats.expectancy).toBe('150');
+    expect(usdReopen.series.find((b) => b.bucketStart === '2026-01-12')!.totalPositions).toBe(1);
+
+    // Re-close leg B with new figures.
+    await db.execute(sql`
+      UPDATE positions SET
+        status = 'closed',
+        closed_at = '2026-01-20T00:00:00.000Z'::timestamptz,
+        last_flat_at = '2026-01-20T00:00:00.000Z'::timestamptz,
+        last_flat_net_pnl = '70'::numeric
+      WHERE id = ${legB}
+    `);
+
+    const afterReclose = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdReclose = afterReclose.currencies.find((c) => c.code === 'USD')!;
+    expect(usdReclose.stats.totalPositions).toBe(1);
+    expect(usdReclose.stats.expectancy).toBe('170');
+    expect(usdReclose.series.find((b) => b.bucketStart === '2026-01-12')!.totalPositions).toBe(0);
+    expect(usdReclose.series.find((b) => b.bucketStart === '2026-01-20')!.totalPositions).toBe(1);
+  });
+
+  it('AC 5.6: an unlink recomputes statistics from the current legs', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-03T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      netPnl: '100',
+      groupId,
+    });
+    const legB = await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-01-04T00:00:00.000Z',
+      closedAt: '2026-01-12T00:00:00.000Z',
+      netPnl: '50',
+      groupId,
+    });
+
+    const before = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdBefore = before.currencies.find((c) => c.code === 'USD')!;
+    expect(usdBefore.stats.totalPositions).toBe(1);
+    expect(usdBefore.stats.expectancy).toBe('150');
+
+    await db.execute(sql`UPDATE positions SET group_id = NULL WHERE id = ${legB}`);
+
+    const after = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdAfter = after.currencies.find((c) => c.code === 'USD')!;
+    expect(usdAfter.stats.totalPositions).toBe(2);
+    expect(usdAfter.stats.expectancy).toBe('75');
+  });
+
+  it('AC 5.7: restoring a leg latch to a prior value moves the group event with no group-table write', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+    const groupId = await createGroup(userId);
+
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-03T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      lastFlatAt: '2026-01-10T00:00:00.000Z',
+      netPnl: '100',
+      groupId,
+    });
+    const legB = await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-01-04T00:00:00.000Z',
+      closedAt: '2026-01-15T00:00:00.000Z',
+      lastFlatAt: '2026-01-15T00:00:00.000Z',
+      netPnl: '80',
+      groupId,
+    });
+
+    const before = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdBefore = before.currencies.find((c) => c.code === 'USD')!;
+    expect(usdBefore.stats.totalPositions).toBe(1);
+    expect(usdBefore.stats.expectancy).toBe('180');
+
+    const groupRowBefore = await db.execute(sql`
+      SELECT label_override, created_at FROM position_groups WHERE id = ${groupId}
+    `);
+
+    // Simulate §48's unsettle: restore leg B's latch to an earlier prior
+    // value. No write to position_groups.
+    await db.execute(sql`
+      UPDATE positions SET
+        closed_at = '2026-01-12T00:00:00.000Z'::timestamptz,
+        last_flat_at = '2026-01-12T00:00:00.000Z'::timestamptz,
+        last_flat_net_pnl = '60'::numeric
+      WHERE id = ${legB}
+    `);
+
+    const after = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usdAfter = after.currencies.find((c) => c.code === 'USD')!;
+    expect(usdAfter.stats.totalPositions).toBe(1);
+    expect(usdAfter.stats.expectancy).toBe('160');
+    expect(usdAfter.series.find((b) => b.bucketStart === '2026-01-15')!.totalPositions).toBe(0);
+    expect(usdAfter.series.find((b) => b.bucketStart === '2026-01-12')!.totalPositions).toBe(1);
+
+    const groupRowAfter = await db.execute(sql`
+      SELECT label_override, created_at FROM position_groups WHERE id = ${groupId}
+    `);
+    expect(groupRowAfter).toEqual(groupRowBefore);
+  });
+
+  // AC 5.9, design C8/D10: fetchHistoryMetadata aggregates by unit
+  // (COALESCE(group_id, id)) before counting, so a flat group counts once
+  // and an open group with one closed leg counts not at all.
+  it('AC 5.9: historyRange counts a flat group once and an open group with a closed leg not at all, dated at the flat day', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+
+    // Flat group: both legs closed. The unit counts once, dated at the
+    // LATEST leg's closed_at (2026-01-15), not the earlier leg's.
+    const flatGroup = await createGroup(userId);
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-01T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      groupId: flatGroup,
+    });
+    await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-01-02T00:00:00.000Z',
+      closedAt: '2026-01-15T00:00:00.000Z',
+      groupId: flatGroup,
+    });
+
+    // Open group: one closed leg, one still open. The unit is not flat, so it
+    // counts not at all — the closed leg must not count on its own.
+    const openGroup = await createGroup(userId);
+    await insertLeg(userId, account.id, {
+      symbol: 'NVDA',
+      openedAt: '2026-01-03T00:00:00.000Z',
+      closedAt: '2026-01-05T00:00:00.000Z',
+      groupId: openGroup,
+    });
+    await insertLeg(userId, account.id, {
+      symbol: 'TSLA',
+      status: 'open',
+      openedAt: '2026-01-04T00:00:00.000Z',
+      closedAt: null,
+      groupId: openGroup,
+    });
+
+    const result = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usd = result.currencies.find((c) => c.code === 'USD')!;
+
+    expect(usd.historyRange.totalClosedPositions).toBe(1);
+    expect(new Date(usd.historyRange.earliestClosedAt!).getTime()).toBe(
+      new Date('2026-01-15T00:00:00.000Z').getTime(),
+    );
+    expect(new Date(usd.historyRange.mostRecentClosedAt!).getTime()).toBe(
+      new Date('2026-01-15T00:00:00.000Z').getTime(),
+    );
   });
 });

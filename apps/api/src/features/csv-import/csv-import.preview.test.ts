@@ -647,3 +647,65 @@ describe('POST /api/csv-import/preview — option integration (§32)', () => {
     expect(body.positions[0].scope.assetType).toBe('stock');
   });
 });
+
+// ===========================================================================
+// Group proposals (design C10, AC 8.8) — the preview carries groupProposals
+// through to the client; the order id is never quoted in the response.
+//
+// Contract block — one row per success criterion this block covers.
+//
+// | Criterion                                                            | Pre-condition                                                              | Call (seam)                      | Observable result                                                        | Source of expected value |
+// |-----------------------------------------------------------------------|-----------------------------------------------------------------------------|-----------------------------------|----------------------------------------------------------------------------|---------------------------|
+// | AC 8.8 — preview carries one groupProposals entry for a two-leg order | a stock leg and an option leg on the same underlying share an order id    | POST /api/csv-import/preview     | body.groupProposals has one entry: stable string id, legRefs [0,1], a string label, basis 'order_id' | requirements.md AC 8.8; design.md C10 |
+// | AC 8.11 — the order id is never stored/returned                      | same request                                                               | POST /api/csv-import/preview     | the raw order id string appears nowhere in the response body             | requirements.md AC 8.11; design.md C10 "the order id is never staged, returned or stored" |
+// ===========================================================================
+
+describe('POST /api/csv-import/preview — group proposals (AC 8.8, 8.11)', () => {
+  const GROUP_ORDER_ID = 'ORD-GROUP-1';
+  const GROUPED_CSV = [
+    'Symbol,Type,Side,Price,Quantity,Date,Fees,OrderId',
+    `AAPL,STOCK,BUY,100,10,2026-01-01,1,${GROUP_ORDER_ID}`,
+    `AAPL260320C250,OPTION,BUY,1.75,1,2026-01-01,0.65,${GROUP_ORDER_ID}`,
+  ].join('\n');
+
+  function groupedExecRequest(accountId: string) {
+    const base = execRequest(accountId);
+    return {
+      ...base,
+      mapping: {
+        ...base.mapping,
+        columns: { ...base.mapping.columns, orderId: 'OrderId' },
+        contractForm: 'occ-symbol',
+      },
+    };
+  }
+
+  it('returns one groupProposals entry with a stable id, legRefs, label and basis for a two-leg order id match', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+
+    const res = await postPreview(cookie, GROUPED_CSV, groupedExecRequest(accountId));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.committable).toBe(true);
+    expect(body.groupProposals).toHaveLength(1);
+
+    const proposal = body.groupProposals[0];
+    expect(typeof proposal.id).toBe('string');
+    expect(proposal.id.length).toBeGreaterThan(0);
+    expect(proposal.legRefs).toEqual([0, 1]);
+    expect(typeof proposal.label).toBe('string');
+    expect(proposal.basis).toBe('order_id');
+  });
+
+  it('never quotes the order id anywhere in the preview response', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+
+    const res = await postPreview(cookie, GROUPED_CSV, groupedExecRequest(accountId));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.groupProposals).toHaveLength(1);
+    expect(JSON.stringify(body)).not.toContain(GROUP_ORDER_ID);
+  });
+});

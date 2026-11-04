@@ -266,9 +266,20 @@ export interface RuleInsert {
   updatedAt: string;
 }
 
+// A strategy group; `id` is already remapped and `user_id` is set by the insert
+// function, so a group is restored under the importing user (C11).
+export interface PositionGroupInsert {
+  id: string;
+  labelOverride: string | null;
+  createdAt: string;
+}
+
 export interface PositionInsert {
   id: string;
   accountId: string;
+  // Absent or null restores the position ungrouped; a set id is the fresh group
+  // id (C11). An omitted value binds as NULL via `boundValue`.
+  groupId?: string | null;
   symbol: string;
   side: string;
   assetType: string;
@@ -467,10 +478,18 @@ const RULE_COLUMNS: Column[] = [
   { name: 'updated_at', cast: 'timestamptz' },
 ];
 
+const POSITION_GROUP_COLUMNS: Column[] = [
+  { name: 'id', cast: 'plain' },
+  { name: 'user_id', cast: 'plain' },
+  { name: 'label_override', cast: 'plain' },
+  { name: 'created_at', cast: 'timestamptz' },
+];
+
 const POSITION_COLUMNS: Column[] = [
   { name: 'id', cast: 'plain' },
   { name: 'user_id', cast: 'plain' },
   { name: 'account_id', cast: 'plain' },
+  { name: 'group_id', cast: 'plain' },
   { name: 'symbol', cast: 'plain' },
   { name: 'side', cast: 'plain' },
   { name: 'asset_type', cast: 'plain' },
@@ -705,6 +724,20 @@ export async function insertArchiveTradingRules(
   );
 }
 
+/** Insert strategy groups; `user_id` is the importing user (C11). */
+export async function insertArchivePositionGroups(
+  tx: ImportDb,
+  userId: string,
+  rows: PositionGroupInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'position_groups',
+    POSITION_GROUP_COLUMNS,
+    rows.map((r) => [r.id, userId, r.labelOverride, r.createdAt]),
+  );
+}
+
 export async function insertArchivePositions(
   tx: ImportDb,
   userId: string,
@@ -718,6 +751,7 @@ export async function insertArchivePositions(
       r.id,
       userId,
       r.accountId,
+      r.groupId,
       r.symbol,
       r.side,
       r.assetType,

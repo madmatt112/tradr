@@ -116,6 +116,7 @@ export {
   CsvPreviewRequestSchema,
   LocatedErrorSchema,
   LocatedWarningSchema,
+  GroupProposalSchema,
   ProposedFillSchema,
   ProposedPositionSchema,
   CsvPreviewResponseSchema,
@@ -133,6 +134,7 @@ export type {
   CsvPreviewRequest,
   LocatedError,
   LocatedWarning,
+  GroupProposal,
   ProposedFill,
   ProposedPosition,
   CsvPreviewResponse,
@@ -146,6 +148,7 @@ export * from './constants/expense-categories';
 export * from './constants/tags';
 export { CSV_IMPORT_PRESETS, mappingColumns } from './constants/csv-import-presets';
 export * from './lib/occ';
+export * from './lib/strategy';
 export * from './lib/tax-lots';
 export * from './fees';
 export { calculateTrade } from './calculator';
@@ -378,6 +381,7 @@ export {
   ArchiveAccountSchema,
   ArchiveTagSchema,
   ArchiveTradingRuleSchema,
+  ArchivePositionGroupSchema,
   ArchivePositionSchema,
   ArchiveFillSchema,
   ArchiveLotSelectionSchema,
@@ -412,6 +416,7 @@ export type {
   ArchiveAccount,
   ArchiveTag,
   ArchiveTradingRule,
+  ArchivePositionGroup,
   ArchivePosition,
   ArchiveFill,
   ArchiveLotSelection,

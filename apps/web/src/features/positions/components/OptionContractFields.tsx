@@ -14,50 +14,57 @@ export interface OptionContractFieldsProps {
   onChange: (next: OptionContractInputs) => void;
   /** Field-level errors plus a `form` slot for the rare non-field error. */
   errors?: Partial<Record<'underlying' | 'expiry' | 'strike' | 'form', string>>;
+  /** Prefixes every input/error id, so a multi-leg row's ids stay distinct (task 17). */
+  idPrefix?: string;
 }
 
-export function OptionContractFields({ value, onChange, errors }: OptionContractFieldsProps) {
+export function OptionContractFields({
+  value,
+  onChange,
+  errors,
+  idPrefix = 'occ',
+}: OptionContractFieldsProps) {
   return (
     <div className="space-y-3">
       {errors?.form && (
-        <p id="occ-form-error" role="alert" className="text-sm text-destructive">
+        <p id={`${idPrefix}-form-error`} role="alert" className="text-sm text-destructive">
           {errors.form}
         </p>
       )}
 
       <div className="space-y-2">
-        <Label htmlFor="occ-underlying">Underlying</Label>
+        <Label htmlFor={`${idPrefix}-underlying`}>Underlying</Label>
         <Input
-          id="occ-underlying"
+          id={`${idPrefix}-underlying`}
           type="text"
           autoComplete="off"
           placeholder="AAPL"
           value={value.underlying}
           onChange={(e) => onChange({ ...value, underlying: e.target.value })}
           aria-invalid={errors?.underlying ? true : undefined}
-          aria-describedby={errors?.underlying ? 'occ-underlying-error' : undefined}
+          aria-describedby={errors?.underlying ? `${idPrefix}-underlying-error` : undefined}
         />
         {errors?.underlying && (
-          <p id="occ-underlying-error" className="text-sm text-destructive">
+          <p id={`${idPrefix}-underlying-error`} className="text-sm text-destructive">
             {errors.underlying}
           </p>
         )}
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="occ-expiry">Expiry</Label>
+        <Label htmlFor={`${idPrefix}-expiry`}>Expiry</Label>
         <Input
-          id="occ-expiry"
+          id={`${idPrefix}-expiry`}
           type="date"
           min="2000-01-01"
           max="2049-12-31"
           value={value.expiry}
           onChange={(e) => onChange({ ...value, expiry: e.target.value })}
           aria-invalid={errors?.expiry ? true : undefined}
-          aria-describedby={errors?.expiry ? 'occ-expiry-error' : undefined}
+          aria-describedby={errors?.expiry ? `${idPrefix}-expiry-error` : undefined}
         />
         {errors?.expiry && (
-          <p id="occ-expiry-error" className="text-sm text-destructive">
+          <p id={`${idPrefix}-expiry-error`} className="text-sm text-destructive">
             {errors.expiry}
           </p>
         )}
@@ -81,19 +88,19 @@ export function OptionContractFields({ value, onChange, errors }: OptionContract
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="occ-strike">Strike</Label>
+        <Label htmlFor={`${idPrefix}-strike`}>Strike</Label>
         <Input
-          id="occ-strike"
+          id={`${idPrefix}-strike`}
           type="text"
           inputMode="decimal"
           placeholder="150.00"
           value={value.strike}
           onChange={(e) => onChange({ ...value, strike: e.target.value })}
           aria-invalid={errors?.strike ? true : undefined}
-          aria-describedby={errors?.strike ? 'occ-strike-error' : undefined}
+          aria-describedby={errors?.strike ? `${idPrefix}-strike-error` : undefined}
         />
         {errors?.strike && (
-          <p id="occ-strike-error" className="text-sm text-destructive">
+          <p id={`${idPrefix}-strike-error`} className="text-sm text-destructive">
             {errors.strike}
           </p>
         )}
