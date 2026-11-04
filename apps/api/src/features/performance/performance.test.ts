@@ -1222,4 +1222,57 @@ describe('GET /api/performance — the group is the statistics unit (Requirement
     `);
     expect(groupRowAfter).toEqual(groupRowBefore);
   });
+
+  // AC 5.9, design C8/D10: fetchHistoryMetadata aggregates by unit
+  // (COALESCE(group_id, id)) before counting, so a flat group counts once
+  // and an open group with one closed leg counts not at all.
+  it('AC 5.9: historyRange counts a flat group once and an open group with a closed leg not at all, dated at the flat day', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+
+    // Flat group: both legs closed. The unit counts once, dated at the
+    // LATEST leg's closed_at (2026-01-15), not the earlier leg's.
+    const flatGroup = await createGroup(userId);
+    await insertLeg(userId, account.id, {
+      symbol: 'AAPL',
+      openedAt: '2026-01-01T00:00:00.000Z',
+      closedAt: '2026-01-10T00:00:00.000Z',
+      groupId: flatGroup,
+    });
+    await insertLeg(userId, account.id, {
+      symbol: 'MSFT',
+      openedAt: '2026-01-02T00:00:00.000Z',
+      closedAt: '2026-01-15T00:00:00.000Z',
+      groupId: flatGroup,
+    });
+
+    // Open group: one closed leg, one still open. The unit is not flat, so it
+    // counts not at all — the closed leg must not count on its own.
+    const openGroup = await createGroup(userId);
+    await insertLeg(userId, account.id, {
+      symbol: 'NVDA',
+      openedAt: '2026-01-03T00:00:00.000Z',
+      closedAt: '2026-01-05T00:00:00.000Z',
+      groupId: openGroup,
+    });
+    await insertLeg(userId, account.id, {
+      symbol: 'TSLA',
+      status: 'open',
+      openedAt: '2026-01-04T00:00:00.000Z',
+      closedAt: null,
+      groupId: openGroup,
+    });
+
+    const result = await getPerformance(db, userId, perfInput(), freshSignal(), Date.now());
+    const usd = result.currencies.find((c) => c.code === 'USD')!;
+
+    expect(usd.historyRange.totalClosedPositions).toBe(1);
+    expect(new Date(usd.historyRange.earliestClosedAt!).getTime()).toBe(
+      new Date('2026-01-15T00:00:00.000Z').getTime(),
+    );
+    expect(new Date(usd.historyRange.mostRecentClosedAt!).getTime()).toBe(
+      new Date('2026-01-15T00:00:00.000Z').getTime(),
+    );
+  });
 });

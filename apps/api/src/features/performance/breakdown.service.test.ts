@@ -44,6 +44,14 @@ async function createTag(userId: string, name: string, category = 'general') {
   return row!;
 }
 
+// design C8: a bare position_groups row — the leg carries the account/symbol.
+async function createGroup(userId: string): Promise<string> {
+  const result = await db.execute<{ id: string }>(sql`
+    INSERT INTO position_groups (user_id) VALUES (${userId}) RETURNING id
+  `);
+  return result[0]!.id;
+}
+
 interface SeedPositionOpts {
   symbol: string;
   side?: 'long' | 'short';
@@ -52,6 +60,8 @@ interface SeedPositionOpts {
   closedAt: string;
   /** The latched net P&L; classifyOne reads it directly, so no fills are needed. */
   netPnl: string;
+  /** design C8: the leg's group, when it has one. */
+  groupId?: string;
 }
 
 // Positions are inserted via raw SQL on purpose: db.insert(positions) is
@@ -65,9 +75,10 @@ async function insertClosedPosition(
 ): Promise<string> {
   const result = await db.execute<{ id: string }>(sql`
     INSERT INTO positions
-      (user_id, account_id, symbol, side, asset_type, status, opened_at, closed_at, last_flat_net_pnl)
+      (user_id, account_id, group_id, symbol, side, asset_type, status, opened_at, closed_at,
+       last_flat_net_pnl)
     VALUES
-      (${userId}, ${accountId}, ${opts.symbol}, ${opts.side ?? 'long'},
+      (${userId}, ${accountId}, ${opts.groupId ?? null}, ${opts.symbol}, ${opts.side ?? 'long'},
        ${opts.assetType ?? 'stock'}, 'closed',
        ${opts.closedAt}::timestamptz - interval '1 day', ${opts.closedAt}::timestamptz,
        ${opts.netPnl}::numeric)
@@ -243,6 +254,124 @@ describe('getBreakdown', () => {
       expect(midnight.stats.totalPositions).toBe(0);
       expect(midnight.stats.winRate).toBeNull();
       expect(midnight.stats.breakevenRate).toBeNull();
+    });
+  });
+
+  // design C8 (AC 5.8): a multi-leg group is one statistics unit, so a
+  // breakdown counts it once — never once per leg.
+  describe('a group counts once (AC 5.8)', () => {
+    it('counts a two-leg group once under symbol, keyed by its underlying', async () => {
+      const user = await createUser();
+      const usd = await createAccount(user.id, 'USD');
+      const groupId = await createGroup(user.id);
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'AAPL250320C150',
+        assetType: 'option',
+        closedAt: '2026-01-05T14:00:00.000Z',
+        netPnl: '100',
+        groupId,
+      });
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'AAPL250320C155',
+        assetType: 'option',
+        side: 'short',
+        closedAt: '2026-01-06T09:00:00.000Z',
+        netPnl: '50',
+        groupId,
+      });
+
+      const res = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'symbol' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const cur = res.currencies.find((c) => c.code === 'USD')!;
+      expect(cur.total.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === 'AAPL')!.stats.totalPositions).toBe(1);
+    });
+
+    it('counts a two-leg group once under weekday and hour, at its flat instant', async () => {
+      const user = await createUser();
+      const usd = await createAccount(user.id, 'USD');
+      const groupId = await createGroup(user.id);
+      // Leg A flat Monday 09:00; leg B flat (later) Tuesday 20:00. classifyGroup
+      // dates the group at the LATEST leg flat, so it counts once on
+      // Tuesday/20 and never on Monday/9.
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'AAPL',
+        closedAt: '2026-01-05T09:00:00.000Z',
+        netPnl: '100',
+        groupId,
+      });
+      await insertClosedPosition(user.id, usd.id, {
+        symbol: 'MSFT',
+        closedAt: '2026-01-06T20:00:00.000Z',
+        netPnl: '50',
+        groupId,
+      });
+
+      const weekdayRes = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'weekday' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const weekdayCur = weekdayRes.currencies.find((c) => c.code === 'USD')!;
+      expect(weekdayCur.total.totalPositions).toBe(1);
+      expect(weekdayCur.rows.find((r) => r.key === '1')!.stats.totalPositions).toBe(0); // Mon
+      expect(weekdayCur.rows.find((r) => r.key === '2')!.stats.totalPositions).toBe(1); // Tue
+
+      const hourRes = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'hour' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const hourCur = hourRes.currencies.find((c) => c.code === 'USD')!;
+      expect(hourCur.rows.find((r) => r.key === '9')!.stats.totalPositions).toBe(0);
+      expect(hourCur.rows.find((r) => r.key === '20')!.stats.totalPositions).toBe(1);
+    });
+
+    it('counts a group once per distinct tag across its legs', async () => {
+      const user = await createUser();
+      const usd = await createAccount(user.id, 'USD');
+      const t1 = await createTag(user.id, 'Breakout');
+      const t2 = await createTag(user.id, 'Earnings');
+      const groupId = await createGroup(user.id);
+
+      const legA = await insertClosedPosition(user.id, usd.id, {
+        symbol: 'AAPL',
+        closedAt: '2026-01-05T14:00:00.000Z',
+        netPnl: '100',
+        groupId,
+      });
+      const legB = await insertClosedPosition(user.id, usd.id, {
+        symbol: 'MSFT',
+        closedAt: '2026-01-06T14:00:00.000Z',
+        netPnl: '50',
+        groupId,
+      });
+      await db.insert(positionTags).values([
+        { positionId: legA, tagId: t1.id },
+        { positionId: legB, tagId: t2.id },
+      ]);
+
+      const res = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'tag' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const cur = res.currencies.find((c) => c.code === 'USD')!;
+      expect(cur.total.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === t1.id)!.stats.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === t2.id)!.stats.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === 'untagged')!.stats.totalPositions).toBe(0);
     });
   });
 
@@ -607,6 +736,80 @@ describe('getBreakdown', () => {
         'trading_rules_breakdown_scoring_failed',
         expect.objectContaining({ userId: user.id, populationSize: 2 }),
       );
+    });
+
+    // design C8: scoreComplianceStatuses loads and scores a group's legIds
+    // (falling back to the entry's own id) and folds — non-compliant beats
+    // compliant beats unscored.
+    it("folds a group's compliance from its legs: non-compliant, then compliant, then unscored (AC 5.8)", async () => {
+      const user = await createUser();
+      const usdA = await createAccount(user.id, 'USD'); // rule-scoped
+      const usdB = await createAccount(user.id, 'USD'); // out of the rule's scope
+      await insertRule(user.id, LONG_ONLY_RULE, { accountId: usdA.id });
+
+      // Group 1: one compliant leg + one breaching leg -> non-compliant wins.
+      const g1 = await createGroup(user.id);
+      await insertClosedPosition(user.id, usdA.id, {
+        symbol: 'AAPL',
+        side: 'long',
+        closedAt: '2026-01-05T14:00:00.000Z',
+        netPnl: '10',
+        groupId: g1,
+      });
+      await insertClosedPosition(user.id, usdA.id, {
+        symbol: 'MSFT',
+        side: 'short',
+        closedAt: '2026-01-06T14:00:00.000Z',
+        netPnl: '-5',
+        groupId: g1,
+      });
+
+      // Group 2: one compliant leg + one unscored (out-of-scope) leg -> compliant.
+      const g2 = await createGroup(user.id);
+      await insertClosedPosition(user.id, usdA.id, {
+        symbol: 'NVDA',
+        side: 'long',
+        closedAt: '2026-01-07T14:00:00.000Z',
+        netPnl: '20',
+        groupId: g2,
+      });
+      await insertClosedPosition(user.id, usdB.id, {
+        symbol: 'TSLA',
+        side: 'long',
+        closedAt: '2026-01-08T14:00:00.000Z',
+        netPnl: '15',
+        groupId: g2,
+      });
+
+      // Group 3: every leg unscored (both out of the rule's scope) -> unscored.
+      const g3 = await createGroup(user.id);
+      await insertClosedPosition(user.id, usdB.id, {
+        symbol: 'AMD',
+        side: 'long',
+        closedAt: '2026-01-09T14:00:00.000Z',
+        netPnl: '5',
+        groupId: g3,
+      });
+      await insertClosedPosition(user.id, usdB.id, {
+        symbol: 'AMZN',
+        side: 'long',
+        closedAt: '2026-01-10T14:00:00.000Z',
+        netPnl: '-5',
+        groupId: g3,
+      });
+
+      const res = await getBreakdown(
+        db,
+        user.id,
+        breakdownInput({ by: 'compliance' }),
+        freshController().signal,
+        Date.now(),
+      );
+      const cur = res.currencies.find((c) => c.code === 'USD')!;
+      expect(cur.total.totalPositions).toBe(3);
+      expect(cur.rows.find((r) => r.key === 'non_compliant')!.stats.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === 'compliant')!.stats.totalPositions).toBe(1);
+      expect(cur.rows.find((r) => r.key === 'unscored')!.stats.totalPositions).toBe(1);
     });
 
     it('omits complianceRate on the other dimensions', async () => {
