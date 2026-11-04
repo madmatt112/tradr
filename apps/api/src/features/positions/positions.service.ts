@@ -354,6 +354,63 @@ export async function buildCloseHookContext(
   return { position, account, netPnl };
 }
 
+/**
+ * Plan-tiers enforcement (D9/D18), extracted from `createPosition` so the
+ * group create path (`position-groups.service.ts` C4) can apply the same L2
+ * cap and L1 writability rule over a batch of legs, since `createPositionTx`
+ * stays check-free. `createPosition` calls this with `batchSize` 1, which
+ * makes `positionCount + batchSize > limit` equal to the prior
+ * `positionCount >= limit` test — same messages, same codes. Admin /
+ * gating-off deployments pass through with zero behaviour change. 403s are
+ * terminal-for-state — never 429, no Retry-After.
+ */
+export async function assertPositionCreateAllowed(
+  tx: Transaction,
+  userId: string,
+  accountId: string,
+  batchSize: number,
+  gate: { isAdmin: boolean },
+): Promise<void> {
+  const tier = await getTierContext(tx, { userId, isAdmin: gate.isAdmin });
+  if (!tier.enforced) return;
+
+  // L2: per-user position cap (indexed count(*); accepted
+  // concurrent-overshoot posture, REQ-6.3), batched (REQ-6.2).
+  if (tier.limits.positions !== null) {
+    const positionCount = await countPositionsByUser(tx, userId);
+    if (positionCount + batchSize > tier.limits.positions) {
+      captureServerEvent('tier_limit_hit', {
+        distinctId: userId,
+        properties: { lever: 'positions' },
+      });
+      throw new AppError(
+        403,
+        'TIER_LIMIT_POSITIONS',
+        `Your plan allows ${tier.limits.positions} positions. Upgrade to Pro for unlimited positions.`,
+      );
+    }
+  }
+  // L1 writability (D18): while over the account cap, new trading data
+  // may only target the effective writable designation.
+  if (tier.limits.accounts !== null) {
+    const accountCount = await countAccountsByUser(tx, userId);
+    if (accountCount > tier.limits.accounts) {
+      const writableAccountId = await resolveWritableAccountId(tx, userId);
+      if (accountId !== writableAccountId) {
+        captureServerEvent('tier_limit_hit', {
+          distinctId: userId,
+          properties: { lever: 'accounts' },
+        });
+        throw new AppError(
+          403,
+          'TIER_ACCOUNT_NOT_WRITABLE',
+          'This account is not writable on your current plan. New positions can only target your designated writable account — change the designation or upgrade to Pro.',
+        );
+      }
+    }
+  }
+}
+
 // Public wrapper — owns its own transaction and maps the FK `23503` violation
 // on `account_id` to NotFoundError (single-call semantics; this swallow is only
 // safe because this statement owns the tx — design.md §Component 7b).
@@ -375,50 +432,7 @@ export async function createPosition(
 ) {
   try {
     const position = await withTransaction(db, async (tx) => {
-      // Plan-tiers enforcement (D9/D18) — single-create path only. The bulk
-      // CSV path runs its own Phase-A checks in `commitImport`, so
-      // `createPositionTx` stays check-free, and NO check exists on any
-      // REQ-6.5 never-blocked path (close/fill/edit/delete/state
-      // transitions). Admin / gating-off pass through with zero behaviour
-      // change. 403s are terminal-for-state — never 429, no Retry-After.
-      const tier = await getTierContext(tx, { userId, isAdmin: gate.isAdmin });
-      if (tier.enforced) {
-        // L2: per-user position cap (indexed count(*); accepted
-        // concurrent-overshoot posture, REQ-6.3).
-        if (tier.limits.positions !== null) {
-          const positionCount = await countPositionsByUser(tx, userId);
-          if (positionCount >= tier.limits.positions) {
-            captureServerEvent('tier_limit_hit', {
-              distinctId: userId,
-              properties: { lever: 'positions' },
-            });
-            throw new AppError(
-              403,
-              'TIER_LIMIT_POSITIONS',
-              `Your plan allows ${tier.limits.positions} positions. Upgrade to Pro for unlimited positions.`,
-            );
-          }
-        }
-        // L1 writability (D18): while over the account cap, new trading data
-        // may only target the effective writable designation.
-        if (tier.limits.accounts !== null) {
-          const accountCount = await countAccountsByUser(tx, userId);
-          if (accountCount > tier.limits.accounts) {
-            const writableAccountId = await resolveWritableAccountId(tx, userId);
-            if (data.accountId !== writableAccountId) {
-              captureServerEvent('tier_limit_hit', {
-                distinctId: userId,
-                properties: { lever: 'accounts' },
-              });
-              throw new AppError(
-                403,
-                'TIER_ACCOUNT_NOT_WRITABLE',
-                'This account is not writable on your current plan. New positions can only target your designated writable account — change the designation or upgrade to Pro.',
-              );
-            }
-          }
-        }
-      }
+      await assertPositionCreateAllowed(tx, userId, data.accountId, 1, gate);
       return createPositionTx(tx, userId, data);
     });
     // Fire-and-forget business event AFTER the tx commits (design Component 4,
@@ -465,6 +479,9 @@ export async function createPositionTx(
     targetPrice?: string | null;
     stopLoss?: string | null;
   },
+  // Set on a group leg's create (position-groups.service.ts C4); omitted,
+  // every other caller keeps today's ungrouped insert.
+  groupId?: string,
 ) {
   // Verify account ownership
   const accountRows = await findAccountById(tx, data.accountId, userId);
@@ -472,7 +489,7 @@ export async function createPositionTx(
     throw new NotFoundError('Account', data.accountId);
   }
 
-  const rows = await insertPosition(tx, { userId, ...data });
+  const rows = await insertPosition(tx, { userId, ...data, ...(groupId ? { groupId } : {}) });
   return rows[0];
 }
 
