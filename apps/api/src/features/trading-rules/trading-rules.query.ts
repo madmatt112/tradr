@@ -156,8 +156,10 @@ function toScoringRule(row: TradingRuleRow): TradingRule {
  * 2. the windowed population — each non-draft user position with open instant at
  *    most `hi` (the latest target open) that is open, went flat at or after `lo`
  *    (the earliest target open minus eight days, D14) or has a fill at or after
- *    `lo` — with its account currency, timezone, starting balance, fills, tags
- *    and `has_notes` (the notes text is never read, NFR Security);
+ *    `lo` — with its account currency, timezone, starting balance, fills, tags,
+ *    `group_id` and `has_notes` (the notes text is never read, NFR Security),
+ *    plus every sibling of a windowed row's group regardless of the window
+ *    (design D11, AC 5.10): a tag or account scope never truncates a group's sum;
  * 3. the balance-type ledger rows of the targets' accounts before `hi`, loaded
  *    only when an enabled `max_risk_percent` rule needs a balance.
  *
@@ -199,9 +201,9 @@ export async function loadScoringData(
         MAX(open_instant)                     AS hi
       FROM targets
     ),
-    population AS (
+    windowed AS (
       SELECT
-        p.id, p.side, p.asset_type, p.symbol, p.status,
+        p.id, p.group_id, p.side, p.asset_type, p.symbol, p.status,
         p.closed_at, p.last_flat_at, p.last_flat_net_pnl,
         p.account_id, p.opened_at, p.created_at, p.stop_loss, p.target_price,
         (p.notes IS NOT NULL AND btrim(p.notes) <> '') AS has_notes,
@@ -224,6 +226,27 @@ export async function loadScoringData(
             WHERE f.position_id = p.id AND f.filled_at >= b.lo
           )
         )
+    ),
+    sibling_groups AS (
+      SELECT DISTINCT group_id FROM windowed WHERE group_id IS NOT NULL
+    ),
+    siblings AS (
+      SELECT
+        p.id, p.group_id, p.side, p.asset_type, p.symbol, p.status,
+        p.closed_at, p.last_flat_at, p.last_flat_net_pnl,
+        p.account_id, p.opened_at, p.created_at, p.stop_loss, p.target_price,
+        (p.notes IS NOT NULL AND btrim(p.notes) <> '') AS has_notes,
+        a.currency, a.timezone, a.starting_balance
+      FROM positions p
+      JOIN accounts a ON a.id = p.account_id AND a.user_id = p.user_id
+      JOIN sibling_groups sg ON sg.group_id = p.group_id
+      WHERE p.user_id = ${userId}
+        AND p.status <> 'draft'
+    ),
+    population AS (
+      SELECT * FROM windowed
+      UNION
+      SELECT * FROM siblings
     ),
     population_fills AS (
       SELECT
@@ -257,6 +280,7 @@ export async function loadScoringData(
         'lastFlatAt', pop.last_flat_at, 'lastFlatNetPnl', pop.last_flat_net_pnl::text,
         'fills', COALESCE(pf.fills, '[]'::jsonb),
         'tags', COALESCE(pts.tags, '[]'::jsonb),
+        'groupId', pop.group_id,
         'accountId', pop.account_id,
         'openedAt', pop.opened_at,
         'createdAt', pop.created_at,

@@ -9,7 +9,7 @@ import {
 } from '@tradr/shared';
 
 import type { SnapshotPosition } from '@/features/performance/performance.query';
-import { classifyOne } from '@/features/performance/performance.service';
+import { classifyGroup, classifyOne } from '@/features/performance/performance.service';
 import {
   aggregateFills,
   computeOpenCostBasis,
@@ -81,12 +81,17 @@ export interface ScoringContext {
   byId: Map<string, ScoringPosition>;
   ledgerByAccount: Map<string, BalanceEntry[]>;
   populations: Map<string, Population>;
+  legsByGroup: Map<string, ScoringPosition[]>;
 }
 
 /**
  * Build a scoring context from loaded data. Indexes positions by id and ledger
  * rows by account; populations are built lazily and memoised as rules ask for
- * them, so a context with no context-type rules builds none.
+ * them, so a context with no context-type rules builds none. `legsByGroup`
+ * indexes every leg of every group in `data.positions` regardless of any
+ * rule's account or tag scope, so a group-aware rule reads a group's whole
+ * sum even when a scope would otherwise see only one of its legs (design C9,
+ * D11).
  */
 export function buildScoringContext(data: ScoringData, weekStartDay: 0 | 1): ScoringContext {
   const byId = new Map<string, ScoringPosition>();
@@ -99,7 +104,15 @@ export function buildScoringContext(data: ScoringData, weekStartDay: 0 | 1): Sco
     else ledgerByAccount.set(e.accountId, [e]);
   }
 
-  return { weekStartDay, data, byId, ledgerByAccount, populations: new Map() };
+  const legsByGroup = new Map<string, ScoringPosition[]>();
+  for (const p of data.positions) {
+    if (p.groupId == null) continue;
+    const legs = legsByGroup.get(p.groupId);
+    if (legs) legs.push(p);
+    else legsByGroup.set(p.groupId, [p]);
+  }
+
+  return { weekStartDay, data, byId, ledgerByAccount, populations: new Map(), legsByGroup };
 }
 
 // --- Time helpers ---
@@ -116,6 +129,21 @@ function createdMs(p: ScoringPosition): number {
 // Population order: open instant, then creation instant (design C5).
 function byOpenThenCreated(a: ScoringPosition, b: ScoringPosition): number {
   return openInstantMs(a) - openInstantMs(b) || createdMs(a) - createdMs(b);
+}
+
+// A grouped position's unit instant is its earliest sibling's open instant
+// (open, then created, over every leg of the group — not only the ones a
+// rule's scope would see), so the group counts as one trade on one day
+// wherever it is earlier than its own legs (design C9, AC 5.10). An ungrouped
+// position is its own unit.
+function unitOpenInstant(
+  ctx: ScoringContext,
+  p: ScoringPosition,
+): { openMs: number; createdMs: number } {
+  if (p.groupId == null) return { openMs: openInstantMs(p), createdMs: createdMs(p) };
+  const legs = ctx.legsByGroup.get(p.groupId) ?? [p];
+  const earliest = legs.reduce((a, b) => (byOpenThenCreated(a, b) <= 0 ? a : b));
+  return { openMs: openInstantMs(earliest), createdMs: createdMs(earliest) };
 }
 
 // Calendar date (YYYY-MM-DD) of `date` in `timeZone`. Replicates the module-
@@ -179,11 +207,15 @@ function getPopulation(ctx: ScoringContext, rule: TradingRule): Population {
 
   const events: PopulationEvent[] = [];
   const losingFlats: Date[] = [];
+  const countedGroups = new Set<string>();
   for (const p of positions) {
     const minorUnits = getCurrencyMinorUnits(p.currency);
     const side = p.side as 'long' | 'short';
     const assetType = p.assetType as 'stock' | 'option';
 
+    // Realisation events stay per leg regardless of grouping (design C9,
+    // "events stay per leg") — out-of-window events already fall outside
+    // every population.
     for (const ev of computeRealizationEvents(
       p.fills.map((f) => ({ ...f, filledAt: new Date(f.filledAt) })),
       side,
@@ -193,9 +225,22 @@ function getPopulation(ctx: ScoringContext, rule: TradingRule): Population {
       events.push({ occurredAt: ev.occurredAt, netPnl: ev.netPnl });
     }
 
-    const classified = classifyOne(p);
-    if (classified && classified.classification === 'losing') {
-      losingFlats.push(classified.closedAt);
+    // Losing flats are a per-UNIT concept (design C9): a grouped leg is
+    // classified once per group, via every leg of the group (`legsByGroup`,
+    // not this rule-scoped `positions`), so a tag or account scope that only
+    // matches one leg still reads the group's whole sum (D11).
+    if (p.groupId != null) {
+      if (countedGroups.has(p.groupId)) continue;
+      countedGroups.add(p.groupId);
+      const group = classifyGroup(ctx.legsByGroup.get(p.groupId) ?? [p]);
+      if (group && group.classification === 'losing') {
+        losingFlats.push(group.closedAt);
+      }
+    } else {
+      const classified = classifyOne(p);
+      if (classified && classified.classification === 'losing') {
+        losingFlats.push(classified.closedAt);
+      }
     }
   }
   events.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
@@ -453,14 +498,25 @@ export function evaluateRule(
       const count = def.params.count;
       const population = getPopulation(ctx, rule);
       const tz = target.accountTimezone;
-      const targetKey = zonedDateKey(new Date(oInstant), tz);
+      // The target's own unit instant: a grouped target's day is its group's
+      // earliest leg, so a leg scored the day after its sibling opened still
+      // sees that earlier day (design C9, AC 5.10).
+      const targetUnit = unitOpenInstant(ctx, target);
+      const targetKey = zonedDateKey(new Date(targetUnit.openMs), tz);
       let earlier = 0;
+      const countedGroups = new Set<string>();
       for (const p of population.positions) {
         if (p.id === target.id) continue;
+        if (p.groupId != null) {
+          if (p.groupId === target.groupId) continue; // a sibling of the target: skip
+          if (countedGroups.has(p.groupId)) continue; // the group already counted once
+          countedGroups.add(p.groupId);
+        }
+        const unit = unitOpenInstant(ctx, p);
         const isEarlier =
-          openInstantMs(p) < oInstant ||
-          (openInstantMs(p) === oInstant && createdMs(p) < createdMs(target));
-        if (isEarlier && zonedDateKey(new Date(openInstantMs(p)), tz) === targetKey) earlier++;
+          unit.openMs < targetUnit.openMs ||
+          (unit.openMs === targetUnit.openMs && unit.createdMs < targetUnit.createdMs);
+        if (isEarlier && zonedDateKey(new Date(unit.openMs), tz) === targetKey) earlier++;
       }
       const measured = earlier + 1;
       return mk(
