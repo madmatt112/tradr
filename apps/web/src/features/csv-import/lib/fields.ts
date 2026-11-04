@@ -87,6 +87,16 @@ export function targetFieldsForShape(
  * asset-type column is needed (REQ-2.8 client half). Every other field is
  * satisfied only by a mapped column.
  */
+/**
+ * Trims a user-entered group label override to the server's
+ * `labelOverrideSchema` (`trim().min(1).max(40)`), returning `null` when the
+ * result is empty so the caller can drop the key rather than send "".
+ */
+export function sanitizeLabelOverride(label: string): string | null {
+  const trimmed = label.trim().slice(0, 40);
+  return trimmed === '' ? null : trimmed;
+}
+
 export function isRequiredFieldSatisfied(field: string, mapping: Mapping): boolean {
   if (
     field === 'assetType' &&

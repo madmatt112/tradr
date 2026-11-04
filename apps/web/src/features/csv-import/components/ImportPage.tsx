@@ -14,7 +14,11 @@ import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { docsUrl } from '@/lib/docs';
 
 import { useCsvPreview } from '../hooks/useCsvPreview';
-import { isRequiredFieldSatisfied, targetFieldsForShape } from '../lib/fields';
+import {
+  isRequiredFieldSatisfied,
+  sanitizeLabelOverride,
+  targetFieldsForShape,
+} from '../lib/fields';
 import { readHeaderHints } from '../lib/readHeaderHints';
 
 import { AccountPicker } from './AccountPicker';
@@ -149,21 +153,17 @@ export function ImportPage() {
     });
   }
 
-  // Trimmed to match server validation (labelOverrideSchema = trim().min(1).max(40))
-  // and collapsed to an omitted key — not an empty string — when blank, since
-  // `labelOverrides` has no nullable variant here; the service already reads a
-  // missing id as "no override" (`labelOverrides[proposal.id] ?? null`).
   function handleLabelChange(id: string, label: string) {
     if (declinedProposalIds.includes(id)) return;
-    const trimmed = label.trim().slice(0, 40);
+    const sanitized = sanitizeLabelOverride(label);
     setLabelOverrides((prev) => {
-      if (trimmed === '') {
+      if (sanitized === null) {
         if (!(id in prev)) return prev;
         const next = { ...prev };
         delete next[id];
         return next;
       }
-      return { ...prev, [id]: trimmed };
+      return { ...prev, [id]: sanitized };
     });
   }
 

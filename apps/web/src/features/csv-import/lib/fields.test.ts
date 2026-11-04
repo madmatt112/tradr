@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { CSV_IMPORT_PRESETS, type Mapping } from '@tradr/shared';
 
-import { isRequiredFieldSatisfied, targetFieldsForShape } from './fields';
+import { isRequiredFieldSatisfied, sanitizeLabelOverride, targetFieldsForShape } from './fields';
 
 const COMPOSED_FIELDS = [
   { field: 'underlying', label: 'Underlying (options; defaults to Symbol)', required: false },
@@ -48,6 +48,16 @@ describe('order id field (AC 8.1)', () => {
     const orderId = { field: 'orderId', label: 'Order ID', required: false };
     expect(targetFieldsForShape('execution')).toContainEqual(orderId);
     expect(targetFieldsForShape('round-trip')).toContainEqual(orderId);
+  });
+});
+
+describe('sanitizeLabelOverride', () => {
+  it('returns null rather than an empty/whitespace override', () => {
+    expect(sanitizeLabelOverride('   ')).toBeNull();
+  });
+
+  it('trims surrounding whitespace and caps the override at 40 characters', () => {
+    expect(sanitizeLabelOverride(`  ${'A'.repeat(50)}  `)).toBe('A'.repeat(40));
   });
 });
 
