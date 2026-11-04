@@ -38,7 +38,9 @@ import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 import { BreakevenBadge } from './BreakevenBadge';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
+import { LinkLegsDialog } from './LinkLegsDialog';
 import { PositionEditDialog } from './PositionEditDialog';
+import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
 
 interface Props {
@@ -57,6 +59,7 @@ export function PositionDetailView({ positionId }: Props) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [fillDialogOpen, setFillDialogOpen] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -204,6 +207,11 @@ export function PositionDetailView({ positionId }: Props) {
               {reopenPosition.isPending ? 'Reopening...' : 'Reopen'}
             </Button>
           )}
+          {!isDraft && (
+            <Button variant="outline" className="cursor-pointer" onClick={() => setLinkOpen(true)}>
+              Link legs
+            </Button>
+          )}
           <Button
             variant="destructive"
             className="cursor-pointer"
@@ -216,6 +224,9 @@ export function PositionDetailView({ positionId }: Props) {
           <DrawerToggle />
         </div>
       </div>
+
+      {/* Group panel — only for a leg that carries a group (design C13). */}
+      {position.group && <PositionGroupPanel positionId={position.id} group={position.group} />}
 
       {/* P&L Summary */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -419,6 +430,23 @@ export function PositionDetailView({ positionId }: Props) {
           onOpenChange={setTagsOpen}
           positionId={position.id}
           currentTags={position.tags ?? []}
+        />
+      )}
+
+      {/* Link legs dialog — mounted only while open so the bare detail
+          suites (no QueryClient) keep mounting without stubbing it. */}
+      {linkOpen && (
+        <LinkLegsDialog
+          position={{
+            id: position.id,
+            accountId: position.accountId,
+            symbol: position.symbol,
+            assetType: position.assetType,
+            status: position.status,
+            groupId: position.groupId ?? null,
+          }}
+          open={linkOpen}
+          onOpenChange={setLinkOpen}
         />
       )}
 
