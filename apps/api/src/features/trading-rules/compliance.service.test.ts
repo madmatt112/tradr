@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
-import { tradingRules, users } from '@/db/schema';
+import { positionGroups, tradingRules, users } from '@/db/schema';
 import { ledgerEntries } from '@/db/schema/accounting.schema';
 import { positions } from '@/db/schema/positions.schema';
 import { logger } from '@/lib/logger';
@@ -265,5 +265,30 @@ describe('loadScoringData', () => {
     expect(data.positions.every((p) => p.accountId === ownerAccount.id)).toBe(true);
     expect(data.ledger.length).toBeGreaterThan(0);
     expect(data.ledger.every((e) => e.accountId === ownerAccount.id)).toBe(true);
+  });
+
+  it('loads a grouped sibling that falls outside the scoring window (design D11, AC 5.10)', async () => {
+    const { cookie, userId } = await registerUser();
+    const account = await createAccount(cookie);
+    await insertRule(userId, DIRECTIONS_RULE);
+
+    const [group] = await db
+      .insert(positionGroups)
+      .values({ userId, labelOverride: null })
+      .returning({ id: positionGroups.id });
+
+    const targetId = await insertPosition(userId, account.id, { openedAt: T0, groupId: group!.id });
+    const siblingId = await insertPosition(userId, account.id, {
+      openedAt: new Date('2026-05-01T15:00:00Z'), // well before lo
+      closedAt: BEFORE_LO, // flat before lo too — would be dropped alone
+      status: 'closed',
+      groupId: group!.id,
+    });
+
+    const data = await loadScoringData(db, userId, [targetId]);
+    const ids = data.positions.map((p) => p.id);
+
+    expect(ids).toContain(targetId);
+    expect(ids).toContain(siblingId);
   });
 });
