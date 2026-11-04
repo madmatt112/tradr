@@ -67,6 +67,15 @@ export const ledgerEntries = pgTable(
     index('ledger_reverses_group_id_idx')
       .on(table.reversesGroupId)
       .where(sql`${table.reversesGroupId} IS NOT NULL`),
+    // Year-bounded P&L index for the CA/US tax-summary path (ca-acb-pool-perf
+    // §C4). Bounds both the user and the occurred_at year window that
+    // `listRealisedPositionsForYear` (expenses.query.ts) scans, restoring the
+    // Scenario 3 index-scan plan. The predicate names ONLY the two P&L entry
+    // types that query filters on — deliberately narrower than the per-account
+    // indexes above, which carry the cash-movement types too.
+    index('ledger_user_occurred_pnl_idx')
+      .on(table.userId, table.occurredAt)
+      .where(sql`${table.entryType} IN ('position_pnl', 'position_pnl_reversal')`),
     // NOTE: the former `ledger_position_pnl_unique_idx` (one position_pnl row
     // per position) was DROPPED by the ledger-balances reversal amendment
     // (d-536e8750, 2026-07-20). A reopen→re-close legitimately writes multiple

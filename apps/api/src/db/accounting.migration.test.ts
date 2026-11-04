@@ -20,6 +20,7 @@ const DATABASE_URL =
 
 const INDEX_NAME = 'ledger_user_account_direction_amount_pnl_idx';
 const OCCURRED_INDEX_NAME = 'ledger_user_account_occurred_pnl_idx';
+const YEAR_INDEX_NAME = 'ledger_user_occurred_pnl_idx';
 
 let sql: ReturnType<typeof postgres>;
 
@@ -110,5 +111,58 @@ describe('accounting migration — covering index', () => {
       `Expected pg_get_constraintdef for "ledger_entry_type_chk" to contain ` +
         `"withdrawal_reversal".\nActual def:\n  ${constraint[0]?.def}`,
     ).toContain('withdrawal_reversal');
+  });
+});
+
+// Contract — ca-acb-pool-perf Task 4 (design.md §C4, AC 1.2/1.5/1.6):
+//   Pre-condition: migrations (incl. 0041) applied to a fresh `tradr_test_migrate`.
+//   Call (seam): `SELECT indexdef FROM pg_indexes WHERE indexname = 'ledger_user_occurred_pnl_idx'`.
+//   Observable result: exactly one row; indexdef covers (user_id, occurred_at) and its
+//     WHERE predicate names exactly 'position_pnl' and 'position_pnl_reversal', the same
+//     two types `listRealisedPositionsForYear` filters on (expenses.query.ts:279), and
+//     excludes every other ledger entry_type (e.g. 'balance_adjustment').
+//   Source of expected value: design.md §C4 Interfaces + post-condition 2; the predicate
+//     literal is copied from expenses.query.ts:279, not invented here.
+// At base this index does not exist, so the row count is 0 and every assertion below fails.
+describe('accounting migration — year-bounded P&L index (ca-acb-pool-perf C4)', () => {
+  it(`pg_indexes has exactly one ${YEAR_INDEX_NAME} row, on (user_id, occurred_at), predicated on exactly the two position_pnl* types`, async () => {
+    const rows = await sql<{ indexdef: string }[]>`
+      SELECT indexdef FROM pg_indexes WHERE indexname = ${YEAR_INDEX_NAME}
+    `;
+
+    expect(
+      rows,
+      `Expected exactly one row in pg_indexes for "${YEAR_INDEX_NAME}" — ` +
+        `see ca-acb-pool-perf/design.md §C4 and tasks.md Task 4.`,
+    ).toHaveLength(1);
+
+    const indexdef = rows[0]!.indexdef;
+
+    expect(
+      indexdef.includes('(user_id, occurred_at)'),
+      `Expected pg_indexes.indexdef for "${YEAR_INDEX_NAME}" to cover ` +
+        `(user_id, occurred_at) (design.md §C4 Interfaces).\n` +
+        `Actual indexdef:\n  ${indexdef}`,
+    ).toBe(true);
+
+    // Quote-delimited with the trailing cast: a bare "'position_pnl'" substring
+    // also matches inside "'position_pnl_reversal'", which would hide a predicate
+    // that dropped the first type but kept the second.
+    expect(
+      indexdef.includes("'position_pnl'::character varying"),
+      `Expected pg_indexes.indexdef for "${YEAR_INDEX_NAME}" to predicate on ` +
+        `'position_pnl' (expenses.query.ts:279).\nActual indexdef:\n  ${indexdef}`,
+    ).toBe(true);
+    expect(
+      indexdef.includes("'position_pnl_reversal'::character varying"),
+      `Expected pg_indexes.indexdef for "${YEAR_INDEX_NAME}" to predicate on ` +
+        `'position_pnl_reversal' (expenses.query.ts:279).\nActual indexdef:\n  ${indexdef}`,
+    ).toBe(true);
+    expect(
+      indexdef.includes('balance_adjustment'),
+      `Expected pg_indexes.indexdef for "${YEAR_INDEX_NAME}" to name only the two ` +
+        `types the query filters on, not "balance_adjustment" (design.md §C4 ` +
+        `post-condition 2).\nActual indexdef:\n  ${indexdef}`,
+    ).toBe(false);
   });
 });

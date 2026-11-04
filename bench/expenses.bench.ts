@@ -19,9 +19,11 @@
 //     performance` command — Vitest's native `bench()` API requires
 //     `vitest bench` mode, which the harness does not wire). The wall-clock
 //     budgets per scenario are documented in comments above each `it()` block.
-//   - For Scenarios 2 and 3 the bench also runs an `EXPLAIN ANALYZE` once
-//     during fixture setup and asserts the planner picked the expected
-//     indexes (no `Seq Scan` on `fills`/`positions`/`ledger_entries`).
+//   - For Scenario 3 the bench also runs an `EXPLAIN ANALYZE` once during
+//     fixture setup and asserts the planner picked the expected index (no
+//     `Seq Scan` on `ledger_entries`). Scenario 2's EXPLAIN ANALYZE is
+//     printed for evidence only — the planner correctly seq-scans `fills`/
+//     `positions` at that scenario's row count, so no plan is asserted.
 
 import { pipeline } from 'node:stream/promises';
 
@@ -29,6 +31,8 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import type { TaxSummaryResponse } from '@tradr/shared';
 
 import app, { bootstrap } from '@/app';
 import { runMigrations, runPostMigrations } from '@/db/migrate';
@@ -74,11 +78,6 @@ const TAX_LIFETIME_POSITIONS = 5_000;
 const TAX_IN_YEAR_POSITIONS = 1_000;
 const TAX_IN_YEAR_LOSSES = 200;
 const TAX_BUDGET_MS = 500;
-// Temporary ceiling for the CA ACB pool scenario only (Scenario 4 below): the
-// full-history pool walk misses the 500ms NFR today (deferral d-e71c3ae3). A
-// follow-up performance spec optimizes computeAcbDispositions and restores
-// TAX_BUDGET_MS for that scenario.
-const CA_ACB_BUDGET_MS = 4000;
 
 const N_ITERATIONS = 20;
 const N_WARMUP = 3;
@@ -149,6 +148,88 @@ function assertContains(check: ExplainCheck, fragment: string): void {
     throw new Error(`EXPLAIN plan does not contain "${fragment}".\nFull plan:\n${check.text}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// CA figures digest (design C2, AC 3.2) — proves the CA tax figures over the
+// bench's large history do not change. Money fields are fixed two-decimal
+// strings (`expenses.service.ts:635`); sums run on BigInt minor units, never
+// a JS number, so the digest can't drift from float rounding (design D6).
+// ---------------------------------------------------------------------------
+interface CaFiguresDigest {
+  realisedCad: string;
+  dispositionCount: number;
+  unpricedCounts: {
+    priced: number;
+    missing_rate: number;
+    pool_unpriced: number;
+    insufficient_pool: number;
+  };
+  pricedGainSum: string;
+  superficialLossCount: number;
+  acbMissingRatesCount: number;
+}
+
+function parseMoneyMinorUnits(value: string): bigint {
+  const match = /^(-?)(\d+)\.(\d{2})$/.exec(value);
+  if (!match) throw new Error(`unexpected money format: ${value}`);
+  const [, sign, wholePart, fracPart] = match;
+  const magnitude = BigInt(wholePart) * 100n + BigInt(fracPart);
+  return sign === '-' ? -magnitude : magnitude;
+}
+
+function formatMoneyMinorUnits(minorUnits: bigint): string {
+  const sign = minorUnits < 0n ? '-' : '';
+  const abs = minorUnits < 0n ? -minorUnits : minorUnits;
+  const wholePart = abs / 100n;
+  const fracPart = abs % 100n;
+  return `${sign}${wholePart}.${fracPart.toString().padStart(2, '0')}`;
+}
+
+function caFiguresDigest(body: TaxSummaryResponse): CaFiguresDigest {
+  const realisedCad =
+    body.realisedPnl.perCurrency.find((row) => row.currency === 'CAD')?.amount ?? '0.00';
+
+  const unpricedCounts = {
+    priced: 0,
+    missing_rate: 0,
+    pool_unpriced: 0,
+    insufficient_pool: 0,
+  };
+  let pricedGainSumMinorUnits = 0n;
+  for (const row of body.acbDispositions) {
+    if (row.unpricedReason === null) {
+      unpricedCounts.priced++;
+      if (row.gain !== null) pricedGainSumMinorUnits += parseMoneyMinorUnits(row.gain);
+    } else {
+      unpricedCounts[row.unpricedReason]++;
+    }
+  }
+
+  return {
+    realisedCad,
+    dispositionCount: body.acbDispositions.length,
+    unpricedCounts,
+    pricedGainSum: formatMoneyMinorUnits(pricedGainSumMinorUnits),
+    superficialLossCount: body.flags.superficialLosses.length,
+    acbMissingRatesCount: body.acbMissingRates.length,
+  };
+}
+
+// Captured at base (see Implementation Log task 2) on two separate full bench
+// runs before C3 lands (design D8, AC 3.2).
+const CA_FIGURES_DIGEST_AT_BASE: CaFiguresDigest = {
+  realisedCad: '-6648.76',
+  dispositionCount: 1000,
+  unpricedCounts: {
+    priced: 1000,
+    missing_rate: 0,
+    pool_unpriced: 0,
+    insufficient_pool: 0,
+  },
+  pricedGainSum: '-6648.76',
+  superficialLossCount: 328,
+  acbMissingRatesCount: 0,
+};
 
 // ---------------------------------------------------------------------------
 // Bench DB lifecycle
@@ -513,10 +594,13 @@ describe('expenses bench — LIST 500 rows', () => {
 // Scenario 2 — Fee rollup
 // Budget: < 200 ms wall clock for `GET /api/expenses/fee-rollup?year=YYYY`
 // over 50 accounts × 10k fills/year (= 500k `fills` rows for the year).
-// Plan assertion: NO `Seq Scan on fills` and NO `Seq Scan on positions`.
+// No plan assertion on `fills`/`positions`: the year window keeps about 98%
+// of `fills`, and the same `Seq Scan` plan held at 1af0b7a with no candidate
+// index changing it (design M6, M7) — a selective window must not seq-scan,
+// and this one isn't selective. The EXPLAIN below is printed for evidence.
 // ---------------------------------------------------------------------------
 describe('expenses bench — fee-rollup 500k fills', () => {
-  it(`p95 < ${FEE_ROLLUP_BUDGET_MS}ms with index scans on fills + positions`, async () => {
+  it(`p95 < ${FEE_ROLLUP_BUDGET_MS}ms`, async () => {
     await benchSql.unsafe('VACUUM ANALYZE fills');
     await benchSql.unsafe('VACUUM ANALYZE positions');
     await benchSql.unsafe('VACUUM ANALYZE accounts');
@@ -543,11 +627,12 @@ describe('expenses bench — fee-rollup 500k fills', () => {
         GROUP BY accounts.id, accounts.name, positions.asset_type, accounts.currency
       `);
     const plan = parseExplain(explainRows as Array<Record<string, unknown>>);
-    assertNoSeqScanOn(plan, 'fills');
-    assertNoSeqScanOn(plan, 'positions');
-    // Defensive: confirm the expected indexes appear somewhere in the plan.
-    // (At 500k rows the planner may pick a hash join over an index-driven
-    //  nested-loop; what matters is "not a Seq Scan on fills/positions".)
+    // No assertion here: the same plan seq-scans at 1af0b7a, the year window
+    // keeps about 98% of `fills`, and no candidate index changed it (design
+    // M6, M7). A selective window must not seq-scan; this window isn't
+    // selective, so `Seq Scan on fills`/`positions` is the correct plan at
+    // this row count, not a regression.
+    console.log(`[bench] fee-rollup 500k — plan:\n${plan.text}`);
 
     const path = `/api/expenses/fee-rollup?year=${TARGET_YEAR}`;
     const headers = { Cookie: `session=${feeRollupSessionCookie}` };
@@ -685,9 +770,7 @@ describe('expenses bench — tax-summary 5-year history', () => {
 // Scenario 4 — CA ACB pool: same 5-year, 5_000-position fixture as Scenario 3,
 // but every position gets entry+exit fills (`acb` walks the whole history,
 // not just the year) across 3 taxable accounts (one USD) + 1 registered
-// account. NFR target is < 500ms; measured against the temporary
-// CA_ACB_BUDGET_MS ceiling (see its definition above) while the miss is
-// deferred (d-e71c3ae3).
+// account.
 describe('expenses bench — CA ACB pool, 5-year history', () => {
   // Seeded here, not in the top-level `beforeAll`, so Scenarios 1-3's own
   // EXPLAIN checks run against the row counts they were written for.
@@ -784,7 +867,7 @@ describe('expenses bench — CA ACB pool, 5-year history', () => {
     );
   }, 600_000);
 
-  it(`p95 < ${CA_ACB_BUDGET_MS}ms`, async () => {
+  it(`p95 < ${TAX_BUDGET_MS}ms`, async () => {
     await benchSql.unsafe('VACUUM ANALYZE fills');
     await benchSql.unsafe('VACUUM ANALYZE positions');
     await benchSql.unsafe('VACUUM ANALYZE exchange_rates');
@@ -800,10 +883,11 @@ describe('expenses bench — CA ACB pool, 5-year history', () => {
     }
 
     const samples: number[] = [];
+    let lastBody: TaxSummaryResponse | undefined;
     for (let i = 0; i < N_ITERATIONS; i++) {
       const t0 = nowMs();
       const res = await app.request(path, { headers });
-      await res.json();
+      lastBody = (await res.json()) as TaxSummaryResponse;
       samples.push(nowMs() - t0);
       if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     }
@@ -812,6 +896,10 @@ describe('expenses bench — CA ACB pool, 5-year history', () => {
     console.log(
       `[bench] CA ACB pool 5yr — p50=${stats.p50.toFixed(2)}ms p95=${stats.p95.toFixed(2)}ms p99=${stats.p99.toFixed(2)}ms`,
     );
-    expect(stats.p95).toBeLessThan(CA_ACB_BUDGET_MS);
+    expect(stats.p95).toBeLessThan(TAX_BUDGET_MS);
+
+    const digest = caFiguresDigest(lastBody!);
+    console.log(`[bench] CA figures digest: ${JSON.stringify(digest)}`);
+    expect(digest).toEqual(CA_FIGURES_DIGEST_AT_BASE);
   }, 600_000);
 });
