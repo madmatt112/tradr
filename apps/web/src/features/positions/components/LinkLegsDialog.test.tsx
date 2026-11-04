@@ -31,8 +31,8 @@ vi.mock('../hooks/usePositionGroups', () => ({
   useAddGroupLeg: vi.fn(() => ({ mutate: h.addMutate, isPending: false })),
 }));
 
-import { usePositions } from '../hooks/usePositions';
 import { useAddGroupLeg } from '../hooks/usePositionGroups';
+import { usePositions } from '../hooks/usePositions';
 
 import { LinkLegsDialog } from './LinkLegsDialog';
 
