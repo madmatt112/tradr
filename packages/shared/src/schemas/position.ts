@@ -21,8 +21,9 @@ const maxLossReasonValues: [MaxLossReason, ...MaxLossReason[]] = [
 const MaxLossReasonSchema = z.enum(maxLossReasonValues);
 
 // A group's override is a short free-text label (design C3/Data Models),
-// stored trimmed, 1 to 40 characters (AC 2.4).
-const labelOverrideSchema = z.string().trim().min(1).max(40);
+// stored trimmed, 1 to 40 characters (AC 2.4). Exported so csv-import.ts's
+// commit-time `labelOverrides` values are validated under the same rule.
+export const labelOverrideSchema = z.string().trim().min(1).max(40);
 
 // One leg of a group create (design C3). Price, quantity and fee rules match
 // `CreateFillSchema` above, so a price of 0 is accepted (AC 4.5); unlike

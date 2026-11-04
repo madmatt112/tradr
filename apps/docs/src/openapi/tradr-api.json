@@ -2334,6 +2334,22 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "declinedProposalIds": {
+                    "default": [],
+                    "description": "Ids from the preview's `groupProposals` to import ungrouped instead of linked. An id not in the staged proposals is ignored.\n",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "labelOverrides": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "default": {},
+                    "description": "Proposal id -> label override (1-40 trimmed characters), stored on the group it creates.\n",
+                    "type": "object"
+                  },
                   "token": {
                     "format": "uuid",
                     "type": "string"
@@ -2350,7 +2366,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId }` — the import summary."
+            "description": "`{ positionsCreated, fillsCreated, positionIds, accountId, groupsCreated }` — the import summary."
           },
           "400": {
             "description": "Malformed body (invalid token / confirmDuplicates)."
@@ -2401,7 +2417,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`.\n"
+            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation, groupProposals }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`. `groupProposals` is an array of `{ id, legRefs, label, basis }` — each a proposed multi-leg group, pre-selected; pass its `id` in the commit's `declinedProposalIds` to import it ungrouped instead. The order id that seeded a proposal is never included.\n"
           },
           "400": {
             "description": "Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS)."

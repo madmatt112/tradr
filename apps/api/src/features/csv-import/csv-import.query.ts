@@ -24,12 +24,15 @@ export interface AccountFillKey {
   type: string;
 }
 
-/** Stored Phase-B summary written into `committed_result` on finalize. */
+/** Stored Phase-B summary written into `committed_result` on finalize.
+ * `groupsCreated` is optional: a summary stored before this field shipped
+ * has no key for it (design C10). */
 export interface CommittedResult {
   positionsCreated: number;
   fillsCreated: number;
   positionIds: string[];
   accountId: string;
+  groupsCreated?: number;
 }
 
 /**
