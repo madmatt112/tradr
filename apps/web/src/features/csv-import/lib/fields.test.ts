@@ -43,6 +43,14 @@ describe('targetFieldsForShape', () => {
   });
 });
 
+describe('order id field (AC 8.1)', () => {
+  it('lists orderId as optional for both execution and round-trip shapes', () => {
+    const orderId = { field: 'orderId', label: 'Order ID', required: false };
+    expect(targetFieldsForShape('execution')).toContainEqual(orderId);
+    expect(targetFieldsForShape('round-trip')).toContainEqual(orderId);
+  });
+});
+
 describe('isRequiredFieldSatisfied', () => {
   const tradervue = CSV_IMPORT_PRESETS.find((p) => p.id === 'tradervue')!;
 
