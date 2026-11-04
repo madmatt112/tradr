@@ -7,7 +7,7 @@
     },
     {
       "name": "api",
-      "testFiles": 200
+      "testFiles": 201
     },
     {
       "name": "migrations",
@@ -26,7 +26,7 @@
       "testFiles": 3
     }
   ],
-  "testFilesTotal": 462,
+  "testFilesTotal": 463,
   "e2eSpecFiles": 39,
   "migrations": 43,
   "ciJobs": [

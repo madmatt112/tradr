@@ -68,6 +68,11 @@ export interface NormalizedRow {
   sourceRow: number;
   /** Tradr field -> normalized value. */
   values: Record<string, string>;
+  /**
+   * True iff the row's opening date cell (`filledAt`, or `entryDate` on a
+   * round-trip row) had no time component (C10, D13).
+   */
+  dateOnly?: boolean;
 }
 
 /** Result of a successful normalization: the row plus any located warnings. */
@@ -106,6 +111,7 @@ const ENUM_OR_TEXT_FIELDS: readonly string[] = [
   'descriptor',
   'right',
   'eventCode',
+  'orderId',
 ];
 
 /** Scale of `fills.price`/`quantity`/`fees` (`positions.schema.ts:60-62`). */
@@ -135,6 +141,9 @@ export function normalizeRow(
   // Direction derived from a signed `quantity` cell (seam 1); reconciled with an
   // explicit `action` after the loop, once every cell has been seen.
   let quantityDirection: 'buy' | 'sell' | undefined;
+  // Opening date cell's dateOnly flag (AC 8.5, design C10/D13); set only for
+  // `filledAt`/`entryDate`, never `exitDate`.
+  let dateOnly: boolean | undefined;
 
   for (const [field, raw] of Object.entries(mappedRow.values)) {
     // `fees` is summed with any extra fee parts after the loop (C6, REQ-5.4).
@@ -230,6 +239,9 @@ export function normalizeRow(
         continue;
       }
       out[field] = result.value;
+      if (field === 'filledAt' || field === 'entryDate') {
+        dateOnly = isOpeningDateOnly(raw, opts.dateFormat);
+      }
     } else if (ENUM_OR_TEXT_FIELDS.includes(field)) {
       out[field] = raw;
     } else {
@@ -307,7 +319,7 @@ export function normalizeRow(
   }
 
   if (errors.length > 0) return errors;
-  return { row: { sourceRow, values: out }, warnings };
+  return { row: { sourceRow, values: out, ...(dateOnly ? { dateOnly: true } : {}) }, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +442,17 @@ const EXPIRY_MONTHS: Record<string, number> = {
   NOV: 11,
   DEC: 12,
 };
+
+/**
+ * True iff a raw opening-date cell has no time component (AC 8.5, design
+ * C10/D13): every format except `iso-datetime` is a bare calendar date by
+ * construction; an `iso-datetime` cell is date-only only when the raw value
+ * itself carries no time (`Date.parse` otherwise accepts a bare date too).
+ */
+function isOpeningDateOnly(raw: string, format: DateFormat): boolean {
+  if (format !== 'iso-datetime') return true;
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw.trim());
+}
 
 /**
  * Normalize a broker date to ISO-8601 with offset (REQ-5.3). The declared format

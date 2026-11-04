@@ -75,8 +75,17 @@ export const LocatedWarningSchema = z.object({
     'rounded',
     'derived_expiry',
     'rows_skipped',
+    'group_heuristic_skipped',
+    'group_proposal_dropped',
   ]),
   message: z.string(),
+});
+
+export const GroupProposalSchema = z.object({
+  id: z.string(),
+  legRefs: z.array(z.number().int()),
+  label: z.string(),
+  basis: z.enum(['order_id', 'inferred']),
 });
 
 export const ProposedFillSchema = z.object({
@@ -148,6 +157,7 @@ export type Mapping = z.infer<typeof MappingSchema>;
 export type CsvPreviewRequest = z.infer<typeof CsvPreviewRequestSchema>;
 export type LocatedError = z.infer<typeof LocatedErrorSchema>;
 export type LocatedWarning = z.infer<typeof LocatedWarningSchema>;
+export type GroupProposal = z.infer<typeof GroupProposalSchema>;
 export type ProposedFill = z.infer<typeof ProposedFillSchema>;
 export type ProposedPosition = z.infer<typeof ProposedPositionSchema>;
 export type CsvPreviewResponse = z.infer<typeof CsvPreviewResponseSchema>;
