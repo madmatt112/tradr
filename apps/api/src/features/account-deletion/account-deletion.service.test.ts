@@ -29,6 +29,7 @@ import {
   feeSchedules,
   fills,
   ledgerEntries,
+  positionGroups,
   positionImages,
   positionTags,
   positions,
@@ -512,6 +513,54 @@ describe('executeDeletion — cascade', () => {
     await executeDeletion({ userId: user.id, initiator: 'self' });
 
     expect(await countWhere('login_lockouts', 'key_hash', key)).toBe(0);
+  });
+
+  // Regression guard (multi-leg-positions AC 9.5 / design C7: "Account
+  // deletion needs no change, because position_groups.user_id cascades").
+  // The broad cascade test above walks every FK child of `users` generically,
+  // but never seeds a `position_groups` row, so it never actually exercises
+  // this table's cascade — this test seeds one directly so the assertion is
+  // real, not vacuous.
+  //
+  // Contract:
+  // - Pre-condition: a position_groups row and two linked legs for the user.
+  // - Test: `executeDeletion({ userId: user.id, initiator: 'self' })`.
+  // - Observable result: zero position_groups rows remain for the user.
+  // - Source of expected value: requirements.md AC 9.5 ("their groups SHALL
+  //   be deleted with it"); the FK's `ON DELETE cascade`
+  //   (migrations/0042_position_groups.sql).
+  it("removes the user's groups along with their account (AC 9.5)", async () => {
+    const user = await seedUser();
+    const graph = await seedAllUserData(user.id);
+
+    // eslint-disable-next-line no-restricted-syntax
+    const [secondLeg] = await db
+      .insert(positions)
+      .values({
+        userId: user.id,
+        accountId: graph.accountId,
+        symbol: 'MSFT',
+        side: 'long',
+        assetType: 'stock',
+        status: 'draft',
+      })
+      .returning({ id: positions.id });
+    const [group] = await db
+      .insert(positionGroups)
+      .values({ userId: user.id, labelOverride: null })
+      .returning({ id: positionGroups.id });
+    await db.update(positions).set({ groupId: group.id }).where(eq(positions.id, graph.positionId));
+    await db.update(positions).set({ groupId: group.id }).where(eq(positions.id, secondLeg.id));
+
+    expect(
+      await db.select().from(positionGroups).where(eq(positionGroups.userId, user.id)),
+    ).toHaveLength(1);
+
+    await executeDeletion({ userId: user.id, initiator: 'self' });
+
+    expect(
+      await db.select().from(positionGroups).where(eq(positionGroups.userId, user.id)),
+    ).toHaveLength(0);
   });
 
   it('answers 404 on a second run and leaves exactly one tombstone', async () => {

@@ -58,6 +58,7 @@ import {
   expenses,
   fills,
   ledgerEntries,
+  positionGroups,
   positionTags,
   positions,
   sessions,
@@ -1266,6 +1267,70 @@ describe('POST /api/admin/users/:id/reset', () => {
     // Cascaded from the position rather than deleted directly.
     expect(
       await db.select().from(fills).where(eq(fills.positionId, target.positionId)),
+    ).toHaveLength(0);
+  });
+
+  /*
+   * Contract block — AC 1.5 / design C7 ("the admin reset ... delete the
+   * user's groups; the admin path reports position_groups in its counts").
+   *
+   * Pre: the target holds a 2-leg group (forged by direct insert; reset is
+   *   about rows existing, not about how they were created).
+   * Call: `postReset(target.id, { confirmEmail: target.email }, admin.token)`.
+   * Result: 200; `body.deleted.position_groups` is 1 (asserted with
+   *   `toMatchObject`, so this adds a key rather than changing the existing
+   *   assertion above); no `position_groups` row survives for the user.
+   * Source: requirements.md AC 1.5 ("a group left with one leg SHALL
+   *   dissolve"); design C7.
+   */
+  it("deletes the user's groups and reports position_groups in the counts", async () => {
+    const admin = await seedAdmin();
+    const target = await seedUser();
+    const accountId = await seedAccount(target.id);
+
+    // eslint-disable-next-line no-restricted-syntax
+    const legs = await db
+      .insert(positions)
+      .values([
+        {
+          userId: target.id,
+          accountId,
+          symbol: 'AAPL',
+          side: 'long',
+          assetType: 'stock',
+          status: 'open',
+          openedAt: new Date(),
+        },
+        {
+          userId: target.id,
+          accountId,
+          symbol: 'MSFT',
+          side: 'long',
+          assetType: 'stock',
+          status: 'open',
+          openedAt: new Date(),
+        },
+      ])
+      .returning({ id: positions.id });
+    const [group] = await db
+      .insert(positionGroups)
+      .values({ userId: target.id, labelOverride: null })
+      .returning({ id: positionGroups.id });
+    await db.update(positions).set({ groupId: group.id }).where(eq(positions.id, legs[0]!.id));
+    await db.update(positions).set({ groupId: group.id }).where(eq(positions.id, legs[1]!.id));
+
+    expect(
+      await db.select().from(positionGroups).where(eq(positionGroups.userId, target.id)),
+    ).toHaveLength(1);
+
+    const res = await postReset(target.id, { confirmEmail: target.email }, admin.token);
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as { deleted: Record<string, number> };
+    expect(body.deleted).toMatchObject({ position_groups: 1 });
+
+    expect(
+      await db.select().from(positionGroups).where(eq(positionGroups.userId, target.id)),
     ).toHaveLength(0);
   });
 

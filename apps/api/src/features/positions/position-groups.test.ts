@@ -110,12 +110,23 @@
  * `specs/options-tools/requirements.md` — see the task report.
  */
 import { eq, sql } from 'drizzle-orm';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
 import { fills, ledgerEntries, positions } from '@/db/schema';
+import {
+  insertPositionCloseLedgerEntries,
+  reversePositionCloseLedgerEntries,
+} from '@/features/accounting/ledger-hook';
 import { getTierLimits } from '@/features/billing/tier-limits.constants';
+import * as positionsQuery from '@/features/positions/positions.query';
+import {
+  replaceCloseHook,
+  unregisterCloseHook,
+  replaceReverseHook,
+  unregisterReverseHook,
+} from '@/features/positions/positions.service';
 import { config } from '@/lib/config';
 
 let testCounter = 0;
@@ -908,6 +919,230 @@ describe('position-groups ownership (NFR Security)', () => {
       { positionId: ownerLeg.id },
     );
     expect(addRes.status).toBe(404);
+  });
+});
+
+/*
+ * Contract block — delete paths keep groups whole (design C7).
+ *
+ * AC 1.5 (delete one of three legs; group left with two legs)
+ *   Pre: a 3-leg group.
+ *   Call: DELETE /api/positions/:id on one leg.
+ *   Result: 204; the deleted leg is gone (404 on GET); the list still shows
+ *     a `kind: 'group'` entry for the other two legs.
+ *   Source: requirements.md AC 1.5 ("a group left with one leg SHALL
+ *     dissolve" implies a group left with more than one SHALL NOT).
+ *
+ * AC 1.5 (delete one of two legs; group dissolves)
+ *   Pre: a 2-leg group.
+ *   Call: DELETE /api/positions/:id on one leg.
+ *   Result: 204; the survivor's `groupId` reads null and the list carries
+ *     no `kind: 'group'` entry for it — a plain position.
+ *   Source: requirements.md AC 1.5 ("a group left with one leg SHALL
+ *     dissolve into a plain position").
+ *
+ * Error Handling 6 (membership changed under the lock)
+ *   Pre: an ungrouped leg whose unlocked pre-read sees no group, but by the
+ *     time the lock is acquired another transaction has linked it.
+ *   Call: DELETE /api/positions/:id, with `findPositionById` mocked to
+ *     perform that concurrent link right after its own (ungrouped) read.
+ *   Result: 409 CONFLICT, "The group changed; try again."; the leg survives
+ *     (the whole transaction rolled back).
+ *   Source: design Error Handling 6; design C7 ("an ungrouped row takes
+ *     today's path, and if the locked row now has a group it throws
+ *     Error Handling 6's 409").
+ *
+ * AC 1.5 (ledger reversal for a deleted grouped leg, matching an ungrouped
+ * position)
+ *   Pre: a 2-leg group with one leg closed (full exit), the close/reverse
+ *     ledger hooks registered.
+ *   Call: DELETE /api/positions/:id on the closed leg.
+ *   Result: 204; the account balance returns to its pre-close value, exactly
+ *     as `positions closed-delete + ledger reversal` (positions.test.ts)
+ *     shows for an ungrouped position.
+ *   Source: design C7 ("runs the reverse hooks and delete as today").
+ */
+describe('positions delete keeps groups whole (AC 1.5, design C7, Error Handling 6)', () => {
+  it('deleting one leg of a three-leg group leaves a two-leg group', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+
+    const createRes = await authedRequest('POST', '/api/position-groups', cookie, {
+      accountId: account.id,
+      filledAt: '2025-03-01T00:00:00.000Z',
+      legs: [
+        { symbol: 'AAPL260116C100', side: 'long', assetType: 'option', quantity: '1', price: '5' },
+        {
+          symbol: 'AAPL260116C110',
+          side: 'short',
+          assetType: 'option',
+          quantity: '1',
+          price: '2',
+        },
+        {
+          symbol: 'AAPL260116C120',
+          side: 'long',
+          assetType: 'option',
+          quantity: '1',
+          price: '1',
+        },
+      ],
+    });
+    expect(createRes.status).toBe(201);
+    const group = await createRes.json();
+    const [legA, legB, legC] = group.legs;
+
+    const res = await authedRequest('DELETE', `/api/positions/${legA.id}`, cookie);
+    expect(res.status).toBe(204);
+
+    const getRes = await authedRequest('GET', `/api/positions/${legA.id}`, cookie);
+    expect(getRes.status).toBe(404);
+
+    const list = await (await authedRequest('GET', '/api/positions', cookie)).json();
+    const stillGroup = list.find((e: { id: string }) => e.id === group.id);
+    expect(stillGroup).toBeDefined();
+    expect(stillGroup.kind).toBe('group');
+    expect(stillGroup.legs.map((l: { id: string }) => l.id).sort()).toEqual(
+      [legB.id, legC.id].sort(),
+    );
+  });
+
+  it('deleting one leg of a two-leg group dissolves it; the survivor reads as a plain position', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+
+    const createRes = await authedRequest('POST', '/api/position-groups', cookie, {
+      accountId: account.id,
+      filledAt: '2025-03-01T00:00:00.000Z',
+      legs: [
+        { symbol: 'AAPL260116C100', side: 'long', assetType: 'option', quantity: '1', price: '5' },
+        {
+          symbol: 'AAPL260116C110',
+          side: 'short',
+          assetType: 'option',
+          quantity: '1',
+          price: '2',
+        },
+      ],
+    });
+    expect(createRes.status).toBe(201);
+    const group = await createRes.json();
+    const [legA, legB] = group.legs;
+
+    const res = await authedRequest('DELETE', `/api/positions/${legA.id}`, cookie);
+    expect(res.status).toBe(204);
+
+    const survivorRes = await authedRequest('GET', `/api/positions/${legB.id}`, cookie);
+    expect(survivorRes.status).toBe(200);
+    const survivor = await survivorRes.json();
+    expect(survivor.groupId ?? null).toBeNull();
+
+    const list = await (await authedRequest('GET', '/api/positions', cookie)).json();
+    expect(list.some((e: { kind?: string }) => e.kind === 'group')).toBe(false);
+    const survivorEntry = list.find((e: { id: string }) => e.id === legB.id);
+    expect(survivorEntry).toBeDefined();
+    expect(survivorEntry.kind).not.toBe('group');
+  });
+
+  it('returns 409 when the leg is grouped by the time its lock is acquired', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+
+    // The ungrouped leg under test, plus an unrelated 2-leg group that will
+    // stand in for "another transaction linked it" — the forged update below
+    // only needs a group row that satisfies the FK, not real membership.
+    const legA = await createOpenLeg(cookie, account.id, 'AAPL260116C500');
+    const legB = await createOpenLeg(cookie, account.id, 'AAPL260116C510', { side: 'short' });
+    const legC = await createOpenLeg(cookie, account.id, 'AAPL260116C520');
+    const linkRes = await authedRequest('POST', '/api/position-groups/link', cookie, {
+      positionIds: [legB.id, legC.id],
+    });
+    expect(linkRes.status).toBe(201);
+    const raceGroup = await linkRes.json();
+
+    const realFindPositionById = positionsQuery.findPositionById;
+    const spy = vi
+      .spyOn(positionsQuery, 'findPositionById')
+      .mockImplementation((dbArg, id, userId) => {
+        const query = realFindPositionById(dbArg, id, userId);
+        return query.then(async (rows) => {
+          if (id === legA.id) {
+            // Simulates a concurrent link committing between the unlocked read
+            // and the lock, by mutating the row directly through the plain
+            // `db` handle rather than the caller's (possibly uncommitted) tx.
+            await db
+              .update(positions)
+              .set({ groupId: raceGroup.id })
+              .where(eq(positions.id, legA.id));
+          }
+          return rows;
+        }) as unknown as ReturnType<typeof positionsQuery.findPositionById>;
+      });
+
+    let res: Response;
+    try {
+      res = await authedRequest('DELETE', `/api/positions/${legA.id}`, cookie);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error.code).toBe('CONFLICT');
+    expect(body.error.message).toBe('The group changed; try again.');
+  });
+});
+
+describe('positions delete — ledger reversal for a grouped leg (AC 1.5)', () => {
+  beforeAll(() => {
+    replaceCloseHook('ledger', insertPositionCloseLedgerEntries);
+    replaceReverseHook('ledger', reversePositionCloseLedgerEntries);
+  });
+  afterAll(() => {
+    unregisterCloseHook('ledger');
+    unregisterReverseHook('ledger');
+  });
+
+  async function getAccountBalance(cookie: string, accountId: string): Promise<number> {
+    const res = await authedRequest('GET', `/api/accounts/${accountId}`, cookie);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    return Number(body.balance);
+  }
+
+  it("reverses a closed leg's ledger entry exactly as it does for an ungrouped position", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const preClose = await getAccountBalance(cookie, account.id);
+
+    const legA = await createOpenLeg(cookie, account.id, 'AAPL260116C600', { price: '5' });
+    const legB = await createOpenLeg(cookie, account.id, 'AAPL260116C610', {
+      side: 'short',
+      price: '2',
+    });
+    const linkRes = await authedRequest('POST', '/api/position-groups/link', cookie, {
+      positionIds: [legA.id, legB.id],
+    });
+    expect(linkRes.status).toBe(201);
+
+    await addFill(cookie, legA.id, {
+      type: 'exit',
+      price: '7',
+      quantity: '1',
+      fees: '0',
+      filledAt: '2025-01-02T00:00:00.000Z',
+    });
+
+    const postClose = await getAccountBalance(cookie, account.id);
+    expect(postClose).not.toBe(preClose);
+
+    const res = await authedRequest('DELETE', `/api/positions/${legA.id}`, cookie);
+    expect(res.status).toBe(204);
+
+    expect(await getAccountBalance(cookie, account.id)).toBe(preClose);
+
+    const getRes = await authedRequest('GET', `/api/positions/${legA.id}`, cookie);
+    expect(getRes.status).toBe(404);
   });
 });
 

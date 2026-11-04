@@ -10,6 +10,7 @@ import {
   accounts as accountsTable,
   fills,
   ledgerEntries,
+  positionGroups,
   positions,
   positionTags,
   tags as tagsTable,
@@ -789,6 +790,40 @@ describe('DELETE /api/accounts/:id?cascade=demo', () => {
       headers: { 'X-Forwarded-For': uniqueIp() },
     });
     expect(res.status).toBe(401);
+  });
+
+  /*
+   * Contract block — AC 9.5 / design C7 ("teardownDemoAccount deletes the
+   * account's groups before deletePositionsByAccount").
+   *
+   * Pre: the sample account holds two linked legs (a group), forged by a
+   *   direct insert since the seeder itself never creates groups.
+   * Call: DELETE /api/accounts/:id?cascade=demo.
+   * Result: 204; no `position_groups` row survives for the user — a group
+   *   whose legs are all torn down must not strand the group row.
+   * Source: design C7's purpose line ("no stranded or one-leg group").
+   */
+  it('leaves no position_groups row for a group whose legs lived in the torn-down account', async () => {
+    const { cookie, userId } = await registerAndGetCookie();
+    const { accountId, positionIds } = await seedDemo(cookie, userId);
+
+    const [group] = await db
+      .insert(positionGroups)
+      .values({ userId, labelOverride: null })
+      .returning({ id: positionGroups.id });
+    await db.update(positions).set({ groupId: group.id }).where(eq(positions.id, positionIds[0]));
+    await db.update(positions).set({ groupId: group.id }).where(eq(positions.id, positionIds[1]));
+
+    expect(
+      await db.select().from(positionGroups).where(eq(positionGroups.userId, userId)),
+    ).toHaveLength(1);
+
+    const res = await authedRequest('DELETE', `/api/accounts/${accountId}?cascade=demo`, cookie);
+    expect(res.status).toBe(204);
+
+    expect(
+      await db.select().from(positionGroups).where(eq(positionGroups.userId, userId)),
+    ).toHaveLength(0);
   });
 });
 
