@@ -39,6 +39,8 @@ export interface SnapshotPosition {
   fills: SnapshotFill[];
   /** The position's tags, ordered by tag id. Empty when untagged. */
   tags: Tag[];
+  /** design C8: the leg's group, when it has one. Optional so pre-task fixtures compile. */
+  groupId?: string | null;
 }
 
 export interface TimeframeSnapshot {
@@ -80,15 +82,43 @@ export async function fetchTimeframeSnapshot(
   // 3-letter constants — no injection surface.
   const supported = `{${(CURRENCY_CODES as readonly string[]).join(',')}}`;
   const result = await tx.execute<{ envelope: TimeframeSnapshot }>(sql`
-    WITH closed AS (
+    WITH touched_groups AS (
+      -- design C8/D9: a group is touched when any leg has a fill in the
+      -- window, or every leg has a flat instant and the latest of those falls
+      -- in the window. Computed over ALL of a group's legs, not just the ones
+      -- the window would otherwise select, so a touched group pulls in every
+      -- leg below (AC 5.4).
+      SELECT p.group_id
+      FROM positions p
+      WHERE p.user_id = ${userId} AND p.group_id IS NOT NULL
+      GROUP BY p.group_id
+      HAVING
+        bool_or(EXISTS (
+          SELECT 1 FROM fills f
+          WHERE f.position_id = p.id
+            AND f.filled_at >= ${startInstant.toISOString()}
+            AND f.filled_at <  ${endInstant.toISOString()}
+        ))
+        OR (
+          bool_and(COALESCE(p.last_flat_at, p.closed_at) IS NOT NULL)
+          AND MAX(COALESCE(p.last_flat_at, p.closed_at)) >= ${startInstant.toISOString()}
+          AND MAX(COALESCE(p.last_flat_at, p.closed_at)) <  ${endInstant.toISOString()}
+        )
+    ),
+    closed AS (
       -- Positions RELEVANT to the window, which is no longer the same as
       -- "closed in the window": a partial exit realizes P&L while the position
       -- stays open (bucket B), so any position with a fill in the window
       -- qualifies too. The service splits the two populations — see
       -- performance.service.ts §buckets. Fee-schedule columns are gone: fees
       -- come from fills.fees and are never re-applied at read time.
+      --
+      -- An ungrouped row keeps that predicate unchanged. A grouped row is read
+      -- only when its group is touched (see touched_groups above), and then
+      -- every leg of that group is read, even one whose own predicate alone
+      -- would not have selected it (AC 5.4).
       SELECT DISTINCT
-        p.id, p.side, p.asset_type, p.symbol, p.closed_at, p.status,
+        p.id, p.side, p.asset_type, p.symbol, p.closed_at, p.status, p.group_id,
         p.last_flat_at, p.last_flat_net_pnl,
         a.currency
       FROM positions p
@@ -97,16 +127,22 @@ export async function fetchTimeframeSnapshot(
         AND a.currency = ANY(${supported}::text[])
         AND (
           (
-            COALESCE(p.last_flat_at, p.closed_at) IS NOT NULL
-            AND COALESCE(p.last_flat_at, p.closed_at) >= ${startInstant.toISOString()}
-            AND COALESCE(p.last_flat_at, p.closed_at) <  ${endInstant.toISOString()}
+            p.group_id IS NULL
+            AND (
+              (
+                COALESCE(p.last_flat_at, p.closed_at) IS NOT NULL
+                AND COALESCE(p.last_flat_at, p.closed_at) >= ${startInstant.toISOString()}
+                AND COALESCE(p.last_flat_at, p.closed_at) <  ${endInstant.toISOString()}
+              )
+              OR EXISTS (
+                SELECT 1 FROM fills f
+                WHERE f.position_id = p.id
+                  AND f.filled_at >= ${startInstant.toISOString()}
+                  AND f.filled_at <  ${endInstant.toISOString()}
+              )
+            )
           )
-          OR EXISTS (
-            SELECT 1 FROM fills f
-            WHERE f.position_id = p.id
-              AND f.filled_at >= ${startInstant.toISOString()}
-              AND f.filled_at <  ${endInstant.toISOString()}
-          )
+          OR p.group_id IN (SELECT group_id FROM touched_groups)
         )
     ),
     position_fills AS (
@@ -159,6 +195,7 @@ export async function fetchTimeframeSnapshot(
           'id', c.id, 'side', c.side, 'assetType', c.asset_type,
           'symbol', c.symbol,
           'currency', c.currency, 'closedAt', c.closed_at, 'status', c.status,
+          'groupId', c.group_id,
           'lastFlatAt', c.last_flat_at, 'lastFlatNetPnl', c.last_flat_net_pnl::text,
           'fills', COALESCE(pf.fills, '[]'::jsonb),
           'tags', COALESCE(pts.tags, '[]'::jsonb)
