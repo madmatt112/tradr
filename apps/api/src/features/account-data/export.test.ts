@@ -23,6 +23,7 @@ import {
   fillTransferLinks,
   fills,
   ledgerEntries,
+  positionGroups,
   positionImages,
   positionTags,
   positions,
@@ -405,7 +406,7 @@ describe('createExport', () => {
       degradations: unknown[];
     };
     expect(manifest.format).toBe('tradr-account-archive');
-    expect(manifest.archiveVersion).toBe(4);
+    expect(manifest.archiveVersion).toBe(5);
     expect(manifest.sourceAppVersion).toBe('unknown'); // APP_VERSION unset in tests
     expect(manifest.exportedAt).toMatch(MICRO_TS_RE);
     expect(manifest.degradations).toEqual([]);
@@ -508,7 +509,7 @@ describe('createExport', () => {
       archiveVersion: number;
       counts: Record<string, number>;
     };
-    expect(manifest.archiveVersion).toBe(4);
+    expect(manifest.archiveVersion).toBe(5);
     expect(manifest.counts.lotSelections).toBe(1);
 
     const [selection] = ndjson(entries, 'lot-selections.ndjson');
@@ -601,7 +602,7 @@ describe('createExport', () => {
       archiveVersion: number;
       counts: Record<string, number>;
     };
-    expect(manifest.archiveVersion).toBe(4);
+    expect(manifest.archiveVersion).toBe(5);
     expect(manifest.counts.transferLinks).toBe(1);
 
     const accountRows = ndjson(entries, 'accounts.ndjson') as Array<{
@@ -613,6 +614,70 @@ describe('createExport', () => {
 
     const [link] = ndjson(entries, 'transfer-links.ndjson');
     expect(link).toEqual({ exitFillId: exitFill.id, entryFillId: entryFill.id });
+  });
+
+  // Design C11, AC 9.1 — every group, its legs' groupId and any label override
+  // travel with the archive, and ARCHIVE_VERSION increments to 5.
+  it("carries a position group, its legs' groupId and label override (AC 9.1)", async () => {
+    const [u] = await db
+      .insert(users)
+      .values({ email: `export-groups-${randomUUID()}@example.com`, passwordHash: PASSWORD_HASH })
+      .returning({ id: users.id });
+    const [acct] = await db
+      .insert(accounts)
+      .values({ userId: u.id, name: 'Main', currency: 'USD', startingBalance: '0' })
+      .returning({ id: accounts.id });
+    const [group] = await db
+      .insert(positionGroups)
+      .values({ userId: u.id, labelOverride: 'Iron Condor' })
+      .returning({ id: positionGroups.id });
+    // eslint-disable-next-line no-restricted-syntax -- seed fixed grouped legs for the group export test
+    const [legA] = await db
+      .insert(positions)
+      .values({
+        userId: u.id,
+        accountId: acct.id,
+        groupId: group.id,
+        symbol: 'XYZ',
+        side: 'short',
+        assetType: 'stock',
+      })
+      .returning({ id: positions.id });
+    // eslint-disable-next-line no-restricted-syntax -- seed fixed grouped legs for the group export test
+    const [legB] = await db
+      .insert(positions)
+      .values({
+        userId: u.id,
+        accountId: acct.id,
+        groupId: group.id,
+        symbol: 'XYZ',
+        side: 'long',
+        assetType: 'stock',
+      })
+      .returning({ id: positions.id });
+
+    const entries = await exportEntries(u.id);
+
+    const manifest = JSON.parse(decode(entries, 'manifest.json')) as {
+      archiveVersion: number;
+      counts: Record<string, number>;
+    };
+    expect(manifest.archiveVersion).toBe(5);
+    expect(manifest.counts.positionGroups).toBe(1);
+
+    const [groupRow] = ndjson(entries, 'position-groups.ndjson');
+    expect(groupRow).toEqual({
+      id: group.id,
+      labelOverride: 'Iron Condor',
+      createdAt: expect.stringMatching(MICRO_TS_RE),
+    });
+
+    const legRows = ndjson(entries, 'positions.ndjson') as Array<{
+      id: string;
+      groupId: string | null;
+    }>;
+    expect(legRows.find((p) => p.id === legA.id)?.groupId).toBe(group.id);
+    expect(legRows.find((p) => p.id === legB.id)?.groupId).toBe(group.id);
   });
 
   it('never writes a secret into the archive (Req 2.5)', async () => {

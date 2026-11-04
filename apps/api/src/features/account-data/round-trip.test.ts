@@ -20,6 +20,7 @@ import {
   fillTransferLinks,
   fills,
   ledgerEntries,
+  positionGroups,
   positionImages,
   positionTags,
   positions,
@@ -1256,4 +1257,97 @@ describe('transfer-link archive carry (design C8, AC 9.1-9.3)', () => {
       .where(eq(fillTransferLinks.userId, userB));
     expect(linkRows).toHaveLength(0);
   });
+});
+
+async function seedGroupUser(prefix: string): Promise<{
+  userId: string;
+  groupId: string;
+  legAId: string;
+  legBId: string;
+}> {
+  const userId = await seedBareUser(prefix);
+  const [acct] = await db
+    .insert(accounts)
+    .values({ userId, name: 'Main', currency: 'USD', startingBalance: '0' })
+    .returning({ id: accounts.id });
+  const [group] = await db
+    .insert(positionGroups)
+    .values({ userId, labelOverride: 'Iron Condor' })
+    .returning({ id: positionGroups.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed fixed grouped legs for the group round-trip test
+  const [legA] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId: acct.id,
+      groupId: group.id,
+      symbol: 'XYZ',
+      side: 'short',
+      assetType: 'stock',
+      status: 'closed',
+      openedAt: new Date('2026-01-01T00:00:00Z'),
+      closedAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatNetPnl: '125.0000',
+    })
+    .returning({ id: positions.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed fixed grouped legs for the group round-trip test
+  const [legB] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId: acct.id,
+      groupId: group.id,
+      symbol: 'XYZ',
+      side: 'long',
+      assetType: 'stock',
+      status: 'closed',
+      openedAt: new Date('2026-01-01T00:00:00Z'),
+      closedAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatAt: new Date('2026-01-02T00:00:00Z'),
+      lastFlatNetPnl: '-75.0000',
+    })
+    .returning({ id: positions.id });
+  return { userId, groupId: group.id, legAId: legA.id, legBId: legB.id };
+}
+
+describe('position-group archive carry (design C11, AC 9.1-9.2)', () => {
+  it(
+    "carries a group, its legs' groupId and label override; import restores them " +
+      'against remapped ids and the latched figures match (AC 9.1, AC 9.2)',
+    async () => {
+      const seedA = await seedGroupUser('rt-group-a');
+      const bytesA = await exportBytes(seedA.userId);
+      const parsedA = parseArchive(bytesA);
+
+      const groupsA = rowsOf(parsedA, 'position-groups.ndjson');
+      expect(groupsA).toHaveLength(1);
+      expect(groupsA[0].labelOverride).toBe('Iron Condor');
+
+      const legsA = rowsOf(parsedA, 'positions.ndjson');
+      expect(legsA.every((p) => p.groupId === seedA.groupId)).toBe(true);
+
+      const userB = await seedBareUser('rt-group-b');
+      await confirmImport(userB, streamOf(bytesA), digestOf(bytesA));
+
+      const bytesB = await exportBytes(userB);
+      const parsedB = parseArchive(bytesB);
+
+      const groupsB = rowsOf(parsedB, 'position-groups.ndjson');
+      expect(groupsB).toHaveLength(1);
+      expect(groupsB[0].labelOverride).toBe('Iron Condor');
+      // Remapped: a fresh id on B, never A's own group id.
+      expect(groupsB[0].id).not.toBe(seedA.groupId);
+
+      const legsB = rowsOf(parsedB, 'positions.ndjson');
+      expect(legsB).toHaveLength(2);
+      expect(legsB.every((p) => p.groupId === groupsB[0].id)).toBe(true);
+
+      // Latches travel on positions unchanged, so the legs' figures match
+      // after import (AC 9.2).
+      const pnlA = legsA.map((p) => p.lastFlatNetPnl).sort();
+      const pnlB = legsB.map((p) => p.lastFlatNetPnl).sort();
+      expect(pnlB).toEqual(pnlA);
+    },
+  );
 });
