@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull } from 'drizzle-orm';
 
 import type { Database, Transaction } from '@/db';
 import { positionGroups, positions } from '@/db/schema';
@@ -108,6 +108,29 @@ export async function dissolveGroupIfSingleton(
     await setPositionGroupLink(tx, id, null);
   }
   await deletePositionGroup(tx, groupId, userId);
+}
+
+/** Every group a user owns (design C7: account/user teardown must not strand one). */
+export function deletePositionGroupsByUser(tx: Transaction, userId: string) {
+  return tx.delete(positionGroups).where(eq(positionGroups.userId, userId)).returning();
+}
+
+/**
+ * Every group whose legs live in the given account, found through the legs'
+ * `account_id` while they still exist — `position_groups` itself has no
+ * account reference. Must run before the account's positions are deleted
+ * (design C7, `teardownDemoAccount` order).
+ */
+export async function deletePositionGroupsByAccount(tx: Transaction, accountId: string) {
+  const legs = await tx
+    .select({ groupId: positions.groupId })
+    .from(positions)
+    .where(and(eq(positions.accountId, accountId), isNotNull(positions.groupId)));
+  const groupIds = [
+    ...new Set(legs.map((l) => l.groupId).filter((id): id is string => id !== null)),
+  ];
+  if (groupIds.length === 0) return [];
+  return tx.delete(positionGroups).where(inArray(positionGroups.id, groupIds)).returning();
 }
 
 export function updateGroupLabelOverride(

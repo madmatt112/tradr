@@ -39,6 +39,7 @@ import { matchExitsToLots, orderFills, availableByLot } from './lots';
 import type { LotConflict, LotFill, LotSlice } from './lots';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import { assembleListEntries, buildGroupEntry } from './position-group-entries';
+import { dissolveGroupIfSingleton, lockGroupLegs } from './position-groups.query';
 import { findPositionImagesByPosition } from './position-images.query';
 import {
   insertPosition,
@@ -769,10 +770,26 @@ export async function editPosition(
 
 export async function removePosition(db: Database, id: string, userId: string) {
   return withTransaction(db, async (tx) => {
-    // Amended Data Integrity NFR (2026-07-17): load under a row lock so the
-    // status/delete decision is serialized against concurrent transitions.
-    const lockRows = await findPositionForUpdate(tx, id, userId);
-    if ((lockRows as RawRow[]).length === 0) throw new NotFoundError('Position', id);
+    // design C7: read unlocked first to decide which lock path applies. A
+    // grouped leg takes the group lock (locks every leg, re-verifies
+    // membership under lock — Error Handling #6); an ungrouped leg takes the
+    // single-row lock below and is re-checked for a group acquired in the
+    // gap between this read and that lock.
+    const preRows = await findPositionById(tx, id, userId);
+    if (preRows.length === 0) throw new NotFoundError('Position', id);
+    const groupId = preRows[0].groupId as string | null;
+
+    if (groupId) {
+      await lockGroupLegs(tx, userId, groupId);
+    } else {
+      // Amended Data Integrity NFR (2026-07-17): load under a row lock so the
+      // status/delete decision is serialized against concurrent transitions.
+      const lockRows = await findPositionForUpdate(tx, id, userId);
+      if ((lockRows as RawRow[]).length === 0) throw new NotFoundError('Position', id);
+      if ((lockRows as RawRow[])[0].group_id) {
+        throw new ConflictError('The group changed; try again.');
+      }
+    }
 
     // R4 amendment (task 23b): DELETE is now uniform across every status. Invoke
     // the registered reverse hooks FIRST, under the close-hook lock order
@@ -800,6 +817,13 @@ export async function removePosition(db: Database, id: string, userId: string) {
     // the ledger with NULL positionId, netting to zero in the balance and
     // dropping out of the expenses tax inner-join (ledger-balances Req 7.7).
     await deletePosition(tx, id, userId);
+
+    // design C7: dissolve the group into a plain position once this delete
+    // leaves it with one leg or fewer (`dissolveGroupIfSingleton` is a no-op
+    // above that count).
+    if (groupId) {
+      await dissolveGroupIfSingleton(tx, groupId, userId);
+    }
   });
 }
 

@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import type { Database, Transaction } from '@/db';
 import { users } from '@/db/schema';
+import { deletePositionGroupsByAccount } from '@/features/positions/position-groups.query';
 import {
   addFillTx,
   closePositionTx,
@@ -404,6 +405,9 @@ export async function seedDemoAccount(db: Database, userId: string) {
  */
 export async function teardownDemoAccount(tx: Transaction, userId: string, accountId: string) {
   await deleteLedgerEntriesByAccount(tx, accountId);
+  // design C7: a group's legs still carry `account_id` here; delete the
+  // group row before the legs go, so no position_groups row is stranded.
+  await deletePositionGroupsByAccount(tx, accountId);
   await deletePositionsByAccount(tx, accountId);
   await deleteAccount(tx, accountId, userId);
 

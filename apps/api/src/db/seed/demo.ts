@@ -52,6 +52,7 @@ import {
   externalApiKeys,
   feeSchedules,
   ledgerEntries,
+  positionGroups,
   positions,
   usageRecords,
   users,
@@ -292,6 +293,8 @@ async function resetUserData(tx: Transaction, userId: string) {
   await tx.delete(csvImportStaging).where(eq(csvImportStaging.userId, userId));
   await tx.delete(ledgerEntries).where(eq(ledgerEntries.userId, userId));
   await tx.delete(positions).where(eq(positions.userId, userId)); // cascades fills
+  // design C7: after the legs, so no position_groups row is stranded.
+  await tx.delete(positionGroups).where(eq(positionGroups.userId, userId));
   await tx.delete(expenses).where(eq(expenses.userId, userId));
   await tx.delete(exchangeRates).where(eq(exchangeRates.userId, userId));
   await tx.delete(dashboardLayouts).where(eq(dashboardLayouts.userId, userId));
