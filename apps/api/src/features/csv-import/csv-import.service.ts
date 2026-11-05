@@ -2,6 +2,7 @@ import { Decimal } from 'decimal.js';
 
 import {
   CURRENCY_CODES,
+  parseOccSymbol,
   type CsvPreviewRequest,
   type CsvPreviewResponse,
   type GroupProposal,
@@ -19,11 +20,14 @@ import {
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
 import {
+  findCandidateStockRows,
   findMatchingSettlement,
   findOpenLegBySymbol,
 } from '@/features/positions/option-settlement.query';
+import { settleLegTx, type SettlementResult } from '@/features/positions/option-settlement.service';
+import { lockLegs } from '@/features/positions/position-groups.query';
 import { linkPositionsTx } from '@/features/positions/position-groups.service';
-import { countPositionsByUser } from '@/features/positions/positions.query';
+import { countPositionsByUser, findPositionById } from '@/features/positions/positions.query';
 import {
   addFillTx,
   closePositionTx,
@@ -648,8 +652,9 @@ export async function commitImport(
   // positions + fills + ledger + the committed flag together; the claimed row
   // is then deleted so a retry must re-preview.
   const { result, accountId } = claimed;
+  const settledEvents: SettlementResult[] = [];
   try {
-    return await withTransaction(db, async (tx) => {
+    const committedResult = await withTransaction(db, async (tx) => {
       // Upfront account guard (Component 7a) — one re-verify before any insert.
       const [account] = await findAccountById(tx, accountId, userId);
       if (!account) {
@@ -682,6 +687,45 @@ export async function commitImport(
         groupsCreated += 1;
       }
 
+      // Lifecycle-event settlement (design C12) — resolve each staged event's
+      // leg id (a same-file segment's fresh positionId, or an existing open
+      // leg's own id), lock the FULL union of target legs and their eligible
+      // held stock rows in ONE pass (design D4's ascending lock-ordering rule,
+      // `lockLegs`), then settle each through the same core the manual
+      // settlement dialog uses, in file order. `settleLegTx` re-locks its own
+      // leg/candidates internally; re-acquiring an already-held row lock in
+      // the same tx is a no-op.
+      const events = result.events ?? [];
+      if (events.length > 0) {
+        const legIdByEvent = events.map((event) =>
+          event.target.kind === 'segment'
+            ? positionIds[event.target.segmentRef!]!
+            : event.target.positionId!,
+        );
+
+        const lockIds = new Set(legIdByEvent);
+        for (const legId of new Set(legIdByEvent)) {
+          const [leg] = await findPositionById(tx, legId, userId);
+          if (!leg || leg.assetType !== 'option') continue;
+          const parsed = parseOccSymbol(leg.symbol);
+          if (!parsed.ok) continue;
+          const held = await findCandidateStockRows(tx, userId, accountId, parsed.value.underlying);
+          for (const row of held) lockIds.add(row.id);
+        }
+        await lockLegs(tx, userId, [...lockIds]);
+
+        for (let i = 0; i < events.length; i++) {
+          const event = events[i]!;
+          const settled = await settleLegTx(tx, userId, legIdByEvent[i]!, {
+            outcome: event.outcome,
+            settledAt: event.settledAt,
+            quantity: event.quantity,
+            fees: event.fees,
+          });
+          settledEvents.push(settled);
+        }
+      }
+
       const summary: CommittedResult = {
         positionsCreated: positionIds.length,
         fillsCreated,
@@ -712,6 +756,22 @@ export async function commitImport(
 
       return summary;
     });
+
+    // Emit position_settled per settled event (design C12), AFTER the bulk tx
+    // commits — the same fire-and-forget pattern `settleLeg` uses, with
+    // source 'import' rather than 'manual' (settleLegTx itself never emits).
+    for (const settled of settledEvents) {
+      try {
+        captureServerEvent('position_settled', {
+          distinctId: userId,
+          properties: { outcome: settled.outcome, source: 'import' },
+        });
+      } catch {
+        /* ignore — capture is fire-and-forget */
+      }
+    }
+
+    return committedResult;
   } catch (err) {
     // Compensating delete of the claimed `committing` row (own tiny tx). The
     // bulk tx already rolled back all data, so nothing persisted under it.
