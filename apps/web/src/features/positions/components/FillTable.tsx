@@ -39,6 +39,19 @@ interface Props {
   positionStatus: string;
 }
 
+/**
+ * Fills are stored as numeric(18,8) decimal strings, so the API returns values
+ * like "150.50000000". For the table we only need a readable figure, so cap the
+ * display at three decimal places and trim trailing zeros (150.5 stays 150.5,
+ * not 150.500). Display-only: the edit dialog and CSV export keep full stored
+ * precision, so this never rounds the saved data.
+ */
+export function formatFillValue(value: string): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return n.toFixed(3).replace(/\.?0+$/, '');
+}
+
 export function FillTable({ fills, positionId, positionStatus }: Props) {
   const deleteFill = useDeleteFill(positionId);
   const [editFill, setEditFill] = useState<Fill | null>(null);
@@ -74,9 +87,11 @@ export function FillTable({ fills, positionId, positionStatus }: Props) {
                     {fill.type}
                   </Badge>
                 </TableCell>
-                <TableCell className="text-right">{fill.price}</TableCell>
-                <TableCell className="text-right">{fill.quantity}</TableCell>
-                <TableCell className="text-right max-md:hidden">{fill.fees}</TableCell>
+                <TableCell className="text-right">{formatFillValue(fill.price)}</TableCell>
+                <TableCell className="text-right">{formatFillValue(fill.quantity)}</TableCell>
+                <TableCell className="text-right max-md:hidden">
+                  {formatFillValue(fill.fees)}
+                </TableCell>
                 <TableCell>{new Date(fill.filledAt).toLocaleString()}</TableCell>
                 <TableCell className="max-w-32 truncate max-md:hidden">
                   {fill.notes || '—'}
