@@ -158,6 +158,8 @@ export {
   encodeOccCompact,
   blackScholes,
   format6SigFig,
+  expiryInstant,
+  isPastExpiryUnsettled,
 } from './options';
 export type { OccComponents, ParseResult, BlackScholesInput, BlackScholesOutput } from './options';
 export {
