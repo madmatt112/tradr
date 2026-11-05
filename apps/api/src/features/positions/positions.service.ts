@@ -42,6 +42,7 @@ import {
 } from './fills.query';
 import { matchExitsToLots, orderFills, availableByLot } from './lots';
 import type { LotConflict, LotFill, LotSlice } from './lots';
+import { isRowSettlementTouched } from './option-settlement.query';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import { assembleListEntries, buildGroupEntry } from './position-group-entries';
 import { dissolveGroupIfSingleton, lockGroupLegs } from './position-groups.query';
@@ -1027,6 +1028,13 @@ export async function reopenPositionTx(
 
   if (position.status !== 'closed') {
     throw new ConflictError(`Cannot reopen a ${position.status} position`);
+  }
+
+  // Design C4 last bullet: a row an option settlement touched refuses reopen
+  // outright, whatever the same-day guard below would otherwise say — unsettle
+  // (design C5) is the only way back for a settled row.
+  if (await isRowSettlementTouched(tx, id)) {
+    throw new ConflictError('This position was settled — unsettle it before reopening');
   }
 
   const reopenAt = reopenedAt ? new Date(reopenedAt) : new Date();

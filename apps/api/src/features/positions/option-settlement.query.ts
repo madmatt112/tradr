@@ -1,7 +1,7 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import type { Transaction } from '@/db';
-import { optionSettlementFills, optionSettlementRows, optionSettlements } from '@/db/schema';
+import { fills, optionSettlementFills, optionSettlementRows, optionSettlements } from '@/db/schema';
 
 // Writes for one settlement record (design C3 post-condition 8). Split out of
 // the service so the transaction-scoped inserts have a single, testable seam —
@@ -77,4 +77,71 @@ export function insertOptionSettlementFills(
   rows: Array<{ settlementId: string; fillId: string; written: boolean }>,
 ) {
   return tx.insert(optionSettlementFills).values(rows).returning();
+}
+
+// Reads for unsettle (design C5). The record alone is the source of truth for
+// every refusal check, so these are plain, unlocked selects — the caller locks
+// the touched positions themselves via `lockLegs`.
+
+/** Scoped by user and leg, so a foreign id or a wrong leg reads as a 404. */
+export function findOptionSettlementByLeg(
+  tx: Transaction,
+  settlementId: string,
+  legId: string,
+  userId: string,
+) {
+  return tx
+    .select()
+    .from(optionSettlements)
+    .where(
+      and(
+        eq(optionSettlements.id, settlementId),
+        eq(optionSettlements.positionId, legId),
+        eq(optionSettlements.userId, userId),
+      ),
+    )
+    .limit(1);
+}
+
+export function findOptionSettlementRows(tx: Transaction, settlementId: string) {
+  return tx
+    .select()
+    .from(optionSettlementRows)
+    .where(eq(optionSettlementRows.settlementId, settlementId));
+}
+
+export function findOptionSettlementFills(tx: Transaction, settlementId: string) {
+  return tx
+    .select()
+    .from(optionSettlementFills)
+    .where(eq(optionSettlementFills.settlementId, settlementId));
+}
+
+/** The full fill rows for a settlement's written fills, read by id. */
+export function findFillsByIds(tx: Transaction, fillIds: string[]) {
+  if (fillIds.length === 0) return Promise.resolve([]);
+  return tx.select().from(fills).where(inArray(fills.id, fillIds));
+}
+
+/** Cascades: its rows and fills (settlement_id CASCADE) go with it. */
+export function deleteOptionSettlement(tx: Transaction, settlementId: string) {
+  return tx.delete(optionSettlements).where(eq(optionSettlements.id, settlementId)).returning();
+}
+
+/**
+ * Design C4 last bullet: whether any settlement has touched this position —
+ * the reopen guard's own check. `position_id` is `SET NULL` on delete, so a
+ * row that no longer exists stops being "touched" for this purpose, which is
+ * fine: it has nothing left to reopen.
+ */
+export async function isRowSettlementTouched(
+  tx: Transaction,
+  positionId: string,
+): Promise<boolean> {
+  const rows = await tx
+    .select({ id: optionSettlementRows.id })
+    .from(optionSettlementRows)
+    .where(eq(optionSettlementRows.positionId, positionId))
+    .limit(1);
+  return rows.length > 0;
 }

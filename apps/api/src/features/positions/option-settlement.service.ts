@@ -8,20 +8,33 @@ import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
 
 import {
+  deleteOptionSettlement,
   findCandidateStockRows,
+  findFillsByIds,
+  findOptionSettlementByLeg,
+  findOptionSettlementFills,
+  findOptionSettlementRows,
   insertOptionSettlement,
   insertOptionSettlementFills,
   insertOptionSettlementRows,
 } from './option-settlement.query';
 import { aggregateFills } from './pnl';
 import { lockLegs } from './position-groups.query';
-import { findFillsByPosition, findPositionById, sumFillQuantityByType } from './positions.query';
+import {
+  deletePosition,
+  findFillsByPosition,
+  findPositionById,
+  sumFillQuantityByType,
+  updatePosition,
+} from './positions.query';
 import {
   addFillTx,
   closeIfBalancedTx,
   createPositionTx,
   openPositionTx,
+  removeRecordedFillTx,
 } from './positions.service';
+import { findTransferLinkByFillId } from './transfer-links.query';
 
 export type SettlementOutcome = 'worthless' | 'assigned' | 'exercised';
 
@@ -453,4 +466,139 @@ export async function settleLeg(
   }
 
   return result;
+}
+
+/**
+ * The exact undo (design C5 Unsettle). Every refusal is judged from the
+ * settlement record alone (design C5 post-condition 3, Req 4.7) — never from
+ * guessing at what "should" still be true.
+ */
+async function unsettleTx(
+  tx: Transaction,
+  userId: string,
+  legId: string,
+  settlementId: string,
+): Promise<SettlementOutcome> {
+  // 1. Load the settlement scoped by user and leg; a miss is 404.
+  const [settlement] = await findOptionSettlementByLeg(tx, settlementId, legId, userId);
+  if (!settlement) {
+    throw new NotFoundError('Settlement', settlementId);
+  }
+
+  // 2. Lock the touched rows, then re-read the settlement — a double submit
+  // (or a race) that deleted it between the two reads is also a 404.
+  const rows = await findOptionSettlementRows(tx, settlementId);
+  const rowPositionIds = [
+    ...new Set(rows.map((r) => r.positionId).filter((id): id is string => id !== null)),
+  ];
+  const lockedRows = await lockLegs(tx, userId, rowPositionIds);
+  const lockedById = new Map(lockedRows.map((r) => [r.id as string, r]));
+
+  const [recheck] = await findOptionSettlementByLeg(tx, settlementId, legId, userId);
+  if (!recheck) {
+    throw new NotFoundError('Settlement', settlementId);
+  }
+
+  // 3. Refuse with the reason and no write, judged from the record alone.
+  for (const row of rows) {
+    if (row.positionId === null || !lockedById.has(row.positionId)) {
+      throw new ConflictError('A touched position no longer exists; unsettle refused');
+    }
+  }
+
+  const fillRows = await findOptionSettlementFills(tx, settlementId);
+  const writtenFills = fillRows.filter((f) => f.written);
+  if (writtenFills.some((f) => f.fillId === null)) {
+    throw new ConflictError('A recorded fill no longer exists; unsettle refused');
+  }
+
+  const recordedFillIds = new Set(
+    fillRows.map((f) => f.fillId).filter((id): id is string => id !== null),
+  );
+  for (const row of rows) {
+    const currentFills = await findFillsByPosition(tx, row.positionId as string);
+    if (currentFills.some((f) => !recordedFillIds.has(f.id as string))) {
+      throw new ConflictError(
+        'A touched position gained a fill since settlement; unsettle refused',
+      );
+    }
+  }
+
+  const writtenFillIds = writtenFills.map((f) => f.fillId as string);
+  for (const fillId of writtenFillIds) {
+    const links = await findTransferLinkByFillId(tx, fillId);
+    if (links.length > 0) {
+      throw new ConflictError('A recorded fill is linked to a transfer; unsettle refused');
+    }
+  }
+
+  for (const row of rows) {
+    if (row.touch === 'stock_opened') {
+      const lockedRow = lockedById.get(row.positionId as string);
+      if (lockedRow?.group_id) {
+        throw new ConflictError('The opened position has joined a group; unsettle refused');
+      }
+    }
+  }
+
+  // 4. Flip rows the settlement closed back open, with no reverse hook.
+  for (const row of rows) {
+    if (row.closedRow) {
+      await updatePosition(tx, row.positionId as string, userId, {
+        status: 'open',
+        closedAt: null,
+      });
+    }
+  }
+
+  // 5. Remove each written fill; the fill hook posts the correcting delta at
+  // that fill's own filledAt — the settlement date.
+  const writtenFillRecords = await findFillsByIds(tx, writtenFillIds);
+  for (const fillRecord of writtenFillRecords) {
+    await removeRecordedFillTx(tx, fillRecord.positionId, fillRecord, userId);
+  }
+
+  // 6. Delete every stock position the settlement opened — never
+  // `removePosition`, whose reverse-hook loop would re-reverse a prior
+  // partial exit's P&L (Req 4.3).
+  for (const row of rows) {
+    if (row.touch === 'stock_opened') {
+      await deletePosition(tx, row.positionId as string, userId);
+    }
+  }
+
+  // 7. Restore each surviving row's latch pair, then delete the settlement;
+  // its rows and fills cascade with it.
+  for (const row of rows) {
+    if (row.touch === 'stock_opened') continue;
+    await updatePosition(tx, row.positionId as string, userId, {
+      lastFlatAt: row.priorLastFlatAt,
+      lastFlatNetPnl: row.priorLastFlatNetPnl,
+    });
+  }
+  await deleteOptionSettlement(tx, settlementId);
+
+  return settlement.outcome as SettlementOutcome;
+}
+
+/**
+ * Owns the transaction and emits `position_unsettled` (outcome; enum only)
+ * after commit, the same fire-and-forget pattern as `settleLeg`.
+ */
+export async function unsettle(
+  db: Database,
+  userId: string,
+  legId: string,
+  settlementId: string,
+): Promise<void> {
+  const outcome = await withTransaction(db, (tx) => unsettleTx(tx, userId, legId, settlementId));
+
+  try {
+    captureServerEvent('position_unsettled', {
+      distinctId: userId,
+      properties: { outcome },
+    });
+  } catch {
+    // ignore — capture is fire-and-forget
+  }
 }
