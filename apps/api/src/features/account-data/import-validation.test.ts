@@ -49,6 +49,11 @@ const NDJSON_ORDER: Array<[keyof Spec, string, string]> = [
   ['fills', 'fills.ndjson', 'fills'],
   ['lotSelections', 'lot-selections.ndjson', 'lot-selections'],
   ['transferLinks', 'transfer-links.ndjson', 'transfer-links'],
+  ['optionSettlements', 'option-settlements.ndjson', 'option-settlements'],
+  ['optionSettlementRows', 'option-settlement-rows.ndjson', 'option-settlement-rows'],
+  ['optionSettlementFills', 'option-settlement-fills.ndjson', 'option-settlement-fills'],
+  ['positionRolls', 'position-rolls.ndjson', 'position-rolls'],
+  ['entryGreeks', 'entry-greeks.ndjson', 'entry-greeks'],
   ['positionTags', 'position-tags.ndjson', 'positionTags'],
   ['positionImages', 'position-images.ndjson', 'positionImages'],
   ['ledgerEntries', 'ledger-entries.ndjson', 'ledgerEntries'],
@@ -73,6 +78,11 @@ interface Spec {
   fills?: unknown[];
   lotSelections?: unknown[];
   transferLinks?: unknown[];
+  optionSettlements?: unknown[];
+  optionSettlementRows?: unknown[];
+  optionSettlementFills?: unknown[];
+  positionRolls?: unknown[];
+  entryGreeks?: unknown[];
   positionTags?: unknown[];
   positionImages?: unknown[];
   ledgerEntries?: unknown[];
@@ -121,6 +131,13 @@ function makeArchive(spec: Spec): Buffer {
   if (spec.positionGroups) counts.positionGroups = spec.positionGroups.length;
   if (spec.lotSelections) counts.lotSelections = spec.lotSelections.length;
   if (spec.transferLinks) counts.transferLinks = spec.transferLinks.length;
+  // Design C14 — optional so a pre-version-6 manifest (which has no C14 keys)
+  // still parses; declared here only when the spec carries that category.
+  if (spec.optionSettlements) counts.optionSettlements = spec.optionSettlements.length;
+  if (spec.optionSettlementRows) counts.optionSettlementRows = spec.optionSettlementRows.length;
+  if (spec.optionSettlementFills) counts.optionSettlementFills = spec.optionSettlementFills.length;
+  if (spec.positionRolls) counts.positionRolls = spec.positionRolls.length;
+  if (spec.entryGreeks) counts.entryGreeks = spec.entryGreeks.length;
   Object.assign(counts, spec.countsOverride ?? {});
 
   if (!spec.omitManifest) {
@@ -246,6 +263,59 @@ const lotSelection = (o: Obj = {}): Obj => ({
 const transferLink = (o: Obj = {}): Obj => ({
   exitFillId: rid(),
   entryFillId: rid(),
+  ...o,
+});
+const optionSettlement = (o: Obj = {}): Obj => ({
+  id: rid(),
+  positionId: rid(),
+  outcome: 'worthless',
+  quantity: '1',
+  premium: '0',
+  settledAt: TS,
+  createdAt: TS,
+  ...o,
+});
+const optionSettlementRow = (o: Obj = {}): Obj => ({
+  id: rid(),
+  settlementId: rid(),
+  positionId: null,
+  touch: 'leg',
+  closedRow: true,
+  priorLastFlatAt: null,
+  priorLastFlatNetPnl: null,
+  ...o,
+});
+const optionSettlementFill = (o: Obj = {}): Obj => ({
+  id: rid(),
+  settlementId: rid(),
+  fillId: null,
+  written: true,
+  ...o,
+});
+const positionRoll = (o: Obj = {}): Obj => ({
+  id: rid(),
+  chainId: rid(),
+  fromPositionId: rid(),
+  toPositionId: rid(),
+  exitFillId: rid(),
+  entryFillId: rid(),
+  rolledAt: TS,
+  createdAt: TS,
+  ...o,
+});
+const entryGreeks = (o: Obj = {}): Obj => ({
+  positionId: rid(),
+  delta: '0.5',
+  gamma: '0.01',
+  thetaPerDay: '-0.01',
+  vegaPerPct: '0.01',
+  rhoPerPct: null,
+  source: 'black_scholes',
+  volatility: null,
+  spot: null,
+  rate: null,
+  dividendYield: null,
+  capturedAt: TS,
   ...o,
 });
 const ledger = (o: Obj = {}): Obj => ({
@@ -860,6 +930,35 @@ describe('validateArchive — references', () => {
       preferences: preferences(),
     });
     expect(hasPath(f, 'transfer-links[0]')).toBe(true);
+  });
+
+  // Design C14 (AC 11.3) — the five version-6 entries each get a ref check
+  // following the transfer-links entry: a set reference that names no archive
+  // row is a validation fault. (A null row/fill reference staying null and
+  // never raising a fault is covered by round-trip.test.ts, which round-trips
+  // the archive rather than only validating it.)
+  it('rejects a set reference in a settlement, its row, its fill, a roll or entry Greeks that names no archive row', async () => {
+    const a = acct();
+    const pos = position({ accountId: a.id });
+    const settlement = optionSettlement({ positionId: rid() });
+    const f = await faults({
+      accounts: [a],
+      positions: [pos],
+      optionSettlements: [settlement],
+      optionSettlementRows: [
+        optionSettlementRow({ settlementId: settlement.id, positionId: rid() }),
+      ],
+      optionSettlementFills: [optionSettlementFill({ settlementId: settlement.id, fillId: rid() })],
+      positionRolls: [positionRoll({ fromPositionId: rid() })],
+      entryGreeks: [entryGreeks({ positionId: rid() })],
+      preferences: preferences(),
+      archiveVersionOverride: 6,
+    });
+    expect(hasPath(f, 'option-settlements[0]')).toBe(true);
+    expect(hasPath(f, 'option-settlement-rows[0]')).toBe(true);
+    expect(hasPath(f, 'option-settlement-fills[0]')).toBe(true);
+    expect(hasPath(f, 'position-rolls[0]')).toBe(true);
+    expect(hasPath(f, 'entry-greeks[0]')).toBe(true);
   });
 
   it('rejects a position-tag referencing an unknown position or tag', async () => {

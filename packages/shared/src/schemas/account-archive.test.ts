@@ -17,6 +17,7 @@ import {
   ArchiveConversationSchema,
   ArchiveCountsSchema,
   ArchiveDashboardLayoutSchema,
+  ArchiveEntryGreeksSchema,
   ArchiveExchangeRateSchema,
   ArchiveExpenseSchema,
   ArchiveFillSchema,
@@ -25,9 +26,13 @@ import {
   ArchiveLotSelectionSchema,
   ArchiveManifestSchema,
   ArchiveMessageSchema,
+  ArchiveOptionSettlementFillSchema,
+  ArchiveOptionSettlementRowSchema,
+  ArchiveOptionSettlementSchema,
   ArchivePersonaSchema,
   ArchivePositionGroupSchema,
   ArchivePositionImageSchema,
+  ArchivePositionRollSchema,
   ArchivePositionSchema,
   ArchivePositionTagSchema,
   ArchivePreferencesSchema,
@@ -188,6 +193,69 @@ const rows = {
     schema: ArchiveTransferLinkSchema,
     value: { exitFillId: U(5), entryFillId: U(6) },
   },
+  optionSettlement: {
+    schema: ArchiveOptionSettlementSchema,
+    value: {
+      id: U(7),
+      positionId: U(4),
+      outcome: 'worthless',
+      quantity: '5.00000000',
+      premium: '150.00000000',
+      settledAt: TS,
+      createdAt: TS,
+    },
+  },
+  optionSettlementRow: {
+    schema: ArchiveOptionSettlementRowSchema,
+    value: {
+      id: U(8),
+      settlementId: U(7),
+      positionId: U(4),
+      touch: 'leg',
+      closedRow: true,
+      priorLastFlatAt: null,
+      priorLastFlatNetPnl: null,
+    },
+  },
+  optionSettlementFill: {
+    schema: ArchiveOptionSettlementFillSchema,
+    value: {
+      id: U(9),
+      settlementId: U(7),
+      fillId: U(5),
+      written: true,
+    },
+  },
+  positionRoll: {
+    schema: ArchivePositionRollSchema,
+    value: {
+      id: U(1),
+      chainId: U(2),
+      fromPositionId: U(4),
+      toPositionId: U(3),
+      exitFillId: U(5),
+      entryFillId: U(6),
+      rolledAt: TS,
+      createdAt: TS,
+    },
+  },
+  entryGreeks: {
+    schema: ArchiveEntryGreeksSchema,
+    value: {
+      positionId: U(4),
+      delta: '0.520000000000',
+      gamma: '0.013000000000',
+      thetaPerDay: '-0.045000000000',
+      vegaPerPct: '0.090000000000',
+      rhoPerPct: null,
+      source: 'black_scholes',
+      volatility: '0.28000000',
+      spot: '160.00000000',
+      rate: '0.04500000',
+      dividendYield: null,
+      capturedAt: TS,
+    },
+  },
   positionTag: { schema: ArchivePositionTagSchema, value: { positionId: U(4), tagId: U(3) } },
   positionImage: {
     schema: ArchivePositionImageSchema,
@@ -309,7 +377,7 @@ const rows = {
 
 describe('account-archive contract constants', () => {
   it('freezes the version, entry order and caps', () => {
-    expect(ARCHIVE_VERSION).toBe(5);
+    expect(ARCHIVE_VERSION).toBe(6);
     expect(ARCHIVE_ENTRY_ORDER[0]).toBe('manifest.json');
     expect(ARCHIVE_ENTRY_ORDER).toContain('dashboard-layout.json');
     // rules.ndjson sits directly after tags.ndjson (design C8).
@@ -328,6 +396,16 @@ describe('account-archive contract constants', () => {
     expect(ARCHIVE_ENTRY_ORDER.indexOf('position-groups.ndjson')).toBe(
       ARCHIVE_ENTRY_ORDER.indexOf('positions.ndjson') - 1,
     );
+    // The five version-6 entries follow transfer-links.ndjson, in this exact
+    // order (design C14).
+    const transferLinksIdx = ARCHIVE_ENTRY_ORDER.indexOf('transfer-links.ndjson');
+    expect(ARCHIVE_ENTRY_ORDER.slice(transferLinksIdx + 1, transferLinksIdx + 6)).toEqual([
+      'option-settlements.ndjson',
+      'option-settlement-rows.ndjson',
+      'option-settlement-fills.ndjson',
+      'position-rolls.ndjson',
+      'entry-greeks.ndjson',
+    ]);
     expect(Object.keys(ARCHIVE_CAPS)).toHaveLength(10);
     expect(ARCHIVE_CAPS.maxUploadBytes).toBe(536_870_912);
     expect(ARCHIVE_CAPS.maxDecompressedBytes).toBe(2_147_483_648);
@@ -605,6 +683,112 @@ describe('archive version 5 additions (design C11, AC 9.1)', () => {
   it('ArchiveManifestSchema accepts archiveVersion 5', () => {
     expect(
       ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 5 }).success,
+    ).toBe(true);
+  });
+});
+
+// Design C14 (AC 11.3) — the version-6 archive additions: five new entries
+// (settlements, their touched rows and fills, rolls, entry Greeks), their
+// optional counts, and the widened manifest version union.
+describe('archive version 6 additions (design C14, AC 11.3)', () => {
+  it('ArchiveCountsSchema accepts the five new optional counts and rejects a negative', () => {
+    const value = {
+      ...counts,
+      optionSettlements: 1,
+      optionSettlementRows: 1,
+      optionSettlementFills: 2,
+      positionRolls: 1,
+      entryGreeks: 1,
+    };
+    expect(ArchiveCountsSchema.safeParse(value).success).toBe(true);
+    expect(ArchiveCountsSchema.safeParse(counts).success).toBe(true);
+    for (const key of [
+      'optionSettlements',
+      'optionSettlementRows',
+      'optionSettlementFills',
+      'positionRolls',
+      'entryGreeks',
+    ]) {
+      expect(ArchiveCountsSchema.safeParse({ ...counts, [key]: -1 }).success).toBe(false);
+    }
+  });
+
+  it('ArchiveOptionSettlementSchema accepts a valid row and is strict', () => {
+    expect(ArchiveOptionSettlementSchema.safeParse(rows.optionSettlement.value).success).toBe(true);
+    expect(
+      ArchiveOptionSettlementSchema.safeParse({ ...rows.optionSettlement.value, outcome: 'void' })
+        .success,
+    ).toBe(false);
+    expect(
+      ArchiveOptionSettlementSchema.safeParse({ ...rows.optionSettlement.value, quantity: '-1' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('ArchiveOptionSettlementRowSchema accepts a null positionId and rejects a non-uuid one, and is strict', () => {
+    expect(ArchiveOptionSettlementRowSchema.safeParse(rows.optionSettlementRow.value).success).toBe(
+      true,
+    );
+    expect(
+      ArchiveOptionSettlementRowSchema.safeParse({
+        ...rows.optionSettlementRow.value,
+        positionId: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      ArchiveOptionSettlementRowSchema.safeParse({
+        ...rows.optionSettlementRow.value,
+        positionId: 'not-a-uuid',
+      }).success,
+    ).toBe(false);
+    expect(
+      ArchiveOptionSettlementRowSchema.safeParse({
+        ...rows.optionSettlementRow.value,
+        touch: 'opened_elsewhere',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ArchiveOptionSettlementFillSchema accepts a null fillId and rejects a non-uuid one, and is strict', () => {
+    expect(
+      ArchiveOptionSettlementFillSchema.safeParse(rows.optionSettlementFill.value).success,
+    ).toBe(true);
+    expect(
+      ArchiveOptionSettlementFillSchema.safeParse({
+        ...rows.optionSettlementFill.value,
+        fillId: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      ArchiveOptionSettlementFillSchema.safeParse({
+        ...rows.optionSettlementFill.value,
+        fillId: 'not-a-uuid',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ArchivePositionRollSchema accepts a valid row and is strict', () => {
+    expect(ArchivePositionRollSchema.safeParse(rows.positionRoll.value).success).toBe(true);
+    expect(
+      ArchivePositionRollSchema.safeParse({ ...rows.positionRoll.value, fromPositionId: null })
+        .success,
+    ).toBe(false);
+  });
+
+  it('ArchiveEntryGreeksSchema accepts a nullable rhoPerPct and rejects an invalid source, and is strict', () => {
+    expect(ArchiveEntryGreeksSchema.safeParse(rows.entryGreeks.value).success).toBe(true);
+    expect(
+      ArchiveEntryGreeksSchema.safeParse({ ...rows.entryGreeks.value, rhoPerPct: '0.010000000000' })
+        .success,
+    ).toBe(true);
+    expect(
+      ArchiveEntryGreeksSchema.safeParse({ ...rows.entryGreeks.value, source: 'guess' }).success,
+    ).toBe(false);
+  });
+
+  it('ArchiveManifestSchema accepts archiveVersion 6', () => {
+    expect(
+      ArchiveManifestSchema.safeParse({ ...rows.manifest.value, archiveVersion: 6 }).success,
     ).toBe(true);
   });
 });
