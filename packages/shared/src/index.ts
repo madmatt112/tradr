@@ -177,6 +177,30 @@ export type {
   OccEncodeOutput,
 } from './schemas/options';
 export {
+  OptionOutcomeSchema,
+  SettleLegInputSchema,
+  RollLegInputSchema,
+  CaptureEntryGreeksInputSchema,
+  SettlementResultSchema,
+  RollResultSchema,
+  SettlementContextSchema,
+  RollChainSchema,
+  PositionSettlementDetailSchema,
+  EntryGreeksDetailSchema,
+} from './schemas/option-lifecycle';
+export type {
+  OptionOutcome,
+  SettleLegInput,
+  RollLegInput,
+  CaptureEntryGreeksInput,
+  SettlementResult,
+  RollResult,
+  SettlementContext,
+  RollChain,
+  PositionSettlementDetail,
+  EntryGreeksDetail,
+} from './schemas/option-lifecycle';
+export {
   WidgetTypeSchema,
   ThemeSchema,
   GRID_MAX_ROWS,
