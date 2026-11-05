@@ -168,7 +168,7 @@ import {
   reversePositionCloseLedgerEntries,
 } from '@/features/accounting/ledger-hook';
 import { getTierLimits } from '@/features/billing/tier-limits.constants';
-import { getTaxSummary } from '@/features/expenses/expenses.service';
+import { getTaxSummary, setTaxJurisdiction } from '@/features/expenses/expenses.service';
 import { findLotSelectionsByPosition } from '@/features/positions/fills.query';
 import { settleLeg, settleLegTx } from '@/features/positions/option-settlement.service';
 import * as positionGroupsQuery from '@/features/positions/position-groups.query';
@@ -1000,7 +1000,13 @@ describe('settleLeg — short put assigned, then sold, nets 750 less fees (AC 3.
       closeIfBalancedTx(tx, stockRow.id, userId, '2026-07-20T00:00:00.000Z'),
     );
     expect(closedRow).not.toBeNull();
-    expect(Number(closedRow!.lastFlatNetPnl)).toBeCloseTo(749.35, 2);
+    // closeIfBalancedTx's own return value predates its second, lastFlat-
+    // snapshotting update (closePositionTx returns the row from its first
+    // `updatePosition` call only) — the same reason every other closed-row
+    // lastFlatNetPnl check in this file (R, S, T below) re-reads the
+    // committed row rather than trusting the return value.
+    const committedStockRow = await getPositionRow(stockRow.id);
+    expect(Number(committedStockRow.lastFlatNetPnl)).toBeCloseTo(749.35, 2);
   });
 });
 
@@ -1621,6 +1627,12 @@ describe('settleLeg — the lots read and tax summary show the adjusted price (A
       entryQty: '1',
       filledAt: BEFORE_EXPIRY,
     });
+
+    // 'short'/'long' term is a US-only distinction — pin the jurisdiction
+    // so classifyUSHoldPeriod's branch actually runs (default 'other' gives
+    // a null term for every row, per expenses.service.ts's own `jurisdiction
+    // === 'US'` gate).
+    await setTaxJurisdiction(userId, 'US');
 
     await settleLeg(db, userId, legId, { outcome: 'assigned', fees: '0' });
 
