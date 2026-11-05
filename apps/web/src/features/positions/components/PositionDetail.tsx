@@ -39,6 +39,7 @@ import { BreakevenBadge } from './BreakevenBadge';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
 import { LinkLegsDialog } from './LinkLegsDialog';
+import { PastExpiryChip } from './PastExpiryChip';
 import { PositionEditDialog } from './PositionEditDialog';
 import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
@@ -135,6 +136,7 @@ export function PositionDetailView({ positionId }: Props) {
             <Badge variant="outline">{position.assetType}</Badge>
             <Badge variant="outline">{position.status}</Badge>
             {position.classification === 'breakeven' && <BreakevenBadge />}
+            {position.pastExpiryUnsettled && <PastExpiryChip />}
           </div>
           {optionContract && (
             <p className="text-sm text-muted-foreground">

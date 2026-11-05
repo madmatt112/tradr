@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { PastExpiryChip } from '@/features/positions/components/PastExpiryChip';
 import { PositionGroupRowActions } from '@/features/positions/components/PositionGroupRowActions';
 import { PositionRowActions } from '@/features/positions/components/PositionRowActions';
 import { usePositions } from '@/features/positions/hooks/usePositions';
@@ -92,6 +93,9 @@ function OpenPositionsWidget() {
                     >
                       {entry.underlying} {entry.label}
                     </Link>
+                    {!!entry.pastExpiryLegCount && (
+                      <PastExpiryChip count={entry.pastExpiryLegCount} />
+                    )}
                   </TableCell>
                   <TableCell>—</TableCell>
                   <TableCell>—</TableCell>
@@ -123,6 +127,7 @@ function OpenPositionsWidget() {
                   >
                     {entry.symbol}
                   </Link>
+                  {entry.pastExpiryUnsettled && <PastExpiryChip />}
                 </TableCell>
                 <TableCell className="capitalize">{entry.side}</TableCell>
                 <TableCell className="capitalize">{entry.assetType}</TableCell>

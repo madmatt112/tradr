@@ -5,6 +5,7 @@ import type { PositionListItem } from '@tradr/shared';
 
 import { Numeric } from '@/components/Numeric';
 import { Alert } from '@/components/ui/alert';
+import { PastExpiryChip } from '@/features/positions/components/PastExpiryChip';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { firstOpenLegId, isGroupEntry } from '@/features/positions/utils/listEntries';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
@@ -91,6 +92,7 @@ export function OpenPositionsTab() {
                 <span className="text-sm font-medium">
                   {entry.underlying} {entry.label}
                 </span>
+                {!!entry.pastExpiryLegCount && <PastExpiryChip count={entry.pastExpiryLegCount} />}
               </div>
               <div className="flex flex-col items-end">
                 <Numeric
@@ -121,6 +123,7 @@ export function OpenPositionsTab() {
               <span className="text-xs text-muted-foreground">
                 {directionLabel(p)} · {Math.abs(p.totalEntryQuantity - p.totalExitQuantity)}
               </span>
+              {p.pastExpiryUnsettled && <PastExpiryChip />}
             </div>
             <div className="flex flex-col items-end">
               <Numeric
