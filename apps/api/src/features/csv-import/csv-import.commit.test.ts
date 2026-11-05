@@ -1,11 +1,20 @@
-import { eq } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, describe, it, expect } from 'vitest';
+import { Decimal } from 'decimal.js';
+import { and, eq } from 'drizzle-orm';
+import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from 'vitest';
 
-import { parseOccSymbol } from '@tradr/shared';
+import { encodeOccCompact, parseOccSymbol } from '@tradr/shared';
 
 import app from '@/app';
 import { db } from '@/db';
-import { fills, ledgerEntries, positionGroups, positions, subscriptions, users } from '@/db/schema';
+import {
+  fills,
+  ledgerEntries,
+  optionSettlements,
+  positionGroups,
+  positions,
+  subscriptions,
+  users,
+} from '@/db/schema';
 import { csvImportCounters, csvImportStaging } from '@/db/schema/csv-import.schema';
 import { insertPositionCloseLedgerEntries } from '@/features/accounting/ledger-hook';
 import { getTierLimits } from '@/features/billing/tier-limits.constants';
@@ -15,6 +24,7 @@ import {
   unregisterCloseHook,
 } from '@/features/positions/positions.service';
 import { config } from '@/lib/config';
+import * as posthog from '@/lib/posthog';
 
 // Register the live ledger close-hook directly (NOT the full async `bootstrap()`,
 // which also runs migrations / decrypt-canary against `db` — undefined at
@@ -1227,5 +1237,329 @@ describe('POST /api/csv-import/commit — group proposals (AC 8.9, 2.3, 10.1)', 
     // Compensating delete, same atomicity contract as the Phase-B test above.
     const staged = await db.select().from(csvImportStaging).where(eq(csvImportStaging.id, token));
     expect(staged).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// Lifecycle-event settlement at commit (task 20, design C12) — settles each
+// staged event through `settleLegTx`, inside the SAME bulk transaction
+// replay and group-linking already run in, after `previewImport` (task 19)
+// has already resolved and staged `result.events`.
+//
+// Contract block — one row per success criterion.
+//
+// | Criterion                                                                         | Pre-condition                                                                           | Call (seam)                       | Observable result                                                                               | Source |
+// |-------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|-------------------------------------|---------------------------------------------------------------------------------------------------|---------|
+// | AC 10.7 / 11.7 — a Flex file with A and EX rows commits an assigned and an exercised settlement, position_settled fires with source import | two pre-existing open legs (short put, long call) from earlier commits; a Flex-shaped file tagging A against the put and EX against the call | POST /api/csv-import/preview then /commit | one option_settlements row per leg (assigned / exercised); both legs close; captureServerEvent fires twice with properties.source 'import' | requirements.md AC 10.7, 11.7; design C12 |
+// | AC 10.4 — an assigned short put with its coded stock row leaves one stock position with the premium in its basis | a same-file short put segment tagged A, plus a coded stock row at the strike matching it (underlying, day, 100 shares, price at strike) | POST .../preview then /commit      | exactly one stock position for the underlying; its entry fill is priced at strike minus premium (AC 3.9's 47.50 worked example) | requirements.md AC 10.4; design C12 (D16) |
+// | AC 10.2 — a same-file leg settles after replay, with the row's date, quantity and fee | a same-file long call segment tagged EX, with a fees column mapped on the event row      | POST .../preview then /commit      | the leg's settlement record carries the row's date and quantity; the stock row settlement opens with the row's fee on its entry fill | requirements.md AC 10.2; design C12 |
+// | Commit-time refusal rolls back the whole import                                  | an event row's quantity (2) exceeds the target leg's actual open units (1), undetected at preview since `findOpenLegBySymbol` only checks `open_units > 0` | POST .../commit | 400; no MSFT position, fill or ledger row from this import; no settlement; the pre-existing leg untouched; the staged row deleted | design C12 "A commit-time refusal rolls back the whole import" |
+// | A second commit of one token returns the stored result                           | a token already committed, with one settled event                                       | POST .../commit (again)            | 200, the second summary equals the first; exactly one settlement and one resulting stock position exist | requirements.md AC 8.6, applied to an import carrying events |
+// ===========================================================================
+
+describe('POST /api/csv-import/commit — lifecycle-event settlement (task 20, design C12)', () => {
+  beforeAll(registerLedgerHook);
+  afterAll(() => unregisterCloseHook('ledger'));
+
+  function occ(
+    underlying: string,
+    expiration: string,
+    type: 'call' | 'put',
+    strike: string,
+  ): string {
+    const result = encodeOccCompact({ underlying, expiration, type, strike });
+    if (!result.ok) {
+      throw new Error(`fixture OCC symbol invalid: ${result.error.message}`);
+    }
+    return result.value;
+  }
+
+  /** A Flex-shaped execution mapping with an eventCode column and a fees
+   * column (task 19/20). The fees column is always mapped: with none mapped,
+   * `csv-normalize.ts` leaves `values.fees` undefined on every row (it only
+   * sets `out.fees` when a fees cell or extra fee part exists), and
+   * `csv-lifecycle.ts`'s stock-row consumption unconditionally sums
+   * `row.values.fees` into the matched event's fee — an undefined value
+   * there throws inside `Decimal`, a real Flex file always carrying a
+   * commission column. */
+  function lifecycleRequest(accountId: string) {
+    return {
+      accountId,
+      rowShape: 'execution',
+      mapping: {
+        rowShape: 'execution',
+        contractForm: 'occ-symbol',
+        columns: {
+          symbol: 'Symbol',
+          assetType: 'AssetClass',
+          action: 'Buy/Sell',
+          quantity: 'Quantity',
+          price: 'TradePrice',
+          filledAt: 'DateTime',
+          eventCode: 'Notes/Codes',
+          fees: 'Fees',
+        },
+      },
+      timezone: 'UTC',
+      dateFormat: 'iso',
+      numberFormat: 'us',
+    };
+  }
+
+  /** Opens an entry-only option leg through its own commit (no lifecycle code),
+   * returning the created position's id. */
+  async function openOptionLeg(
+    cookie: string,
+    accountId: string,
+    symbol: string,
+    action: 'BUY' | 'SELL',
+    price: string,
+    date: string,
+  ): Promise<string> {
+    const csv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      `${symbol},OPTION,${action},${price},1,${date},0`,
+    ].join('\n');
+    const base = execRequest(accountId);
+    const request = { ...base, mapping: { ...base.mapping, contractForm: 'occ-symbol' } };
+    const token = await stageToken(cookie, csv, request);
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+    const summary = await res.json();
+    return summary.positionIds[0] as string;
+  }
+
+  it('commits an assigned and an exercised settlement for a Flex file naming A and EX against existing open legs, firing position_settled with source import (AC 10.7, 11.7)', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+
+    const putSymbol = occ('AAPL', '2026-04-17', 'put', '50');
+    const callSymbol = occ('MSFT', '2026-05-15', 'call', '260');
+
+    const putLegId = await openOptionLeg(
+      cookie,
+      accountId,
+      putSymbol,
+      'SELL',
+      '3.00',
+      '2026-01-05',
+    );
+    const callLegId = await openOptionLeg(
+      cookie,
+      accountId,
+      callSymbol,
+      'BUY',
+      '2.00',
+      '2026-02-01',
+    );
+
+    const captureSpy = vi.spyOn(posthog, 'captureServerEvent').mockImplementation(() => {});
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes,Fees',
+      `${putSymbol},OPT,SELL,1,0,2026-04-20,A,0`,
+      `${callSymbol},OPT,BUY,1,0,2026-05-20,EX,0`,
+    ].join('\n');
+    const token = await stageToken(cookie, csv, lifecycleRequest(accountId));
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+
+    const putSettlements = await db
+      .select()
+      .from(optionSettlements)
+      .where(eq(optionSettlements.positionId, putLegId));
+    expect(putSettlements).toHaveLength(1);
+    expect(putSettlements[0]!.outcome).toBe('assigned');
+
+    const callSettlements = await db
+      .select()
+      .from(optionSettlements)
+      .where(eq(optionSettlements.positionId, callLegId));
+    expect(callSettlements).toHaveLength(1);
+    expect(callSettlements[0]!.outcome).toBe('exercised');
+
+    const [putLeg] = await db.select().from(positions).where(eq(positions.id, putLegId));
+    expect(putLeg!.status).toBe('closed');
+    const [callLeg] = await db.select().from(positions).where(eq(positions.id, callLegId));
+    expect(callLeg!.status).toBe('closed');
+
+    const importEvents = captureSpy.mock.calls.filter((call) => call[0] === 'position_settled');
+    expect(importEvents).toHaveLength(2);
+    for (const call of importEvents) {
+      const properties = (call[1] as { properties: Record<string, unknown> }).properties;
+      expect(properties.source).toBe('import');
+    }
+  });
+
+  it('consumes a coded stock row on assignment, leaving one stock position with the premium in its basis (AC 10.4)', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const putSymbol = occ('AAPL', '2026-04-17', 'put', '50');
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes,Fees',
+      `${putSymbol},OPT,SELL,1,2.50,2026-02-01,,0`,
+      `${putSymbol},OPT,BUY,1,0,2026-02-10,A,0`,
+      'AAPL,STK,BUY,100,50,2026-02-10,A,0',
+    ].join('\n');
+    const token = await stageToken(cookie, csv, lifecycleRequest(accountId));
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+
+    const stockRows = await db
+      .select()
+      .from(positions)
+      .where(and(eq(positions.accountId, accountId), eq(positions.assetType, 'stock')));
+    expect(stockRows).toHaveLength(1);
+    expect(stockRows[0]!.symbol).toBe('AAPL');
+    expect(stockRows[0]!.side).toBe('long');
+
+    const entryFills = await db
+      .select()
+      .from(fills)
+      .where(and(eq(fills.positionId, stockRows[0]!.id), eq(fills.type, 'entry')));
+    expect(entryFills).toHaveLength(1);
+    // Short put, strike 50, premium 2.50 → adjusted price 47.50 (AC 3.9).
+    expect(new Decimal(entryFills[0]!.price).equals(new Decimal('47.50'))).toBe(true);
+    expect(new Decimal(entryFills[0]!.quantity).equals(new Decimal('100'))).toBe(true);
+  });
+
+  it("settles a same-file leg after replay, with the row's date, quantity and fee (AC 10.2)", async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const callSymbol = occ('MSFT', '2026-05-15', 'call', '260');
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes,Fees',
+      `${callSymbol},OPT,BUY,1,2.00,2026-03-01,,0`,
+      `${callSymbol},OPT,SELL,1,0,2026-03-15,EX,1.25`,
+    ].join('\n');
+    const token = await stageToken(cookie, csv, lifecycleRequest(accountId));
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(200);
+
+    const [leg] = await db
+      .select()
+      .from(positions)
+      .where(and(eq(positions.accountId, accountId), eq(positions.symbol, callSymbol)));
+    expect(leg!.status).toBe('closed');
+
+    const [settlement] = await db
+      .select()
+      .from(optionSettlements)
+      .where(eq(optionSettlements.positionId, leg!.id));
+    expect(settlement).toBeDefined();
+    expect(settlement!.outcome).toBe('exercised');
+    expect(new Decimal(settlement!.quantity).equals(new Decimal('1'))).toBe(true);
+    expect(settlement!.settledAt.toISOString().slice(0, 10)).toBe('2026-03-15');
+
+    const stockRows = await db
+      .select()
+      .from(positions)
+      .where(and(eq(positions.accountId, accountId), eq(positions.assetType, 'stock')));
+    expect(stockRows).toHaveLength(1);
+    const entryFills = await db
+      .select()
+      .from(fills)
+      .where(and(eq(fills.positionId, stockRows[0]!.id), eq(fills.type, 'entry')));
+    expect(entryFills).toHaveLength(1);
+    expect(new Decimal(entryFills[0]!.fees).equals(new Decimal('1.25'))).toBe(true);
+  });
+
+  it("a settlement refused at commit (quantity above the leg's actual open units) rolls back the whole import", async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const putSymbol = occ('AAPL', '2026-04-17', 'put', '50');
+
+    const legId = await openOptionLeg(cookie, accountId, putSymbol, 'SELL', '3.00', '2026-01-05');
+
+    // The event row declares quantity 2, but the leg has only 1 open unit.
+    // previewImport's target resolution checks only open_units > 0 (not the
+    // exact quantity), so this stages as committable and fails only inside
+    // settleLegTx's addFillTx exit-quantity check, at commit time.
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes,Fees',
+      'MSFT,STK,BUY,10,100,2026-03-01,,0',
+      'MSFT,STK,SELL,10,110,2026-03-02,,0',
+      `${putSymbol},OPT,SELL,2,0,2026-03-10,A,0`,
+    ].join('\n');
+    const token = await stageToken(cookie, csv, lifecycleRequest(accountId));
+
+    const res = await postCommit(cookie, token);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+
+    const msft = await db
+      .select()
+      .from(positions)
+      .where(and(eq(positions.accountId, accountId), eq(positions.symbol, 'MSFT')));
+    expect(msft).toHaveLength(0);
+
+    const settlements = await db
+      .select()
+      .from(optionSettlements)
+      .where(eq(optionSettlements.positionId, legId));
+    expect(settlements).toHaveLength(0);
+
+    const [leg] = await db.select().from(positions).where(eq(positions.id, legId));
+    expect(leg!.status).toBe('open');
+    const legFills = await db.select().from(fills).where(eq(fills.positionId, legId));
+    expect(legFills).toHaveLength(1);
+
+    const importFills = await db
+      .select({ id: fills.id })
+      .from(fills)
+      .innerJoin(positions, eq(fills.positionId, positions.id))
+      .where(and(eq(positions.accountId, accountId), eq(positions.symbol, 'MSFT')));
+    expect(importFills).toHaveLength(0);
+
+    const ledgerRows = await db
+      .select()
+      .from(ledgerEntries)
+      .innerJoin(positions, eq(ledgerEntries.positionId, positions.id))
+      .where(eq(positions.accountId, accountId));
+    expect(ledgerRows).toHaveLength(0);
+
+    const staged = await db.select().from(csvImportStaging).where(eq(csvImportStaging.id, token));
+    expect(staged).toHaveLength(0);
+  });
+
+  it('a second commit of a token with a settled event returns the stored result, with no second settlement', async () => {
+    const cookie = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    const putSymbol = occ('AAPL', '2026-04-17', 'put', '50');
+
+    const legId = await openOptionLeg(cookie, accountId, putSymbol, 'SELL', '3.00', '2026-01-05');
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes,Fees',
+      `${putSymbol},OPT,SELL,1,0,2026-04-20,A,0`,
+    ].join('\n');
+    const token = await stageToken(cookie, csv, lifecycleRequest(accountId));
+
+    const first = await postCommit(cookie, token);
+    expect(first.status).toBe(200);
+    const firstSummary = await first.json();
+
+    const second = await postCommit(cookie, token);
+    expect(second.status).toBe(200);
+    const secondSummary = await second.json();
+    expect(secondSummary).toEqual(firstSummary);
+
+    const settlements = await db
+      .select()
+      .from(optionSettlements)
+      .where(eq(optionSettlements.positionId, legId));
+    expect(settlements).toHaveLength(1);
+
+    const stockRows = await db
+      .select()
+      .from(positions)
+      .where(and(eq(positions.accountId, accountId), eq(positions.assetType, 'stock')));
+    expect(stockRows).toHaveLength(1);
   });
 });
