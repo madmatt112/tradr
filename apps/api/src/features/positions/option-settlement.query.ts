@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { Transaction } from '@/db';
+import type { Database, Transaction } from '@/db';
 import { fills, optionSettlementFills, optionSettlementRows, optionSettlements } from '@/db/schema';
 
 // Writes for one settlement record (design C3 post-condition 8). Split out of
@@ -144,4 +144,79 @@ export async function isRowSettlementTouched(
     .where(eq(optionSettlementRows.positionId, positionId))
     .limit(1);
   return rows.length > 0;
+}
+
+export type SettlementDetailEntry = {
+  settlementId: string;
+  outcome: string;
+  premium: string;
+  quantity: string;
+  settledAt: Date;
+  createdAt: Date;
+  role: 'leg' | 'stock_exit' | 'stock_opened';
+  legPositionId: string;
+  stockPositionIds: string[];
+};
+
+/**
+ * Every settlement record touching this position (design C2 Detail
+ * additions): a leg reads its own settlement(s) with `role: 'leg'`, and a
+ * stock row that a settlement exited or opened reads the same record with
+ * `role: 'stock_exit'`/`'stock_opened'` — so a stock row reaches unsettle too
+ * (Req 8.1). `[]` when the position has never been touched; the detail read
+ * adds the key only when this is non-empty.
+ */
+export async function findSettlementsByPosition(
+  db: Database | Transaction,
+  positionId: string,
+): Promise<SettlementDetailEntry[]> {
+  const touchedRows = await db
+    .select({
+      settlementId: optionSettlementRows.settlementId,
+      touch: optionSettlementRows.touch,
+    })
+    .from(optionSettlementRows)
+    .where(eq(optionSettlementRows.positionId, positionId));
+  if (touchedRows.length === 0) return [];
+
+  const settlementIds = touchedRows.map((row) => row.settlementId);
+  const settlementRecords = await db
+    .select()
+    .from(optionSettlements)
+    .where(inArray(optionSettlements.id, settlementIds));
+  const settlementById = new Map(settlementRecords.map((s) => [s.id, s]));
+
+  const allRows = await db
+    .select({
+      settlementId: optionSettlementRows.settlementId,
+      positionId: optionSettlementRows.positionId,
+      touch: optionSettlementRows.touch,
+    })
+    .from(optionSettlementRows)
+    .where(inArray(optionSettlementRows.settlementId, settlementIds));
+  const stockIdsBySettlement = new Map<string, string[]>();
+  for (const row of allRows) {
+    if ((row.touch === 'stock_exit' || row.touch === 'stock_opened') && row.positionId) {
+      const ids = stockIdsBySettlement.get(row.settlementId) ?? [];
+      ids.push(row.positionId);
+      stockIdsBySettlement.set(row.settlementId, ids);
+    }
+  }
+
+  return touchedRows
+    .map((row) => {
+      const settlement = settlementById.get(row.settlementId)!;
+      return {
+        settlementId: settlement.id,
+        outcome: settlement.outcome,
+        premium: settlement.premium,
+        quantity: settlement.quantity,
+        settledAt: settlement.settledAt,
+        createdAt: settlement.createdAt,
+        role: row.touch as 'leg' | 'stock_exit' | 'stock_opened',
+        legPositionId: settlement.positionId,
+        stockPositionIds: stockIdsBySettlement.get(row.settlementId) ?? [],
+      };
+    })
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }

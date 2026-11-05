@@ -174,6 +174,13 @@ positions.get('/', validate('query', ListQuerySchema), async (c) => {
  *       omits the field for an ungrouped position. Carries
  *       `pastExpiryUnsettled: true` when the position is an open option leg
  *       past its expiry with open units, and omits the field otherwise.
+ *       Carries `settlements` (every settlement record touching this row,
+ *       each with a `role` of `leg`, `stock_exit` or `stock_opened`) only
+ *       when the position has been touched by one; carries `rollChain`
+ *       (the roll chain's legs in roll order, and `netCredit`) only when the
+ *       leg has been rolled; carries `entryGreeks` (the captured entry
+ *       Greeks, `rhoPerPct` nullable) only when a capture exists. All three
+ *       are omitted otherwise.
  *     tags: [Positions]
  *     parameters:
  *       - in: path

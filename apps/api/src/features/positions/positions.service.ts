@@ -31,6 +31,7 @@ import { logger } from '@/lib/logger';
 import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
 
+import { findEntryGreeksByPosition } from './entry-greeks.query';
 import {
   insertFill,
   findFillById,
@@ -42,7 +43,8 @@ import {
 } from './fills.query';
 import { matchExitsToLots, orderFills, availableByLot } from './lots';
 import type { LotConflict, LotFill, LotSlice } from './lots';
-import { isRowSettlementTouched } from './option-settlement.query';
+import { findChainIdForLeg, getRollChain } from './option-roll.query';
+import { findSettlementsByPosition, isRowSettlementTouched } from './option-settlement.query';
 import { aggregateFills, computeOpenCostBasis, computePnlFromTotals } from './pnl';
 import { assembleListEntries, buildGroupEntry } from './position-group-entries';
 import { dissolveGroupIfSingleton, lockGroupLegs } from './position-groups.query';
@@ -644,6 +646,26 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   const withCompliance = compliance === undefined ? detail : { ...detail, compliance };
   const withGroup = group === null ? withCompliance : { ...withCompliance, group };
 
+  // Settlements, roll chain and entry Greeks (design C2 Detail additions):
+  // each key is added only when it has a value, so a position untouched by
+  // any of the three reads exactly as it did before this task. Mutated onto
+  // a single typed object (rather than chained ternary spreads) so the keys
+  // stay plain properties instead of fragmenting the return type into a
+  // union callers can't index into directly.
+  const settlements = await findSettlementsByPosition(db, position.id);
+  const chainId = await findChainIdForLeg(db, position.id);
+  const rollChain = chainId === null ? null : await getRollChain(db, position.id);
+  const [entryGreeksRow] = await findEntryGreeksByPosition(db, position.id);
+
+  const withExtras = { ...withGroup } as typeof withGroup & {
+    settlements: typeof settlements;
+    rollChain: Exclude<typeof rollChain, null>;
+    entryGreeks: typeof entryGreeksRow;
+  };
+  if (settlements.length > 0) withExtras.settlements = settlements;
+  if (rollChain !== null) withExtras.rollChain = rollChain;
+  if (entryGreeksRow !== undefined) withExtras.entryGreeks = entryGreeksRow;
+
   // Same predicate the list read uses; no new query (TD4, NFR Performance).
   const pastExpiryUnsettled = isPastExpiryUnsettled({
     assetType: position.assetType as 'stock' | 'option',
@@ -651,7 +673,7 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     symbol: position.symbol,
     openUnits,
   });
-  return pastExpiryUnsettled ? { ...withGroup, pastExpiryUnsettled: true } : withGroup;
+  return pastExpiryUnsettled ? { ...withExtras, pastExpiryUnsettled: true } : withExtras;
 }
 
 /**
