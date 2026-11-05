@@ -25,7 +25,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useAdvisorEnabled } from '@/hooks/useRegistrationEnabled';
 
 import { useOptionsChain, type OptionContract } from '../hooks/useOptionsChain';
 import {
@@ -70,15 +69,11 @@ interface OptionsChainViewerProps {
 }
 
 /**
- * The chain viewer is served by `/api/advisor/options-chain`, so it goes with
- * the advisor: on an instance that has withdrawn it (DISABLE_ADVISOR) the card
- * is absent from the options page and the calculator alike — not an error
- * state, since nothing is wrong, and not an empty state pointing at a settings
- * tab that no longer exists.
+ * The chain viewer no longer depends on the advisor (AC 7.4, 7.6): its key is
+ * managed on its own Settings → Market data tab, which stays even on an
+ * instance that has withdrawn the advisor (DISABLE_ADVISOR).
  */
 export function OptionsChainViewer(props: OptionsChainViewerProps = {}) {
-  const advisorEnabled = useAdvisorEnabled();
-  if (!advisorEnabled) return null;
   return <OptionsChainViewerCard {...props} />;
 }
 
@@ -328,7 +323,7 @@ function NoKeyState() {
         Connect an Unusual Whales key to view live options chains.
       </p>
       <Button asChild variant="outline" size="sm" className="cursor-pointer">
-        <Link to="/settings/advisor">Go to Settings</Link>
+        <Link to="/settings/market-data">Go to Settings</Link>
       </Button>
     </div>
   );

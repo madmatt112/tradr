@@ -186,10 +186,14 @@ describe('Settings tabbed layout', () => {
     expect(screen.getByRole('tab', { name: /Profile/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Account/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Tags/i })).toBeTruthy();
-    // The appended Data tab (export/import) renders beside the others.
-    expect(screen.getByRole('tab', { name: /Data/i })).toBeTruthy();
+    // The appended Data tab (export/import) renders beside the others. Exact
+    // name, not a substring match: a substring regex also matches the
+    // appended Market data tab's accessible name.
+    expect(screen.getByRole('tab', { name: 'Data' })).toBeTruthy();
     // The appended Rules tab (trading-rules) renders after Data.
     expect(screen.getByRole('tab', { name: /Rules/i })).toBeTruthy();
+    // The appended Market data tab (the UW key, split out of Advisor).
+    expect(screen.getByRole('tab', { name: 'Market data' })).toBeTruthy();
   });
 
   it('case 2: navigating to /settings redirects to /settings/advisor', async () => {

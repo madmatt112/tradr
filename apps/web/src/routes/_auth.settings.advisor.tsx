@@ -1,6 +1,5 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 
-import { MarketDataKeyCard } from '@/features/advisor/components/MarketDataKeyCard';
 import { PersonaList } from '@/features/advisor/components/PersonaList';
 import { ProviderKeyCard } from '@/features/advisor/components/ProviderKeyCard';
 import { TradeDataConsentToggle } from '@/features/advisor/components/TradeDataConsentToggle';
@@ -25,8 +24,7 @@ function SettingsAdvisor() {
       </section>
 
       <section className="space-y-4">
-        <h3 className="text-base font-medium">Market data &amp; trade-data access</h3>
-        <MarketDataKeyCard />
+        <h3 className="text-base font-medium">Trade-data access</h3>
         <TradeDataConsentToggle />
       </section>
 

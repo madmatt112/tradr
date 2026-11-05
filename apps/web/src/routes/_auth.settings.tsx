@@ -3,6 +3,7 @@ import {
   Bot,
   CircleQuestionMark,
   Database,
+  LineChart,
   ListChecks,
   Settings as SettingsIcon,
   Tag,
@@ -36,6 +37,12 @@ const SETTINGS_TABS = [
   // See, create, enable, disable and delete the trading rules Tradr scores each
   // position against. Appended after Data (never inserted) for the same reason.
   { id: 'rules', label: 'Rules', icon: ListChecks, route: '/settings/rules' },
+  // The Unusual Whales market-data key, split out of the Advisor tab: it powers
+  // the options-chain viewer and the calculator's option path, neither of which
+  // depends on the advisor any more. Appended (never inserted) for the same
+  // reason as Tags/Data/Rules, and never filtered by `visibleTabs` — it is the
+  // one settings surface that survives the Advisor tab's disappearance.
+  { id: 'market-data', label: 'Market data', icon: LineChart, route: '/settings/market-data' },
 ] as const;
 
 /**
