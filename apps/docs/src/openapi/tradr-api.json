@@ -3713,6 +3713,118 @@
         ]
       }
     },
+    "/api/options/chain": {
+      "get": {
+        "description": "Backs the options-tools page chain viewer. Shares the Unusual Whales client and the `market_data_options_chain` tool's parsing (no duplicate fetch logic). When the authenticated user has no Unusual Whales key the response is `{ configured: false }` so the viewer shows an empty-state CTA to Settings, not an error.\nA chain is scoped to ONE expiry. Omit `expiration` to get the nearest tradeable one. The response is `{ configured: true, expiration, expirations[], underlying?, chain }`: `expiration` is the expiry actually returned, `expirations` is every tradeable expiry (soonest first) for the picker, and `chain` is the compact projection `{ symbol, expiration?, count, contracts[] }` sorted by strike. Each contract carries `premium` — the last traded price, or the NBBO midpoint when the contract has not traded — which is what the calculator uses as an entry price.\n`underlying` is the last trade on the underlying (`price`, `market_time`, `tape_time`), used by the viewer to anchor the ladder on at-the-money. It is fetched separately and is OMITTED rather than fatal when that quote fails — the chain is the payload; the anchor is not worth failing it for. A `market_time` other than `regular` means the price is a pre/post-market print, not a live quote.\nRequesting an `expiration` the symbol has no contracts for is 404 SYMBOL_NOT_FOUND with an explicit message. Other upstream failures map to their reason codes on the matching HTTP status: 400 MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never returned or logged.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Z.]{1,6}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Expiry to fetch (YYYY-MM-DD). Defaults to the nearest tradeable expiry.",
+            "in": "query",
+            "name": "expiration",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, expiration, expirations, underlying?, chain }."
+          },
+          "400": {
+            "description": "Validation error or MARKET_DATA_KEY_INVALID."
+          },
+          "404": {
+            "description": "SYMBOL_NOT_FOUND — unknown symbol, or no contracts on that expiry."
+          },
+          "429": {
+            "description": "MARKET_DATA_RATE_LIMITED or PLATFORM_RATE_LIMITED."
+          },
+          "503": {
+            "description": "MARKET_DATA_UNAVAILABLE."
+          }
+        },
+        "summary": "Get one expiry's option chain for a symbol from Unusual Whales.",
+        "tags": [
+          "Options"
+        ]
+      }
+    },
+    "/api/options/market-data-key": {
+      "delete": {
+        "description": "Hard-deletes the stored key for the authenticated user. The ciphertext is gone from the database; the plaintext was never persisted.\n",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No market-data key configured."
+          }
+        },
+        "summary": "Remove the Unusual Whales market-data key.",
+        "tags": [
+          "Options"
+        ]
+      },
+      "get": {
+        "description": "Returns the market-data (Unusual Whales) BYOK key status. The plaintext is NEVER returned — only `configured`, a last-4-char masking hint (`keyHintTail`), and the `verified` flag. When no key is stored the response is `{ configured: false }`.\n",
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, keyHintTail, verified } — no key material."
+          }
+        },
+        "summary": "Get the masked status of the authenticated user's Unusual Whales key.",
+        "tags": [
+          "Options"
+        ]
+      },
+      "put": {
+        "description": "Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned. Runs a lightweight verification probe: a 401/403 rejects the save with `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a transient failure (timeout / upstream unavailable) stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "apiKey": {
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiKey"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ configured: true, keyHintTail, verified: boolean }."
+          },
+          "400": {
+            "description": "Validation error or MARKET_DATA_KEY_INVALID (key rejected by Unusual Whales)."
+          },
+          "429": {
+            "description": "Save rate limit reached (10 / hour)."
+          }
+        },
+        "summary": "Save (or replace) the Unusual Whales market-data key.",
+        "tags": [
+          "Options"
+        ]
+      }
+    },
     "/api/performance": {
       "get": {
         "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. Carries `pastExpiryUnsettledLegs` (count of the user's open option legs past their expiry with open units, across all accounts and currencies, independent of the requested window) only when above zero, and omits the field otherwise.\n",

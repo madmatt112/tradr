@@ -1,6 +1,6 @@
 // Options-chain viewer endpoint (design §Component 12, REQ-12.2/12.3/12.4).
 //
-// GET /api/advisor/options-chain?symbol=…[&expiration=YYYY-MM-DD]
+// GET /api/options/chain?symbol=…[&expiration=YYYY-MM-DD]
 //
 // Shares the Unusual Whales client (Task 8) and the `market_data_options_chain`
 // tool's parsing (Task 13: parseOptionChain + optionsChainInputSchema) so the

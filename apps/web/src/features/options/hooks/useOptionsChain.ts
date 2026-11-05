@@ -1,5 +1,5 @@
 // useOptionsChain — TanStack Query hook for the options-chain viewer
-// (design §Component 12; REQ-12.2/12.3/12.4). Wraps GET /api/advisor/options-chain.
+// (design §Component 12; REQ-12.2/12.3/12.4). Wraps GET /api/options/chain.
 //
 // The query is disabled until a symbol is supplied so typing does not fire a
 // request per keystroke (the viewer debounces the symbol). The response is
@@ -85,7 +85,7 @@ export function useOptionsChain(symbol: string, expiration?: string) {
     queryFn: () => {
       const params = new URLSearchParams({ symbol: trimmed });
       if (expiration) params.set('expiration', expiration);
-      return api.get<OptionsChainResponse>(`/advisor/options-chain?${params.toString()}`);
+      return api.get<OptionsChainResponse>(`/options/chain?${params.toString()}`);
     },
     enabled: trimmed.length > 0,
     retry: false,

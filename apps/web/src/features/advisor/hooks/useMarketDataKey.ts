@@ -1,6 +1,7 @@
 // useMarketDataKey — TanStack Query hooks for the Unusual Whales market-data
 // BYOK key surface (design §Component 9; REQ-10.1, REQ-10.4). Wraps the
-// market-data-key endpoints (Task 9): GET/PUT/DELETE /api/advisor/market-data-key.
+// market-data-key endpoints (Task 9; moved by design C9): GET/PUT/DELETE
+// /api/options/market-data-key.
 //
 // SECURITY: the plaintext key is NEVER cached client-side. The status query
 // holds only the masking hint (keyHintTail) + verification flag — never key
@@ -32,7 +33,7 @@ export interface SaveMarketDataKeyResult {
 export function useMarketDataKey() {
   return useQuery<MarketDataKeyStatus>({
     queryKey: marketDataKeyKeys.status(),
-    queryFn: () => api.get<MarketDataKeyStatus>('/advisor/market-data-key'),
+    queryFn: () => api.get<MarketDataKeyStatus>('/options/market-data-key'),
   });
 }
 
@@ -45,7 +46,7 @@ export function useSaveMarketDataKey() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (apiKey: string) =>
-      api.put<SaveMarketDataKeyResult>('/advisor/market-data-key', { apiKey }),
+      api.put<SaveMarketDataKeyResult>('/options/market-data-key', { apiKey }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: marketDataKeyKeys.status() });
     },
@@ -56,7 +57,7 @@ export function useSaveMarketDataKey() {
 export function useDeleteMarketDataKey() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.delete('/advisor/market-data-key'),
+    mutationFn: () => api.delete('/options/market-data-key'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: marketDataKeyKeys.status() });
     },
