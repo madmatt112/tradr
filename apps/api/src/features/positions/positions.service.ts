@@ -903,6 +903,7 @@ export async function closePositionTx(
   id: string,
   userId: string,
   closedAt?: string,
+  opts?: { fillJustWritten?: boolean },
 ) {
   const lockRows = await findPositionForUpdate(tx, id, userId);
   if ((lockRows as RawRow[]).length === 0) {
@@ -933,8 +934,11 @@ export async function closePositionTx(
   // whether any fill was added since the last reopen; `reopenedWithoutNewFills`
   // answers that from DB insertion timestamps (see its doc), so a normal close
   // (including a first close, or one preceded by a notes/plan edit) is never
-  // affected.
-  if (await reopenedWithoutNewFills(tx, id)) {
+  // affected. `opts.fillJustWritten` (design D7) is the seam's own bridge for
+  // a caller (closeIfBalancedTx) that just wrote the balancing fill in this
+  // same transaction — the guard's premise cannot hold, so it is skipped
+  // rather than re-checked.
+  if (!opts?.fillJustWritten && (await reopenedWithoutNewFills(tx, id))) {
     throw new ConflictError('Add a fill before closing — nothing has changed since the reopen');
   }
 
@@ -1090,6 +1094,45 @@ export interface LotSelectionItemInput {
   quantity: string;
 }
 
+// Tx-accepting seam (design C4): closes a position whose exits now balance
+// its entries, extracted from `addFill`'s auto-close step so the bulk-import
+// close-balance check (task 9) can reuse it. Returns the closed row, or null
+// when the position isn't open or doesn't reconcile yet — never throws for
+// "not balanced", since that is the normal, expected case on most fills.
+export async function closeIfBalancedTx(
+  tx: Transaction,
+  positionId: string,
+  userId: string,
+  filledAt: string,
+  opts?: { fillJustWritten?: boolean },
+) {
+  const [{ total: entryTotal }] = await sumFillQuantityByType(tx, positionId, 'entry');
+  const [{ total: exitTotal }] = await sumFillQuantityByType(tx, positionId, 'exit');
+  if (!reconciles(entryTotal, exitTotal)) return null;
+
+  const lockRows = await findPositionForUpdate(tx, positionId, userId);
+  const position = (lockRows as RawRow[])[0];
+  if (position?.status !== 'open') return null;
+
+  // closedAt is the fill's own timestamp — the position closed when its last
+  // exit executed, not when the request was made. That accuracy matters:
+  // closedAt feeds the tax and performance summaries, so stamping "now" onto
+  // a trade being journalled after the fact would misreport it.
+  //
+  // Clamped to openedAt, because a backdated exit CAN legitimately precede
+  // it: `POST /open` with no body stamps openedAt as now, so a user who
+  // records historical fills afterwards has fills older than the open. Left
+  // unclamped, closePositionTx's closeNotBeforeOpen guard would reject the
+  // whole request and the fill itself would fail to save.
+  const openedAt = position.opened_at ? new Date(position.opened_at) : null;
+  const filledAtDate = new Date(filledAt);
+  const closedAt = openedAt && filledAtDate < openedAt ? openedAt : filledAtDate;
+
+  // closePositionTx re-locks the row (already held by this tx) and fires the
+  // ledger close hook.
+  return closePositionTx(tx, positionId, userId, closedAt.toISOString(), opts);
+}
+
 export async function addFill(
   db: Database,
   positionId: string,
@@ -1119,31 +1162,7 @@ export async function addFill(
     // closePosition/closePositionTx.
     if (data.type !== 'exit') return { fill: inserted, closed: null };
 
-    const [{ total: entryTotal }] = await sumFillQuantityByType(tx, positionId, 'entry');
-    const [{ total: exitTotal }] = await sumFillQuantityByType(tx, positionId, 'exit');
-    if (!reconciles(entryTotal, exitTotal)) return { fill: inserted, closed: null };
-
-    const lockRows = await findPositionForUpdate(tx, positionId, userId);
-    const position = (lockRows as RawRow[])[0];
-    if (position?.status !== 'open') return { fill: inserted, closed: null };
-
-    // closedAt is the fill's own timestamp — the position closed when its last
-    // exit executed, not when the request was made. That accuracy matters:
-    // closedAt feeds the tax and performance summaries, so stamping "now" onto
-    // a trade being journalled after the fact would misreport it.
-    //
-    // Clamped to openedAt, because a backdated exit CAN legitimately precede
-    // it: `POST /open` with no body stamps openedAt as now, so a user who
-    // records historical fills afterwards has fills older than the open. Left
-    // unclamped, closePositionTx's closeNotBeforeOpen guard would reject the
-    // whole request and the fill itself would fail to save.
-    const openedAt = position.opened_at ? new Date(position.opened_at) : null;
-    const filledAt = new Date(data.filledAt);
-    const closedAt = openedAt && filledAt < openedAt ? openedAt : filledAt;
-
-    // closePositionTx re-locks the row (already held by this tx) and fires the
-    // ledger close hook.
-    const closedRow = await closePositionTx(tx, positionId, userId, closedAt.toISOString());
+    const closedRow = await closeIfBalancedTx(tx, positionId, userId, data.filledAt);
     return { fill: inserted, closed: closedRow };
   });
 
@@ -1603,6 +1622,26 @@ export async function editFill(
   });
 }
 
+// Tx-accepting seam (design C4): the deleteFill-plus-runFillHooks tail of
+// `removeFill`, extracted so the bulk-import removal path (task 9) can reuse
+// it. Takes no guard of its own — `removeFill`'s pre-delete checks (claimed
+// entry, last-remaining-entry, exit-dependency) stay there; this seam only
+// performs the delete and posts the correcting P&L delta.
+export async function removeRecordedFillTx(
+  tx: Transaction,
+  positionId: string,
+  fill: Awaited<ReturnType<typeof findFillById>>[number],
+  userId: string,
+): Promise<void> {
+  await deleteFill(tx, fill.id, positionId);
+
+  // Re-derive realized P&L (Req 9.9). Deleting an exit un-realizes it, so the
+  // delta goes negative and posts a correcting debit. `occurredAt` is the
+  // removed fill's own timestamp — the correction belongs at the trade time it
+  // undoes, not at the time the user noticed.
+  await runFillHooks(tx, positionId, userId, fill.filledAt);
+}
+
 export async function removeFill(db: Database, positionId: string, fillId: string, userId: string) {
   return withTransaction(db, async (tx) => {
     const lockRows = await findPositionForUpdate(tx, positionId, userId);
@@ -1654,12 +1693,6 @@ export async function removeFill(db: Database, positionId: string, fillId: strin
       }
     }
 
-    await deleteFill(tx, fillId, positionId);
-
-    // Re-derive realized P&L (Req 9.9). Deleting an exit un-realizes it, so the
-    // delta goes negative and posts a correcting debit. `occurredAt` is the
-    // removed fill's own timestamp — the correction belongs at the trade time it
-    // undoes, not at the time the user noticed.
-    await runFillHooks(tx, positionId, userId, fill.filledAt);
+    await removeRecordedFillTx(tx, positionId, fill, userId);
   });
 }
