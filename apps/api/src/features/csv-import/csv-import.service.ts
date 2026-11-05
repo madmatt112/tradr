@@ -7,6 +7,7 @@ import {
   type GroupProposal,
   type LocatedError,
   type LocatedWarning,
+  type ProposedEvent,
   type ProposedPosition,
 } from '@tradr/shared';
 
@@ -17,6 +18,10 @@ import {
   resolveWritableAccountId,
 } from '@/features/accounts/accounts.query';
 import { getTierContext } from '@/features/billing/tier.query';
+import {
+  findMatchingSettlement,
+  findOpenLegBySymbol,
+} from '@/features/positions/option-settlement.query';
 import { linkPositionsTx } from '@/features/positions/position-groups.service';
 import { countPositionsByUser } from '@/features/positions/positions.query';
 import {
@@ -45,6 +50,7 @@ import {
   type CommittedResult,
 } from './csv-import.query';
 import { guardRowCount } from './csv-import.upload';
+import type { LifecycleEvent } from './csv-lifecycle';
 import { parseCsv } from './csv-parse';
 import { runPipeline, toInstant } from './csv-pipeline';
 import type { Segment } from './csv-segment';
@@ -147,6 +153,118 @@ function existingKey(k: AccountFillKey): string {
   return dupKey(k.symbol, k.filledAt.toISOString(), k.price, k.quantity, k.type);
 }
 
+// ---------------------------------------------------------------------------
+// Lifecycle-event target resolution (design C12, TD9) — previewImport's own
+// seam, run after the pure pipeline so it can see both the file's segments
+// and the account's existing data.
+// ---------------------------------------------------------------------------
+
+/** The leg side a lifecycle outcome requires (`option-settlement.service.ts`'s `LEGAL_OUTCOMES_BY_SIDE`, inverted). */
+const REQUIRED_SIDE: Record<'assigned' | 'exercised', 'long' | 'short'> = {
+  assigned: 'short',
+  exercised: 'long',
+};
+
+/**
+ * Resolve each lifted lifecycle event's target (design C12), in TD9 order: a
+ * settlement already matching the leg, outcome, date and quantity warns and
+ * proposes nothing; else a same-file open segment; else an open leg in the
+ * account by symbol, each checked against the side the outcome requires. No
+ * target — including a wrong-sided one — pushes a `nonBlocking` located
+ * error rather than refusing the whole file. Pushes directly onto the
+ * caller's `errors`/`warnings` so they fold into the same response arrays as
+ * the rest of the pipeline.
+ */
+async function resolveLifecycleEvents(
+  db: Database,
+  userId: string,
+  accountId: string,
+  events: LifecycleEvent[],
+  segments: Segment[],
+  columns: Record<string, string>,
+  errors: LocatedError[],
+  warnings: LocatedWarning[],
+): Promise<ProposedEvent[]> {
+  const resolved: ProposedEvent[] = [];
+
+  for (const event of events) {
+    // `unsupported` never reaches here: csv-contract.ts only ever tags
+    // `assigned`/`exercised` (an unsupported code always errors and drops).
+    if (event.outcome === 'unsupported') continue;
+    const outcome = event.outcome;
+    const requiredSide = REQUIRED_SIDE[outcome];
+    const settledAtDate = new Date(event.date);
+
+    const alreadySettled = await findMatchingSettlement(
+      db,
+      userId,
+      accountId,
+      event.symbol,
+      outcome,
+      settledAtDate,
+      event.quantity,
+    );
+    if (alreadySettled) {
+      warnings.push({
+        rowNumber: event.rowNumber,
+        kind: 'lifecycle_already_settled',
+        message: `Row ${event.rowNumber} matches a settlement already recorded for this leg; no event is proposed.`,
+      });
+      continue;
+    }
+
+    const segmentIndex = segments.findIndex(
+      (seg) =>
+        seg.scope.assetType === 'option' &&
+        seg.scope.symbol === event.symbol &&
+        !seg.closes &&
+        seg.side === requiredSide,
+    );
+    if (segmentIndex !== -1) {
+      resolved.push({
+        rowNumber: event.rowNumber,
+        outcome,
+        symbol: event.symbol,
+        quantity: event.quantity,
+        settledAt: event.date,
+        // No `fees` column mapped leaves `LifecycleEvent.fee` unset (REQ-10.2's
+        // 0-default, same as a stock/option fill's `fees ?? '0'`).
+        fees: event.fee ?? '0',
+        target: { kind: 'segment', segmentRef: segmentIndex },
+      });
+      continue;
+    }
+
+    const legId = await findOpenLegBySymbol(db, userId, accountId, event.symbol, requiredSide);
+    if (legId !== undefined) {
+      resolved.push({
+        rowNumber: event.rowNumber,
+        outcome,
+        symbol: event.symbol,
+        quantity: event.quantity,
+        settledAt: event.date,
+        // No `fees` column mapped leaves `LifecycleEvent.fee` unset (REQ-10.2's
+        // 0-default, same as a stock/option fill's `fees ?? '0'`).
+        fees: event.fee ?? '0',
+        target: { kind: 'open_leg', positionId: legId },
+      });
+      continue;
+    }
+
+    const error: LocatedError = {
+      rowNumber: event.rowNumber,
+      tradrField: 'eventCode',
+      code: 'LIFECYCLE_TARGET_NOT_FOUND',
+      message: `Row ${event.rowNumber}: no open leg or same-file position matches this ${outcome} event for ${event.symbol}; the row will not import an event, but the rest of the file still can.`,
+      nonBlocking: true,
+    };
+    if (columns.eventCode !== undefined) error.csvColumn = columns.eventCode;
+    errors.push(error);
+  }
+
+  return resolved;
+}
+
 /**
  * Preview an import (design Component 6). Runs the full pure pipeline, validates
  * field- and invariant-level, scans for duplicates against the account's
@@ -226,8 +344,23 @@ export async function previewImport(
     );
   }
 
-  // Classification: committable iff no blocking errors remain.
-  const committable = errors.length === 0;
+  // 8) Lifecycle-event target resolution (design C12) — after the pipeline and
+  // the duplicate scan, so a target miss folds into the SAME errors array the
+  // committable classification below reads.
+  const events = await resolveLifecycleEvents(
+    db,
+    userId,
+    accountId,
+    pipeline.events,
+    pipeline.segments,
+    request.mapping.columns,
+    errors,
+    warnings,
+  );
+
+  // Classification: committable iff every remaining error is non-blocking
+  // (design C12) — a lifecycle target miss no longer blocks the whole file.
+  const committable = errors.every((e) => e.nonBlocking);
 
   // Summary counts.
   const rowsWithErrors = new Set(errors.map((e) => e.rowNumber).filter((n) => n > 0)).size;
@@ -255,6 +388,7 @@ export async function previewImport(
     committable,
     requiresDuplicateAffirmation,
     groupProposals: pipeline.groupProposals,
+    events: events.map(neutralizeProposedEvent),
   };
 
   // Enforce the staged-byte cap (Component 8) → 413.
@@ -298,6 +432,7 @@ export async function previewImport(
     committable: stagedResult.committable,
     requiresDuplicateAffirmation: stagedResult.requiresDuplicateAffirmation,
     groupProposals: stagedResult.groupProposals,
+    events: stagedResult.events,
   };
 }
 
@@ -318,12 +453,15 @@ export async function previewImport(
 
 /** The staged `result` payload shape, as written by `previewImport`.
  * `groupProposals` is optional: a preview staged before this field shipped
- * has no key for it, and commits ungrouped (design C10). */
+ * has no key for it, and commits ungrouped (design C10). `events` is
+ * likewise optional: a preview staged before task 19 shipped has no key for
+ * it and settles nothing at commit (design C12) — read as `result.events ?? []`. */
 interface StagedResult {
   positions: ProposedPosition[];
   committable: boolean;
   requiresDuplicateAffirmation: boolean;
   groupProposals?: GroupProposal[];
+  events?: ProposedEvent[];
 }
 
 /** Commit-time choices on a staged import's group proposals (design C10). */
@@ -765,6 +903,19 @@ function neutralizeLocatedError(e: LocatedError): LocatedError {
     tradrField: e.tradrField,
     code: e.code,
     message: neutralizeCsvCell(e.message),
+    nonBlocking: e.nonBlocking,
+  };
+}
+
+function neutralizeProposedEvent(e: ProposedEvent): ProposedEvent {
+  return {
+    rowNumber: e.rowNumber,
+    outcome: e.outcome,
+    symbol: neutralizeCsvCell(e.symbol),
+    quantity: neutralizeCsvCell(e.quantity),
+    settledAt: neutralizeCsvCell(e.settledAt),
+    fees: neutralizeCsvCell(e.fees),
+    target: e.target,
   };
 }
 

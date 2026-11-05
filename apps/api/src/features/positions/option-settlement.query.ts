@@ -1,3 +1,4 @@
+import { Decimal } from 'decimal.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import { isPastExpiryUnsettled } from '@tradr/shared';
@@ -50,6 +51,82 @@ export async function findCandidateStockRows(
     openedAt: new Date(row.opened_at as string),
     openUnits: String(row.open_units),
   }));
+}
+
+// Reads for the import preview's lifecycle-event target resolution (design
+// C12, TD9).
+
+/**
+ * The open option leg a lifecycle event targets (design C12): same account,
+ * same OCC symbol, the side the event's outcome requires (`assigned` ->
+ * `short`, `exercised` -> `long`), open units above zero. Mirrors
+ * `findCandidateStockRows`'s open-units-in-SQL shape; the earliest-opened
+ * match wins when more than one exists.
+ */
+export async function findOpenLegBySymbol(
+  db: Database | Transaction,
+  userId: string,
+  accountId: string,
+  symbol: string,
+  side: 'long' | 'short',
+): Promise<string | undefined> {
+  const rows = await db.execute(sql`
+    SELECT p.id, p.opened_at,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+      - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) AS open_units
+    FROM positions p
+    LEFT JOIN fills f ON f.position_id = p.id
+    WHERE p.user_id = ${userId}
+      AND p.account_id = ${accountId}
+      AND p.symbol = ${symbol}
+      AND p.side = ${side}
+      AND p.status = 'open'
+      AND p.asset_type = 'option'
+    GROUP BY p.id, p.opened_at
+    HAVING COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+         - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) > 0
+    ORDER BY p.opened_at ASC
+    LIMIT 1
+  `);
+  return (rows[0]?.id as string | undefined) ?? undefined;
+}
+
+/**
+ * Whether a settlement already recorded against this leg matches a lifecycle
+ * event about to be re-proposed (design C12, TD9): same account, same OCC
+ * symbol, same outcome, the same UTC calendar day, and the same quantity.
+ * Checked BEFORE target resolution, so a fully settled leg (closed, and so
+ * never an open target) reports the re-import warning rather than a false
+ * `LIFECYCLE_TARGET_NOT_FOUND`.
+ */
+export async function findMatchingSettlement(
+  db: Database | Transaction,
+  userId: string,
+  accountId: string,
+  symbol: string,
+  outcome: string,
+  settledAt: Date,
+  quantity: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ settledAt: optionSettlements.settledAt, quantity: optionSettlements.quantity })
+    .from(optionSettlements)
+    .innerJoin(positions, eq(optionSettlements.positionId, positions.id))
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(positions.accountId, accountId),
+        eq(positions.symbol, symbol),
+        eq(optionSettlements.outcome, outcome),
+      ),
+    );
+  const targetDay = settledAt.toISOString().slice(0, 10);
+  const targetQuantity = new Decimal(quantity);
+  return rows.some(
+    (row) =>
+      row.settledAt.toISOString().slice(0, 10) === targetDay &&
+      new Decimal(row.quantity).equals(targetQuantity),
+  );
 }
 
 // Reads for the operator CLI (design C11, `tradr positions expire`). System-

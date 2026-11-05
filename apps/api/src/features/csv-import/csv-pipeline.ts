@@ -17,6 +17,7 @@ import {
 
 import { resolveContracts } from './csv-contract';
 import { proposeGroups } from './csv-group-proposals';
+import { liftLifecycleEvents, type LifecycleEvent } from './csv-lifecycle';
 import { applyMapping, validateMappingShape } from './csv-mapping';
 import { normalizeRow, type NormalizedRow } from './csv-normalize';
 import type { ParsedCsv } from './csv-parse';
@@ -44,6 +45,8 @@ export interface PipelineResult {
   rowsSkipped: number;
   /** Proposed multi-leg groups (design C10); legRefs index into proposedPositions. */
   groupProposals: GroupProposal[];
+  /** Lifted lifecycle events (design C12), for `previewImport` to resolve a target against. */
+  events: LifecycleEvent[];
 }
 
 /**
@@ -142,12 +145,19 @@ export function runPipeline(
     contractForm: mapping.contractForm,
     numberFormat: request.numberFormat,
     columns: mapping.columns,
+    rowShape: mapping.rowShape,
   });
   errors.push(...resolved.errors);
   warnings.push(...resolved.warnings);
 
+  // Lifecycle lift (design C12) — between contract resolution and segmentation:
+  // lifts a `lifecycleOutcome`-tagged option row out of the segmenter's input
+  // into a lifted event, consuming the coded stock row it settles against.
+  const lifted = liftLifecycleEvents(resolved.rows);
+  warnings.push(...lifted.warnings);
+
   // Segment.
-  const segResult = segment(resolved.rows, mapping.rowShape);
+  const segResult = segment(lifted.rows, mapping.rowShape);
   errors.push(...segResult.errors);
   warnings.push(...segResult.warnings);
 
@@ -173,6 +183,7 @@ export function runPipeline(
     totalFills,
     rowsSkipped: filtered.rowsSkipped,
     groupProposals: groupResult.proposals,
+    events: lifted.events,
   };
 }
 

@@ -63,6 +63,9 @@ export const LocatedErrorSchema = z.object({
   tradrField: z.string().optional(),
   code: z.string(),
   message: z.string(),
+  // Set on a lifecycle-event target miss (design C12): the row stays an error
+  // but no longer blocks `committable` — the rest of the file still imports.
+  nonBlocking: z.boolean().optional(),
 });
 
 export const LocatedWarningSchema = z.object({
@@ -80,6 +83,7 @@ export const LocatedWarningSchema = z.object({
     'group_heuristic_skipped',
     'group_proposal_dropped',
     'lifecycle_basis_excludes_premium',
+    'lifecycle_already_settled',
   ]),
   message: z.string(),
 });
@@ -111,6 +115,26 @@ export const ProposedPositionSchema = z.object({
   proposedPnl: z.number().optional(),
 });
 
+// A proposed lifecycle event's settlement target (design C12, TD8): a
+// same-file segment is an index into the preview's `positions` array (no
+// position id exists yet at preview time); an open leg already in the
+// account names its position id directly.
+export const ProposedEventTargetSchema = z.object({
+  kind: z.enum(['segment', 'open_leg']),
+  segmentRef: z.number().int().optional(),
+  positionId: z.string().uuid().optional(),
+});
+
+export const ProposedEventSchema = z.object({
+  rowNumber: z.number().int(),
+  outcome: z.enum(['assigned', 'exercised']),
+  symbol: z.string(),
+  quantity: z.string(),
+  settledAt: z.string(),
+  fees: z.string(),
+  target: ProposedEventTargetSchema,
+});
+
 export const CsvPreviewResponseSchema = z.object({
   token: z.string().uuid(),
   summary: z.object({
@@ -127,6 +151,7 @@ export const CsvPreviewResponseSchema = z.object({
   committable: z.boolean(),
   requiresDuplicateAffirmation: z.boolean(),
   groupProposals: z.array(GroupProposalSchema),
+  events: z.array(ProposedEventSchema),
 });
 
 export const CsvCommitRequestSchema = z.object({
@@ -167,6 +192,8 @@ export type LocatedWarning = z.infer<typeof LocatedWarningSchema>;
 export type GroupProposal = z.infer<typeof GroupProposalSchema>;
 export type ProposedFill = z.infer<typeof ProposedFillSchema>;
 export type ProposedPosition = z.infer<typeof ProposedPositionSchema>;
+export type ProposedEventTarget = z.infer<typeof ProposedEventTargetSchema>;
+export type ProposedEvent = z.infer<typeof ProposedEventSchema>;
 export type CsvPreviewResponse = z.infer<typeof CsvPreviewResponseSchema>;
 // z.input (not z.infer): declinedProposalIds/labelOverrides default server-side,
 // so a caller building a request body may omit them.
