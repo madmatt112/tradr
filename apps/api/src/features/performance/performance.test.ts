@@ -10,7 +10,7 @@ import {
 
 import app from '@/app';
 import { db } from '@/db';
-import { positions, subscriptions } from '@/db/schema';
+import { fills, positions, subscriptions } from '@/db/schema';
 import { seedPositions } from '@/db/seed';
 import { config } from '@/lib/config';
 import { validate } from '@/lib/validation';
@@ -1274,5 +1274,137 @@ describe('GET /api/performance — the group is the statistics unit (Requirement
     expect(new Date(usd.historyRange.mostRecentClosedAt!).getTime()).toBe(
       new Date('2026-01-15T00:00:00.000Z').getTime(),
     );
+  });
+});
+
+/**
+ * option-lifecycle-events task 5 — flagged-leg count on the performance read
+ * (design C2; requirements.md AC 1.5, AC 11.5).
+ *
+ * Contract:
+ *
+ *  1. "a user's two past-expiry-unsettled option legs are counted on the
+ *     performance read whatever the requested window, and another user's
+ *     flagged leg is never counted" — Pre: user A holds two open option
+ *     positions, each with a parseable past-expiry (2020) OCC symbol and one
+ *     entry fill (open units above zero); user B is a separate, freshly
+ *     registered user with no positions at all. Call:
+ *     `getRequest('/api/performance?' + buildPerfQuery(), cookieA)` then the
+ *     same path for `cookieB` — `buildPerfQuery()`'s default window is
+ *     2026-01-01..2026-01-31, nowhere near either leg's 2020 `openedAt`/expiry,
+ *     so a correct count the window cannot touch proves window-independence.
+ *     Observe: user A's body reads `pastExpiryUnsettledLegs: 2`; user B's body
+ *     carries no `pastExpiryUnsettledLegs` key at all. Source: requirements.md
+ *     AC 1.5 ("the performance page SHALL show the flagged-leg count"); design
+ *     C2 ("Performance adds one read, `findOpenOptionLegs`, inside the
+ *     existing read-only transaction"); the task's own restriction ("the count
+ *     ignores the requested window and currency, because an unsettled leg is a
+ *     state, not a period figure"). Only the positive, A-side assertion is red
+ *     now — the service never sets the key today, so B's "no key" half of this
+ *     same call already holds; it stays in this test as the one seam
+ *     (`app.request`) the task names, documented rather than claimed as a
+ *     second red case.
+ *
+ * Folded/dropped criteria:
+ *  - AC 1.5's "a user with none has no key" is RED-IMPOSSIBLE at base: the
+ *    service does not set `pastExpiryUnsettledLegs` at all today, so a body
+ *    with zero flagged legs already carries no such key, exactly as the task
+ *    text says ("The key is absent at zero, so no existing value in this file
+ *    changes"). No existing assertion in this file names that absence
+ *    branch-by-branch (a user with an open, not-yet-expired option leg
+ *    plus an open stock leg, neither flagged), so the second test below is a
+ *    fresh regression guard for the implementer brief, not counted as red.
+ *  - AC 11.5 (`@swagger` block and `tradr-api.json` regeneration) is not
+ *    reachable through this file's `app.request` seam — the same fold this
+ *    spec's own task 3 and 4 tests already recorded for `fills.test.ts`
+ *    (AC 3.13); it is enforced by CI's generated-pages `git diff --exit-code`
+ *    gate on `checks`, not a vitest assertion.
+ */
+describe('GET /api/performance — past-expiry-unsettled leg count (option-lifecycle-events task 5, AC 1.5)', () => {
+  // Direct insert is intentional: this fixture needs a precise OCC symbol and
+  // `status: 'open'` with open units above zero, outside the positions
+  // service's own validation path — the same pattern this file already uses
+  // above for the currency-change and legacy-row fixtures (lines ~401-446).
+  async function insertOpenOptionLeg(
+    userId: string,
+    accountId: string,
+    symbol: string,
+    openedAt: string,
+  ): Promise<string> {
+    // eslint-disable-next-line no-restricted-syntax
+    const [row] = await db
+      .insert(positions)
+      .values({
+        userId,
+        accountId,
+        symbol,
+        side: 'short',
+        assetType: 'option',
+        status: 'open',
+        openedAt: new Date(openedAt),
+      })
+      .returning();
+    await db.insert(fills).values({
+      positionId: row!.id,
+      type: 'entry',
+      price: '2',
+      quantity: '1',
+      filledAt: new Date(openedAt),
+    });
+    return row!.id;
+  }
+
+  it("AC 1.5: counts a user's own past-expiry-unsettled option legs on the performance read, independent of the requested window, and never counts another user's flagged leg", async () => {
+    const cookieA = await registerAndGetCookie();
+    const userIdA = await getCurrentUserId(cookieA);
+    const accountA = await createAccount(cookieA, 'USD');
+
+    await insertOpenOptionLeg(userIdA, accountA.id, 'AAPL200116C150', '2020-01-01T00:00:00.000Z');
+    await insertOpenOptionLeg(userIdA, accountA.id, 'MSFT200117P150', '2020-01-02T00:00:00.000Z');
+
+    const resA = await getRequest(`/api/performance?${buildPerfQuery()}`, cookieA);
+    expect(resA.status).toBe(200);
+    const bodyA = (await resA.json()) as { pastExpiryUnsettledLegs?: number };
+    expect(bodyA.pastExpiryUnsettledLegs).toBe(2);
+
+    const cookieB = await registerAndGetCookie();
+    const resB = await getRequest(`/api/performance?${buildPerfQuery()}`, cookieB);
+    expect(resB.status).toBe(200);
+    const bodyB = (await resB.json()) as { pastExpiryUnsettledLegs?: number };
+    expect('pastExpiryUnsettledLegs' in bodyB).toBe(false);
+  });
+
+  it('regression guard: carries no pastExpiryUnsettledLegs key for a user whose only positions are an open stock leg and a not-yet-expired open option leg', async () => {
+    const cookie = await registerAndGetCookie();
+    const userId = await getCurrentUserId(cookie);
+    const account = await createAccount(cookie, 'USD');
+
+    await insertOpenOptionLeg(userId, account.id, 'AAPL491231C150', '2025-01-01T00:00:00.000Z');
+
+    // eslint-disable-next-line no-restricted-syntax
+    const [stockRow] = await db
+      .insert(positions)
+      .values({
+        userId,
+        accountId: account.id,
+        symbol: 'TSLA',
+        side: 'long',
+        assetType: 'stock',
+        status: 'open',
+        openedAt: new Date('2025-01-01T00:00:00.000Z'),
+      })
+      .returning();
+    await db.insert(fills).values({
+      positionId: stockRow!.id,
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: new Date('2025-01-01T00:00:00.000Z'),
+    });
+
+    const res = await getRequest(`/api/performance?${buildPerfQuery()}`, cookie);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { pastExpiryUnsettledLegs?: number };
+    expect('pastExpiryUnsettledLegs' in body).toBe(false);
   });
 });
