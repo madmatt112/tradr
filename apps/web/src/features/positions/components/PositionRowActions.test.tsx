@@ -201,6 +201,25 @@ describe('PositionRowActions — lifecycle gating', () => {
   });
 });
 
+// design C10: Settle is offered from the row menu on any open option leg.
+describe('PositionRowActions — settle option leg (AC 2.1)', () => {
+  it('offers a Settle item for an open option leg, short or long, but not for a stock position', async () => {
+    renderActions({ status: 'open', assetType: 'option', side: 'short', symbol: 'AAPL260619P150' });
+    await openMenu('AAPL260619P150');
+    expect(menuItem('Settle')).toBeTruthy();
+    cleanup();
+
+    renderActions({ status: 'open', assetType: 'option', side: 'long', symbol: 'AAPL260619C150' });
+    await openMenu('AAPL260619C150');
+    expect(menuItem('Settle')).toBeTruthy();
+    cleanup();
+
+    renderActions({ status: 'open', assetType: 'stock' });
+    await openMenu();
+    expect(queryMenuItem('Settle')).toBeNull();
+  });
+});
+
 describe('PositionRowActions — actions fire the right mutation', () => {
   it('Open position calls the open mutation when an entry fill already exists', async () => {
     const mutate = vi.fn();
