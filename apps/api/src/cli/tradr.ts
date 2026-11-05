@@ -23,6 +23,7 @@ import { hashPassword } from '@/features/auth/auth.service';
 import { lockoutKey } from '@/features/auth/lockout';
 import { config, isEmailConfigured } from '@/lib/config';
 
+import { runPositionsExpireCli } from './positions-expire';
 import { runStorageGc, runStorageMigrateToInline } from './storage-maintenance.service';
 
 // Reuse the runner's folder resolution (db/migrate.ts) so the CLI reads the
@@ -744,6 +745,7 @@ const USAGE = [
   '  tradr reset-password <email> [--password <value>]',
   '  tradr unlock <email>',
   '  tradr disable-2fa <email>',
+  '  tradr positions expire [--user <email>] [--all-users] [--settle <legId>=<outcome>] [--date <iso>] [--quantity <n>] [--fees <amount>]',
 ];
 
 /**
@@ -790,6 +792,11 @@ async function main(): Promise<number> {
   }
   if (args[0] === 'disable-2fa') {
     return runDisableTwoFactor(args.slice(1));
+  }
+  // Self-host cron support with no boot-time scheduler (design C11, C13):
+  // an operator's own cron entry runs this, not a timer in the process.
+  if (args[0] === 'positions' && args[1] === 'expire') {
+    return runPositionsExpireCli(args.slice(2));
   }
   usage();
   return 2;

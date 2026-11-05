@@ -1,7 +1,15 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
+import { isPastExpiryUnsettled } from '@tradr/shared';
+
 import type { Database, Transaction } from '@/db';
-import { fills, optionSettlementFills, optionSettlementRows, optionSettlements } from '@/db/schema';
+import {
+  fills,
+  optionSettlementFills,
+  optionSettlementRows,
+  optionSettlements,
+  positions,
+} from '@/db/schema';
 
 // Writes for one settlement record (design C3 post-condition 8). Split out of
 // the service so the transaction-scoped inserts have a single, testable seam —
@@ -42,6 +50,67 @@ export async function findCandidateStockRows(
     openedAt: new Date(row.opened_at as string),
     openUnits: String(row.open_units),
   }));
+}
+
+// Reads for the operator CLI (design C11, `tradr positions expire`). System-
+// wide when `userId` is omitted, matching `--all-users`; scoped when it is
+// given, matching `--user`.
+
+/**
+ * Every past-expiry-unsettled option leg (design C11), optionally scoped to
+ * one user. Mirrors `findOpenOptionLegs`'s open-units-in-SQL shape, with the
+ * position id and owning user id added so the CLI can list and, under
+ * `--all-users`, settle through the leg's real owner. Filtered through the
+ * same `isPastExpiryUnsettled` predicate the list/detail reads use (TD4) —
+ * no second definition of "flagged".
+ */
+export async function findFlaggedOptionLegs(
+  db: Database | Transaction,
+  userId?: string,
+): Promise<Array<{ id: string; userId: string; symbol: string }>> {
+  const rows = await db.execute(sql`
+    SELECT p.id, p.user_id, p.symbol,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+      - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) AS open_units
+    FROM positions p
+    LEFT JOIN fills f ON f.position_id = p.id
+    WHERE p.asset_type = 'option' AND p.status = 'open'
+    ${userId ? sql`AND p.user_id = ${userId}` : sql``}
+    GROUP BY p.id, p.user_id, p.symbol
+  `);
+  return rows
+    .map((row) => ({
+      id: row.id as string,
+      userId: row.user_id as string,
+      symbol: row.symbol as string,
+      openUnits: Number(row.open_units),
+    }))
+    .filter((leg) =>
+      isPastExpiryUnsettled({
+        assetType: 'option',
+        status: 'open',
+        symbol: leg.symbol,
+        openUnits: leg.openUnits,
+      }),
+    )
+    .map(({ id, userId: ownerId, symbol }) => ({ id, userId: ownerId, symbol }));
+}
+
+/**
+ * The owning user id for a leg, or `undefined` when no such position exists —
+ * the `--all-users` seam for settling through the leg's real owner rather
+ * than an operator-supplied one (design C11).
+ */
+export async function findOptionLegOwner(
+  db: Database | Transaction,
+  legId: string,
+): Promise<string | undefined> {
+  const rows = await db
+    .select({ userId: positions.userId })
+    .from(positions)
+    .where(eq(positions.id, legId))
+    .limit(1);
+  return rows[0]?.userId;
 }
 
 export function insertOptionSettlement(
