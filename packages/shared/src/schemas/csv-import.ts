@@ -79,6 +79,7 @@ export const LocatedWarningSchema = z.object({
     'rows_skipped',
     'group_heuristic_skipped',
     'group_proposal_dropped',
+    'lifecycle_basis_excludes_premium',
   ]),
   message: z.string(),
 });
