@@ -1,6 +1,11 @@
 import Decimal from 'decimal.js';
 
-import { getCurrencyMinorUnits, parseOccSymbol, type Tag } from '@tradr/shared';
+import {
+  getCurrencyMinorUnits,
+  isPastExpiryUnsettled,
+  parseOccSymbol,
+  type Tag,
+} from '@tradr/shared';
 import { classifyPosition } from '@tradr/shared/lib/performance';
 import { resolveLotMethod } from '@tradr/shared/lib/tax-lots';
 
@@ -601,6 +606,8 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     lotSelection: selectionsByExit.get(f.id) ?? null,
   }));
 
+  const openUnits = pnl.totalEntryQuantity - pnl.totalExitQuantity;
+
   const detail = {
     ...position,
     // Account timezone defines the trading day the client uses to decide
@@ -623,7 +630,7 @@ export async function getPositionDetail(db: Database, id: string, userId: string
     stopLoss: position.stopLoss === null ? null : new Decimal(position.stopLoss).toNumber(),
     targetRR,
     actualRR,
-    openUnits: pnl.totalEntryQuantity - pnl.totalExitQuantity,
+    openUnits,
     closedUnits: pnl.totalExitQuantity,
     openCostBasis: computeOpenCostBasis(
       totals,
@@ -634,7 +641,16 @@ export async function getPositionDetail(db: Database, id: string, userId: string
   };
 
   const withCompliance = compliance === undefined ? detail : { ...detail, compliance };
-  return group === null ? withCompliance : { ...withCompliance, group };
+  const withGroup = group === null ? withCompliance : { ...withCompliance, group };
+
+  // Same predicate the list read uses; no new query (TD4, NFR Performance).
+  const pastExpiryUnsettled = isPastExpiryUnsettled({
+    assetType: position.assetType as 'stock' | 'option',
+    status: position.status as 'draft' | 'open' | 'closed',
+    symbol: position.symbol,
+    openUnits,
+  });
+  return pastExpiryUnsettled ? { ...withGroup, pastExpiryUnsettled: true } : withGroup;
 }
 
 /**
