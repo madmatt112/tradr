@@ -30,7 +30,10 @@ const performance = new Hono<PerformanceEnv>();
  *       Authed. Computes bucketed P&L series, equity curve and statistics per currency
  *       over the requested `[start, end)` window. Query validation (minimum start date,
  *       date order, bucket-count cap) always runs on the REQUESTED window on every
- *       tier.
+ *       tier. Carries `pastExpiryUnsettledLegs` (count of the user's open option
+ *       legs past their expiry with open units, across all accounts and currencies,
+ *       independent of the requested window) only when above zero, and omits the
+ *       field otherwise.
  *     tags: [Performance]
  *     parameters:
  *       - in: query

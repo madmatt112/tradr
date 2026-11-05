@@ -124,6 +124,32 @@ export function findPositionListByUser(
   `);
 }
 
+/**
+ * A user's open option legs (symbol, status, open units), for the
+ * past-expiry-unsettled count on the performance read (design C2). Scoped to
+ * `status = 'open'` and `asset_type = 'option'` at the query so only the rows
+ * `isPastExpiryUnsettled` can ever flag are pulled.
+ */
+export async function findOpenOptionLegs(
+  db: Database | Transaction,
+  userId: string,
+): Promise<Array<{ symbol: string; status: 'open'; openUnits: number }>> {
+  const rows = await db.execute(sql`
+    SELECT p.symbol,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+      - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) AS open_units
+    FROM positions p
+    LEFT JOIN fills f ON f.position_id = p.id
+    WHERE p.user_id = ${userId} AND p.asset_type = 'option' AND p.status = 'open'
+    GROUP BY p.id, p.symbol
+  `);
+  return rows.map((row) => ({
+    symbol: row.symbol as string,
+    status: 'open' as const,
+    openUnits: Number(row.open_units),
+  }));
+}
+
 export function findPositionById(db: Database | Transaction, id: string, userId: string) {
   return db
     .select()
