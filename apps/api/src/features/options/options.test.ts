@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { blackScholes, encodeOccSymbol, parseOccSymbol } from '@tradr/shared';
 
 import app from '@/app';
+import { config } from '@/lib/config';
 
 let testCounter = 0;
 const testRunId = Date.now();
@@ -373,4 +374,75 @@ describe('options API', () => {
     );
     expect(otherRes.status).toBe(200);
   }, 20000);
+
+  // Task 14 contract (design C9 — chain and key move off the advisor router):
+  //
+  // - Req 7.1 + 7.2: pre-condition is a fresh authenticated user with no
+  //   Unusual Whales key stored. Call: authedRequest('GET',
+  //   '/api/options/chain?symbol=SPY', cookie) and authedRequest('GET',
+  //   '/api/options/market-data-key', cookie). Observable result: both 200
+  //   with `{ configured: false }` — the unconfigured-state response contract
+  //   each endpoint already has under the advisor router, now reachable under
+  //   `/api/options`. Source of the expected value: Req 7.1 ("keeping its
+  //   response contract") and Req 7.2 ("keeping masking").
+  afterEach(() => {
+    config.DISABLE_ADVISOR = false;
+  });
+
+  it('serves the chain and market-data-key routes under /api/options', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const chainRes = await authedRequest('GET', '/api/options/chain?symbol=SPY', cookie);
+    expect(chainRes.status).toBe(200);
+    expect(await chainRes.json()).toEqual({ configured: false });
+
+    const keyRes = await authedRequest('GET', '/api/options/market-data-key', cookie);
+    expect(keyRes.status).toBe(200);
+    expect(await keyRes.json()).toEqual({ configured: false });
+  });
+
+  // - Req 7.3: pre-condition is a fresh authenticated user, advisor enabled
+  //   (the default — DISABLE_ADVISOR unset). Call: authedRequest('GET',
+  //   '/api/advisor/options-chain?symbol=SPY', cookie) and authedRequest(
+  //   'GET', '/api/advisor/market-data-key', cookie). Observable result: both
+  //   404 — the old paths are gone with no shim. Source of the expected
+  //   value: Req 7.3 ("removed with no shim").
+  it('removes the old /api/advisor chain and market-data-key paths with no shim', async () => {
+    const { cookie } = await registerAndGetCookie();
+
+    const chainRes = await authedRequest('GET', '/api/advisor/options-chain?symbol=SPY', cookie);
+    expect(chainRes.status).toBe(404);
+
+    const keyRes = await authedRequest('GET', '/api/advisor/market-data-key', cookie);
+    expect(keyRes.status).toBe(404);
+  });
+
+  // - Req 7.4 + 7.9 (new-homes half): pre-condition is a fresh authenticated
+  //   user with `config.DISABLE_ADVISOR = true`. Call: authedRequest('GET',
+  //   '/api/options/chain?symbol=SPY', cookie), authedRequest('GET',
+  //   '/api/options/market-data-key', cookie), and authedRequest('GET',
+  //   '/api/advisor/_health', cookie). Observable result: the first two are
+  //   200 with `{ configured: false }` (the new homes do not depend on the
+  //   advisor gate) and the third is still 403 ADVISOR_DISABLED (every
+  //   remaining advisor route keeps the gate). Source of the expected value:
+  //   Req 7.4 verbatim ("a user SHALL be able to ... see the chain" and
+  //   "every remaining /api/advisor route SHALL still return
+  //   ADVISOR_DISABLED").
+  it('reaches the new homes with the advisor disabled, while every remaining advisor route still 403s', async () => {
+    const { cookie } = await registerAndGetCookie();
+    config.DISABLE_ADVISOR = true;
+
+    const chainRes = await authedRequest('GET', '/api/options/chain?symbol=SPY', cookie);
+    expect(chainRes.status).toBe(200);
+    expect(await chainRes.json()).toEqual({ configured: false });
+
+    const keyRes = await authedRequest('GET', '/api/options/market-data-key', cookie);
+    expect(keyRes.status).toBe(200);
+    expect(await keyRes.json()).toEqual({ configured: false });
+
+    const remaining = await authedRequest('GET', '/api/advisor/_health', cookie);
+    expect(remaining.status).toBe(403);
+    const remainingBody = await remaining.json();
+    expect(remainingBody.error.code).toBe('ADVISOR_DISABLED');
+  });
 });

@@ -84,7 +84,7 @@ describe('MarketDataKeyCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Key verified'));
-    expect(api.put).toHaveBeenCalledWith('/advisor/market-data-key', {
+    expect(api.put).toHaveBeenCalledWith('/options/market-data-key', {
       apiKey: 'uw-secret-plaintext-123',
     });
     expect(screen.getByText('Key verified')).toBeTruthy();
@@ -141,7 +141,7 @@ describe('MarketDataKeyCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm remove' }));
 
     expect(await screen.findByText(/Not configured/)).toBeTruthy();
-    expect(api.delete).toHaveBeenCalledWith('/advisor/market-data-key');
+    expect(api.delete).toHaveBeenCalledWith('/options/market-data-key');
   });
 
   it('keeps all action buttons clickable (cursor-pointer)', async () => {
