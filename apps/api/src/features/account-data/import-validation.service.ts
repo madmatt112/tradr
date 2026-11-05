@@ -9,6 +9,7 @@ import {
   ArchiveBuiltinPersonaRefSchema,
   ArchiveConversationSchema,
   ArchiveDashboardLayoutSchema,
+  ArchiveEntryGreeksSchema,
   ArchiveExchangeRateSchema,
   ArchiveExpenseSchema,
   ArchiveFillSchema,
@@ -16,9 +17,13 @@ import {
   ArchiveLotSelectionSchema,
   ArchiveManifestSchema,
   ArchiveMessageSchema,
+  ArchiveOptionSettlementFillSchema,
+  ArchiveOptionSettlementRowSchema,
+  ArchiveOptionSettlementSchema,
   ArchivePersonaSchema,
   ArchivePositionGroupSchema,
   ArchivePositionImageSchema,
+  ArchivePositionRollSchema,
   ArchivePositionSchema,
   ArchivePositionTagSchema,
   ArchivePreferencesSchema,
@@ -84,6 +89,11 @@ const COUNT_KEY: Record<string, keyof ArchiveCounts> = {
   'fills.ndjson': 'fills',
   'lot-selections.ndjson': 'lotSelections',
   'transfer-links.ndjson': 'transferLinks',
+  'option-settlements.ndjson': 'optionSettlements',
+  'option-settlement-rows.ndjson': 'optionSettlementRows',
+  'option-settlement-fills.ndjson': 'optionSettlementFills',
+  'position-rolls.ndjson': 'positionRolls',
+  'entry-greeks.ndjson': 'entryGreeks',
   'position-tags.ndjson': 'positionTags',
   'position-images.ndjson': 'positionImages',
   'ledger-entries.ndjson': 'ledgerEntries',
@@ -108,6 +118,11 @@ const LABEL: Record<string, string> = {
   'fills.ndjson': 'fills',
   'lot-selections.ndjson': 'lot-selections',
   'transfer-links.ndjson': 'transfer-links',
+  'option-settlements.ndjson': 'option-settlements',
+  'option-settlement-rows.ndjson': 'option-settlement-rows',
+  'option-settlement-fills.ndjson': 'option-settlement-fills',
+  'position-rolls.ndjson': 'position-rolls',
+  'entry-greeks.ndjson': 'entry-greeks',
   'position-tags.ndjson': 'position-tags',
   'position-images.ndjson': 'position-images',
   'ledger-entries.ndjson': 'ledger-entries',
@@ -191,6 +206,11 @@ export async function validateArchive(
     fills: 0,
     lotSelections: 0,
     transferLinks: 0,
+    optionSettlements: 0,
+    optionSettlementRows: 0,
+    optionSettlementFills: 0,
+    positionRolls: 0,
+    entryGreeks: 0,
     positionTags: 0,
     positionImages: 0,
     ledgerEntries: 0,
@@ -215,6 +235,14 @@ export async function validateArchive(
   // against the archive's fills (C12): exit is an exit, entry is an entry, same
   // position. Doubles as the per-entry id-uniqueness set for fills.
   const fills = new Map<string, { type: 'entry' | 'exit'; position: string }>();
+  // Settlement ids, so a settlement row or fill can be checked against the
+  // archive's settlements (C14). Doubles as the per-entry id-uniqueness set.
+  const optionSettlementIds = new Set<string>();
+  const optionSettlementRowIds = new Set<string>();
+  const optionSettlementFillIds = new Set<string>();
+  const positionRollIds = new Set<string>();
+  // Entry Greeks are keyed by position_id (one row per position, C14).
+  const entryGreeksPositionIds = new Set<string>();
   const positionImageIds = new Set<string>();
   const ledgerIds = new Set<string>();
   const rateIds = new Set<string>();
@@ -547,6 +575,93 @@ export async function validateArchive(
         if (exit !== undefined && entry !== undefined && exit.position === entry.position) {
           addFault(base, 'invariant', 'A transfer link pairs fills in the same position.');
         }
+        return;
+      }
+      case 'option-settlements.ndjson': {
+        const r = ArchiveOptionSettlementSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        uniqueId(optionSettlementIds, r.data.id, `${base}.id`);
+        ref(
+          positionIds.has(r.data.positionId),
+          `${base}.positionId`,
+          `positionId ${r.data.positionId} names no position in the archive.`,
+        );
+        return;
+      }
+      case 'option-settlement-rows.ndjson': {
+        const r = ArchiveOptionSettlementRowSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        uniqueId(optionSettlementRowIds, r.data.id, `${base}.id`);
+        ref(
+          optionSettlementIds.has(r.data.settlementId),
+          `${base}.settlementId`,
+          `settlementId ${r.data.settlementId} names no settlement in the archive.`,
+        );
+        // A null row reference stays null; a set one must name an archive position.
+        if (r.data.positionId !== null) {
+          ref(
+            positionIds.has(r.data.positionId),
+            `${base}.positionId`,
+            `positionId ${r.data.positionId} names no position in the archive.`,
+          );
+        }
+        return;
+      }
+      case 'option-settlement-fills.ndjson': {
+        const r = ArchiveOptionSettlementFillSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        uniqueId(optionSettlementFillIds, r.data.id, `${base}.id`);
+        ref(
+          optionSettlementIds.has(r.data.settlementId),
+          `${base}.settlementId`,
+          `settlementId ${r.data.settlementId} names no settlement in the archive.`,
+        );
+        // A null fill reference stays null; a set one must name an archive fill.
+        if (r.data.fillId !== null) {
+          ref(
+            fills.has(r.data.fillId),
+            `${base}.fillId`,
+            `fillId ${r.data.fillId} names no fill in the archive.`,
+          );
+        }
+        return;
+      }
+      case 'position-rolls.ndjson': {
+        const r = ArchivePositionRollSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        uniqueId(positionRollIds, r.data.id, `${base}.id`);
+        ref(
+          positionIds.has(r.data.fromPositionId),
+          `${base}.fromPositionId`,
+          `fromPositionId ${r.data.fromPositionId} names no position in the archive.`,
+        );
+        ref(
+          positionIds.has(r.data.toPositionId),
+          `${base}.toPositionId`,
+          `toPositionId ${r.data.toPositionId} names no position in the archive.`,
+        );
+        ref(
+          fills.has(r.data.exitFillId),
+          `${base}.exitFillId`,
+          `exitFillId ${r.data.exitFillId} names no fill in the archive.`,
+        );
+        ref(
+          fills.has(r.data.entryFillId),
+          `${base}.entryFillId`,
+          `entryFillId ${r.data.entryFillId} names no fill in the archive.`,
+        );
+        return;
+      }
+      case 'entry-greeks.ndjson': {
+        const r = ArchiveEntryGreeksSchema.safeParse(value);
+        if (!r.success) return void addZodFaults(base, r.error);
+        // One row per position (position_id is the primary key, C14).
+        uniqueId(entryGreeksPositionIds, r.data.positionId, `${base}.positionId`);
+        ref(
+          positionIds.has(r.data.positionId),
+          `${base}.positionId`,
+          `positionId ${r.data.positionId} names no position in the archive.`,
+        );
         return;
       }
       case 'position-tags.ndjson': {

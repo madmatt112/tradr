@@ -1680,7 +1680,10 @@ describe('option-lifecycle archive carry (design C14, AC 11.3)', () => {
 
         expect(rowsOf(parsedA, 'option-settlements.ndjson')).toHaveLength(2);
         expect(rowsOf(parsedA, 'option-settlement-rows.ndjson')).toHaveLength(2);
-        expect(rowsOf(parsedA, 'option-settlement-fills.ndjson')).toHaveLength(2);
+        // The worthless settlement writes two settlement fills — a written exit
+        // and a baseline snapshot of the entry (option-settlement.test.ts:584-592)
+        // — plus the null-reference settlement's one fill: three in all.
+        expect(rowsOf(parsedA, 'option-settlement-fills.ndjson')).toHaveLength(3);
         expect(rowsOf(parsedA, 'position-rolls.ndjson')).toHaveLength(1);
         expect(rowsOf(parsedA, 'entry-greeks.ndjson')).toHaveLength(1);
 

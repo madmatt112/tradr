@@ -323,6 +323,69 @@ export interface TransferLinkInsert {
   entryFillId: string;
 }
 
+// An option settlement; `id` and `positionId` are already remapped and
+// `user_id` is set by the insert function (C14).
+export interface OptionSettlementInsert {
+  id: string;
+  positionId: string;
+  outcome: string;
+  quantity: string;
+  premium: string;
+  settledAt: string;
+  createdAt: string;
+}
+
+// A touched-position row; `id`, `settlementId` and `positionId` are already
+// remapped (a null positionId stays null). No `user_id` and no `created_at`.
+export interface OptionSettlementRowInsert {
+  id: string;
+  settlementId: string;
+  positionId: string | null;
+  touch: string;
+  closedRow: boolean;
+  priorLastFlatAt: string | null;
+  priorLastFlatNetPnl: string | null;
+}
+
+// A settlement fill; `id`, `settlementId` and `fillId` are already remapped (a
+// null fillId stays null). No `user_id`.
+export interface OptionSettlementFillInsert {
+  id: string;
+  settlementId: string;
+  fillId: string | null;
+  written: boolean;
+}
+
+// A roll; every reference is already remapped and `user_id` is set by the insert
+// function (C14).
+export interface PositionRollInsert {
+  id: string;
+  chainId: string;
+  fromPositionId: string;
+  toPositionId: string;
+  exitFillId: string;
+  entryFillId: string;
+  rolledAt: string;
+  createdAt: string;
+}
+
+// A position's entry Greeks; `positionId` (the primary key) is already remapped.
+// No `user_id` — the row cascades via `positionId` (C14).
+export interface EntryGreeksInsert {
+  positionId: string;
+  delta: string;
+  gamma: string;
+  thetaPerDay: string;
+  vegaPerPct: string;
+  rhoPerPct: string | null;
+  source: string;
+  volatility: string | null;
+  spot: string | null;
+  rate: string | null;
+  dividendYield: string | null;
+  capturedAt: string;
+}
+
 export interface PositionTagInsert {
   positionId: string;
   tagId: string;
@@ -527,6 +590,61 @@ const TRANSFER_LINK_COLUMNS: Column[] = [
   { name: 'user_id', cast: 'plain' },
   { name: 'exit_fill_id', cast: 'plain' },
   { name: 'entry_fill_id', cast: 'plain' },
+];
+
+const OPTION_SETTLEMENT_COLUMNS: Column[] = [
+  { name: 'id', cast: 'plain' },
+  { name: 'user_id', cast: 'plain' },
+  { name: 'position_id', cast: 'plain' },
+  { name: 'outcome', cast: 'plain' },
+  { name: 'quantity', cast: 'numeric' },
+  { name: 'premium', cast: 'numeric' },
+  { name: 'settled_at', cast: 'timestamptz' },
+  { name: 'created_at', cast: 'timestamptz' },
+];
+
+const OPTION_SETTLEMENT_ROW_COLUMNS: Column[] = [
+  { name: 'id', cast: 'plain' },
+  { name: 'settlement_id', cast: 'plain' },
+  { name: 'position_id', cast: 'plain' },
+  { name: 'touch', cast: 'plain' },
+  { name: 'closed_row', cast: 'plain' },
+  { name: 'prior_last_flat_at', cast: 'timestamptz' },
+  { name: 'prior_last_flat_net_pnl', cast: 'numeric' },
+];
+
+const OPTION_SETTLEMENT_FILL_COLUMNS: Column[] = [
+  { name: 'id', cast: 'plain' },
+  { name: 'settlement_id', cast: 'plain' },
+  { name: 'fill_id', cast: 'plain' },
+  { name: 'written', cast: 'plain' },
+];
+
+const POSITION_ROLL_COLUMNS: Column[] = [
+  { name: 'id', cast: 'plain' },
+  { name: 'user_id', cast: 'plain' },
+  { name: 'chain_id', cast: 'plain' },
+  { name: 'from_position_id', cast: 'plain' },
+  { name: 'to_position_id', cast: 'plain' },
+  { name: 'exit_fill_id', cast: 'plain' },
+  { name: 'entry_fill_id', cast: 'plain' },
+  { name: 'rolled_at', cast: 'timestamptz' },
+  { name: 'created_at', cast: 'timestamptz' },
+];
+
+const ENTRY_GREEKS_COLUMNS: Column[] = [
+  { name: 'position_id', cast: 'plain' },
+  { name: 'delta', cast: 'numeric' },
+  { name: 'gamma', cast: 'numeric' },
+  { name: 'theta_per_day', cast: 'numeric' },
+  { name: 'vega_per_pct', cast: 'numeric' },
+  { name: 'rho_per_pct', cast: 'numeric' },
+  { name: 'source', cast: 'plain' },
+  { name: 'volatility', cast: 'numeric' },
+  { name: 'spot', cast: 'numeric' },
+  { name: 'rate', cast: 'numeric' },
+  { name: 'dividend_yield', cast: 'numeric' },
+  { name: 'captured_at', cast: 'timestamptz' },
 ];
 
 const POSITION_TAG_COLUMNS: Column[] = [
@@ -812,6 +930,113 @@ export async function insertArchiveTransferLinks(
     'fill_transfer_links',
     TRANSFER_LINK_COLUMNS,
     rows.map((r) => [userId, r.exitFillId, r.entryFillId]),
+  );
+}
+
+/** Insert option settlements; `user_id` is the importing user (C14). */
+export async function insertArchiveOptionSettlements(
+  tx: ImportDb,
+  userId: string,
+  rows: OptionSettlementInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'option_settlements',
+    OPTION_SETTLEMENT_COLUMNS,
+    rows.map((r) => [
+      r.id,
+      userId,
+      r.positionId,
+      r.outcome,
+      r.quantity,
+      r.premium,
+      r.settledAt,
+      r.createdAt,
+    ]),
+  );
+}
+
+/** Insert settlement touched-position rows; no `user_id`, no `created_at` (C14). */
+export async function insertArchiveOptionSettlementRows(
+  tx: ImportDb,
+  rows: OptionSettlementRowInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'option_settlement_rows',
+    OPTION_SETTLEMENT_ROW_COLUMNS,
+    rows.map((r) => [
+      r.id,
+      r.settlementId,
+      r.positionId,
+      r.touch,
+      r.closedRow,
+      r.priorLastFlatAt,
+      r.priorLastFlatNetPnl,
+    ]),
+  );
+}
+
+/** Insert settlement fills; no `user_id` (C14). */
+export async function insertArchiveOptionSettlementFills(
+  tx: ImportDb,
+  rows: OptionSettlementFillInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'option_settlement_fills',
+    OPTION_SETTLEMENT_FILL_COLUMNS,
+    rows.map((r) => [r.id, r.settlementId, r.fillId, r.written]),
+  );
+}
+
+/** Insert position rolls; `user_id` is the importing user (C14). */
+export async function insertArchivePositionRolls(
+  tx: ImportDb,
+  userId: string,
+  rows: PositionRollInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'position_rolls',
+    POSITION_ROLL_COLUMNS,
+    rows.map((r) => [
+      r.id,
+      userId,
+      r.chainId,
+      r.fromPositionId,
+      r.toPositionId,
+      r.exitFillId,
+      r.entryFillId,
+      r.rolledAt,
+      r.createdAt,
+    ]),
+  );
+}
+
+/** Insert position entry Greeks; no `user_id` — cascades via `position_id` (C14). */
+export async function insertArchiveEntryGreeks(
+  tx: ImportDb,
+  rows: EntryGreeksInsert[],
+): Promise<void> {
+  await batchInsert(
+    tx,
+    'position_entry_greeks',
+    ENTRY_GREEKS_COLUMNS,
+    rows.map((r) => [
+      r.positionId,
+      r.delta,
+      r.gamma,
+      r.thetaPerDay,
+      r.vegaPerPct,
+      r.rhoPerPct,
+      r.source,
+      r.volatility,
+      r.spot,
+      r.rate,
+      r.dividendYield,
+      r.capturedAt,
+    ]),
   );
 }
 

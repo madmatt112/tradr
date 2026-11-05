@@ -577,6 +577,78 @@ export async function spoolAccountData(
         ORDER BY tl.created_at, tl.id
       `,
     ),
+    // --- Version-6 option-lifecycle entries (design C14) ---
+    // option_settlements carries user_id; the rest are scoped by a join through
+    // the settlement or the position where the table has no user_id.
+    optionSettlements: await spoolFlat(
+      tx,
+      dir,
+      'option-settlements.ndjson',
+      sql`
+        SELECT id, position_id AS "positionId", outcome,
+          ${num('quantity')} AS "quantity", ${num('premium')} AS "premium",
+          ${ts('settled_at')} AS "settledAt", ${ts('created_at')} AS "createdAt"
+        FROM option_settlements WHERE user_id = ${userId} ORDER BY created_at, id
+      `,
+    ),
+    optionSettlementRows: await spoolFlat(
+      tx,
+      dir,
+      'option-settlement-rows.ndjson',
+      sql`
+        SELECT r.id, r.settlement_id AS "settlementId", r.position_id AS "positionId",
+          r.touch, r.closed_row AS "closedRow",
+          ${ts('r.prior_last_flat_at')} AS "priorLastFlatAt",
+          ${num('r.prior_last_flat_net_pnl')} AS "priorLastFlatNetPnl"
+        FROM option_settlement_rows r
+        JOIN option_settlements s ON s.id = r.settlement_id
+        WHERE s.user_id = ${userId}
+        ORDER BY r.id
+      `,
+    ),
+    optionSettlementFills: await spoolFlat(
+      tx,
+      dir,
+      'option-settlement-fills.ndjson',
+      sql`
+        SELECT osf.id, osf.settlement_id AS "settlementId", osf.fill_id AS "fillId",
+          osf.written
+        FROM option_settlement_fills osf
+        JOIN option_settlements s ON s.id = osf.settlement_id
+        WHERE s.user_id = ${userId}
+        ORDER BY osf.id
+      `,
+    ),
+    positionRolls: await spoolFlat(
+      tx,
+      dir,
+      'position-rolls.ndjson',
+      sql`
+        SELECT id, chain_id AS "chainId", from_position_id AS "fromPositionId",
+          to_position_id AS "toPositionId", exit_fill_id AS "exitFillId",
+          entry_fill_id AS "entryFillId", ${ts('rolled_at')} AS "rolledAt",
+          ${ts('created_at')} AS "createdAt"
+        FROM position_rolls WHERE user_id = ${userId} ORDER BY created_at, id
+      `,
+    ),
+    entryGreeks: await spoolFlat(
+      tx,
+      dir,
+      'entry-greeks.ndjson',
+      sql`
+        SELECT g.position_id AS "positionId",
+          ${num('g.delta')} AS "delta", ${num('g.gamma')} AS "gamma",
+          ${num('g.theta_per_day')} AS "thetaPerDay", ${num('g.vega_per_pct')} AS "vegaPerPct",
+          ${num('g.rho_per_pct')} AS "rhoPerPct", g.source,
+          ${num('g.volatility')} AS "volatility", ${num('g.spot')} AS "spot",
+          ${num('g.rate')} AS "rate", ${num('g.dividend_yield')} AS "dividendYield",
+          ${ts('g.captured_at')} AS "capturedAt"
+        FROM position_entry_greeks g
+        JOIN positions p ON p.id = g.position_id
+        WHERE p.user_id = ${userId}
+        ORDER BY g.position_id
+      `,
+    ),
     positionTags: await spoolFlat(
       tx,
       dir,
