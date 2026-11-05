@@ -107,7 +107,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { assembleListEntries } from './position-group-entries';
+import { assembleListEntries, buildGroupEntry, mapListRow } from './position-group-entries';
 
 interface RawTag {
   id: string;
@@ -310,7 +310,7 @@ describe('assembleListEntries (design C6)', () => {
     expect(open.updatedAt).toEqual(d(6));
   });
 
-  it("leaves netPnl and grossPnl null while no leg has an exit", () => {
+  it('leaves netPnl and grossPnl null while no leg has an exit', () => {
     const rows = [
       row({
         id: 'leg-1',
@@ -339,7 +339,7 @@ describe('assembleListEntries (design C6)', () => {
     expect(entry.netPnl).toBeNull();
   });
 
-  it("sums gross P&L, net P&L, fees and open cost basis across legs", () => {
+  it('sums gross P&L, net P&L, fees and open cost basis across legs', () => {
     const rows = [
       row({
         id: 'closed-leg',
@@ -487,10 +487,7 @@ describe('assembleListEntries (design C6)', () => {
       }),
     ];
 
-    const rows = [
-      ...bcsLegs('gOverride', 'My Custom Spread'),
-      ...bcsLegs('gNoOverride', null),
-    ];
+    const rows = [...bcsLegs('gOverride', 'My Custom Spread'), ...bcsLegs('gNoOverride', null)];
 
     const entries = assembleListEntries(rows, {});
 
@@ -617,5 +614,156 @@ describe('assembleListEntries (design C6)', () => {
       tag: ['tag-setup', 'tag-mistake'],
     }) as Array<Record<string, unknown>>;
     expect(unmatched.map((e) => e.id)).toEqual([]);
+  });
+});
+
+/**
+ * option-lifecycle-events task 4 — past-expiry-unsettled flag on
+ * `mapListRow` and `buildGroupEntry` (design C2; requirements.md AC 1.1,
+ * 1.3, 1.4).
+ *
+ * Contract (one case per success criterion from the task-4 author brief):
+ *
+ *  1. "an open leg with open units above zero and a parseable OCC symbol,
+ *     read after its expiry instant, carries the flag; a future expiry, a
+ *     closed leg, a stock row and an unparseable legacy symbol carry no key"
+ *     — Pre: five rows built with the shared `row()` fixture — an open
+ *     option leg with a 2020 (past) expiry and open units; an open option
+ *     leg with a 2049 (future) expiry; a closed option leg with a 2020
+ *     expiry; an open stock row; an open option leg with a legacy symbol
+ *     `parseOccSymbol` rejects. Call: `mapListRow(row)` on each. Observe:
+ *     only the past-expiry row carries `pastExpiryUnsettled: true`; the
+ *     other four carry no `pastExpiryUnsettled` key at all (TD4 — the key
+ *     appears only when true). Both branches are asserted in one test so it
+ *     is red now (the positive branch fails; the negative branches already
+ *     hold, since nothing sets the key yet). Source: requirements.md AC 1.1,
+ *     AC 1.4; design.md C1 (`isPastExpiryUnsettled`), C2 ("mapListRow ...
+ *     set the flag without a new query").
+ *  2. "a group entry carries its count of flagged legs, present only when
+ *     above zero" — Pre: one group of two open option legs with 2020
+ *     expiries and open units (both flagged), and a second group of one
+ *     open option leg with a 2049 expiry (unflagged). Call:
+ *     `buildGroupEntry(groupId, legRows)` on each group's rows. Observe: the
+ *     flagged group reads `pastExpiryLegCount: 2` and both its mapped
+ *     `legs` carry `pastExpiryUnsettled: true`; the unflagged group carries
+ *     no `pastExpiryLegCount` key. Source: requirements.md AC 1.3; design.md
+ *     C2 ("buildGroupEntry counts its legs").
+ *
+ * Folded/dropped criteria:
+ *  - AC 1.1's "detail" location and AC 1.4's detail-read negative cases need
+ *    the real route and DB (`getPositionDetail` queries `db` directly) —
+ *    covered in `positions.test.ts`, describe block "positions —
+ *    past-expiry-unsettled flag (option-lifecycle-events task 4)".
+ *  - AC 1.6 ("a GET SHALL never write a position, fill or ledger row") is
+ *    marked "Invariant (verified, not red-first)" in requirements.md itself,
+ *    and the task text confirms it "already holds at base": `mapListRow` and
+ *    `buildGroupEntry` take no `db` parameter (verified by reading
+ *    `position-group-entries.ts:38,200` — neither signature accepts a
+ *    database handle), so neither function can issue a write by
+ *    construction; there is nothing for a unit test here to guard. The
+ *    route-level regression guard lives in `positions.test.ts`.
+ *  - NFR Performance ("adds no query to a list read") is likewise
+ *    RED-IMPOSSIBLE at this seam: `mapListRow(row)` and
+ *    `buildGroupEntry(groupId, legRows)` take already-fetched plain rows and
+ *    return plain objects with no `db`/`tx` parameter in scope, so the flag
+ *    computation structurally cannot add a query — confirmed by reading the
+ *    current signatures, which the implementer may not change.
+ */
+describe('past-expiry-unsettled flag on mapListRow and buildGroupEntry (design C2)', () => {
+  it('flags only an open option leg with open units and a parseable symbol, past its expiry (AC 1.1, AC 1.4)', () => {
+    const pastExpired = mapListRow(
+      row({
+        id: 'past',
+        asset_type: 'option',
+        symbol: 'AAPL200116C150',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+    ) as Record<string, unknown>;
+    const futureOption = mapListRow(
+      row({
+        id: 'future',
+        asset_type: 'option',
+        symbol: 'AAPL491231C150',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+    ) as Record<string, unknown>;
+    const closedLeg = mapListRow(
+      row({
+        id: 'closed',
+        asset_type: 'option',
+        symbol: 'AAPL200116C150',
+        status: 'closed',
+        entry_qty: '1',
+        exit_qty: '1',
+      }),
+    ) as Record<string, unknown>;
+    const stockRow = mapListRow(
+      row({
+        id: 'stock',
+        asset_type: 'stock',
+        symbol: 'AAPL',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+    ) as Record<string, unknown>;
+    const legacySymbol = mapListRow(
+      row({
+        id: 'legacy',
+        asset_type: 'option',
+        symbol: 'LEGACYOPT123',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+    ) as Record<string, unknown>;
+
+    expect(pastExpired.pastExpiryUnsettled).toBe(true);
+    expect('pastExpiryUnsettled' in futureOption).toBe(false);
+    expect('pastExpiryUnsettled' in closedLeg).toBe(false);
+    expect('pastExpiryUnsettled' in stockRow).toBe(false);
+    expect('pastExpiryUnsettled' in legacySymbol).toBe(false);
+  });
+
+  it("counts a group's flagged legs, present only when above zero (AC 1.3)", () => {
+    const flaggedGroup = buildGroupEntry('gFlagged', [
+      row({
+        id: 'leg-1',
+        group_id: 'gFlagged',
+        asset_type: 'option',
+        symbol: 'AAPL200116C150',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+      row({
+        id: 'leg-2',
+        group_id: 'gFlagged',
+        asset_type: 'option',
+        symbol: 'AAPL200216C160',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+    ]) as unknown as Record<string, unknown> & { legs: Record<string, unknown>[] };
+    const unflaggedGroup = buildGroupEntry('gClean', [
+      row({
+        id: 'leg-3',
+        group_id: 'gClean',
+        asset_type: 'option',
+        symbol: 'AAPL491231C150',
+        status: 'open',
+        entry_qty: '1',
+        exit_qty: '0',
+      }),
+    ]) as unknown as Record<string, unknown>;
+
+    expect(flaggedGroup.pastExpiryLegCount).toBe(2);
+    expect(flaggedGroup.legs.every((leg) => leg.pastExpiryUnsettled === true)).toBe(true);
+    expect('pastExpiryLegCount' in unflaggedGroup).toBe(false);
   });
 });
