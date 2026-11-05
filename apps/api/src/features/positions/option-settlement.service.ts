@@ -1,8 +1,11 @@
 import Decimal from 'decimal.js';
 
+import type { OccComponents } from '@tradr/shared';
 import { expiryInstant, parseOccSymbol } from '@tradr/shared';
 
 import type { Database, Transaction } from '@/db';
+import { getStockQuote } from '@/features/symbols/stock-quote.client';
+import { isStockQuoteConfigured } from '@/lib/config';
 import { ConflictError, NotFoundError, ValidationError } from '@/lib/errors';
 import { captureServerEvent } from '@/lib/posthog';
 import { withTransaction } from '@/lib/transaction';
@@ -55,6 +58,21 @@ export interface SettlementResult {
   settledAt: string;
   openedPositionIds: string[];
   exitedPositionIds: string[];
+}
+
+export interface SettlementContextHeldRow {
+  positionId: string;
+  symbol: string;
+  openUnits: string;
+  openedAt: string;
+}
+
+export interface SettlementContextResult {
+  legalOutcomes: SettlementOutcome[];
+  expiryInstant: string;
+  premium: string;
+  heldRows: SettlementContextHeldRow[];
+  suggestedOutcome: SettlementOutcome | null;
 }
 
 const LEGAL_OUTCOMES_BY_SIDE: Record<string, SettlementOutcome[]> = {
@@ -601,4 +619,109 @@ export async function unsettle(
   } catch {
     // ignore — capture is fire-and-forget
   }
+}
+
+/**
+ * `suggestedOutcome` (design C8): non-null only once the New York date equals
+ * the leg's expiration and now is past the expiry instant, with the quote
+ * provider configured; a quote failure gives null. In-the-money is $0.01 or
+ * more on `lastPrice` against the strike.
+ */
+async function resolveSuggestedOutcome(
+  side: string,
+  contract: OccComponents,
+  expiry: Date,
+  now: Date,
+): Promise<SettlementOutcome | null> {
+  if (!isStockQuoteConfigured()) return null;
+  if (!(now.getTime() > expiry.getTime())) return null;
+
+  const todayInNy = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+  if (todayInNy !== contract.expiration) return null;
+
+  let lastPrice: Decimal;
+  try {
+    const quote = await getStockQuote(contract.underlying);
+    lastPrice = new Decimal(quote.lastPrice);
+  } catch {
+    return null;
+  }
+
+  const strike = new Decimal(contract.strike);
+  const inTheMoney =
+    contract.type === 'call'
+      ? lastPrice.gte(strike.plus('0.01'))
+      : lastPrice.lte(strike.minus('0.01'));
+  if (!inTheMoney) return 'worthless';
+  return side === 'short' ? 'assigned' : 'exercised';
+}
+
+/**
+ * Read-only settlement context for the dialog (design C8): legal outcomes,
+ * the expiry instant, entry premium, eligible held stock rows and a
+ * pre-selection suggestion. Never writes.
+ */
+export async function getSettlementContext(
+  db: Database,
+  userId: string,
+  legId: string,
+  now: Date = new Date(),
+): Promise<SettlementContextResult> {
+  return withTransaction(db, async (tx) => {
+    const rows = await findPositionById(tx, legId, userId);
+    const position = rows[0];
+    if (!position) {
+      throw new NotFoundError('Position', legId);
+    }
+    if (position.assetType !== 'option') {
+      throw new ValidationError('Settlement only applies to an option leg');
+    }
+
+    const legalOutcomes = LEGAL_OUTCOMES_BY_SIDE[position.side as string] ?? [];
+
+    const parsed = parseOccSymbol(position.symbol);
+    if (!parsed.ok) {
+      throw new ConflictError(parsed.error.message);
+    }
+    const expiry = expiryInstant(parsed.value.expiration);
+
+    const legFills = await findFillsByPosition(tx, legId);
+    const totals = aggregateFills(
+      legFills.map((f) => ({ type: f.type, price: f.price, quantity: f.quantity, fees: f.fees })),
+    );
+    const premium = new Decimal(totals.entryCost).div(totals.entryQty).toFixed(8);
+
+    const candidates = await findCandidateStockRows(
+      tx,
+      userId,
+      position.accountId,
+      parsed.value.underlying,
+    );
+    const heldRows: SettlementContextHeldRow[] = candidates.map((c) => ({
+      positionId: c.id,
+      symbol: parsed.value.underlying,
+      openUnits: c.openUnits,
+      openedAt: c.openedAt.toISOString(),
+    }));
+
+    const suggestedOutcome = await resolveSuggestedOutcome(
+      position.side as string,
+      parsed.value,
+      expiry,
+      now,
+    );
+
+    return {
+      legalOutcomes,
+      expiryInstant: expiry.toISOString(),
+      premium,
+      heldRows,
+      suggestedOutcome,
+    };
+  });
 }

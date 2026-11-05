@@ -4530,6 +4530,98 @@
         ]
       }
     },
+    "/api/positions/{id}/entry-greeks": {
+      "put": {
+        "description": "Authed. A second capture replaces the first. Black-Scholes prices with `T` from the leg's expiry instant less its first entry fill's `filledAt`, over 365 days; a non-positive `T` or an out-of-bounds input is 400. The chain source carries no further input and fetches the live contract.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "dividendYield": {
+                        "type": "number"
+                      },
+                      "rate": {
+                        "type": "number"
+                      },
+                      "source": {
+                        "enum": [
+                          "black_scholes"
+                        ],
+                        "type": "string"
+                      },
+                      "spot": {
+                        "type": "number"
+                      },
+                      "volatility": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "volatility",
+                      "spot",
+                      "rate"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "source": {
+                        "enum": [
+                          "chain"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The captured entry Greeks."
+          },
+          "400": {
+            "description": "Invalid Black-Scholes input or non-positive T (VALIDATION_ERROR)."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "The chain contract is missing",
+            "expired or missing a required Greek.": null
+          }
+        },
+        "summary": "Capture a leg's entry Greeks, by Black-Scholes or the live chain (design C7).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
     "/api/positions/{id}/fills": {
       "post": {
         "description": "Authed. A position is a sequence of fills, not a single trade: add an `entry` fill to open or scale in, an `exit` fill to scale out or close. The position's average price, open quantity, status, and realised P&L are all derived from its fills, so adding one recomputes them. Monetary and quantity fields are strings to preserve decimal precision. An exit may carry `lotSelection` to pick specific lots by specific identification; omitted, the exit matches FIFO against the oldest lots not already reserved by another exit's selection.\n",
@@ -5480,6 +5572,250 @@
           }
         },
         "summary": "Reopen a same-day closed position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/roll": {
+      "post": {
+        "description": "Authed. The new contract must share the underlying and differ from the current one. A grouped leg rolls within the group, re-validated as a set; an admin-gated batch-create check applies to the new leg.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "closeFees": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "closePrice": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "newSymbol": {
+                    "type": "string"
+                  },
+                  "openFees": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "openPrice": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "rolledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "newSymbol",
+                  "quantity",
+                  "closePrice",
+                  "openPrice",
+                  "rolledAt"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The roll result."
+          },
+          "400": {
+            "description": "Invalid contract",
+            "quantity or date (VALIDATION_ERROR).": null
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "The group changed; try again."
+          }
+        },
+        "summary": "Roll an open leg into a new contract (design C6).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/settle": {
+      "post": {
+        "description": "Authed. `outcome` must be legal for the leg's side (short: worthless/assigned, long: worthless/exercised), else 400 with no write. A stock-side outcome opens or exits stock rows per design C3's table.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "fees": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "enum": [
+                      "worthless",
+                      "assigned",
+                      "exercised"
+                    ],
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "settledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "stockRowOrder": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "outcome"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settlement result."
+          },
+          "400": {
+            "description": "Illegal outcome for the side",
+            "or an invalid date/quantity (VALIDATION_ERROR).": null
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "The leg is not open",
+            "has no open units": null,
+            "or the holdings changed.": null
+          }
+        },
+        "summary": "Settle an open option leg worthless, assigned or exercised (design C3).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/settlement-context": {
+      "get": {
+        "description": "Authed. `legalOutcomes` is `['worthless','assigned']` for a short leg or `['worthless','exercised']` for a long leg. `suggestedOutcome` is non-null only once the New York date equals the leg's expiration and now is past the expiry instant, with the quote provider configured; a quote failure gives null. Per-user rate limited to 30 reads per 60 s.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settlement context."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "429": {
+            "30 / 60 s (RATE_LIMITED).": null,
+            "description": "Per-user limit reached"
+          }
+        },
+        "summary": "Legal outcomes, expiry instant, premium, held rows and a pre-selection suggestion.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/settlements/{settlementId}/unsettle": {
+      "post": {
+        "description": "Authed. Refused with 409 and a reason when any touched row or fill has moved since the settlement, when a written fill carries a transfer link, or when an opened row has joined a group.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "settlementId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Undone."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such settlement for this user and leg (NOT_FOUND)."
+          },
+          "409": {
+            "description": "A touched row or fill moved since the settlement; unsettle refused."
+          }
+        },
+        "summary": "Undo a settlement exactly (design C5).",
         "tags": [
           "Positions"
         ]
