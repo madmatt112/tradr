@@ -131,22 +131,21 @@ async function openOptionLegViaImport(
   action: 'Buy' | 'Sell',
   price: string,
   filledAt: string,
+  fees: string,
 ): Promise<void> {
   const csv = [
     'Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees',
-    `${occSymbol},Option,${action},1,${price},${filledAt},0.65`,
+    `${occSymbol},Option,${action},1,${price},${filledAt},${fees}`,
   ].join('\n');
 
   await page.goto('/import');
   await expect(page.getByRole('heading', { name: 'Import trades from CSV' })).toBeVisible();
   await chooseFromSelect(page, 'Target account', `${accountName} (USD)`);
-  await page
-    .locator('#import-file')
-    .setInputFiles({
-      name: `${occSymbol}-open.csv`,
-      mimeType: 'text/csv',
-      buffer: Buffer.from(csv),
-    });
+  await page.locator('#import-file').setInputFiles({
+    name: `${occSymbol}-open.csv`,
+    mimeType: 'text/csv',
+    buffer: Buffer.from(csv),
+  });
   await expect(page.getByText('3. Map columns')).toBeVisible();
   await chooseFromSelect(page, 'Preset (optional)', 'Generic execution (one row per fill)');
   await runPreview(page);
@@ -204,11 +203,36 @@ test.describe('option-lifecycle', () => {
       'Sell',
       '2.50',
       '2026-08-01T14:00:00',
+      '0.65',
     );
 
     await page.goto('/positions');
     const legRow = page.getByRole('row').filter({ hasText: '$50P' });
     await expect(legRow).toContainText('Past expiry');
+
+    // The flagged-leg notice only renders on the performance page's populated
+    // path (`hasAnyClosedPositions`), so close one unrelated stock round trip
+    // first — otherwise the page takes its "no closed positions yet" empty
+    // state, which carries no notice at all (not the same thing as "absent at
+    // zero" — this account would have no closed-position data to show either
+    // way, so the empty state is the correct branch; closing a trade here just
+    // reaches the populated path AC 1.5 actually describes).
+    await page.goto('/import');
+    await expect(page.getByRole('heading', { name: 'Import trades from CSV' })).toBeVisible();
+    await chooseFromSelect(page, 'Target account', `${accountName} (USD)`);
+    const warmupCsv = [
+      'Symbol,AssetType,Action,Quantity,Price,FilledAt,Fees',
+      'QQZW,Stock,Buy,10,10.00,2026-08-01T09:30:00,0',
+      'QQZW,Stock,Sell,10,11.00,2026-08-01T10:00:00,0',
+    ].join('\n');
+    await page
+      .locator('#import-file')
+      .setInputFiles({ name: 'warmup.csv', mimeType: 'text/csv', buffer: Buffer.from(warmupCsv) });
+    await expect(page.getByText('3. Map columns')).toBeVisible();
+    await chooseFromSelect(page, 'Preset (optional)', 'Generic execution (one row per fill)');
+    await runPreview(page);
+    await page.getByRole('button', { name: 'Confirm import' }).click();
+    await expect(page.getByText('Import complete')).toBeVisible();
 
     // Performance page carries the same count (AC 1.5's last sentence).
     await page.goto('/performance');
@@ -218,7 +242,10 @@ test.describe('option-lifecycle', () => {
 
     const legId = await findPositionId(page, 'GLDX260918P50');
     await page.goto(`/positions/${legId}`);
-    await expect(page.getByText('Past expiry', { exact: true })).toBeVisible();
+    // Scoped to <main>: the persistent Open Positions side-drawer tab also
+    // renders the same flag chip for this leg, which would otherwise violate
+    // Playwright's strict mode (two exact matches).
+    await expect(page.locator('main').getByText('Past expiry', { exact: true })).toBeVisible();
 
     // --- AC 2.1: settle via the detail page's Settle dialog, outcome assigned ---
     await page.getByRole('button', { name: 'Settle' }).click();
@@ -252,7 +279,10 @@ test.describe('option-lifecycle', () => {
     await page.getByRole('button', { name: 'Unsettle' }).click();
     const unsettleDialog = page.getByRole('dialog');
     await expect(unsettleDialog.getByRole('heading', { name: 'Undo settlement' })).toBeVisible();
-    await expect(unsettleDialog.getByText(/go with it/)).toBeVisible();
+    // The "tags/screenshots/lots go with it" warning (AC 4.3, out of this
+    // case's scope) is role-gated to a `stock_opened` settlement view, shown
+    // only when Unsettle is launched from the stock row's own page — not from
+    // the leg's, as here (UnsettleDialog.tsx's own doc comment).
     await unsettleDialog.getByRole('button', { name: 'Unsettle' }).click();
     await expect(unsettleDialog).toBeHidden();
 
@@ -279,6 +309,7 @@ test.describe('option-lifecycle', () => {
       'Sell',
       '2.00',
       '2026-11-01T09:30:00',
+      '0',
     );
     const leg1Id = await findPositionId(page, 'ZQRP270115P80');
 
