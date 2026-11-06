@@ -174,3 +174,37 @@ describe('OpenPositionsWidget — five-row cap', () => {
     unmount(container, root);
   });
 });
+
+// Contract (design C10, Req 1.5): a flagged row carries the past-expiry mark
+// in the widget row; an unflagged row carries none. `makePosition` omits
+// `pastExpiryUnsettled` by default, so the unflagged row below carries no key
+// at all, matching a non-option/non-flagged read.
+describe('OpenPositionsWidget — past-expiry chip', () => {
+  it('shows the chip on a flagged row and not on an unflagged row', () => {
+    const positions = [
+      makePosition({
+        id: 'id-flagged',
+        symbol: 'FLAGGED',
+        updatedAt: '2026-01-02T00:00:00.000Z',
+        pastExpiryUnsettled: true,
+      }),
+      makePosition({
+        id: 'id-plain',
+        symbol: 'PLAIN',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: positions,
+      isLoading: false,
+    } as unknown as PositionsResult);
+
+    const { container, root } = mountWith(<OpenPositionsWidget />);
+
+    const rows = container.querySelectorAll('tbody tr');
+    expect(rows[0].textContent).toContain('Past expiry');
+    expect(rows[1].textContent).not.toContain('Past expiry');
+
+    unmount(container, root);
+  });
+});

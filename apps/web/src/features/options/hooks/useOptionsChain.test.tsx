@@ -39,7 +39,7 @@ describe('useOptionsChain', () => {
     const { result } = renderHook(() => useOptionsChain('AAPL'), { wrapper: makeWrapper(qc) });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.get).toHaveBeenCalledWith('/advisor/options-chain?symbol=AAPL');
+    expect(api.get).toHaveBeenCalledWith('/options/chain?symbol=AAPL');
     expect(result.current.data).toEqual(response);
   });
 
@@ -52,8 +52,6 @@ describe('useOptionsChain', () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.get).toHaveBeenCalledWith(
-      '/advisor/options-chain?symbol=AAPL&expiration=2025-06-20',
-    );
+    expect(api.get).toHaveBeenCalledWith('/options/chain?symbol=AAPL&expiration=2025-06-20');
   });
 });

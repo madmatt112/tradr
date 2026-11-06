@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 
 import {
   getCurrencyMinorUnits,
+  isPastExpiryUnsettled,
   type PerformanceCurrency,
   type PerformanceQueryInput,
   type PerformanceResponse,
@@ -28,6 +29,7 @@ import {
   type FillTotals,
   type RealizationEvent,
 } from '@/features/positions/pnl';
+import { findOpenOptionLegs } from '@/features/positions/positions.query';
 import { config } from '@/lib/config';
 import { ClientAbortError, InvalidTimezoneError, TimeoutError } from '@/lib/errors';
 
@@ -72,14 +74,21 @@ export async function getPerformance(
   // requested window: it powers empty-state detection (has any accounts /
   // closed positions) and the preset-range derivation (earliest / most recent
   // closed-position dates).
-  const { snapshot, history } = await db.transaction(
+  const { snapshot, history, openOptionLegs } = await db.transaction(
     async (tx) => {
       const snap = await fetchTimeframeSnapshot(tx, userId, startInstant, endInstant);
       const hist = await fetchHistoryMetadata(tx, userId);
-      return { snapshot: snap, history: hist };
+      const legs = await findOpenOptionLegs(tx, userId);
+      return { snapshot: snap, history: hist, openOptionLegs: legs };
     },
     { isolationLevel: 'repeatable read', accessMode: 'read only' },
   );
+
+  // Count ignores the requested window and currency: an unsettled leg is a
+  // state, not a period figure (design C2).
+  const pastExpiryUnsettledLegs = openOptionLegs.filter((leg) =>
+    isPastExpiryUnsettled({ ...leg, assetType: 'option' }),
+  ).length;
 
   const classified = await classifyTimeframePositions(snapshot.positions, abortSignal, startTime);
 
@@ -132,6 +141,7 @@ export async function getPerformance(
     hasAnyClosedPositionsInSupportedCurrency: history.hasAnyClosedPositionsInSupportedCurrency,
     defaultCurrency,
     currencies,
+    ...(pastExpiryUnsettledLegs > 0 ? { pastExpiryUnsettledLegs } : {}),
   };
 
   return PerformanceResponseSchema.parse(response);

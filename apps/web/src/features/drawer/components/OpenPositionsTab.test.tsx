@@ -297,4 +297,37 @@ describe('OpenPositionsTab', () => {
     expect(useDrawerStore.getState().isOpen).toBe(false);
     unmount(container, root);
   });
+
+  // Contract (design C10, Req 1.5): a flagged row carries the past-expiry
+  // mark in the drawer tab row; an unflagged row carries none. `makePosition`
+  // omits `pastExpiryUnsettled` by default, so the unflagged row below
+  // carries no key at all, matching a non-option/non-flagged read.
+  it('shows the past-expiry chip on a flagged row and not on an unflagged row', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000d1',
+        symbol: 'FLAGGED',
+        openedAt: '2026-05-25T10:00:00.000Z',
+        pastExpiryUnsettled: true,
+      }),
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000d2',
+        symbol: 'PLAIN',
+        openedAt: '2026-05-24T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+    const links = container.querySelectorAll('a');
+
+    expect(links[0].textContent).toContain('Past expiry');
+    expect(links[1].textContent).not.toContain('Past expiry');
+
+    unmount(container, root);
+  });
 });

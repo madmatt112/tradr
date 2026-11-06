@@ -41,6 +41,7 @@ vi.mock('@/hooks/useRegistrationEnabled', () => ({
 
 import { Route as SettingsLayoutRoute } from '../_auth.settings';
 import { Route as AdvisorRoute } from '../_auth.settings.advisor';
+import { Route as MarketDataRoute } from '../_auth.settings.market-data';
 import { Route as ProfileRoute } from '../_auth.settings.profile';
 import { Route as AccountRoute } from '../_auth.settings.account';
 import { Route as HelpRoute } from '../_auth.settings.help';
@@ -53,6 +54,7 @@ import { Route as RulesRoute } from '../_auth.settings.rules';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const layoutOpts = SettingsLayoutRoute.options as any;
 const advisorOpts = AdvisorRoute.options as any;
+const marketDataOpts = MarketDataRoute.options as any;
 const profileOpts = ProfileRoute.options as any;
 const accountOpts = AccountRoute.options as any;
 const helpOpts = HelpRoute.options as any;
@@ -78,6 +80,13 @@ function buildRouter(initialPath: string) {
     getParentRoute: () => settingsLayout as any,
     path: '/advisor',
     component: advisorOpts.component,
+  });
+  // Re-hosted so the layout's `<Link to="/settings/market-data">` tab trigger
+  // has a matching route; the component only mounts if a test navigates here.
+  const marketData = createRoute({
+    getParentRoute: () => settingsLayout as any,
+    path: '/market-data',
+    component: marketDataOpts.component,
   });
   const profile = createRoute({
     getParentRoute: () => settingsLayout as any,
@@ -128,7 +137,17 @@ function buildRouter(initialPath: string) {
   });
 
   const routeTree = rootRoute.addChildren([
-    settingsLayout.addChildren([advisor, billing, profile, account, help, tags, data, rules]),
+    settingsLayout.addChildren([
+      advisor,
+      marketData,
+      billing,
+      profile,
+      account,
+      help,
+      tags,
+      data,
+      rules,
+    ]),
   ]);
 
   return createRouter({
@@ -167,10 +186,14 @@ describe('Settings tabbed layout', () => {
     expect(screen.getByRole('tab', { name: /Profile/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Account/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Tags/i })).toBeTruthy();
-    // The appended Data tab (export/import) renders beside the others.
-    expect(screen.getByRole('tab', { name: /Data/i })).toBeTruthy();
+    // The appended Data tab (export/import) renders beside the others. Exact
+    // name, not a substring match: a substring regex also matches the
+    // appended Market data tab's accessible name.
+    expect(screen.getByRole('tab', { name: 'Data' })).toBeTruthy();
     // The appended Rules tab (trading-rules) renders after Data.
     expect(screen.getByRole('tab', { name: /Rules/i })).toBeTruthy();
+    // The appended Market data tab (the UW key, split out of Advisor).
+    expect(screen.getByRole('tab', { name: 'Market data' })).toBeTruthy();
   });
 
   it('case 2: navigating to /settings redirects to /settings/advisor', async () => {
@@ -192,6 +215,32 @@ describe('Settings tabbed layout', () => {
     });
     expect(screen.queryByRole('tab', { name: /Advisor/i })).toBeNull();
     expect(screen.getByRole('tab', { name: /Profile/i })).toBeTruthy();
+  });
+
+  // The market-data section does not depend on the advisor (REQ-7.4, 7.5):
+  // `visibleTabs()` never filters it out, so it is the one settings surface
+  // that survives the Advisor tab's disappearance alongside it.
+  it('case 2c: with the advisor withdrawn, the Market data tab still shows, the Advisor tab does not, and the route renders the key card (AC 7.4, 7.5)', async () => {
+    posture.advisorEnabled = false;
+    renderAt('/settings/market-data');
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Market data/i })).toBeTruthy();
+    });
+    expect(screen.queryByRole('tab', { name: /Advisor/i })).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId('market-data-key-card')).toBeTruthy();
+    });
+  });
+
+  // The key card moves to its own tab (REQ-7.5): the Advisor tab keeps only
+  // the trade-data consent toggle it was left with.
+  it('case 2d: the Advisor route no longer renders the market-data key card (AC 7.5)', async () => {
+    renderAt('/settings/advisor');
+    await waitFor(() => {
+      expect(screen.getByText('Manage provider keys and personas for the AI advisor.')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('market-data-key-card')).toBeNull();
   });
 
   it('case 3: Account tab Logout button calls logout.mutate', async () => {

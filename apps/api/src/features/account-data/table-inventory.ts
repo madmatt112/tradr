@@ -33,6 +33,11 @@ export const EXPORTED_TABLES = [
   'advisor_conversations',
   'advisor_messages',
   'advisor_summaries',
+  'option_settlements',
+  'option_settlement_rows',
+  'option_settlement_fills',
+  'position_rolls',
+  'position_entry_greeks',
 ] as const;
 
 // The tables the archive never exports (Req 2.2): sessions and tokens, encrypted

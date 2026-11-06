@@ -12,6 +12,7 @@ import { positionAgeDays } from '../utils/positionAge';
 import { shouldNavigateFromRowClick } from '../utils/rowNavigation';
 
 import { BreakevenBadge } from './BreakevenBadge';
+import { PastExpiryChip } from './PastExpiryChip';
 import { PositionRowActions } from './PositionRowActions';
 import { PositionSideChip, PositionStatusChip } from './PositionStatusChip';
 
@@ -83,6 +84,7 @@ export function PositionTableRow({
         <div className="flex items-center gap-2">
           <PositionStatusChip status={pos.status} />
           {pos.classification === 'breakeven' && <BreakevenBadge />}
+          {pos.pastExpiryUnsettled && <PastExpiryChip />}
         </div>
       </TableCell>
       {!drawerOpen && (

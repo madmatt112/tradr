@@ -27,6 +27,7 @@ import { PerformanceEmptyState } from './PerformanceEmptyState';
 import { PnlCalendar } from './PnlCalendar';
 import { StatsPanel } from './StatsPanel';
 import { TimeframeSelector } from './TimeframeSelector';
+import { UnsettledLegsNotice } from './UnsettledLegsNotice';
 import { WeekStartChangedBanner } from './WeekStartChangedBanner';
 
 // ---------------------------------------------------------------------------
@@ -173,6 +174,7 @@ export function PerformancePage({ params, month, by }: PerformancePageProps) {
     hasAnyClosedPositions,
     hasAnyClosedPositionsInSupportedCurrency,
     currencies,
+    pastExpiryUnsettledLegs,
   } = data;
 
   const activeCurrency = pickActiveCurrency(data, params.currency);
@@ -248,6 +250,7 @@ export function PerformancePage({ params, month, by }: PerformancePageProps) {
       <WeekStartChangedBanner />
       {showUtcFallbackBanner ? <InvalidTimezoneBanner isSecondFailure={false} /> : null}
       {showDataQualityBanner ? <DataQualityBanner dataQuality={dataQuality} /> : null}
+      <UnsettledLegsNotice pastExpiryUnsettledLegs={pastExpiryUnsettledLegs} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <TimeframeSelector

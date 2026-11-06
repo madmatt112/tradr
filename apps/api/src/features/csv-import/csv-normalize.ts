@@ -73,6 +73,8 @@ export interface NormalizedRow {
    * round-trip row) had no time component (C10, D13).
    */
   dateOnly?: boolean;
+  /** Set by contract resolution when the row's `eventCode` tags a lifecycle outcome (C12). */
+  lifecycleOutcome?: 'assigned' | 'exercised' | 'unsupported';
 }
 
 /** Result of a successful normalization: the row plus any located warnings. */

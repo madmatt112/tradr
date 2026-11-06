@@ -308,7 +308,43 @@ describe('resolveContracts — located error codes', () => {
     const err = findError(result.errors, 'OPTION_EVENT_NOT_SUPPORTED');
     expect(err).toMatchObject({ tradrField: 'eventCode' });
   });
+});
 
+// ---------------------------------------------------------------------------
+// resolveContracts — lifecycle tagging under rowShape (task 19, AC 10.1)
+//
+// Contract block:
+// | Criterion                                                | Pre-condition                                         | Call (seam)                | Observable result                                   | Source |
+// |------------------------------------------------------------|----------------------------------------------------------|------------------------------|--------------------------------------------------------|---------|
+// | AC 10.1 `A` tags assigned under execution                  | execution rowShape, option row, eventCode `A`             | resolveContracts(rows, opts) | no OPTION_EVENT_NOT_SUPPORTED error; row survives with lifecycleOutcome 'assigned' | task 19 _Prompt |
+// | AC 10.1 `EX`/`AEX`/`MEX` tag exercised under execution      | execution rowShape, option row, eventCode EX/AEX/MEX      | resolveContracts(rows, opts) | no error; lifecycleOutcome 'exercised' for each         | task 19 _Prompt |
+// ---------------------------------------------------------------------------
+
+describe('resolveContracts — lifecycle tagging under rowShape (AC 10.1)', () => {
+  it('tags lifecycleOutcome "assigned" for an A code under an execution rowShape, without refusing', () => {
+    const result = resolveContracts(
+      [row({ symbol: 'AAPL260320C250', assetType: 'option', eventCode: 'A' })],
+      { ...opts('occ-symbol'), rowShape: 'execution' },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].lifecycleOutcome).toBe('assigned');
+    expect(result.rows[0].values.symbol).toBe('AAPL260320C250');
+  });
+
+  it('tags lifecycleOutcome "exercised" for EX, AEX and MEX codes under an execution rowShape', () => {
+    for (const code of ['EX', 'AEX', 'MEX']) {
+      const result = resolveContracts(
+        [row({ symbol: 'AAPL260320C250', assetType: 'option', eventCode: code })],
+        { ...opts('occ-symbol'), rowShape: 'execution' },
+      );
+      expect(result.errors).toEqual([]);
+      expect(result.rows[0].lifecycleOutcome).toBe('exercised');
+    }
+  });
+});
+
+describe('resolveContracts — more refusals', () => {
   it('OCC_NO_FORM_MATCH for a double-space compact string that matches no form', () => {
     const result = resolveContracts(
       [row({ symbol: 'AAPL  260320C0025000', assetType: 'option' })],

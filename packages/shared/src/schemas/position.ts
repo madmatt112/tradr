@@ -4,6 +4,11 @@ import type { MaxLossReason } from '../lib/strategy';
 import { parseOccSymbol } from '../options';
 
 import { EffectiveLotMethodEnum, TaxJurisdictionEnum } from './expense';
+import {
+  EntryGreeksDetailSchema,
+  PositionSettlementDetailSchema,
+  RollChainSchema,
+} from './option-lifecycle';
 import { ClassificationSchema } from './performance';
 import { PositionImageSchema } from './position-image';
 import { TagSchema } from './tag';
@@ -280,6 +285,9 @@ export const PositionListItemSchema = z.object({
   // carry one; null for draft/open rows. Optional so callers that do not compute
   // it can omit the key.
   classification: ClassificationSchema.nullable().optional(),
+  // Past the expiry instant with no settlement recorded (design C2, Req 1.1).
+  // Optional so the shape stays backward-compatible for a non-option row.
+  pastExpiryUnsettled: z.boolean().optional(),
 });
 
 // One leg of a group, as read (design Data Models): a list item plus the
@@ -318,6 +326,9 @@ export const PositionGroupEntrySchema = z.object({
   maxLoss: z.number().nullable(),
   maxLossReason: MaxLossReasonSchema.nullable(),
   legs: z.array(PositionGroupLegSchema),
+  // Count of legs flagged `pastExpiryUnsettled` (design C2, Req 1.3). Optional
+  // so the shape stays backward-compatible for a caller that does not join it.
+  pastExpiryLegCount: z.number().int().nonnegative().optional(),
 });
 
 // One row of `GET /api/positions` (design Data Models/C6): an ungrouped item
@@ -387,6 +398,16 @@ export const PositionDetailSchema = z.object({
   // nullable so the shape stays backward-compatible for an ungrouped position.
   groupId: z.string().uuid().nullable().optional(),
   group: PositionGroupEntrySchema.optional(),
+  // Past the expiry instant with no settlement recorded (design C2, Req 1.1).
+  pastExpiryUnsettled: z.boolean().optional(),
+  // Every settlement record touching this row (design C2/Data Models), so a
+  // stock row can reach unsettle. Present only when at least one exists.
+  settlements: z.array(PositionSettlementDetailSchema).optional(),
+  // This leg's roll chain, in edge order (design C6/Data Models). Present only
+  // when the leg has been rolled.
+  rollChain: RollChainSchema.optional(),
+  // Captured entry Greeks (design C7/Data Models). Present only when captured.
+  entryGreeks: EntryGreeksDetailSchema.optional(),
 });
 
 // Create a multi-leg group in one write (design C3/C4, Requirement 1). Legs

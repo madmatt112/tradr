@@ -115,7 +115,10 @@ positions.post('/', validate('json', CreatePositionSchema), async (c) => {
  *       position or group, `null` otherwise). A grouped entry carries
  *       `kind: "group"`, its legs (each shaped like an ungrouped item), and
  *       group-level figures (`label`, `detectedLabel`, `netEntry`, `maxLoss`);
- *       an ungrouped entry carries no `kind` key. `status`, `classification`
+ *       an ungrouped entry carries no `kind` key. An open option leg past its
+ *       expiry with open units carries `pastExpiryUnsettled: true`; a group
+ *       carries `pastExpiryLegCount` (its count of such legs) when above
+ *       zero. Both keys are omitted otherwise. `status`, `classification`
  *       and `tag` filters match a group's own derived fields, not any one
  *       leg's. Optional filters may be combined.
  *     tags: [Positions]
@@ -168,7 +171,16 @@ positions.get('/', validate('query', ListQuerySchema), async (c) => {
  *       holds at least one trading rule, and omits the field when they hold none.
  *       Carries a `group` object (the multi-leg group this position is a leg
  *       of, with its other legs) only when the position belongs to one, and
- *       omits the field for an ungrouped position.
+ *       omits the field for an ungrouped position. Carries
+ *       `pastExpiryUnsettled: true` when the position is an open option leg
+ *       past its expiry with open units, and omits the field otherwise.
+ *       Carries `settlements` (every settlement record touching this row,
+ *       each with a `role` of `leg`, `stock_exit` or `stock_opened`) only
+ *       when the position has been touched by one; carries `rollChain`
+ *       (the roll chain's legs in roll order, and `netCredit`) only when the
+ *       leg has been rolled; carries `entryGreeks` (the captured entry
+ *       Greeks, `rhoPerPct` nullable) only when a capture exists. All three
+ *       are omitted otherwise.
  *     tags: [Positions]
  *     parameters:
  *       - in: path

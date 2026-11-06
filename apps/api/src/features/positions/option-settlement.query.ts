@@ -1,0 +1,368 @@
+import { Decimal } from 'decimal.js';
+import { and, eq, inArray, sql } from 'drizzle-orm';
+
+import { isPastExpiryUnsettled } from '@tradr/shared';
+
+import type { Database, Transaction } from '@/db';
+import {
+  fills,
+  optionSettlementFills,
+  optionSettlementRows,
+  optionSettlements,
+  positions,
+} from '@/db/schema';
+
+// Writes for one settlement record (design C3 post-condition 8). Split out of
+// the service so the transaction-scoped inserts have a single, testable seam —
+// matching the repo convention of a thin query layer behind the service.
+
+/**
+ * The eligible stock rows for a leg's stock-side outcome (design C3 post-
+ * condition 1): open, long, stock, same account, `symbol` equal to the OCC
+ * underlying, open units above zero. Called unlocked before the lock and
+ * again after it, so the caller can detect a changed set — the
+ * `findOpenOptionLegs` open-units-in-SQL precedent (`positions.query.ts`).
+ */
+export async function findCandidateStockRows(
+  tx: Transaction,
+  userId: string,
+  accountId: string,
+  symbol: string,
+): Promise<Array<{ id: string; openedAt: Date; openUnits: string }>> {
+  const rows = await tx.execute(sql`
+    SELECT p.id, p.opened_at,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+      - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) AS open_units
+    FROM positions p
+    LEFT JOIN fills f ON f.position_id = p.id
+    WHERE p.user_id = ${userId}
+      AND p.account_id = ${accountId}
+      AND p.symbol = ${symbol}
+      AND p.status = 'open'
+      AND p.side = 'long'
+      AND p.asset_type = 'stock'
+    GROUP BY p.id, p.opened_at
+    HAVING COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+         - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) > 0
+    ORDER BY p.opened_at ASC
+  `);
+  return rows.map((row) => ({
+    id: row.id as string,
+    openedAt: new Date(row.opened_at as string),
+    openUnits: String(row.open_units),
+  }));
+}
+
+// Reads for the import preview's lifecycle-event target resolution (design
+// C12, TD9).
+
+/**
+ * The open option leg a lifecycle event targets (design C12): same account,
+ * same OCC symbol, the side the event's outcome requires (`assigned` ->
+ * `short`, `exercised` -> `long`), open units above zero. Mirrors
+ * `findCandidateStockRows`'s open-units-in-SQL shape; the earliest-opened
+ * match wins when more than one exists.
+ */
+export async function findOpenLegBySymbol(
+  db: Database | Transaction,
+  userId: string,
+  accountId: string,
+  symbol: string,
+  side: 'long' | 'short',
+): Promise<string | undefined> {
+  const rows = await db.execute(sql`
+    SELECT p.id, p.opened_at,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+      - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) AS open_units
+    FROM positions p
+    LEFT JOIN fills f ON f.position_id = p.id
+    WHERE p.user_id = ${userId}
+      AND p.account_id = ${accountId}
+      AND p.symbol = ${symbol}
+      AND p.side = ${side}
+      AND p.status = 'open'
+      AND p.asset_type = 'option'
+    GROUP BY p.id, p.opened_at
+    HAVING COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+         - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) > 0
+    ORDER BY p.opened_at ASC
+    LIMIT 1
+  `);
+  return (rows[0]?.id as string | undefined) ?? undefined;
+}
+
+/**
+ * Whether a settlement already recorded against this leg matches a lifecycle
+ * event about to be re-proposed (design C12, TD9): same account, same OCC
+ * symbol, same outcome, the same UTC calendar day, and the same quantity.
+ * Checked BEFORE target resolution, so a fully settled leg (closed, and so
+ * never an open target) reports the re-import warning rather than a false
+ * `LIFECYCLE_TARGET_NOT_FOUND`.
+ */
+export async function findMatchingSettlement(
+  db: Database | Transaction,
+  userId: string,
+  accountId: string,
+  symbol: string,
+  outcome: string,
+  settledAt: Date,
+  quantity: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ settledAt: optionSettlements.settledAt, quantity: optionSettlements.quantity })
+    .from(optionSettlements)
+    .innerJoin(positions, eq(optionSettlements.positionId, positions.id))
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(positions.accountId, accountId),
+        eq(positions.symbol, symbol),
+        eq(optionSettlements.outcome, outcome),
+      ),
+    );
+  const targetDay = settledAt.toISOString().slice(0, 10);
+  const targetQuantity = new Decimal(quantity);
+  return rows.some(
+    (row) =>
+      row.settledAt.toISOString().slice(0, 10) === targetDay &&
+      new Decimal(row.quantity).equals(targetQuantity),
+  );
+}
+
+// Reads for the operator CLI (design C11, `tradr positions expire`). System-
+// wide when `userId` is omitted, matching `--all-users`; scoped when it is
+// given, matching `--user`.
+
+/**
+ * Every past-expiry-unsettled option leg (design C11), optionally scoped to
+ * one user. Mirrors `findOpenOptionLegs`'s open-units-in-SQL shape, with the
+ * position id and owning user id added so the CLI can list and, under
+ * `--all-users`, settle through the leg's real owner. Filtered through the
+ * same `isPastExpiryUnsettled` predicate the list/detail reads use (TD4) —
+ * no second definition of "flagged".
+ */
+export async function findFlaggedOptionLegs(
+  db: Database | Transaction,
+  userId?: string,
+): Promise<Array<{ id: string; userId: string; symbol: string }>> {
+  const rows = await db.execute(sql`
+    SELECT p.id, p.user_id, p.symbol,
+      COALESCE(SUM(CASE WHEN f.type = 'entry' THEN f.quantity END), 0)
+      - COALESCE(SUM(CASE WHEN f.type = 'exit' THEN f.quantity END), 0) AS open_units
+    FROM positions p
+    LEFT JOIN fills f ON f.position_id = p.id
+    WHERE p.asset_type = 'option' AND p.status = 'open'
+    ${userId ? sql`AND p.user_id = ${userId}` : sql``}
+    GROUP BY p.id, p.user_id, p.symbol
+  `);
+  return rows
+    .map((row) => ({
+      id: row.id as string,
+      userId: row.user_id as string,
+      symbol: row.symbol as string,
+      openUnits: Number(row.open_units),
+    }))
+    .filter((leg) =>
+      isPastExpiryUnsettled({
+        assetType: 'option',
+        status: 'open',
+        symbol: leg.symbol,
+        openUnits: leg.openUnits,
+      }),
+    )
+    .map(({ id, userId: ownerId, symbol }) => ({ id, userId: ownerId, symbol }));
+}
+
+/**
+ * The owning user id for a leg, or `undefined` when no such position exists —
+ * the `--all-users` seam for settling through the leg's real owner rather
+ * than an operator-supplied one (design C11).
+ */
+export async function findOptionLegOwner(
+  db: Database | Transaction,
+  legId: string,
+): Promise<string | undefined> {
+  const rows = await db
+    .select({ userId: positions.userId })
+    .from(positions)
+    .where(eq(positions.id, legId))
+    .limit(1);
+  return rows[0]?.userId;
+}
+
+export function insertOptionSettlement(
+  tx: Transaction,
+  data: {
+    userId: string;
+    positionId: string;
+    outcome: string;
+    quantity: string;
+    premium: string;
+    settledAt: Date;
+  },
+) {
+  return tx.insert(optionSettlements).values(data).returning();
+}
+
+export function insertOptionSettlementRows(
+  tx: Transaction,
+  rows: Array<{
+    settlementId: string;
+    positionId: string | null;
+    touch: string;
+    closedRow: boolean;
+    priorLastFlatAt: Date | null;
+    priorLastFlatNetPnl: string | null;
+  }>,
+) {
+  return tx.insert(optionSettlementRows).values(rows).returning();
+}
+
+export function insertOptionSettlementFills(
+  tx: Transaction,
+  rows: Array<{ settlementId: string; fillId: string; written: boolean }>,
+) {
+  return tx.insert(optionSettlementFills).values(rows).returning();
+}
+
+// Reads for unsettle (design C5). The record alone is the source of truth for
+// every refusal check, so these are plain, unlocked selects — the caller locks
+// the touched positions themselves via `lockLegs`.
+
+/** Scoped by user and leg, so a foreign id or a wrong leg reads as a 404. */
+export function findOptionSettlementByLeg(
+  tx: Transaction,
+  settlementId: string,
+  legId: string,
+  userId: string,
+) {
+  return tx
+    .select()
+    .from(optionSettlements)
+    .where(
+      and(
+        eq(optionSettlements.id, settlementId),
+        eq(optionSettlements.positionId, legId),
+        eq(optionSettlements.userId, userId),
+      ),
+    )
+    .limit(1);
+}
+
+export function findOptionSettlementRows(tx: Transaction, settlementId: string) {
+  return tx
+    .select()
+    .from(optionSettlementRows)
+    .where(eq(optionSettlementRows.settlementId, settlementId));
+}
+
+export function findOptionSettlementFills(tx: Transaction, settlementId: string) {
+  return tx
+    .select()
+    .from(optionSettlementFills)
+    .where(eq(optionSettlementFills.settlementId, settlementId));
+}
+
+/** The full fill rows for a settlement's written fills, read by id. */
+export function findFillsByIds(tx: Transaction, fillIds: string[]) {
+  if (fillIds.length === 0) return Promise.resolve([]);
+  return tx.select().from(fills).where(inArray(fills.id, fillIds));
+}
+
+/** Cascades: its rows and fills (settlement_id CASCADE) go with it. */
+export function deleteOptionSettlement(tx: Transaction, settlementId: string) {
+  return tx.delete(optionSettlements).where(eq(optionSettlements.id, settlementId)).returning();
+}
+
+/**
+ * Design C4 last bullet: whether any settlement has touched this position —
+ * the reopen guard's own check. `position_id` is `SET NULL` on delete, so a
+ * row that no longer exists stops being "touched" for this purpose, which is
+ * fine: it has nothing left to reopen.
+ */
+export async function isRowSettlementTouched(
+  tx: Transaction,
+  positionId: string,
+): Promise<boolean> {
+  const rows = await tx
+    .select({ id: optionSettlementRows.id })
+    .from(optionSettlementRows)
+    .where(eq(optionSettlementRows.positionId, positionId))
+    .limit(1);
+  return rows.length > 0;
+}
+
+export type SettlementDetailEntry = {
+  settlementId: string;
+  outcome: string;
+  premium: string;
+  quantity: string;
+  settledAt: Date;
+  createdAt: Date;
+  role: 'leg' | 'stock_exit' | 'stock_opened';
+  legPositionId: string;
+  stockPositionIds: string[];
+};
+
+/**
+ * Every settlement record touching this position (design C2 Detail
+ * additions): a leg reads its own settlement(s) with `role: 'leg'`, and a
+ * stock row that a settlement exited or opened reads the same record with
+ * `role: 'stock_exit'`/`'stock_opened'` — so a stock row reaches unsettle too
+ * (Req 8.1). `[]` when the position has never been touched; the detail read
+ * adds the key only when this is non-empty.
+ */
+export async function findSettlementsByPosition(
+  db: Database | Transaction,
+  positionId: string,
+): Promise<SettlementDetailEntry[]> {
+  const touchedRows = await db
+    .select({
+      settlementId: optionSettlementRows.settlementId,
+      touch: optionSettlementRows.touch,
+    })
+    .from(optionSettlementRows)
+    .where(eq(optionSettlementRows.positionId, positionId));
+  if (touchedRows.length === 0) return [];
+
+  const settlementIds = touchedRows.map((row) => row.settlementId);
+  const settlementRecords = await db
+    .select()
+    .from(optionSettlements)
+    .where(inArray(optionSettlements.id, settlementIds));
+  const settlementById = new Map(settlementRecords.map((s) => [s.id, s]));
+
+  const allRows = await db
+    .select({
+      settlementId: optionSettlementRows.settlementId,
+      positionId: optionSettlementRows.positionId,
+      touch: optionSettlementRows.touch,
+    })
+    .from(optionSettlementRows)
+    .where(inArray(optionSettlementRows.settlementId, settlementIds));
+  const stockIdsBySettlement = new Map<string, string[]>();
+  for (const row of allRows) {
+    if ((row.touch === 'stock_exit' || row.touch === 'stock_opened') && row.positionId) {
+      const ids = stockIdsBySettlement.get(row.settlementId) ?? [];
+      ids.push(row.positionId);
+      stockIdsBySettlement.set(row.settlementId, ids);
+    }
+  }
+
+  return touchedRows
+    .map((row) => {
+      const settlement = settlementById.get(row.settlementId)!;
+      return {
+        settlementId: settlement.id,
+        outcome: settlement.outcome,
+        premium: settlement.premium,
+        quantity: settlement.quantity,
+        settledAt: settlement.settledAt,
+        createdAt: settlement.createdAt,
+        role: row.touch as 'leg' | 'stock_exit' | 'stock_opened',
+        legPositionId: settlement.positionId,
+        stockPositionIds: stockIdsBySettlement.get(row.settlementId) ?? [],
+      };
+    })
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}

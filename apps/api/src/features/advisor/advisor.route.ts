@@ -23,15 +23,8 @@ import {
   setDefaultPersonaHandler,
   updatePersonaHandler,
 } from './crud.handler';
-import {
-  deleteMarketDataKeyHandler,
-  getMarketDataKeyHandler,
-  getTradeDataConsentHandler,
-  saveMarketDataKeyHandler,
-  setTradeDataConsentHandler,
-} from './external-keys.handler';
+import { getTradeDataConsentHandler, setTradeDataConsentHandler } from './external-keys.handler';
 import { getMessageImageHandler } from './image-proxy.handler';
-import { getOptionsChainHandler } from './options-chain.handler';
 import {
   deleteProviderKeyHandler,
   listProviderKeysHandler,
@@ -55,10 +48,11 @@ advisorRouter.use(authMiddleware);
 // Operator posture gate (DISABLE_ADVISOR). Mounted after auth so an anonymous
 // caller still gets the usual 401 and the gate never becomes an unauthenticated
 // probe; mounted before every route, the smoke endpoint included, so "withdrawn"
-// means the whole namespace — conversations, keys, personas, consent, the
-// options-chain viewer and the image proxy — not a curated subset that drifts
-// as handlers are added. 403 rather than 404 for the same reason as
-// REGISTRATION_DISABLED: the routes exist, and the SPA must be able to tell
+// means the whole namespace — conversations, provider keys, personas, consent
+// and the image proxy — not a curated subset that drifts as handlers are
+// added. The market-data key and options-chain routes moved to /api/options
+// (design C9) and no longer sit behind this gate. 403 rather than 404 for
+// the same reason as REGISTRATION_DISABLED: the routes exist, and the SPA must be able to tell
 // "withdrawn" from "wrong URL". The message says only that the advisor is not
 // offered here — never why.
 advisorRouter.use(async (_c, next) => {
@@ -630,69 +624,6 @@ advisorRouter.put('/provider-keys/:providerId', perUserKeySaveRateLimit, savePro
 advisorRouter.patch('/provider-keys/:providerId', patchProviderKeyHandler);
 advisorRouter.delete('/provider-keys/:providerId', deleteProviderKeyHandler);
 
-// === market-data-key endpoints (Task 9; design §Component 5) ===
-// Per-user (REQ-6.2) save rate limiter — mounted on PUT only: 10 saves per user
-// per hour, mirroring the LLM provider-key limiter. A distinct instance so the
-// market-data bucket does not share counts with the provider-key endpoint.
-const perUserMarketDataKeySaveRateLimit = createRateLimiter({
-  name: 'market-data-keys',
-  max: 10,
-  windowMs: 60 * 60 * 1000,
-  keyGenerator: (c) => c.get('userId'),
-  // Redis-outage fallback keeps the normal per-container budget (D8; not tightened).
-  fallbackMax: 10,
-});
-
-/**
- * @swagger
- * /api/advisor/market-data-key:
- *   get:
- *     summary: Get the masked status of the authenticated user's Unusual Whales key.
- *     description: >
- *       Returns the market-data (Unusual Whales) BYOK key status. The plaintext is
- *       NEVER returned — only `configured`, a last-4-char masking hint (`keyHintTail`),
- *       and the `verified` flag. When no key is stored the response is `{ configured:
- *       false }`.
- *     tags: [Advisor]
- *     responses:
- *       200: { description: '{ configured: false } or { configured: true, keyHintTail, verified } — no key material.' }
- *   put:
- *     summary: Save (or replace) the Unusual Whales market-data key.
- *     description: >
- *       Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext
- *       plus a last-4-char masking hint — the plaintext is never persisted or returned.
- *       Runs a lightweight verification probe: a 401/403 rejects the save with
- *       `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a
- *       transient failure (timeout / upstream unavailable) stores the key anyway and
- *       returns `verified: false`. Rate limited to 10 saves per user per hour.
- *     tags: [Advisor]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [apiKey]
- *             properties:
- *               apiKey: { type: string, minLength: 8 }
- *     responses:
- *       200: { description: '{ configured: true, keyHintTail, verified: boolean }.' }
- *       400: { description: 'Validation error or MARKET_DATA_KEY_INVALID (key rejected by Unusual Whales).' }
- *       429: { description: Save rate limit reached (10 / hour). }
- *   delete:
- *     summary: Remove the Unusual Whales market-data key.
- *     description: >
- *       Hard-deletes the stored key for the authenticated user. The ciphertext is
- *       gone from the database; the plaintext was never persisted.
- *     tags: [Advisor]
- *     responses:
- *       204: { description: Deleted. }
- *       404: { description: No market-data key configured. }
- */
-advisorRouter.get('/market-data-key', getMarketDataKeyHandler);
-advisorRouter.put('/market-data-key', perUserMarketDataKeySaveRateLimit, saveMarketDataKeyHandler);
-advisorRouter.delete('/market-data-key', deleteMarketDataKeyHandler);
-
 // === trade-data-consent endpoints (Task 23; design §Component 1/3) ===
 
 /**
@@ -732,57 +663,5 @@ advisorRouter.delete('/market-data-key', deleteMarketDataKeyHandler);
  */
 advisorRouter.get('/trade-data-consent', getTradeDataConsentHandler);
 advisorRouter.put('/trade-data-consent', setTradeDataConsentHandler);
-
-// === options-chain viewer endpoint (Task 35; design §Component 12) ===
-
-/**
- * @swagger
- * /api/advisor/options-chain:
- *   get:
- *     summary: Get one expiry's option chain for a symbol from Unusual Whales.
- *     description: >
- *       Backs the options-tools page chain viewer. Shares the Unusual Whales client and
- *       the `market_data_options_chain` tool's parsing (no duplicate fetch logic). When
- *       the authenticated user has no Unusual Whales key the response is `{ configured:
- *       false }` so the viewer shows an empty-state CTA to Settings, not an error.
- *
- *       A chain is scoped to ONE expiry. Omit `expiration` to get the nearest tradeable
- *       one. The response is `{ configured: true, expiration, expirations[], underlying?,
- *       chain }`: `expiration` is the expiry actually returned, `expirations` is every
- *       tradeable expiry (soonest first) for the picker, and `chain` is the compact
- *       projection `{ symbol, expiration?, count, contracts[] }` sorted by strike. Each
- *       contract carries `premium` — the last traded price, or the NBBO midpoint when the
- *       contract has not traded — which is what the calculator uses as an entry price.
- *
- *       `underlying` is the last trade on the underlying (`price`, `market_time`,
- *       `tape_time`), used by the viewer to anchor the ladder on at-the-money. It is
- *       fetched separately and is OMITTED rather than fatal when that quote fails — the
- *       chain is the payload; the anchor is not worth failing it for. A `market_time`
- *       other than `regular` means the price is a pre/post-market print, not a live quote.
- *
- *       Requesting an `expiration` the symbol has no contracts for is 404
- *       SYMBOL_NOT_FOUND with an explicit message. Other upstream failures map to their
- *       reason codes on the matching HTTP status: 400 MARKET_DATA_KEY_INVALID, 429
- *       MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 503 MARKET_DATA_UNAVAILABLE.
- *       The plaintext key is never returned or logged.
- *     tags: [Advisor]
- *     parameters:
- *       - in: query
- *         name: symbol
- *         required: true
- *         schema: { type: string, pattern: '^[A-Z.]{1,6}$' }
- *       - in: query
- *         name: expiration
- *         description: Expiry to fetch (YYYY-MM-DD). Defaults to the nearest tradeable expiry.
- *         schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
- *     responses:
- *       200:
- *         description: '{ configured: false } or { configured: true, expiration, expirations, underlying?, chain }.'
- *       400: { description: 'Validation error or MARKET_DATA_KEY_INVALID.' }
- *       404: { description: 'SYMBOL_NOT_FOUND — unknown symbol, or no contracts on that expiry.' }
- *       429: { description: 'MARKET_DATA_RATE_LIMITED or PLATFORM_RATE_LIMITED.' }
- *       503: { description: MARKET_DATA_UNAVAILABLE. }
- */
-advisorRouter.get('/options-chain', getOptionsChainHandler);
 
 export { advisorRouter };

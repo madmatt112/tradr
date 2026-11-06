@@ -1,6 +1,6 @@
 import Decimal from 'decimal.js';
 
-import { getCurrencyMinorUnits, type Tag } from '@tradr/shared';
+import { getCurrencyMinorUnits, isPastExpiryUnsettled, type Tag } from '@tradr/shared';
 import { classifyPosition } from '@tradr/shared/lib/performance';
 import {
   computeMaxLoss,
@@ -80,6 +80,16 @@ export function mapListRow(row: RawRow) {
     stopLoss: stopLossRaw,
   });
 
+  const openUnits = pnl.totalEntryQuantity - pnl.totalExitQuantity;
+
+  // TD4: the key appears only when true, never `pastExpiryUnsettled: false`.
+  const pastExpiryUnsettled = isPastExpiryUnsettled({
+    assetType: row.asset_type,
+    status: row.status,
+    symbol: row.symbol,
+    openUnits,
+  });
+
   return {
     id: row.id,
     userId: row.user_id,
@@ -110,7 +120,7 @@ export function mapListRow(row: RawRow) {
     stopLoss: stopLossRaw === null ? null : new Decimal(stopLossRaw).toNumber(),
     targetRR,
     actualRR,
-    openUnits: pnl.totalEntryQuantity - pnl.totalExitQuantity,
+    openUnits,
     closedUnits: pnl.totalExitQuantity,
     openCostBasis: computeOpenCostBasis(
       totals,
@@ -118,6 +128,7 @@ export function mapListRow(row: RawRow) {
       row.asset_type as 'stock' | 'option',
       currencyMinorUnits,
     ),
+    ...(pastExpiryUnsettled ? { pastExpiryUnsettled: true } : {}),
   };
 }
 
@@ -150,6 +161,7 @@ export interface PositionGroupEntryRow {
   maxLoss: number | null;
   maxLossReason: string | null;
   legs: (PositionListItemRow & { groupId: string })[];
+  pastExpiryLegCount?: number;
 }
 
 function toStrategyLeg(row: RawRow): StrategyLeg {
@@ -270,6 +282,9 @@ export function buildGroupEntry(groupId: string, legRows: RawRow[]): PositionGro
 
   const legs = legRows.map((row) => ({ ...mapListRow(row), groupId }));
 
+  // AC 1.3: present only when above zero.
+  const pastExpiryLegCount = legs.filter((leg) => leg.pastExpiryUnsettled === true).length;
+
   return {
     kind: 'group',
     id: groupId,
@@ -297,6 +312,7 @@ export function buildGroupEntry(groupId: string, legRows: RawRow[]): PositionGro
     maxLoss,
     maxLossReason,
     legs,
+    ...(pastExpiryLegCount > 0 ? { pastExpiryLegCount } : {}),
   };
 }
 

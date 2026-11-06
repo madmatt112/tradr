@@ -351,6 +351,41 @@ export function encodeOccCompact(input: OccComponents): ParseResult<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Expiry helpers (design C1) — Component 1 / Req 1
+// ---------------------------------------------------------------------------
+
+// 16:00 America/New_York is 20:00Z under EDT and 21:00Z under EST. Probe both
+// candidates with Intl.DateTimeFormat (Node's ICU is the IANA DST authority)
+// rather than hand-rolling a transition table.
+export function expiryInstant(expiration: string): Date {
+  const [year, month, day] = expiration.split('-').map(Number);
+  const edtCandidate = new Date(Date.UTC(year, month - 1, day, 20, 0, 0));
+  const localHour = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    hourCycle: 'h23',
+  }).format(edtCandidate);
+  if (localHour === '16') return edtCandidate;
+  return new Date(Date.UTC(year, month - 1, day, 21, 0, 0));
+}
+
+export type ExpiryUnsettledLeg = {
+  assetType: 'stock' | 'option';
+  status: 'draft' | 'open' | 'closed';
+  symbol: string;
+  openUnits: number;
+};
+
+export function isPastExpiryUnsettled(leg: ExpiryUnsettledLeg, now: Date = new Date()): boolean {
+  if (leg.assetType !== 'option' || leg.status !== 'open' || leg.openUnits <= 0) {
+    return false;
+  }
+  const parsed = parseOccSymbol(leg.symbol);
+  if (!parsed.ok) return false;
+  return now.getTime() > expiryInstant(parsed.value.expiration).getTime();
+}
+
+// ---------------------------------------------------------------------------
 // Black-Scholes section (Component 3) — private helpers
 //
 // Topic G "designer's choice" framing (design.md §Component 3):

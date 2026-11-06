@@ -131,8 +131,11 @@ different multiplier. It also refuses a mini contract.
 
 Export the **Trades** section of your report only.
 
-Tradr refuses assignment, exercise, and expiration rows. Tradr does not yet
-import option lifecycle events. Close or remove these contracts by hand.
+Tradr reads the assignment and exercise codes in the `Notes/Codes` column —
+`A`, `EX`, `AEX` and `MEX` — and imports each as a settlement on the option
+leg. It refuses the `EP` and `GEA` codes; close or remove those contracts by
+hand. Tradr does not detect an expiration from the report, so a contract that
+expired worthless stays open until you settle it by hand.
 
 A contract with no closing row stays open, the same as a stock position.
 

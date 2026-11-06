@@ -1,6 +1,6 @@
 // Options-chain viewer endpoint (design §Component 12, REQ-12.2/12.3/12.4).
 //
-// GET /api/advisor/options-chain?symbol=…[&expiration=YYYY-MM-DD]
+// GET /api/options/chain?symbol=…[&expiration=YYYY-MM-DD]
 //
 // Shares the Unusual Whales client (Task 8) and the `market_data_options_chain`
 // tool's parsing (Task 13: parseOptionChain + optionsChainInputSchema) so the
@@ -16,9 +16,11 @@
 
 import type { Context } from 'hono';
 
+import { parseOccSymbol } from '@tradr/shared';
+
 import { db } from '@/db';
 import { decrypt } from '@/lib/encryption';
-import { AppError, ValidationError } from '@/lib/errors';
+import { AppError, ConflictError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 
 import { selectUnusualWhalesKeyCiphertext } from './external-keys.query';
@@ -158,4 +160,78 @@ export async function getOptionsChainHandler(c: Context<AuthEnv>) {
     });
     throw toHttpError(error);
   }
+}
+
+/** Parse a UW numeric field, which arrives as a decimal STRING on most rows. */
+function asNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * The live Greeks for one option contract (design C7 Entry Greeks — chain
+ * source). Fetches the contract's own expiry through the shared
+ * `fetchChainForExpiry` and matches on parsed OCC components, since the
+ * provider's own symbol form can differ from the stored one. No key, or a
+ * contract missing delta, gamma, theta or vega, is a 409 (chain data is
+ * incomplete, not a client error). An expired or unlisted contract reads 404
+ * through `toHttpError`. The provider carries no rho (Known limits).
+ */
+export async function getContractGreeks(
+  userId: string,
+  occSymbol: string,
+): Promise<{ delta: number; gamma: number; thetaPerDay: number; vegaPerPct: number }> {
+  const parsed = parseOccSymbol(occSymbol);
+  if (!parsed.ok) {
+    throw new ValidationError('occSymbol is not a valid OCC contract');
+  }
+
+  const ciphertext = await selectUnusualWhalesKeyCiphertext(db, userId);
+  if (!ciphertext) {
+    throw new ConflictError('No Unusual Whales key is configured');
+  }
+
+  const apiKey = decrypt(ciphertext.encryptedKey);
+  const client = createUnusualWhalesClient({
+    apiKey,
+    userId,
+    cache: new MarketDataCache(),
+    meter: new MarketDataMeter(),
+  });
+
+  let resolved: { raw: unknown; expiration: string; expirations: string[] };
+  try {
+    resolved = await fetchChainForExpiry(client, parsed.value.underlying, parsed.value.expiration);
+  } catch (error) {
+    throw toHttpError(error);
+  }
+
+  const rows = ((resolved.raw as { data?: unknown[] }).data ?? []) as Record<string, unknown>[];
+  const match = rows.find((row) => {
+    const rowSymbol = typeof row.option_symbol === 'string' ? row.option_symbol : '';
+    const rowParsed = parseOccSymbol(rowSymbol);
+    return (
+      rowParsed.ok &&
+      rowParsed.value.underlying === parsed.value.underlying &&
+      rowParsed.value.expiration === parsed.value.expiration &&
+      rowParsed.value.type === parsed.value.type &&
+      Number(rowParsed.value.strike) === Number(parsed.value.strike)
+    );
+  });
+
+  const delta = match ? asNumber(match.delta) : undefined;
+  const gamma = match ? asNumber(match.gamma) : undefined;
+  const thetaPerDay = match ? asNumber(match.theta) : undefined;
+  const vegaPerPct = match ? asNumber(match.vega) : undefined;
+  if (
+    delta === undefined ||
+    gamma === undefined ||
+    thetaPerDay === undefined ||
+    vegaPerPct === undefined
+  ) {
+    throw new ConflictError('The contract is missing required Greeks');
+  }
+
+  return { delta, gamma, thetaPerDay, vegaPerPct };
 }

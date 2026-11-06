@@ -6,9 +6,9 @@ description: Every table Tradr creates, its columns, and how they reference each
 {/* GENERATED FILE — do not edit.
     Source: apps/api/src/db/migrations/meta/ (latest snapshot) · Generator: apps/docs/scripts/gen-db-schema.mjs */}
 
-Tradr's schema is **45 tables**, created by **43 migrations** that run
+Tradr's schema is **50 tables**, created by **44 migrations** that run
 automatically when the api boots. This page is generated from the Drizzle snapshot
-for the latest schema-changing migration (`0042_position_groups`), so it describes the schema the migrations
+for the latest schema-changing migration (`0043_option_lifecycle`), so it describes the schema the migrations
 actually produce.
 
 You do not need any of this to run Tradr. It is here for writing queries against
@@ -609,6 +609,76 @@ a query you write against these tables may need updating on any release.
 | `window_started_at` | `timestamp with time zone` | not null |
 | `locked_until` | `timestamp with time zone` | — |
 
+### `option_settlement_fills`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `settlement_id` | `uuid` | not null |
+| `fill_id` | `uuid` | — |
+| `written` | `boolean` | not null |
+
+**References**
+
+- `settlement_id` → `option_settlements.id` on delete cascade
+- `fill_id` → `fills.id` on delete set null
+
+### `option_settlement_rows`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `settlement_id` | `uuid` | not null |
+| `position_id` | `uuid` | — |
+| `touch` | `varchar(12)` | not null |
+| `closed_row` | `boolean` | not null |
+| `prior_last_flat_at` | `timestamp with time zone` | — |
+| `prior_last_flat_net_pnl` | `numeric(18, 4)` | — |
+
+**References**
+
+- `settlement_id` → `option_settlements.id` on delete cascade
+- `position_id` → `positions.id` on delete set null
+
+### `option_settlements`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `position_id` | `uuid` | not null |
+| `outcome` | `varchar(9)` | not null |
+| `quantity` | `numeric(18, 8)` | not null |
+| `premium` | `numeric(18, 8)` | not null |
+| `settled_at` | `timestamp with time zone` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `position_id` → `positions.id` on delete cascade
+
+### `position_entry_greeks`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `position_id` | `uuid` | primary key |
+| `delta` | `numeric(24, 12)` | not null |
+| `gamma` | `numeric(24, 12)` | not null |
+| `theta_per_day` | `numeric(24, 12)` | not null |
+| `vega_per_pct` | `numeric(24, 12)` | not null |
+| `rho_per_pct` | `numeric(24, 12)` | — |
+| `source` | `varchar(13)` | not null |
+| `volatility` | `numeric(18, 8)` | — |
+| `spot` | `numeric(18, 8)` | — |
+| `rate` | `numeric(18, 8)` | — |
+| `dividend_yield` | `numeric(18, 8)` | — |
+| `captured_at` | `timestamp with time zone` | not null |
+
+**References**
+
+- `position_id` → `positions.id` on delete cascade
+
 ### `position_groups`
 
 | Column | Type | Notes |
@@ -621,6 +691,28 @@ a query you write against these tables may need updating on any release.
 **References**
 
 - `user_id` → `users.id` on delete cascade
+
+### `position_rolls`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid` | primary key, default `gen_random_uuid()` |
+| `user_id` | `uuid` | not null |
+| `chain_id` | `uuid` | not null |
+| `from_position_id` | `uuid` | not null |
+| `to_position_id` | `uuid` | not null |
+| `exit_fill_id` | `uuid` | not null |
+| `entry_fill_id` | `uuid` | not null |
+| `rolled_at` | `timestamp with time zone` | not null |
+| `created_at` | `timestamp with time zone` | not null, default `now()` |
+
+**References**
+
+- `user_id` → `users.id` on delete cascade
+- `from_position_id` → `positions.id` on delete cascade
+- `to_position_id` → `positions.id` on delete cascade
+- `exit_fill_id` → `fills.id` on delete cascade
+- `entry_fill_id` → `fills.id` on delete cascade
 
 ### `user_backup_codes`
 

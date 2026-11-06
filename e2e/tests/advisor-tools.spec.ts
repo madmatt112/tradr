@@ -143,9 +143,9 @@ async function ensureStackOrSkip(req: APIRequestContext): Promise<void> {
   }
 }
 
-/** Save a UW market-data key on Settings → Advisor and wait for it to verify. */
+/** Save a UW market-data key on Settings → Market data and wait for it to verify. */
 async function saveMarketDataKey(page: Page, key: string): Promise<void> {
-  await page.goto('/settings/advisor');
+  await page.goto('/settings/market-data');
   const card = page.getByTestId('market-data-key-card');
   await expect(card).toBeVisible();
   await card.getByLabel('API key').fill(key);
@@ -262,7 +262,7 @@ test.describe('advisor-tools', () => {
   //
   // Fully deterministic through the task-37 harness: Black-Scholes and OCC are
   // pure client-side math (no API, no LLM), and the Options Chain viewer hits
-  // GET /api/advisor/options-chain which fans out to the UW stub.
+  // GET /api/options/chain which fans out to the UW stub.
   // -------------------------------------------------------------------------
   test('Black-Scholes pricer computes Greeks (pure client-side math, unchanged)', async ({
     page,
@@ -315,7 +315,7 @@ test.describe('advisor-tools', () => {
     await registerAndAuthenticate(page, 'chain');
 
     // Without a UW key: typing a symbol yields the empty-state CTA to Settings,
-    // NOT an error (REQ-12.2). GET /options-chain returns { configured: false }.
+    // NOT an error (REQ-12.2). GET /api/options/chain returns { configured: false }.
     await page.goto('/options');
     await page.locator('#options-chain-symbol').fill('AAPL');
     await expect(

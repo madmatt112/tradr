@@ -36,12 +36,17 @@ import { decodeOptionContract } from '../utils/optionContract';
 import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
 import { BreakevenBadge } from './BreakevenBadge';
+import { EntryGreeksDialog } from './EntryGreeksDialog';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
 import { LinkLegsDialog } from './LinkLegsDialog';
+import { PastExpiryChip } from './PastExpiryChip';
 import { PositionEditDialog } from './PositionEditDialog';
 import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
+import { PositionTimeline } from './PositionTimeline';
+import { RollLegDialog } from './RollLegDialog';
+import { SettleLegDialog } from './SettleLegDialog';
 
 interface Props {
   positionId: string;
@@ -60,6 +65,9 @@ export function PositionDetailView({ positionId }: Props) {
   const [fillDialogOpen, setFillDialogOpen] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [settleOpen, setSettleOpen] = useState(false);
+  const [rollOpen, setRollOpen] = useState(false);
+  const [greeksOpen, setGreeksOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -97,9 +105,16 @@ export function PositionDetailView({ positionId }: Props) {
 
   // Reopen (R13): closed positions whose openedAt is still the current trading
   // day in the account's timezone. Server is authoritative and 409s a prior-day
-  // reopen; this only governs whether the button is offered.
+  // reopen; this only governs whether the button is offered. design C10: a row
+  // touched by a settlement is never offered Reopen (AC 4.8) — unsettle first.
   const canReopen =
-    isClosed && isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date());
+    isClosed &&
+    isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date()) &&
+    (position.settlements ?? []).length === 0;
+
+  // design C10: Settle, Roll and Capture Greeks are offered on the detail
+  // header for any open option leg.
+  const isOpenOptionLeg = isOpen && position.assetType === 'option';
 
   // Determine account currency from the position (we need it for formatting)
   // The detail endpoint doesn't return accountCurrency, so use a fallback
@@ -135,6 +150,7 @@ export function PositionDetailView({ positionId }: Props) {
             <Badge variant="outline">{position.assetType}</Badge>
             <Badge variant="outline">{position.status}</Badge>
             {position.classification === 'breakeven' && <BreakevenBadge />}
+            {position.pastExpiryUnsettled && <PastExpiryChip />}
           </div>
           {optionContract && (
             <p className="text-sm text-muted-foreground">
@@ -205,6 +221,25 @@ export function PositionDetailView({ positionId }: Props) {
               disabled={reopenPosition.isPending}
             >
               {reopenPosition.isPending ? 'Reopening...' : 'Reopen'}
+            </Button>
+          )}
+          {isOpenOptionLeg && (
+            <Button className="cursor-pointer" onClick={() => setSettleOpen(true)}>
+              Settle
+            </Button>
+          )}
+          {isOpenOptionLeg && (
+            <Button variant="outline" className="cursor-pointer" onClick={() => setRollOpen(true)}>
+              Roll
+            </Button>
+          )}
+          {isOpenOptionLeg && (
+            <Button
+              variant="outline"
+              className="cursor-pointer"
+              onClick={() => setGreeksOpen(true)}
+            >
+              Capture Greeks
             </Button>
           )}
           {!isDraft && (
@@ -419,6 +454,13 @@ export function PositionDetailView({ positionId }: Props) {
         />
       </div>
 
+      {/* Timeline — one date-ordered history of fills, settlements, rolls and
+          entry Greeks (design C10, D17; Requirement 8.1). */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Timeline</h2>
+        <PositionTimeline position={position} />
+      </div>
+
       {/* Edit Dialog */}
       <PositionEditDialog open={editOpen} onOpenChange={setEditOpen} position={position} />
 
@@ -448,6 +490,19 @@ export function PositionDetailView({ positionId }: Props) {
           open={linkOpen}
           onOpenChange={setLinkOpen}
         />
+      )}
+
+      {/* Settle dialog — mounted only while open, same reasoning as the tags
+          and link-legs dialogs above. */}
+      {settleOpen && (
+        <SettleLegDialog position={position} open={settleOpen} onOpenChange={setSettleOpen} />
+      )}
+
+      {/* Roll and entry-Greeks dialogs — mounted only while open, same
+          reasoning as the dialogs above (design C10). */}
+      {rollOpen && <RollLegDialog position={position} open={rollOpen} onOpenChange={setRollOpen} />}
+      {greeksOpen && (
+        <EntryGreeksDialog position={position} open={greeksOpen} onOpenChange={setGreeksOpen} />
       )}
 
       {/* Delete Confirmation */}

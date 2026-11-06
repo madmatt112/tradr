@@ -8,8 +8,10 @@ import {
   type LocatedWarning,
   type NumberFormat,
   type OccComponents,
+  type RowShape,
 } from '@tradr/shared';
 
+import { classifyEventCode } from './csv-lifecycle';
 import { normalizeNumber, type NormalizedRow } from './csv-normalize';
 
 /**
@@ -35,6 +37,12 @@ export interface ContractOptions {
   numberFormat: NumberFormat;
   /** Tradr field -> CSV column name, to set `csvColumn` on located errors. */
   columns: Record<string, string>;
+  /**
+   * Declared row shape (C12). Only `execution` lets an `A`/`EX`/`AEX`/`MEX`
+   * code tag `lifecycleOutcome` instead of refusing; `round-trip` and an
+   * undefined shape keep refusing every lifecycle code, same as before.
+   */
+  rowShape?: RowShape;
 }
 
 /** Result of {@link resolveContracts}: surviving rows plus located diagnostics. */
@@ -48,17 +56,17 @@ export interface ResolveResult {
 const CONTRACT_FIELDS = ['expiry', 'strike', 'right'] as const;
 
 /**
- * IBKR lifecycle codes Tradr cannot yet import, mapped to the kind named in the
- * refusal message (REQ-4.2). `A` is an assignment; `EX`/`AEX`/`MEX` an exercise;
- * `EP`/`GEA` an expiration or assignment. Other codes (`O`, `C`, `P`, …) import.
+ * The kind named in the refusal/tagging message for each {@link classifyEventCode}
+ * outcome (REQ-4.2, C12): `assigned` reads as an assignment, `exercised` as an
+ * exercise, `unsupported` (`EP`/`GEA`) as an expiration or assignment. Under an
+ * `execution` rowShape, `assigned`/`exercised` tag `lifecycleOutcome` instead of
+ * refusing (task 19); `unsupported`, and every code under any other rowShape,
+ * still refuses. Other codes (`O`, `C`, `P`, …) classify as `undefined` and import.
  */
-const EVENT_KIND: Record<string, string> = {
-  A: 'assignment',
-  EX: 'exercise',
-  AEX: 'exercise',
-  MEX: 'exercise',
-  EP: 'expiration or assignment',
-  GEA: 'expiration or assignment',
+const EVENT_KIND: Record<'assigned' | 'exercised' | 'unsupported', string> = {
+  assigned: 'assignment',
+  exercised: 'exercise',
+  unsupported: 'expiration or assignment',
 };
 
 /**
@@ -134,20 +142,25 @@ export function resolveContracts(rows: NormalizedRow[], opts: ContractOptions): 
       );
     }
 
-    // (4) Lifecycle event (REQ-4.2). The `;` delimiter for multiple IBKR
-    // Notes/Codes in one cell is INFERRED: the Flex fields page does not state
-    // how codes share a cell. It degrades safely — a single-code cell yields one
-    // token and still matches; a code missed by a wrong delimiter merely imports
-    // the contract at ×100 (the residual), never a crash.
+    // (4) Lifecycle event (REQ-4.2, C12). `classifyEventCode` (task 18) owns the
+    // `;` delimiter and the per-token classification — this module never
+    // re-implements it. `unsupported` (`EP`/`GEA`) always refuses.
+    // `assigned`/`exercised` (`A`/`EX`/`AEX`/`MEX`) tag `lifecycleOutcome`
+    // instead of refusing, but ONLY under an `execution` rowShape (AC 10.1);
+    // under `round-trip` or an undefined rowShape they refuse exactly as before.
+    let lifecycleOutcome: 'assigned' | 'exercised' | undefined;
     if (values.eventCode !== undefined) {
-      const tokens = values.eventCode.split(';').map((t) => t.trim().toUpperCase());
-      const kind = tokens.map((t) => EVENT_KIND[t]).find((k) => k !== undefined);
-      if (kind !== undefined) {
-        push(
-          'eventCode',
-          'OPTION_EVENT_NOT_SUPPORTED',
-          `Row ${sourceRow} carries a ${kind} event ("${values.eventCode}") and cannot be imported until option lifecycle events are supported; close or remove the contract by hand.`,
-        );
+      const classified = classifyEventCode(values.eventCode);
+      if (classified !== undefined) {
+        if (classified === 'unsupported' || opts.rowShape !== 'execution') {
+          push(
+            'eventCode',
+            'OPTION_EVENT_NOT_SUPPORTED',
+            `Row ${sourceRow} carries a ${EVENT_KIND[classified]} event ("${values.eventCode}") and cannot be imported until option lifecycle events are supported; close or remove the contract by hand.`,
+          );
+        } else {
+          lifecycleOutcome = classified;
+        }
       }
     }
 
@@ -299,7 +312,11 @@ export function resolveContracts(rows: NormalizedRow[], opts: ContractOptions): 
       errors.push(...rowErrors);
       continue;
     }
-    outRows.push({ sourceRow, values: { ...values, symbol: compact as string } });
+    outRows.push({
+      sourceRow,
+      values: { ...values, symbol: compact as string },
+      ...(lifecycleOutcome !== undefined ? { lifecycleOutcome } : {}),
+    });
   }
 
   return { rows: outRows, errors, warnings };

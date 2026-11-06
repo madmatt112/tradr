@@ -22,7 +22,9 @@ import { RuleWeightSchema, TradingRuleDefinitionSchema } from './trading-rule';
 // Version 3 adds the lot-selections entry and the taxLotMethod preference (C12).
 // Version 4 adds the transfer-links entry and each account's taxTreatment (C8).
 // Version 5 adds the position-groups entry and each leg's groupId (C11).
-export const ARCHIVE_VERSION = 5;
+// Version 6 adds the five option-lifecycle entries (settlements, their touched
+// rows and fills, rolls and entry Greeks) (C14).
+export const ARCHIVE_VERSION = 6;
 
 // The fixed entry names, in the order they appear in the archive (Data Models).
 // Image entries (matching ARCHIVE_IMAGE_ENTRY_RE) come first, before
@@ -40,6 +42,11 @@ export const ARCHIVE_ENTRY_ORDER = [
   'fills.ndjson',
   'lot-selections.ndjson',
   'transfer-links.ndjson',
+  'option-settlements.ndjson',
+  'option-settlement-rows.ndjson',
+  'option-settlement-fills.ndjson',
+  'position-rolls.ndjson',
+  'entry-greeks.ndjson',
   'position-tags.ndjson',
   'position-images.ndjson',
   'ledger-entries.ndjson',
@@ -281,6 +288,14 @@ export const ArchiveCountsSchema = z
     // Optional so a version-1, -2 or -3 manifest (which has no transfer-links
     // entry) still parses; the reader treats an absent count as 0 (C8).
     transferLinks: nonNegInt.optional(),
+    // Optional so a version-1 through -5 manifest (which has none of the
+    // option-lifecycle entries) still parses; the reader treats an absent count
+    // as 0 (C14).
+    optionSettlements: nonNegInt.optional(),
+    optionSettlementRows: nonNegInt.optional(),
+    optionSettlementFills: nonNegInt.optional(),
+    positionRolls: nonNegInt.optional(),
+    entryGreeks: nonNegInt.optional(),
     positionTags: nonNegInt,
     positionImages: nonNegInt,
     ledgerEntries: nonNegInt,
@@ -324,8 +339,15 @@ export type ArchiveDegradation = z.infer<typeof ArchiveDegradationSchema>;
 export const ArchiveManifestSchema = z
   .object({
     format: z.literal('tradr-account-archive'),
-    // Accept every earlier payload this build reads and its own version (D4, C12 D5, C8, C11).
-    archiveVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+    // Accept every earlier payload this build reads and its own version (D4, C12 D5, C8, C11, C14).
+    archiveVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+      z.literal(6),
+    ]),
     // APP_VERSION at export, or 'unknown'.
     sourceAppVersion: z.string(),
     exportedAt: timestamp,
@@ -496,6 +518,94 @@ export const ArchiveTransferLinkSchema = z
   })
   .strict();
 export type ArchiveTransferLink = z.infer<typeof ArchiveTransferLinkSchema>;
+
+// A settlement of an option leg (option_settlements, C14): the leg went
+// worthless, was assigned or was exercised. No `userId` — the import owns the
+// row for the importing user. `quantity` has a `> 0` CHECK (unsigned); `premium`
+// has none (signed).
+export const ArchiveOptionSettlementSchema = z
+  .object({
+    id: uuid,
+    positionId: uuid,
+    outcome: z.enum(['worthless', 'assigned', 'exercised']),
+    quantity: archiveDecimalString(18, 8, { signed: false }),
+    premium: archiveDecimalString(18, 8, { signed: true }),
+    settledAt: timestamp,
+    createdAt: timestamp,
+  })
+  .strict();
+export type ArchiveOptionSettlement = z.infer<typeof ArchiveOptionSettlementSchema>;
+
+// A position a settlement touched (option_settlement_rows, C14): the leg, a
+// stock exit it closed, or a stock lot it opened. `positionId` is SET NULL in
+// the DB, so a deleted touched row leaves it null; a set id must name an archive
+// position. No `userId` and no `createdAt`.
+export const ArchiveOptionSettlementRowSchema = z
+  .object({
+    id: uuid,
+    settlementId: uuid,
+    positionId: uuid.nullable(),
+    touch: z.enum(['leg', 'stock_exit', 'stock_opened']),
+    closedRow: z.boolean(),
+    priorLastFlatAt: timestamp.nullable(),
+    priorLastFlatNetPnl: archiveDecimalString(18, 4, { signed: true }).nullable(),
+  })
+  .strict();
+export type ArchiveOptionSettlementRow = z.infer<typeof ArchiveOptionSettlementRowSchema>;
+
+// A fill a settlement wrote or snapshotted (option_settlement_fills, C14).
+// `fillId` is SET NULL in the DB, so a deleted fill leaves it null; a set id
+// must name an archive fill. `written` marks a fill this settlement created,
+// versus a baseline snapshot. No `userId`.
+export const ArchiveOptionSettlementFillSchema = z
+  .object({
+    id: uuid,
+    settlementId: uuid,
+    fillId: uuid.nullable(),
+    written: z.boolean(),
+  })
+  .strict();
+export type ArchiveOptionSettlementFill = z.infer<typeof ArchiveOptionSettlementFillSchema>;
+
+// A roll (position_rolls, C14): one leg exited and another opened in the same
+// move. `chainId` groups a chain of rolls. All four references are notNull and
+// must name archive rows. No `userId` — the import owns the row.
+export const ArchivePositionRollSchema = z
+  .object({
+    id: uuid,
+    chainId: uuid,
+    fromPositionId: uuid,
+    toPositionId: uuid,
+    exitFillId: uuid,
+    entryFillId: uuid,
+    rolledAt: timestamp,
+    createdAt: timestamp,
+  })
+  .strict();
+export type ArchivePositionRoll = z.infer<typeof ArchivePositionRollSchema>;
+
+// The entry Greeks of a position (position_entry_greeks, C14), captured once at
+// open. `positionId` is the primary key (one row per position). The four core
+// Greeks are notNull numeric(24,12); `rhoPerPct` is nullable. The market inputs
+// (volatility, spot, rate, dividendYield) are nullable numeric(18,8). No
+// `userId` — the row cascades via `positionId`.
+export const ArchiveEntryGreeksSchema = z
+  .object({
+    positionId: uuid,
+    delta: archiveDecimalString(24, 12, { signed: true }),
+    gamma: archiveDecimalString(24, 12, { signed: true }),
+    thetaPerDay: archiveDecimalString(24, 12, { signed: true }),
+    vegaPerPct: archiveDecimalString(24, 12, { signed: true }),
+    rhoPerPct: archiveDecimalString(24, 12, { signed: true }).nullable(),
+    source: z.enum(['black_scholes', 'chain']),
+    volatility: archiveDecimalString(18, 8, { signed: true }).nullable(),
+    spot: archiveDecimalString(18, 8, { signed: true }).nullable(),
+    rate: archiveDecimalString(18, 8, { signed: true }).nullable(),
+    dividendYield: archiveDecimalString(18, 8, { signed: true }).nullable(),
+    capturedAt: timestamp,
+  })
+  .strict();
+export type ArchiveEntryGreeks = z.infer<typeof ArchiveEntryGreeksSchema>;
 
 export const ArchivePositionTagSchema = z.object({ positionId: uuid, tagId: uuid }).strict();
 export type ArchivePositionTag = z.infer<typeof ArchivePositionTagSchema>;

@@ -20,7 +20,12 @@ import {
   feeSchedules,
   fills,
   ledgerEntries,
+  optionSettlementFills,
+  optionSettlementRows,
+  optionSettlements,
+  positionEntryGreeks,
   positionImages,
+  positionRolls,
   positionTags,
   positions,
   tags,
@@ -321,6 +326,11 @@ describe('spoolAccountData', () => {
       fills: 1,
       lotSelections: 0,
       transferLinks: 0,
+      optionSettlements: 0,
+      optionSettlementRows: 0,
+      optionSettlementFills: 0,
+      positionRolls: 0,
+      entryGreeks: 0,
       positionTags: 1,
       positionImages: 1,
       ledgerEntries: 1,
@@ -465,14 +475,20 @@ describe('spoolAccountData', () => {
     const summary = await runSpool(seed.userId);
 
     // Counts stay at exactly one per category — the decoy never leaks in.
-    // The seed stores no lot selection, transfer link or position group, so those
-    // three are 0, not 1.
-    expect(
-      Object.entries(summary.counts).every(
-        ([k, n]) =>
-          n === (k === 'lotSelections' || k === 'transferLinks' || k === 'positionGroups' ? 0 : 1),
-      ),
-    ).toBe(true);
+    // The seed stores none of these eight categories, so they are 0, not 1.
+    const zeroKeys = new Set([
+      'lotSelections',
+      'transferLinks',
+      'positionGroups',
+      'optionSettlements',
+      'optionSettlementRows',
+      'optionSettlementFills',
+      'positionRolls',
+      'entryGreeks',
+    ]);
+    expect(Object.entries(summary.counts).every(([k, n]) => n === (zeroKeys.has(k) ? 0 : 1))).toBe(
+      true,
+    );
 
     const accountRows = await readNdjson('accounts.ndjson');
     expect(accountRows.map((r) => r.id)).toEqual([seed.accountId]);
@@ -484,5 +500,146 @@ describe('spoolAccountData', () => {
     expect(tagRows.map((r) => r.id)).toEqual([seed.tagId]);
     const conversationRows = await readNdjson('conversations.ndjson');
     expect(conversationRows.map((r) => r.id)).toEqual([seed.conversationId]);
+  });
+
+  // Design C14 (AC 11.3) — a settlement, its touched row and fill, a roll and
+  // entry Greeks each spool to their own entry with a matching count.
+  it('spools a settlement, its row and fill, a roll and entry Greeks', async () => {
+    const seed = await seedFull();
+
+    const [settlement] = await db
+      .insert(optionSettlements)
+      .values({
+        userId: seed.userId,
+        positionId: seed.positionId,
+        outcome: 'worthless',
+        quantity: '5',
+        premium: '150',
+        settledAt: new Date('2026-01-05T00:00:00Z'),
+      })
+      .returning({ id: optionSettlements.id });
+
+    await db.insert(optionSettlementRows).values({
+      settlementId: settlement.id,
+      positionId: seed.positionId,
+      touch: 'leg',
+      closedRow: true,
+      priorLastFlatAt: null,
+      priorLastFlatNetPnl: null,
+    });
+
+    const [settlementFill] = await db
+      .insert(fills)
+      .values({
+        positionId: seed.positionId,
+        type: 'exit',
+        price: '0',
+        quantity: '5',
+        fees: '0',
+        filledAt: new Date('2026-01-05T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+
+    await db.insert(optionSettlementFills).values({
+      settlementId: settlement.id,
+      fillId: settlementFill.id,
+      written: true,
+    });
+
+    // eslint-disable-next-line no-restricted-syntax -- a second leg as the roll's target, seeded for the reader test
+    const [toLeg] = await db
+      .insert(positions)
+      .values({
+        userId: seed.userId,
+        accountId: seed.accountId,
+        symbol: 'MSFT260117C00150000',
+        side: 'short',
+        assetType: 'option',
+        status: 'open',
+        openedAt: new Date('2026-01-05T00:00:00Z'),
+      })
+      .returning({ id: positions.id });
+    const [rollExitFill] = await db
+      .insert(fills)
+      .values({
+        positionId: seed.positionId,
+        type: 'exit',
+        price: '1',
+        quantity: '5',
+        fees: '0',
+        filledAt: new Date('2026-01-06T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+    const [rollEntryFill] = await db
+      .insert(fills)
+      .values({
+        positionId: toLeg.id,
+        type: 'entry',
+        price: '2',
+        quantity: '5',
+        fees: '0',
+        filledAt: new Date('2026-01-06T00:00:00Z'),
+      })
+      .returning({ id: fills.id });
+    await db.insert(positionRolls).values({
+      userId: seed.userId,
+      chainId: randomUUID(),
+      fromPositionId: seed.positionId,
+      toPositionId: toLeg.id,
+      exitFillId: rollExitFill.id,
+      entryFillId: rollEntryFill.id,
+      rolledAt: new Date('2026-01-06T00:00:00Z'),
+    });
+
+    await db.insert(positionEntryGreeks).values({
+      positionId: seed.positionId,
+      delta: '0.52',
+      gamma: '0.013',
+      thetaPerDay: '-0.045',
+      vegaPerPct: '0.09',
+      rhoPerPct: null,
+      source: 'black_scholes',
+      volatility: '0.28',
+      spot: '160',
+      rate: '0.045',
+      dividendYield: null,
+      capturedAt: new Date('2026-01-01T00:00:00Z'),
+    });
+
+    const summary = await runSpool(seed.userId);
+
+    expect(summary.counts.optionSettlements).toBe(1);
+    expect(summary.counts.optionSettlementRows).toBe(1);
+    expect(summary.counts.optionSettlementFills).toBe(1);
+    expect(summary.counts.positionRolls).toBe(1);
+    expect(summary.counts.entryGreeks).toBe(1);
+
+    const [settlementRow] = await readNdjson('option-settlements.ndjson');
+    expect(settlementRow.id).toBe(settlement.id);
+    expect(settlementRow.positionId).toBe(seed.positionId);
+    expect(settlementRow.outcome).toBe('worthless');
+    expect(settlementRow).not.toHaveProperty('userId');
+
+    const [settlementRowRow] = await readNdjson('option-settlement-rows.ndjson');
+    expect(settlementRowRow.settlementId).toBe(settlement.id);
+    expect(settlementRowRow.positionId).toBe(seed.positionId);
+    expect(settlementRowRow.touch).toBe('leg');
+
+    const [settlementFillRow] = await readNdjson('option-settlement-fills.ndjson');
+    expect(settlementFillRow.settlementId).toBe(settlement.id);
+    expect(settlementFillRow.fillId).toBe(settlementFill.id);
+    expect(settlementFillRow.written).toBe(true);
+
+    const [rollRow] = await readNdjson('position-rolls.ndjson');
+    expect(rollRow.fromPositionId).toBe(seed.positionId);
+    expect(rollRow.toPositionId).toBe(toLeg.id);
+    expect(rollRow.exitFillId).toBe(rollExitFill.id);
+    expect(rollRow.entryFillId).toBe(rollEntryFill.id);
+    expect(rollRow).not.toHaveProperty('userId');
+
+    const [greeksRow] = await readNdjson('entry-greeks.ndjson');
+    expect(greeksRow.positionId).toBe(seed.positionId);
+    expect(greeksRow.source).toBe('black_scholes');
+    expect(greeksRow.rhoPerPct).toBeNull();
   });
 });

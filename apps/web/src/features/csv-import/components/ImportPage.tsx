@@ -27,6 +27,7 @@ import { CommitPanel } from './CommitPanel';
 import { FileUpload } from './FileUpload';
 import { IssueList } from './IssueList';
 import { PreviewSummary } from './PreviewSummary';
+import { ProposedEvents } from './ProposedEvents';
 import { ProposedPositions } from './ProposedPositions';
 
 function previewErrorMessage(err: unknown): string {
@@ -306,6 +307,7 @@ export function ImportPage() {
             onDecline={handleDecline}
             onLabelChange={handleLabelChange}
           />
+          <ProposedEvents events={preview.data.events} positions={preview.data.positions} />
           <CommitPanel
             key={preview.data.token}
             preview={preview.data}

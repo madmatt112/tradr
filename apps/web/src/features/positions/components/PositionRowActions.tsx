@@ -1,4 +1,4 @@
-import { Minus, MoreHorizontal, Plus, RotateCcw, Trash2, Play } from 'lucide-react';
+import { CircleCheck, Minus, MoreHorizontal, Plus, RotateCcw, Trash2, Play } from 'lucide-react';
 import { useState } from 'react';
 
 import type { PositionListItem } from '@tradr/shared';
@@ -26,6 +26,7 @@ import { useDeletePosition, useOpenPosition, useReopenPosition } from '../hooks/
 import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
 import { FillDialog } from './FillDialog';
+import { SettleLegDialog } from './SettleLegDialog';
 
 interface Props {
   position: PositionListItem & { groupId?: string | null };
@@ -57,10 +58,13 @@ export function PositionRowActions({ position }: Props) {
   /** Play opened the fill dialog to collect a draft's entry — open once it saves. */
   const [openAfterFill, setOpenAfterFill] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [settleOpen, setSettleOpen] = useState(false);
 
   const isDraft = position.status === 'draft';
   const isOpen = position.status === 'open';
   const isClosed = position.status === 'closed';
+  // design C10: Settle is offered from the row menu on any open option leg.
+  const canSettle = isOpen && position.assetType === 'option';
 
   // A draft is a PLAN, not a position holding units, so there is nothing to
   // "add to" — "+" is open-only. Play is the whole draft workflow instead: on a
@@ -144,6 +148,12 @@ export function PositionRowActions({ position }: Props) {
                 Reopen
               </DropdownMenuItem>
             )}
+            {canSettle && (
+              <DropdownMenuItem className="cursor-pointer" onSelect={() => setSettleOpen(true)}>
+                <CircleCheck className="h-4 w-4" aria-hidden="true" />
+                Settle
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
@@ -183,6 +193,12 @@ export function PositionRowActions({ position }: Props) {
           stopLoss: position.stopLoss,
         }}
       />
+
+      {/* Mounted only while open — the row tests have no QueryClient, and
+          the settlement-context query must never fire behind one. */}
+      {settleOpen && (
+        <SettleLegDialog position={position} open={settleOpen} onOpenChange={setSettleOpen} />
+      )}
 
       {/* Same closed-position tax warning as the detail page — deleting a
           closed position reverses its ledger row. */}

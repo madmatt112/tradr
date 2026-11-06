@@ -117,9 +117,9 @@ async function awaitSymbolsPopulated(page: Page): Promise<void> {
     .toBeGreaterThan(0);
 }
 
-/** Save a UW market-data key on Settings → Advisor and wait for it to verify. */
+/** Save a UW market-data key on Settings → Market data and wait for it to verify. */
 async function saveMarketDataKey(page: Page, key: string): Promise<void> {
-  await page.goto('/settings/advisor');
+  await page.goto('/settings/market-data');
   const card = page.getByTestId('market-data-key-card');
   await expect(card).toBeVisible();
   await card.getByLabel('API key').fill(key);

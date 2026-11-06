@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Unzip, UnzipInflate, UnzipPassThrough, Zip, ZipDeflate } from 'fflate';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -20,8 +20,13 @@ import {
   fillTransferLinks,
   fills,
   ledgerEntries,
+  optionSettlementFills,
+  optionSettlementRows,
+  optionSettlements,
+  positionEntryGreeks,
   positionGroups,
   positionImages,
+  positionRolls,
   positionTags,
   positions,
   tags,
@@ -30,9 +35,20 @@ import {
 } from '@/db/schema';
 import { createExport } from '@/features/account-data/export.service';
 import { confirmImport } from '@/features/account-data/import.service';
+import { sumPostedRealizedForPosition } from '@/features/accounting/accounting.query';
+import { postFillLedgerEntries } from '@/features/accounting/ledger-hook';
 import { findAccountsByUser } from '@/features/accounts/accounts.query';
 import { getTaxSummary } from '@/features/expenses/expenses.service';
+import { settleLeg, unsettle } from '@/features/positions/option-settlement.service';
+import {
+  addFillTx,
+  createPositionTx,
+  openPositionTx,
+  replaceFillHook,
+  unregisterFillHook,
+} from '@/features/positions/positions.service';
 import { ObjectUnreachableError, type ObjectStorage } from '@/lib/object-storage';
+import { withTransaction } from '@/lib/transaction';
 
 // Req 3.7 and 5.7 — the byte-equal round trip. Seed user A with every archive
 // category (tied message `created_at` values, all seven ledger types with a
@@ -1467,5 +1483,420 @@ describe('position-group archive carry (design C11, AC 9.1-9.2)', () => {
       .from(positionGroups)
       .where(eq(positionGroups.userId, userB));
     expect(groupRows).toHaveLength(0);
+  });
+});
+
+// --- option-lifecycle archive carry (design C14, AC 11.3) -------------------
+
+const LIFECYCLE_SETTLE_SYMBOL = 'LFC260717C00150000';
+const LIFECYCLE_ROLL_FROM_SYMBOL = 'RLF260117C00150000';
+const LIFECYCLE_ROLL_TO_SYMBOL = 'RLT260217C00150000';
+const LIFECYCLE_NULL_REF_SYMBOL = 'NUL260117C00150000';
+
+async function realizedTotal(positionId: string, userId: string): Promise<string> {
+  const { total } = await withTransaction(db, (tx) =>
+    sumPostedRealizedForPosition(tx, { userId, positionId }),
+  );
+  return total.toString();
+}
+
+interface LifecycleSeed {
+  userId: string;
+  settleLegId: string;
+  settlementId: string;
+  rollFromId: string;
+  rollToId: string;
+  nullRefSettlementId: string;
+}
+
+// Seeds one of each design-C14 category for a fresh user: a real worthless
+// settlement (via `settleLeg`, so `unsettle` has a genuine settlement to
+// reverse), a roll and its entry Greeks (raw inserts — the export/import path
+// is what's under test, not the roll/Greeks services), and a second
+// settlement whose row and fill carry the null references a deleted touched
+// row or fill leaves behind (design C14, SET NULL).
+async function seedLifecycleUser(prefix: string): Promise<LifecycleSeed> {
+  const userId = await seedBareUser(prefix);
+  const [acct] = await db
+    .insert(accounts)
+    .values({ userId, name: 'Lifecycle', currency: 'USD', startingBalance: '0' })
+    .returning({ id: accounts.id });
+  const accountId = acct.id;
+
+  const { legId: settleLegId } = await withTransaction(db, async (tx) => {
+    const pos = await createPositionTx(tx, userId, {
+      accountId,
+      symbol: LIFECYCLE_SETTLE_SYMBOL,
+      side: 'short',
+      assetType: 'option',
+    });
+    await addFillTx(tx, pos!.id, userId, {
+      type: 'entry',
+      price: '3',
+      quantity: '5',
+      fees: '0',
+      filledAt: '2026-06-01T00:00:00.000Z',
+    });
+    await openPositionTx(tx, pos!.id, userId, '2026-06-01T00:00:00.000Z');
+    return { legId: pos!.id };
+  });
+  const settlement = await settleLeg(db, userId, settleLegId, { outcome: 'worthless' });
+
+  // eslint-disable-next-line no-restricted-syntax -- seed a fixed roll pair for the C14 archive-carry test
+  const [rollFrom] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId,
+      symbol: LIFECYCLE_ROLL_FROM_SYMBOL,
+      side: 'short',
+      assetType: 'option',
+      status: 'closed',
+      openedAt: new Date('2026-01-01T00:00:00Z'),
+      closedAt: new Date('2026-01-10T00:00:00Z'),
+    })
+    .returning({ id: positions.id });
+  // eslint-disable-next-line no-restricted-syntax -- seed a fixed roll pair for the C14 archive-carry test
+  const [rollTo] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId,
+      symbol: LIFECYCLE_ROLL_TO_SYMBOL,
+      side: 'short',
+      assetType: 'option',
+      status: 'open',
+      openedAt: new Date('2026-01-10T00:00:00Z'),
+    })
+    .returning({ id: positions.id });
+  const [rollExitFill] = await db
+    .insert(fills)
+    .values({
+      positionId: rollFrom.id,
+      type: 'exit',
+      price: '1',
+      quantity: '5',
+      fees: '0',
+      filledAt: new Date('2026-01-10T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  const [rollEntryFill] = await db
+    .insert(fills)
+    .values({
+      positionId: rollTo.id,
+      type: 'entry',
+      price: '2',
+      quantity: '5',
+      fees: '0',
+      filledAt: new Date('2026-01-10T00:00:00Z'),
+    })
+    .returning({ id: fills.id });
+  await db.insert(positionRolls).values({
+    userId,
+    chainId: randomUUID(),
+    fromPositionId: rollFrom.id,
+    toPositionId: rollTo.id,
+    exitFillId: rollExitFill.id,
+    entryFillId: rollEntryFill.id,
+    rolledAt: new Date('2026-01-10T00:00:00Z'),
+  });
+
+  await db.insert(positionEntryGreeks).values({
+    positionId: rollTo.id,
+    delta: '0.52',
+    gamma: '0.013',
+    thetaPerDay: '-0.045',
+    vegaPerPct: '0.09',
+    rhoPerPct: null,
+    source: 'black_scholes',
+    volatility: '0.28',
+    spot: '160',
+    rate: '0.045',
+    dividendYield: null,
+    capturedAt: new Date('2026-01-10T00:00:00Z'),
+  });
+
+  // eslint-disable-next-line no-restricted-syntax -- seed a throwaway leg for the null-reference case
+  const [nullRefLeg] = await db
+    .insert(positions)
+    .values({
+      userId,
+      accountId,
+      symbol: LIFECYCLE_NULL_REF_SYMBOL,
+      side: 'short',
+      assetType: 'option',
+      status: 'closed',
+      openedAt: new Date('2026-01-01T00:00:00Z'),
+      closedAt: new Date('2026-01-01T00:00:00Z'),
+    })
+    .returning({ id: positions.id });
+  const [nullRefSettlement] = await db
+    .insert(optionSettlements)
+    .values({
+      userId,
+      positionId: nullRefLeg.id,
+      outcome: 'worthless',
+      quantity: '1',
+      premium: '0',
+      settledAt: new Date('2026-01-01T00:00:00Z'),
+    })
+    .returning({ id: optionSettlements.id });
+  await db.insert(optionSettlementRows).values({
+    settlementId: nullRefSettlement.id,
+    positionId: null,
+    touch: 'stock_exit',
+    closedRow: true,
+    priorLastFlatAt: null,
+    priorLastFlatNetPnl: null,
+  });
+  await db.insert(optionSettlementFills).values({
+    settlementId: nullRefSettlement.id,
+    fillId: null,
+    written: false,
+  });
+
+  return {
+    userId,
+    settleLegId,
+    settlementId: settlement.settlementId,
+    rollFromId: rollFrom.id,
+    rollToId: rollTo.id,
+    nullRefSettlementId: nullRefSettlement.id,
+  };
+}
+
+describe('option-lifecycle archive carry (design C14, AC 11.3)', () => {
+  it(
+    'exports a settlement, a roll and entry Greeks with a null reference carried as null; ' +
+      'import restores them with remapped ids, and unsettle on the imported account nets ' +
+      'fills and ledger back to the pre-settlement net',
+    async () => {
+      replaceFillHook('ledger', postFillLedgerEntries);
+      try {
+        const seedA = await seedLifecycleUser('rt-lifecycle-a');
+
+        const bytesA = await exportBytes(seedA.userId);
+        const parsedA = parseArchive(bytesA);
+
+        expect(rowsOf(parsedA, 'option-settlements.ndjson')).toHaveLength(2);
+        expect(rowsOf(parsedA, 'option-settlement-rows.ndjson')).toHaveLength(2);
+        // The worthless settlement writes two settlement fills — a written exit
+        // and a baseline snapshot of the entry (option-settlement.test.ts:584-592)
+        // — plus the null-reference settlement's one fill: three in all.
+        expect(rowsOf(parsedA, 'option-settlement-fills.ndjson')).toHaveLength(3);
+        expect(rowsOf(parsedA, 'position-rolls.ndjson')).toHaveLength(1);
+        expect(rowsOf(parsedA, 'entry-greeks.ndjson')).toHaveLength(1);
+
+        // A null row/fill reference (the shape a deleted touched row or fill
+        // leaves behind) carries through the export unchanged (design C14).
+        const nullRowA = rowsOf(parsedA, 'option-settlement-rows.ndjson').find(
+          (r) => r.settlementId === seedA.nullRefSettlementId,
+        );
+        expect(nullRowA?.positionId).toBeNull();
+        const nullFillA = rowsOf(parsedA, 'option-settlement-fills.ndjson').find(
+          (r) => r.settlementId === seedA.nullRefSettlementId,
+        );
+        expect(nullFillA?.fillId).toBeNull();
+
+        const userB = await seedBareUser('rt-lifecycle-b');
+        await confirmImport(userB, streamOf(bytesA), digestOf(bytesA));
+
+        // Import restores every row with a fresh, remapped id — never A's own.
+        const settlementsB = await db
+          .select()
+          .from(optionSettlements)
+          .where(eq(optionSettlements.userId, userB));
+        expect(settlementsB).toHaveLength(2);
+        expect(settlementsB.map((r) => r.id)).not.toContain(seedA.settlementId);
+        expect(settlementsB.map((r) => r.id)).not.toContain(seedA.nullRefSettlementId);
+
+        const rollsB = await db.select().from(positionRolls).where(eq(positionRolls.userId, userB));
+        expect(rollsB).toHaveLength(1);
+        expect(rollsB[0]!.fromPositionId).not.toBe(seedA.rollFromId);
+
+        const [rollFromB] = await db
+          .select({ id: positions.id })
+          .from(positions)
+          .where(
+            and(eq(positions.userId, userB), eq(positions.symbol, LIFECYCLE_ROLL_FROM_SYMBOL)),
+          );
+        const [rollToB] = await db
+          .select({ id: positions.id })
+          .from(positions)
+          .where(and(eq(positions.userId, userB), eq(positions.symbol, LIFECYCLE_ROLL_TO_SYMBOL)));
+        expect(rollsB[0]!.fromPositionId).toBe(rollFromB!.id);
+        expect(rollsB[0]!.toPositionId).toBe(rollToB!.id);
+
+        const [greeksB] = await db
+          .select()
+          .from(positionEntryGreeks)
+          .where(eq(positionEntryGreeks.positionId, rollToB!.id));
+        expect(greeksB).toBeDefined();
+        expect(greeksB!.source).toBe('black_scholes');
+
+        // The null reference stays null after import too.
+        const settleRowB = await db
+          .select()
+          .from(positions)
+          .where(and(eq(positions.userId, userB), eq(positions.symbol, LIFECYCLE_SETTLE_SYMBOL)));
+        const legB = settleRowB[0]!;
+        const realSettlementB = settlementsB.find((r) => r.positionId === legB.id)!;
+        const nullSettlementRowB = settlementsB.find((r) => r.id !== realSettlementB.id)!;
+
+        const [nullRowB] = await db
+          .select()
+          .from(optionSettlementRows)
+          .where(eq(optionSettlementRows.settlementId, nullSettlementRowB.id));
+        expect(nullRowB!.positionId).toBeNull();
+        const [nullFillB] = await db
+          .select()
+          .from(optionSettlementFills)
+          .where(eq(optionSettlementFills.settlementId, nullSettlementRowB.id));
+        expect(nullFillB!.fillId).toBeNull();
+
+        // Unsettle on the imported account: fills and the posted ledger total
+        // return to the pre-settlement net (AC 11.3).
+        const fillsBefore = await db.select().from(fills).where(eq(fills.positionId, legB.id));
+        expect(fillsBefore).toHaveLength(2);
+        const realizedBefore = await realizedTotal(legB.id, userB);
+        expect(realizedBefore).not.toBe('0');
+
+        await unsettle(db, userB, legB.id, realSettlementB.id);
+
+        const fillsAfter = await db.select().from(fills).where(eq(fills.positionId, legB.id));
+        expect(fillsAfter).toHaveLength(1);
+        expect(fillsAfter[0]!.type).toBe('entry');
+
+        const legRowAfter = await db.select().from(positions).where(eq(positions.id, legB.id));
+        expect(legRowAfter[0]!.status).toBe('open');
+        expect(legRowAfter[0]!.closedAt).toBeNull();
+
+        expect(await realizedTotal(legB.id, userB)).toBe('0');
+      } finally {
+        unregisterFillHook('ledger');
+      }
+    },
+  );
+
+  // Design C14, AC 11.3 — a version-5 archive carries none of the five new
+  // entries; import restores the archive's own data and creates none of them.
+  it('a version-5 archive still imports (AC 11.3)', async () => {
+    const accountId = randomUUID();
+    const positionId = randomUUID();
+    const counts = {
+      brokerages: 0,
+      systemBrokerages: 0,
+      accounts: 1,
+      tags: 0,
+      positionGroups: 0,
+      positions: 1,
+      fills: 0,
+      lotSelections: 0,
+      transferLinks: 0,
+      positionTags: 0,
+      positionImages: 0,
+      ledgerEntries: 0,
+      exchangeRates: 0,
+      expenses: 0,
+      personas: 0,
+      builtinPersonas: 0,
+      conversations: 0,
+      messages: 0,
+      summaries: 0,
+      images: 0,
+    };
+    const manifest = {
+      format: 'tradr-account-archive',
+      archiveVersion: 5,
+      sourceAppVersion: 'test',
+      exportedAt: LOT_TS,
+      counts,
+      degradations: [] as unknown[],
+    };
+    const account = {
+      id: accountId,
+      name: 'Main',
+      currency: 'USD',
+      timezone: 'UTC',
+      brokerage: null,
+      startingBalance: '0.0000',
+      defaultRiskPercent: null,
+      isDemo: false,
+      isDefault: true,
+      taxTreatment: 'taxable',
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const position = {
+      id: positionId,
+      accountId,
+      groupId: null,
+      symbol: 'AAPL',
+      side: 'long',
+      assetType: 'stock',
+      status: 'open',
+      notes: null,
+      targetPrice: null,
+      stopLoss: null,
+      openedAt: null,
+      closedAt: null,
+      lastFlatAt: null,
+      lastFlatNetPnl: null,
+      createdAt: LOT_TS,
+      updatedAt: LOT_TS,
+    };
+    const preferencesV5 = {
+      displayCurrency: null,
+      timezone: null,
+      taxJurisdiction: null,
+      taxLotMethod: null,
+      theme: 'system',
+      buyingPowerBasis: 'cash',
+      advisorDefaultPersona: null,
+      advisorTradeDataConsent: false,
+      writableAccountId: null,
+      onboarding: {},
+    };
+
+    function buildV5Archive(): Uint8Array {
+      const entries: Array<{ name: string; data: string }> = [
+        { name: 'manifest.json', data: JSON.stringify(manifest) },
+        { name: 'accounts.ndjson', data: `${JSON.stringify(account)}\n` },
+        { name: 'positions.ndjson', data: `${JSON.stringify(position)}\n` },
+        { name: 'preferences.json', data: JSON.stringify(preferencesV5) },
+        { name: 'dashboard-layout.json', data: 'null' },
+      ];
+      const out: Uint8Array[] = [];
+      const z = new Zip((err, data) => {
+        if (err) throw err;
+        out.push(data);
+      });
+      for (const e of entries) {
+        const f = new ZipDeflate(e.name, { level: 9 });
+        z.add(f);
+        f.push(new TextEncoder().encode(e.data), true);
+      }
+      z.end();
+      return concat(out);
+    }
+
+    const bytes = buildV5Archive();
+    const userB = await seedBareUser('rt-v5-c14');
+    await confirmImport(userB, streamOf(bytes), digestOf(bytes));
+
+    const posRows = await db
+      .select({ id: positions.id })
+      .from(positions)
+      .where(eq(positions.userId, userB));
+    expect(posRows).toHaveLength(1);
+
+    const settlementRows = await db
+      .select()
+      .from(optionSettlements)
+      .where(eq(optionSettlements.userId, userB));
+    expect(settlementRows).toHaveLength(0);
+
+    const rollRows = await db.select().from(positionRolls).where(eq(positionRolls.userId, userB));
+    expect(rollRows).toHaveLength(0);
   });
 });

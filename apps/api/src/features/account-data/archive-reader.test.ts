@@ -215,9 +215,11 @@ describe('readArchive (design C5 reader)', () => {
   });
 
   it('reports a newer version as a version error even with an unknown entry present', async () => {
-    const buf = buildZip([{ name: 'mystery.ndjson', data: '{}\n' }, manifest(6)]);
+    // One above ARCHIVE_VERSION (6, design C14) — not 6 itself, which this
+    // build now writes and reads.
+    const buf = buildZip([{ name: 'mystery.ndjson', data: '{}\n' }, manifest(7)]);
     await expect(collect(await save(buf))).rejects.toBeInstanceOf(ArchiveVersionUnsupportedError);
-    await expect(collect(await save(buf))).rejects.toMatchObject({ foundVersion: 6 });
+    await expect(collect(await save(buf))).rejects.toMatchObject({ foundVersion: 7 });
   });
 
   it('rejects a truncated file', async () => {

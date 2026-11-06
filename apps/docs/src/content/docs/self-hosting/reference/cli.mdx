@@ -14,7 +14,7 @@ browser. Run it inside the running container:
 docker compose exec api tradr --help
 ```
 
-**Expected result:** exit code 0, and the 7 commands below.
+**Expected result:** exit code 0, and the 8 commands below.
 
 | Command | Does |
 | --- | --- |
@@ -25,6 +25,7 @@ docker compose exec api tradr --help
 | `tradr reset-password <email> [--password <value>]` | Set a user's password from the server. |
 | `tradr unlock <email>` | Clear a sign-in lockout for an address from the server. |
 | `tradr disable-2fa <email>` | Remove a lost second factor so the password alone signs in. |
+| `tradr positions expire [--user <email>] [--all-users] [--settle <legId>=<outcome>] [--date <iso>] [--quantity <n>] [--fees <amount>]` | List past-expiry-unsettled option legs, or settle one from the shell. |
 
 Every command exits **2** when it cannot reach the database, so a wrapper script
 can tell "it failed" from "it could not run".
@@ -170,6 +171,45 @@ and says so.
 
 It exits 1 when no account matches the email, and 2 when it cannot reach the
 database.
+
+## `positions expire [--user <email>] [--all-users] [--settle <legId>=<outcome>] [--date <iso>] [--quantity <n>] [--fees <amount>]`
+
+There is no boot-time scheduler in this product — an open option leg past its
+expiry stays flagged until someone settles it. This command is what an
+operator wires up in cron to do that from the server, the same way
+`migrate --status` is wired up as a health check.
+
+Pass exactly one of `--user <email>` or `--all-users` to choose the scope.
+With neither flag, or both, it exits 2 and changes nothing.
+
+```bash
+docker compose exec api tradr positions expire --all-users
+```
+
+**Expected result:** exit code 0, one line per flagged leg, naming its id
+and symbol. Nothing is written — listing never settles anything on its own.
+
+Add one or more `--settle <legId>=<outcome>` to close a leg, where
+`<outcome>` is `worthless`, `assigned` or `exercised` — the same values the
+`/settle` endpoint accepts. `--settle` with no `=<outcome>` assumes nothing
+and exits 2 before touching the database. `--date`, `--quantity` and
+`--fees` apply to every `--settle` in the run, matching the endpoint's own
+optional fields.
+
+```bash
+docker compose exec api tradr positions expire --all-users --settle 2b1c...=worthless
+```
+
+Each `--settle` runs in its own transaction and writes the same ledger rows
+the `/settle` endpoint would. A leg that fails — it does not exist, or
+`--user` named someone who does not own it — prints the reason and the run
+continues to the next one rather than stopping.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Listed, or every `--settle` given succeeded. |
+| 1 | At least one `--settle` failed; the others still ran. |
+| 2 | Bad arguments, or the command could not reach the database. |
 
 ## Next steps
 

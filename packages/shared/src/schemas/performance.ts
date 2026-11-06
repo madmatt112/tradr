@@ -237,6 +237,9 @@ export const PerformanceResponseSchema = z.object({
   hasAnyClosedPositionsInSupportedCurrency: z.boolean(),
   defaultCurrency: z.string().nullable(),
   currencies: z.array(PerformanceCurrencySchema),
+  // Count of flagged legs across all accounts (design C2), a positive integer;
+  // absent at zero so a caller tells "no notice" from "zero flagged".
+  pastExpiryUnsettledLegs: z.number().int().positive().optional(),
 });
 
 const BUCKET_COUNT_CAP = 1095;

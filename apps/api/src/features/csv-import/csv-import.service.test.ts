@@ -1,13 +1,14 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
-import type { CsvPreviewRequest } from '@tradr/shared';
+import { encodeOccCompact, type CsvPreviewRequest, type LocatedError } from '@tradr/shared';
 import { readCsvImportSample } from '@tradr/shared/node/csv-import-samples';
 
 import { bootstrap } from '@/app';
 import { db } from '@/db';
 import { accounts, fills, ledgerEntries, positions, users } from '@/db/schema';
 import { csvImportStaging } from '@/db/schema/csv-import.schema';
+import { settleLeg } from '@/features/positions/option-settlement.service';
 import {
   createPosition,
   openPosition,
@@ -15,6 +16,107 @@ import {
 } from '@/features/positions/positions.service';
 
 import { commitImport, neutralizeCsvCell, previewImport } from './csv-import.service';
+
+// ---------------------------------------------------------------------------
+// Task 19 lifecycle-event fixtures — `ProposedEventSchema`/`nonBlocking` are
+// not yet on the shared types (this task adds them), so previewImport's
+// response is read through a local, forward-compatible shape rather than
+// `as any`.
+// ---------------------------------------------------------------------------
+
+interface ExtendedLocatedError extends LocatedError {
+  nonBlocking?: boolean;
+}
+
+interface ProposedEventTarget {
+  kind: 'segment' | 'open_leg';
+  segmentRef?: number;
+  positionId?: string;
+}
+
+interface ProposedEventLike {
+  rowNumber: number;
+  outcome: 'assigned' | 'exercised';
+  symbol: string;
+  quantity: string;
+  target?: ProposedEventTarget;
+}
+
+interface ExtendedPreviewResponse {
+  errors: ExtendedLocatedError[];
+  warnings: Array<{ rowNumber?: number; kind: string; message: string }>;
+  positions: Array<{ scope: { symbol: string; assetType: string } }>;
+  committable: boolean;
+  events?: ProposedEventLike[];
+}
+
+function occ(underlying: string, expiration: string, type: 'call' | 'put', strike: string): string {
+  const result = encodeOccCompact({ underlying, expiration, type, strike });
+  if (!result.ok) {
+    throw new Error(`fixture OCC symbol invalid: ${result.error.message}`);
+  }
+  return result.value;
+}
+
+/** A Trades-shaped execution mapping with an eventCode column (task 19). */
+function lifecycleRequest(
+  accountId: string,
+  overrides: Partial<CsvPreviewRequest> = {},
+): CsvPreviewRequest {
+  return {
+    accountId,
+    rowShape: 'execution',
+    mapping: {
+      rowShape: 'execution',
+      contractForm: 'occ-symbol',
+      columns: {
+        symbol: 'Symbol',
+        assetType: 'AssetClass',
+        action: 'Buy/Sell',
+        quantity: 'Quantity',
+        price: 'TradePrice',
+        filledAt: 'DateTime',
+        eventCode: 'Notes/Codes',
+      },
+    },
+    timezone: 'UTC',
+    dateFormat: 'iso',
+    numberFormat: 'us',
+    ...overrides,
+  };
+}
+
+/** An open option leg seeded directly (no CSV), as a preview target (task 19). */
+async function seedOpenOptionLeg(params: {
+  userId: string;
+  accountId: string;
+  side: 'long' | 'short';
+  symbol: string;
+  quantity: string;
+  filledAt: string;
+}): Promise<string> {
+  const position = await createPosition(
+    db,
+    params.userId,
+    {
+      accountId: params.accountId,
+      symbol: params.symbol,
+      side: params.side,
+      assetType: 'option',
+    },
+    { isAdmin: false },
+  );
+  await db.insert(fills).values({
+    positionId: position!.id,
+    type: 'entry',
+    price: '1.00',
+    quantity: params.quantity,
+    fees: '0',
+    filledAt: new Date(params.filledAt),
+  });
+  await openPosition(db, position!.id, params.userId, params.filledAt);
+  return position!.id;
+}
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -898,7 +1000,7 @@ describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.
     );
   });
 
-  it('(d) refuses an OPT lifecycle code but imports a STK row carrying the same code (REQ-4.2)', async () => {
+  it('(d) proposes a targetless assigned event for an OPT lifecycle code, and still imports the STK row carrying the same code with a premium-excluded warning (AC 10.3, 10.5)', async () => {
     const { userId, accountId } = await seedAccount();
     // Synthetic Trades-shaped rows — never a committed sample edited to carry a code.
     const csv = [
@@ -906,7 +1008,7 @@ describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.
       'AAPL  120121C00400000,OPT,BUY,1,1.75,2012-01-05,A',
       'AAPL,STK,BUY,100,121.50,2012-01-05,A',
     ].join('\n');
-    const res = await previewImport(
+    const res = (await previewImport(
       db,
       userId,
       accountId,
@@ -927,19 +1029,28 @@ describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.
           },
         },
       }),
-    );
+    )) as unknown as ExtendedPreviewResponse;
+
+    // No target (fresh account, no same-file option segment): a located,
+    // nonBlocking error — the row no longer refuses outright (AC 10.3).
     expect(res.errors).toContainEqual(
       expect.objectContaining({
-        code: 'OPTION_EVENT_NOT_SUPPORTED',
+        code: 'LIFECYCLE_TARGET_NOT_FOUND',
         rowNumber: 2,
-        tradrField: 'eventCode',
-        csvColumn: 'Notes/Codes',
+        nonBlocking: true,
       }),
     );
-    // The STK row's `A` is not a lifecycle event on a stock: it imports as stock.
+    expect(res.events ?? []).toEqual([]);
+    expect(res.committable).toBe(true);
+
+    // The STK row's `A` matches no event (price 121.50 ≠ strike 400): it
+    // imports as stock, as today, plus the premium-excluded warning (AC 10.5).
     expect(
       res.positions.some((p) => p.scope.assetType === 'stock' && p.scope.symbol === 'AAPL'),
     ).toBe(true);
+    expect(res.warnings).toContainEqual(
+      expect.objectContaining({ rowNumber: 3, kind: 'lifecycle_basis_excludes_premium' }),
+    );
   });
 
   it('(e) emits one derived_expiry warning for a day-less monthly descriptor (REQ-3.5)', async () => {
@@ -1040,6 +1151,148 @@ describe('previewImport — option contract errors (REQ-2.4–2.6, 3.5, 4.1–4.
         tradrField: 'quantity',
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle-event proposal in the import preview (task 19, design C12)
+//
+// Contract block — one row per success criterion this block covers (the
+// targetless/stock-regression branch and the blocking-committable branch are
+// covered by the updated test (d) above and by the pre-existing "(crossing
+// flat)" test respectively — see the implementer report for both).
+//
+// | Criterion                                                          | Pre-condition                                                              | Call (seam)      | Observable result                                                        | Source |
+// |----------------------------------------------------------------------|-------------------------------------------------------------------------------|-------------------|-----------------------------------------------------------------------------|---------|
+// | AC 10.1/10.2/10.3 (open leg)/10.7 — A+EX events, named targets, EP stays unsupported | two open legs (short/long) in the account; a Flex-shaped file with A, EX, EP rows | previewImport()   | events[] holds the assigned+exercised events, each naming its open_leg target; EP row still errors OPTION_EVENT_NOT_SUPPORTED | design C12, task 19 _Prompt Success |
+// | AC 10.2/10.3 (same-file segment) — segment target                    | one file opens an option segment, then tags an assigned row for the same contract | previewImport()   | the event's target is `{ kind: 'segment', segmentRef }` indexing the proposed position | design C12, TD8 |
+// | AC 10.6 — re-import of a fully settled leg                           | a leg already settled (assigned) for the row's own date and quantity          | previewImport()   | a lifecycle_already_settled warning, no event proposed, committable stays true | design C12, TD9 |
+// ---------------------------------------------------------------------------
+
+describe('previewImport — lifecycle event proposals (design C12)', () => {
+  it('previews an assigned and an exercised event against existing open legs, naming each target, and leaves an EP row unsupported with its reason (AC 10.1, 10.2, 10.3, 10.7)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const assignedSymbol = occ('AAPL', '2026-04-17', 'call', '250');
+    const exercisedSymbol = occ('MSFT', '2026-05-15', 'call', '260');
+    const epSymbol = occ('TSLA', '2026-06-19', 'call', '300');
+
+    const assignedLegId = await seedOpenOptionLeg({
+      userId,
+      accountId,
+      side: 'short',
+      symbol: assignedSymbol,
+      quantity: '1',
+      filledAt: '2026-04-01T00:00:00.000Z',
+    });
+    const exercisedLegId = await seedOpenOptionLeg({
+      userId,
+      accountId,
+      side: 'long',
+      symbol: exercisedSymbol,
+      quantity: '1',
+      filledAt: '2026-05-01T00:00:00.000Z',
+    });
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes',
+      `${assignedSymbol},OPT,SELL,1,0,2026-04-20,A`,
+      `${exercisedSymbol},OPT,BUY,1,0,2026-05-20,EX`,
+      `${epSymbol},OPT,BUY,1,0,2026-06-20,EP`,
+    ].join('\n');
+
+    const res = (await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      lifecycleRequest(accountId),
+    )) as unknown as ExtendedPreviewResponse;
+
+    const events = res.events ?? [];
+    expect(events).toHaveLength(2);
+
+    const assigned = events.find((e) => e.symbol === assignedSymbol);
+    expect(assigned).toMatchObject({ rowNumber: 2, outcome: 'assigned', quantity: '1' });
+    expect(assigned?.target).toMatchObject({ kind: 'open_leg', positionId: assignedLegId });
+
+    const exercised = events.find((e) => e.symbol === exercisedSymbol);
+    expect(exercised).toMatchObject({ rowNumber: 3, outcome: 'exercised', quantity: '1' });
+    expect(exercised?.target).toMatchObject({ kind: 'open_leg', positionId: exercisedLegId });
+
+    const epError = res.errors.find((e) => e.rowNumber === 4);
+    expect(epError).toMatchObject({ code: 'OPTION_EVENT_NOT_SUPPORTED', tradrField: 'eventCode' });
+    expect(epError?.message).toContain('expiration or assignment');
+
+    // The EP row's refusal stays a blocking error: committable is false.
+    expect(res.committable).toBe(false);
+  });
+
+  it("resolves an event's target to a same-file open segment when no DB leg exists (AC 10.2, 10.3)", async () => {
+    const { userId, accountId } = await seedAccount();
+    const symbol = occ('MSFT', '2026-07-17', 'put', '300');
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes',
+      `${symbol},OPT,SELL,2,3.00,2026-07-01,`,
+      `${symbol},OPT,BUY,2,0,2026-07-10,A`,
+    ].join('\n');
+
+    const res = (await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      lifecycleRequest(accountId),
+    )) as unknown as ExtendedPreviewResponse;
+
+    expect(res.positions).toHaveLength(1);
+    expect(res.positions[0].scope.symbol).toBe(symbol);
+
+    const events = res.events ?? [];
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ rowNumber: 3, outcome: 'assigned', quantity: '2' });
+    expect(events[0].target).toMatchObject({ kind: 'segment', segmentRef: 0 });
+    expect(res.committable).toBe(true);
+  });
+
+  it('warns and proposes no event when a re-import matches an already-settled leg (AC 10.6)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const symbol = occ('AAPL', '2026-12-18', 'call', '300');
+
+    const legId = await seedOpenOptionLeg({
+      userId,
+      accountId,
+      side: 'short',
+      symbol,
+      quantity: '1',
+      filledAt: '2026-02-01T00:00:00.000Z',
+    });
+    await settleLeg(db, userId, legId, {
+      outcome: 'assigned',
+      settledAt: '2026-02-10T00:00:00.000Z',
+      quantity: '1',
+      fees: '0',
+    });
+
+    const csv = [
+      'Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,DateTime,Notes/Codes',
+      `${symbol},OPT,SELL,1,0,2026-02-10,A`,
+    ].join('\n');
+
+    const res = (await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(csv),
+      lifecycleRequest(accountId),
+    )) as unknown as ExtendedPreviewResponse;
+
+    expect(res.events ?? []).toEqual([]);
+    expect(res.warnings).toContainEqual(
+      expect.objectContaining({ rowNumber: 2, kind: 'lifecycle_already_settled' }),
+    );
+    expect(res.errors.some((e) => e.code === 'LIFECYCLE_TARGET_NOT_FOUND')).toBe(false);
+    expect(res.committable).toBe(true);
   });
 });
 

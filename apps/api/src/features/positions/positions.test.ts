@@ -1,9 +1,9 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
-import { positions } from '@/db/schema';
+import { fills, ledgerEntries, positions } from '@/db/schema';
 import {
   insertPositionCloseLedgerEntries,
   reversePositionCloseLedgerEntries,
@@ -1965,5 +1965,144 @@ describe('positions — multi-leg groups on list/detail (task 4)', () => {
     const standaloneRes = await authedRequest('GET', `/api/positions/${standalone.id}`, cookie);
     const standaloneDetail = await standaloneRes.json();
     expect(standaloneDetail.group).toBeUndefined();
+  });
+});
+
+/**
+ * option-lifecycle-events task 4 — past-expiry-unsettled flag on the
+ * detail read, plus the AC 1.6 regression guard (design C2; requirements.md
+ * AC 1.1, 1.4, 1.6).
+ *
+ * Contract:
+ *
+ *  1. "an open option leg with a 2020 expiry and open units reads the flag
+ *     on the detail; a future expiry and a stock row carry no key" — Pre: an
+ *     open option position with a parseable past-expiry (2020) symbol and
+ *     open units, an open option position with a parseable future-expiry
+ *     (2049) symbol, and an open stock position, each in the same account.
+ *     Call: `authedRequest('GET', '/api/positions/:id', cookie)` for each.
+ *     Observe: the past-expiry position's body carries
+ *     `pastExpiryUnsettled: true`; the future-expiry and stock positions'
+ *     bodies carry no `pastExpiryUnsettled` key. Both branches sit in one
+ *     test so it is red now (the positive branch fails; the negative
+ *     branches already hold). Source: requirements.md AC 1.1, AC 1.4;
+ *     design.md C2 ("getPositionDetail ... set the flag without a new
+ *     query", "the value-keyed spread at its tail").
+ *
+ * Folded/dropped criteria:
+ *  - AC 1.1's "list item" and "group leg" locations, AC 1.3's
+ *    `pastExpiryLegCount`, and AC 1.4's unparseable-legacy-symbol and
+ *    closed-leg negative cases are pure-function behaviour of `mapListRow`/
+ *    `buildGroupEntry` — covered in `position-group-entries.test.ts`,
+ *    describe block "past-expiry-unsettled flag on mapListRow and
+ *    buildGroupEntry (design C2)".
+ *  - AC 1.6 ("a GET SHALL never write a position, fill or ledger row") is
+ *    marked "Invariant (verified, not red-first)" in requirements.md itself,
+ *    and the task text confirms it "already holds at base" — RED-IMPOSSIBLE.
+ *    `GET /api/positions` and `GET /api/positions/:id` route to
+ *    `listPositions`/`getPositionDetail`, which only `SELECT`; neither
+ *    route handler nor service calls an insert/update/delete. No existing
+ *    assertion in this file names that invariant branch by branch (position,
+ *    fill and ledger row counts across a GET), so the test below is written
+ *    fresh as a regression guard per the standing rule, not counted as a red
+ *    test — it already passes against the base code.
+ */
+describe('positions — past-expiry-unsettled flag (option-lifecycle-events task 4)', () => {
+  it('flags an open option position past its expiry on the detail read, and carries no key for a future expiry or a stock position (AC 1.1, AC 1.4)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+
+    const pastExpired = await createTestPosition(cookie, account.id, {
+      symbol: 'AAPL200116C150',
+      assetType: 'option',
+    });
+    await addFill(cookie, pastExpired.id, {
+      type: 'entry',
+      price: '5',
+      quantity: '1',
+      filledAt: '2020-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, pastExpired.id, '2020-01-01T00:00:00Z');
+
+    const futureOption = await createTestPosition(cookie, account.id, {
+      symbol: 'AAPL491231C150',
+      assetType: 'option',
+    });
+    await addFill(cookie, futureOption.id, {
+      type: 'entry',
+      price: '5',
+      quantity: '1',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, futureOption.id, '2025-01-01T00:00:00Z');
+
+    const stockPos = await createTestPosition(cookie, account.id, { symbol: 'MSFT' });
+    await addFill(cookie, stockPos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, stockPos.id, '2025-01-01T00:00:00Z');
+
+    const pastRes = await authedRequest('GET', `/api/positions/${pastExpired.id}`, cookie);
+    const pastBody = (await pastRes.json()) as Record<string, unknown>;
+    expect(pastBody.pastExpiryUnsettled).toBe(true);
+
+    const futureRes = await authedRequest('GET', `/api/positions/${futureOption.id}`, cookie);
+    const futureBody = (await futureRes.json()) as Record<string, unknown>;
+    expect('pastExpiryUnsettled' in futureBody).toBe(false);
+
+    const stockRes = await authedRequest('GET', `/api/positions/${stockPos.id}`, cookie);
+    const stockBody = (await stockRes.json()) as Record<string, unknown>;
+    expect('pastExpiryUnsettled' in stockBody).toBe(false);
+  });
+
+  // Regression guard (AC 1.6) — holds at base; see the contract block above.
+  it('leaves position, fill and ledger row counts unchanged across a list and a detail GET (AC 1.6)', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie);
+    const pos = await createTestPosition(cookie, account.id, { symbol: 'AAPL' });
+    await addFill(cookie, pos.id, {
+      type: 'entry',
+      price: '100',
+      quantity: '10',
+      filledAt: '2025-01-01T00:00:00Z',
+    });
+    await openTestPosition(cookie, pos.id, '2025-01-01T00:00:00Z');
+    await addFill(cookie, pos.id, {
+      type: 'exit',
+      price: '110',
+      quantity: '10',
+      filledAt: '2025-01-02T00:00:00Z',
+    });
+
+    const snapshot = async () => {
+      const [[{ count: positionCount }], [{ count: fillCount }], [{ count: ledgerCount }]] =
+        await Promise.all([
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(positions)
+            .where(eq(positions.id, pos.id)),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(fills)
+            .where(eq(fills.positionId, pos.id)),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(ledgerEntries)
+            .where(eq(ledgerEntries.positionId, pos.id)),
+        ]);
+      return { positionCount, fillCount, ledgerCount };
+    };
+
+    const before = await snapshot();
+
+    await authedRequest('GET', '/api/positions', cookie);
+    await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+
+    const after = await snapshot();
+
+    expect(after).toEqual(before);
   });
 });

@@ -14,6 +14,7 @@ import {
   type ArchiveContentPart,
   type ArchiveConversation,
   type ArchiveDashboardLayout,
+  type ArchiveEntryGreeks,
   type ArchiveExchangeRate,
   type ArchiveExpense,
   type ArchiveFill,
@@ -21,11 +22,15 @@ import {
   type ArchiveLedgerEntry,
   type ArchiveLotSelection,
   type ArchiveMessage,
+  type ArchiveOptionSettlement,
+  type ArchiveOptionSettlementFill,
+  type ArchiveOptionSettlementRow,
   type ArchivePersona,
   type ArchivePersonaResolution,
   type ArchivePosition,
   type ArchivePositionGroup,
   type ArchivePositionImage,
+  type ArchivePositionRoll,
   type ArchivePositionTag,
   type ArchivePreferences,
   type ArchiveSummary,
@@ -74,12 +79,17 @@ import {
   insertArchiveExchangeRates,
   insertArchiveExpenses,
   insertArchiveFills,
+  insertArchiveEntryGreeks,
   insertArchiveLedgerEntries,
   insertArchiveLotSelections,
   insertArchiveMessages,
+  insertArchiveOptionSettlementFills,
+  insertArchiveOptionSettlementRows,
+  insertArchiveOptionSettlements,
   insertArchivePersonas,
   insertArchivePositionGroups,
   insertArchivePositionImages,
+  insertArchivePositionRolls,
   insertArchivePositions,
   insertArchivePositionTags,
   insertArchiveSummaries,
@@ -89,16 +99,21 @@ import {
   type AccountInsert,
   type BrokerageInsert,
   type ConversationInsert,
+  type EntryGreeksInsert,
   type ExchangeRateInsert,
   type ExpenseInsert,
   type FillInsert,
   type LedgerEntryInsert,
   type LotSelectionInsert,
   type MessageInsert,
+  type OptionSettlementFillInsert,
+  type OptionSettlementInsert,
+  type OptionSettlementRowInsert,
   type PersonaInsert,
   type PositionGroupInsert,
   type PositionImageInsert,
   type PositionInsert,
+  type PositionRollInsert,
   type PositionTagInsert,
   type RuleInsert,
   type SummaryInsert,
@@ -562,6 +577,22 @@ async function restore(
   const transferLinksF = makeFlusher<TransferLinkInsert>((rows) =>
     insertArchiveTransferLinks(tx, userId, rows),
   );
+  // Drained after fills, in archive order: a settlement references a leg and the
+  // rows/fills reference the settlement, so settlements drain before their rows
+  // and fills; rolls and entry Greeks reference positions and fills (C14).
+  const optionSettlementsF = makeFlusher<OptionSettlementInsert>((rows) =>
+    insertArchiveOptionSettlements(tx, userId, rows),
+  );
+  const optionSettlementRowsF = makeFlusher<OptionSettlementRowInsert>((rows) =>
+    insertArchiveOptionSettlementRows(tx, rows),
+  );
+  const optionSettlementFillsF = makeFlusher<OptionSettlementFillInsert>((rows) =>
+    insertArchiveOptionSettlementFills(tx, rows),
+  );
+  const positionRollsF = makeFlusher<PositionRollInsert>((rows) =>
+    insertArchivePositionRolls(tx, userId, rows),
+  );
+  const entryGreeksF = makeFlusher<EntryGreeksInsert>((rows) => insertArchiveEntryGreeks(tx, rows));
   const positionTagsF = makeFlusher<PositionTagInsert>((rows) =>
     insertArchivePositionTags(tx, rows),
   );
@@ -640,6 +671,11 @@ async function restore(
   await fillsF.drain();
   await lotSelectionsF.drain();
   await transferLinksF.drain();
+  await optionSettlementsF.drain();
+  await optionSettlementRowsF.drain();
+  await optionSettlementFillsF.drain();
+  await positionRollsF.drain();
+  await entryGreeksF.drain();
   await positionTagsF.drain();
   await positionImagesF.drain();
   await ledgerF.drain();
@@ -691,6 +727,21 @@ async function restore(
         return;
       case 'transfer-links.ndjson':
         await transferLinksF.drain();
+        return;
+      case 'option-settlements.ndjson':
+        await optionSettlementsF.drain();
+        return;
+      case 'option-settlement-rows.ndjson':
+        await optionSettlementRowsF.drain();
+        return;
+      case 'option-settlement-fills.ndjson':
+        await optionSettlementFillsF.drain();
+        return;
+      case 'position-rolls.ndjson':
+        await positionRollsF.drain();
+        return;
+      case 'entry-greeks.ndjson':
+        await entryGreeksF.drain();
         return;
       case 'position-tags.ndjson':
         await positionTagsF.drain();
@@ -863,6 +914,78 @@ async function restore(
         await transferLinksF.push({
           exitFillId: remapId(salt, r.exitFillId),
           entryFillId: remapId(salt, r.entryFillId),
+        });
+        return;
+      }
+      case 'option-settlements.ndjson': {
+        const r = value as ArchiveOptionSettlement;
+        await optionSettlementsF.push({
+          id: remapId(salt, r.id),
+          positionId: remapId(salt, r.positionId),
+          outcome: r.outcome,
+          quantity: r.quantity,
+          premium: r.premium,
+          settledAt: r.settledAt,
+          createdAt: r.createdAt,
+        });
+        return;
+      }
+      case 'option-settlement-rows.ndjson': {
+        const r = value as ArchiveOptionSettlementRow;
+        await optionSettlementRowsF.push({
+          id: remapId(salt, r.id),
+          settlementId: remapId(salt, r.settlementId),
+          // A null row reference stays null; a set one remaps to the fresh
+          // position id (C14, SET NULL).
+          positionId: r.positionId === null ? null : remapId(salt, r.positionId),
+          touch: r.touch,
+          closedRow: r.closedRow,
+          priorLastFlatAt: r.priorLastFlatAt,
+          priorLastFlatNetPnl: r.priorLastFlatNetPnl,
+        });
+        return;
+      }
+      case 'option-settlement-fills.ndjson': {
+        const r = value as ArchiveOptionSettlementFill;
+        await optionSettlementFillsF.push({
+          id: remapId(salt, r.id),
+          settlementId: remapId(salt, r.settlementId),
+          // A null fill reference stays null; a set one remaps to the fresh fill
+          // id (C14, SET NULL).
+          fillId: r.fillId === null ? null : remapId(salt, r.fillId),
+          written: r.written,
+        });
+        return;
+      }
+      case 'position-rolls.ndjson': {
+        const r = value as ArchivePositionRoll;
+        await positionRollsF.push({
+          id: remapId(salt, r.id),
+          chainId: remapId(salt, r.chainId),
+          fromPositionId: remapId(salt, r.fromPositionId),
+          toPositionId: remapId(salt, r.toPositionId),
+          exitFillId: remapId(salt, r.exitFillId),
+          entryFillId: remapId(salt, r.entryFillId),
+          rolledAt: r.rolledAt,
+          createdAt: r.createdAt,
+        });
+        return;
+      }
+      case 'entry-greeks.ndjson': {
+        const r = value as ArchiveEntryGreeks;
+        await entryGreeksF.push({
+          positionId: remapId(salt, r.positionId),
+          delta: r.delta,
+          gamma: r.gamma,
+          thetaPerDay: r.thetaPerDay,
+          vegaPerPct: r.vegaPerPct,
+          rhoPerPct: r.rhoPerPct,
+          source: r.source,
+          volatility: r.volatility,
+          spot: r.spot,
+          rate: r.rate,
+          dividendYield: r.dividendYield,
+          capturedAt: r.capturedAt,
         });
         return;
       }

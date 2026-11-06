@@ -7,7 +7,9 @@ import {
   blackScholes,
   encodeOccCompact,
   encodeOccSymbol,
+  expiryInstant,
   format6SigFig,
+  isPastExpiryUnsettled,
   parseOccSymbol,
   type OccComponents,
 } from './options';
@@ -1035,5 +1037,98 @@ describe('encodeOccCompact — compact OCC parity (REQ-6)', () => {
       { underlying: '1NVDA', expiration: '2026-03-21', type: 'call', strike: '120' },
       'OCC_BAD_UNDERLYING',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// expiryInstant / isPastExpiryUnsettled (design C1 Expiry helpers, Req 1)
+//
+// Contract block, per success criterion in the task prompt:
+//
+// 1. DST probe (AC 1.2) — pre: expiration string for a July and a January
+//    date. call: expiryInstant(expiration). result: 20:00Z for July,
+//    21:00Z for January, never UTC midnight. source: AC 1.2 worked values.
+// 2. DST-transition probe (design C1) — pre: expirations either side of the
+//    2026-03-08 US spring-forward. call: expiryInstant(expiration). result:
+//    21:00Z before the transition, 20:00Z after. source: design C1's own
+//    probe values.
+// 3. Flag edge (AC 1.1) — pre: an open option leg with open units above
+//    zero and a parseable symbol. call: isPastExpiryUnsettled(leg, now).
+//    result: false exactly at the instant, true one millisecond after.
+//    source: the task prompt's Success line.
+// 4. Non-flagged legs (AC 1.1, 1.4) — pre: draft, closed, stock, zero-unit
+//    and unparsable-symbol legs, each read after the instant. call:
+//    isPastExpiryUnsettled(leg, now). result: false in every case. source:
+//    AC 1.1 (gates before parse) and AC 1.4 (unparsable symbol never
+//    flagged).
+// ---------------------------------------------------------------------------
+
+describe('expiryInstant — DST-aware 16:00 America/New_York instant (design C1, AC 1.2)', () => {
+  it('a July expiration gives 20:00Z and a January expiration gives 21:00Z, never UTC midnight', () => {
+    expect(expiryInstant('2026-07-17').toISOString()).toBe('2026-07-17T20:00:00.000Z');
+    expect(expiryInstant('2026-01-16').toISOString()).toBe('2026-01-16T21:00:00.000Z');
+  });
+
+  it('straddles the 2026 US spring-forward transition (design C1 probe)', () => {
+    expect(expiryInstant('2026-03-06').toISOString()).toBe('2026-03-06T21:00:00.000Z');
+    expect(expiryInstant('2026-03-09').toISOString()).toBe('2026-03-09T20:00:00.000Z');
+  });
+});
+
+describe('isPastExpiryUnsettled — past-expiry-unsettled predicate (design C1, Req 1)', () => {
+  const openOptionSymbol = 'AAPL260717C00150000'; // parses to expiration 2026-07-17 (Form 3)
+  const instant = new Date('2026-07-17T20:00:00.000Z'); // AC 1.2 value for this expiration
+
+  it('flags an open option leg with open units above zero one millisecond after its instant, and not at the instant', () => {
+    const leg = {
+      assetType: 'option' as const,
+      status: 'open' as const,
+      symbol: openOptionSymbol,
+      openUnits: 1,
+    };
+
+    expect(isPastExpiryUnsettled(leg, instant)).toBe(false);
+    expect(isPastExpiryUnsettled(leg, new Date(instant.getTime() + 1))).toBe(true);
+  });
+
+  it('never flags a draft, closed, stock, zero-unit or unparsable-symbol leg, even after the instant', () => {
+    const after = new Date(instant.getTime() + 1);
+
+    const draftLeg = {
+      assetType: 'option' as const,
+      status: 'draft' as const,
+      symbol: openOptionSymbol,
+      openUnits: 1,
+    };
+    const closedLeg = {
+      assetType: 'option' as const,
+      status: 'closed' as const,
+      symbol: openOptionSymbol,
+      openUnits: 1,
+    };
+    const stockLeg = {
+      assetType: 'stock' as const,
+      status: 'open' as const,
+      symbol: 'AAPL',
+      openUnits: 1,
+    };
+    const zeroUnitLeg = {
+      assetType: 'option' as const,
+      status: 'open' as const,
+      symbol: openOptionSymbol,
+      openUnits: 0,
+    };
+    const unparsableLeg = {
+      assetType: 'option' as const,
+      status: 'open' as const,
+      symbol: 'not-an-occ-symbol',
+      openUnits: 1,
+    };
+
+    expect(isPastExpiryUnsettled(draftLeg, after)).toBe(false);
+    expect(isPastExpiryUnsettled(closedLeg, after)).toBe(false);
+    expect(isPastExpiryUnsettled(stockLeg, after)).toBe(false);
+    expect(isPastExpiryUnsettled(zeroUnitLeg, after)).toBe(false);
+    expect(isPastExpiryUnsettled(unparsableLeg, after)).toBe(false);
   });
 });

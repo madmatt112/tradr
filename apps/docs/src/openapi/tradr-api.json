@@ -2389,7 +2389,7 @@
     },
     "/api/csv-import/preview": {
       "post": {
-        "description": "First call of the preview→commit handshake. Parses, maps, normalizes, segments, and dry-runs the uploaded CSV against the target account, returning the proposed positions/fills plus per-row/per-cell errors and warnings — and a single-use `token` the client passes to `/api/csv-import/commit`. No trade data is written; the only side effect is staging one preview row per user (a newer preview supersedes the prior one). The body is read with an actual-bytes byte cap (`CSV_IMPORT_MAX_FILE_BYTES`, default 10 MiB) — a deceptive `Content-Length` below the cap does not bypass it — so an oversized upload is rejected with 413. The multipart `request` part is itself capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).\nOption rows are supported. The mapping declares a contract form — `occ-symbol` (the Symbol column carries an OCC contract symbol), `composed` (separate underlying / expiry / strike / call-put columns, with a declared `expiryFormat`), or `descriptor` (preset-only, Tradervue's Option column) — and every option position is staged and stored as the compact OCC symbol (e.g. `NVDA260321C120`). Assignment, exercise and expiration rows and non-100 multipliers are refused per row.\n",
+        "description": "First call of the preview→commit handshake. Parses, maps, normalizes, segments, and dry-runs the uploaded CSV against the target account, returning the proposed positions/fills plus per-row/per-cell errors and warnings — and a single-use `token` the client passes to `/api/csv-import/commit`. No trade data is written; the only side effect is staging one preview row per user (a newer preview supersedes the prior one). The body is read with an actual-bytes byte cap (`CSV_IMPORT_MAX_FILE_BYTES`, default 10 MiB) — a deceptive `Content-Length` below the cap does not bypass it — so an oversized upload is rejected with 413. The multipart `request` part is itself capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).\nOption rows are supported. The mapping declares a contract form — `occ-symbol` (the Symbol column carries an OCC contract symbol), `composed` (separate underlying / expiry / strike / call-put columns, with a declared `expiryFormat`), or `descriptor` (preset-only, Tradervue's Option column) — and every option position is staged and stored as the compact OCC symbol (e.g. `NVDA260321C120`). Non-100 multipliers are refused per row.\nUnder an `execution` rowShape, an assignment (`A`) or exercise (`EX`/`AEX`/`MEX`) code proposes a lifecycle event instead of refusing: `events[]` names each event's row, outcome, contract, quantity and target (a same-file open position or an existing open leg in the account). A row whose event matches no target is a located error with `nonBlocking: true` — it does not import an event, but the rest of the file still can. A re-import that matches a settlement already recorded for the leg proposes no event and instead warns (`lifecycle_already_settled`). An expiration code (`EP`/`GEA`), and every lifecycle code under any other rowShape, is still refused per row.\n",
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -2417,7 +2417,7 @@
         },
         "responses": {
           "200": {
-            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation, groupProposals }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`. `groupProposals` is an array of `{ id, legRefs, label, basis }` — each a proposed multi-leg group, pre-selected; pass its `id` in the commit's `declinedProposalIds` to import it ungrouped instead. The order id that seeded a proposal is never included.\n"
+            "description": "`{ token, summary, positions, errors, warnings, timezone, committable, requiresDuplicateAffirmation, groupProposals, events }`. `token` is consumed by the commit endpoint. A file-level `rows_skipped` warning reports rows dropped by `mapping.rowFilter`. `groupProposals` is an array of `{ id, legRefs, label, basis }` — each a proposed multi-leg group, pre-selected; pass its `id` in the commit's `declinedProposalIds` to import it ungrouped instead. The order id that seeded a proposal is never included. `events` is an array of `{ rowNumber, outcome, symbol, quantity, settledAt, fees, target }` — each a proposed lifecycle-event settlement; `target.kind` is `segment` (its `segmentRef` indexes `positions`) or `open_leg` (its `positionId` names an existing position). `committable` is true as long as every error is `nonBlocking` — a lifecycle event with no target no longer blocks the rest of the file.\n"
           },
           "400": {
             "description": "Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS)."
@@ -3713,9 +3713,121 @@
         ]
       }
     },
+    "/api/options/chain": {
+      "get": {
+        "description": "Backs the options-tools page chain viewer. Shares the Unusual Whales client and the `market_data_options_chain` tool's parsing (no duplicate fetch logic). When the authenticated user has no Unusual Whales key the response is `{ configured: false }` so the viewer shows an empty-state CTA to Settings, not an error.\nA chain is scoped to ONE expiry. Omit `expiration` to get the nearest tradeable one. The response is `{ configured: true, expiration, expirations[], underlying?, chain }`: `expiration` is the expiry actually returned, `expirations` is every tradeable expiry (soonest first) for the picker, and `chain` is the compact projection `{ symbol, expiration?, count, contracts[] }` sorted by strike. Each contract carries `premium` — the last traded price, or the NBBO midpoint when the contract has not traded — which is what the calculator uses as an entry price.\n`underlying` is the last trade on the underlying (`price`, `market_time`, `tape_time`), used by the viewer to anchor the ladder on at-the-money. It is fetched separately and is OMITTED rather than fatal when that quote fails — the chain is the payload; the anchor is not worth failing it for. A `market_time` other than `regular` means the price is a pre/post-market print, not a live quote.\nRequesting an `expiration` the symbol has no contracts for is 404 SYMBOL_NOT_FOUND with an explicit message. Other upstream failures map to their reason codes on the matching HTTP status: 400 MARKET_DATA_KEY_INVALID, 429 MARKET_DATA_RATE_LIMITED / PLATFORM_RATE_LIMITED, 503 MARKET_DATA_UNAVAILABLE. The plaintext key is never returned or logged.\n",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Z.]{1,6}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Expiry to fetch (YYYY-MM-DD). Defaults to the nearest tradeable expiry.",
+            "in": "query",
+            "name": "expiration",
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, expiration, expirations, underlying?, chain }."
+          },
+          "400": {
+            "description": "Validation error or MARKET_DATA_KEY_INVALID."
+          },
+          "404": {
+            "description": "SYMBOL_NOT_FOUND — unknown symbol, or no contracts on that expiry."
+          },
+          "429": {
+            "description": "MARKET_DATA_RATE_LIMITED or PLATFORM_RATE_LIMITED."
+          },
+          "503": {
+            "description": "MARKET_DATA_UNAVAILABLE."
+          }
+        },
+        "summary": "Get one expiry's option chain for a symbol from Unusual Whales.",
+        "tags": [
+          "Options"
+        ]
+      }
+    },
+    "/api/options/market-data-key": {
+      "delete": {
+        "description": "Hard-deletes the stored key for the authenticated user. The ciphertext is gone from the database; the plaintext was never persisted.\n",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No market-data key configured."
+          }
+        },
+        "summary": "Remove the Unusual Whales market-data key.",
+        "tags": [
+          "Options"
+        ]
+      },
+      "get": {
+        "description": "Returns the market-data (Unusual Whales) BYOK key status. The plaintext is NEVER returned — only `configured`, a last-4-char masking hint (`keyHintTail`), and the `verified` flag. When no key is stored the response is `{ configured: false }`.\n",
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, keyHintTail, verified } — no key material."
+          }
+        },
+        "summary": "Get the masked status of the authenticated user's Unusual Whales key.",
+        "tags": [
+          "Options"
+        ]
+      },
+      "put": {
+        "description": "Encrypts the supplied key at rest (AES-256-GCM) and stores only the ciphertext plus a last-4-char masking hint — the plaintext is never persisted or returned. Runs a lightweight verification probe: a 401/403 rejects the save with `MARKET_DATA_KEY_INVALID`; a successful probe returns `verified: true`; a transient failure (timeout / upstream unavailable) stores the key anyway and returns `verified: false`. Rate limited to 10 saves per user per hour.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "apiKey": {
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "apiKey"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ configured: true, keyHintTail, verified: boolean }."
+          },
+          "400": {
+            "description": "Validation error or MARKET_DATA_KEY_INVALID (key rejected by Unusual Whales)."
+          },
+          "429": {
+            "description": "Save rate limit reached (10 / hour)."
+          }
+        },
+        "summary": "Save (or replace) the Unusual Whales market-data key.",
+        "tags": [
+          "Options"
+        ]
+      }
+    },
     "/api/performance": {
       "get": {
-        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier.\n",
+        "description": "Authed. Computes bucketed P&L series, equity curve and statistics per currency over the requested `[start, end)` window. Query validation (minimum start date, date order, bucket-count cap) always runs on the REQUESTED window on every tier. Carries `pastExpiryUnsettledLegs` (count of the user's open option legs past their expiry with open units, across all accounts and currencies, independent of the requested window) only when above zero, and omits the field otherwise.\n",
         "parameters": [
           {
             "in": "query",
@@ -4254,7 +4366,7 @@
     },
     "/api/positions": {
       "get": {
-        "description": "Authed. Returns the user's positions and multi-leg groups (newest first, one entry per group — no per-group query), each carrying its `tags` array ordered by category then case-insensitive name and its `classification` (`winning`, `losing` or `breakeven` for a closed position or group, `null` otherwise). A grouped entry carries `kind: \"group\"`, its legs (each shaped like an ungrouped item), and group-level figures (`label`, `detectedLabel`, `netEntry`, `maxLoss`); an ungrouped entry carries no `kind` key. `status`, `classification` and `tag` filters match a group's own derived fields, not any one leg's. Optional filters may be combined.\n",
+        "description": "Authed. Returns the user's positions and multi-leg groups (newest first, one entry per group — no per-group query), each carrying its `tags` array ordered by category then case-insensitive name and its `classification` (`winning`, `losing` or `breakeven` for a closed position or group, `null` otherwise). A grouped entry carries `kind: \"group\"`, its legs (each shaped like an ungrouped item), and group-level figures (`label`, `detectedLabel`, `netEntry`, `maxLoss`); an ungrouped entry carries no `kind` key. An open option leg past its expiry with open units carries `pastExpiryUnsettled: true`; a group carries `pastExpiryLegCount` (its count of such legs) when above zero. Both keys are omitted otherwise. `status`, `classification` and `tag` filters match a group's own derived fields, not any one leg's. Optional filters may be combined.\n",
         "parameters": [
           {
             "in": "query",
@@ -4421,7 +4533,7 @@
         ]
       },
       "get": {
-        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name. Carries a `compliance` object (live rule score: `finality`, `score`, `status` and one `entries` element per applicable enabled rule) only when the user holds at least one trading rule, and omits the field when they hold none. Carries a `group` object (the multi-leg group this position is a leg of, with its other legs) only when the position belongs to one, and omits the field for an ungrouped position.\n",
+        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name. Carries a `compliance` object (live rule score: `finality`, `score`, `status` and one `entries` element per applicable enabled rule) only when the user holds at least one trading rule, and omits the field when they hold none. Carries a `group` object (the multi-leg group this position is a leg of, with its other legs) only when the position belongs to one, and omits the field for an ungrouped position. Carries `pastExpiryUnsettled: true` when the position is an open option leg past its expiry with open units, and omits the field otherwise. Carries `settlements` (every settlement record touching this row, each with a `role` of `leg`, `stock_exit` or `stock_opened`) only when the position has been touched by one; carries `rollChain` (the roll chain's legs in roll order, and `netCredit`) only when the leg has been rolled; carries `entryGreeks` (the captured entry Greeks, `rhoPerPct` nullable) only when a capture exists. All three are omitted otherwise.\n",
         "parameters": [
           {
             "in": "path",
@@ -4525,6 +4637,98 @@
           }
         },
         "summary": "Update a position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/entry-greeks": {
+      "put": {
+        "description": "Authed. A second capture replaces the first. Black-Scholes prices with `T` from the leg's expiry instant less its first entry fill's `filledAt`, over 365 days; a non-positive `T` or an out-of-bounds input is 400. The chain source carries no further input and fetches the live contract.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "dividendYield": {
+                        "type": "number"
+                      },
+                      "rate": {
+                        "type": "number"
+                      },
+                      "source": {
+                        "enum": [
+                          "black_scholes"
+                        ],
+                        "type": "string"
+                      },
+                      "spot": {
+                        "type": "number"
+                      },
+                      "volatility": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "volatility",
+                      "spot",
+                      "rate"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "source": {
+                        "enum": [
+                          "chain"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The captured entry Greeks."
+          },
+          "400": {
+            "description": "Invalid Black-Scholes input or non-positive T (VALIDATION_ERROR)."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "The chain contract is missing",
+            "expired or missing a required Greek.": null
+          }
+        },
+        "summary": "Capture a leg's entry Greeks, by Black-Scholes or the live chain (design C7).",
         "tags": [
           "Positions"
         ]
@@ -5480,6 +5684,250 @@
           }
         },
         "summary": "Reopen a same-day closed position.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/roll": {
+      "post": {
+        "description": "Authed. The new contract must share the underlying and differ from the current one. A grouped leg rolls within the group, re-validated as a set; an admin-gated batch-create check applies to the new leg.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "closeFees": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "closePrice": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "newSymbol": {
+                    "type": "string"
+                  },
+                  "openFees": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "openPrice": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "rolledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "newSymbol",
+                  "quantity",
+                  "closePrice",
+                  "openPrice",
+                  "rolledAt"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The roll result."
+          },
+          "400": {
+            "description": "Invalid contract",
+            "quantity or date (VALIDATION_ERROR).": null
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "The group changed; try again."
+          }
+        },
+        "summary": "Roll an open leg into a new contract (design C6).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/settle": {
+      "post": {
+        "description": "Authed. `outcome` must be legal for the leg's side (short: worthless/assigned, long: worthless/exercised), else 400 with no write. A stock-side outcome opens or exits stock rows per design C3's table.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "fees": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "outcome": {
+                    "enum": [
+                      "worthless",
+                      "assigned",
+                      "exercised"
+                    ],
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "description": "Decimal.",
+                    "type": "string"
+                  },
+                  "settledAt": {
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "stockRowOrder": {
+                    "items": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "outcome"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settlement result."
+          },
+          "400": {
+            "description": "Illegal outcome for the side",
+            "or an invalid date/quantity (VALIDATION_ERROR).": null
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "The leg is not open",
+            "has no open units": null,
+            "or the holdings changed.": null
+          }
+        },
+        "summary": "Settle an open option leg worthless, assigned or exercised (design C3).",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/settlement-context": {
+      "get": {
+        "description": "Authed. `legalOutcomes` is `['worthless','assigned']` for a short leg or `['worthless','exercised']` for a long leg. `suggestedOutcome` is non-null only once the New York date equals the leg's expiration and now is past the expiry instant, with the quote provider configured; a quote failure gives null. Per-user rate limited to 30 reads per 60 s.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settlement context."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such position for this user (NOT_FOUND)."
+          },
+          "429": {
+            "30 / 60 s (RATE_LIMITED).": null,
+            "description": "Per-user limit reached"
+          }
+        },
+        "summary": "Legal outcomes, expiry instant, premium, held rows and a pre-selection suggestion.",
+        "tags": [
+          "Positions"
+        ]
+      }
+    },
+    "/api/positions/{id}/settlements/{settlementId}/unsettle": {
+      "post": {
+        "description": "Authed. Refused with 409 and a reason when any touched row or fill has moved since the settlement, when a written fill carries a transfer link, or when an opened row has joined a group.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "settlementId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Undone."
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "404": {
+            "description": "No such settlement for this user and leg (NOT_FOUND)."
+          },
+          "409": {
+            "description": "A touched row or fill moved since the settlement; unsettle refused."
+          }
+        },
+        "summary": "Undo a settlement exactly (design C5).",
         "tags": [
           "Positions"
         ]

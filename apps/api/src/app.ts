@@ -1,15 +1,9 @@
-import Decimal from 'decimal.js';
 import { Hono } from 'hono';
 
 import { runMigrations } from '@/db/migrate';
 import accountDataRouter from '@/features/account-data/account-data.route';
 import accountDeletionRouter from '@/features/account-deletion/account-deletion.route';
 import accountingRouter from '@/features/accounting/accounting.route';
-import {
-  insertPositionCloseLedgerEntries,
-  postFillLedgerEntries,
-  reversePositionCloseLedgerEntries,
-} from '@/features/accounting/ledger-hook';
 import accounts from '@/features/accounts/accounts.route';
 import { adminRouter } from '@/features/admin/admin.route';
 import { advisorRouter } from '@/features/advisor/advisor.route';
@@ -38,15 +32,10 @@ import optionsRouter from '@/features/options/options.route';
 import performance from '@/features/performance/performance.route';
 import fillsRouter from '@/features/positions/fills.route';
 import lotsRouter from '@/features/positions/lots.route';
+import optionLifecycleRouter from '@/features/positions/option-lifecycle.route';
 import positionGroupsRouter from '@/features/positions/position-groups.route';
 import positionImagesRouter from '@/features/positions/position-images.route';
 import positions from '@/features/positions/positions.route';
-import {
-  assertLedgerHooksCoRegistered,
-  replaceCloseHook,
-  replaceFillHook,
-  replaceReverseHook,
-} from '@/features/positions/positions.service';
 import transferLinksRouter from '@/features/positions/transfer-links.route';
 import { initStockQuoteCache } from '@/features/symbols/stock-quote.client';
 import symbolsRouter from '@/features/symbols/symbols.route';
@@ -58,6 +47,7 @@ import {
   loadEncryptionKeyMaterial,
   runEncryptionFingerprintCheckIfConfigured,
 } from '@/lib/encryption';
+import { initLedgerRuntime } from '@/lib/ledger-runtime';
 import { logger } from '@/lib/logger';
 import { globalBodyLimitMiddleware } from '@/middleware/body-limit.middleware';
 import { corsMiddleware } from '@/middleware/cors.middleware';
@@ -168,6 +158,7 @@ app.route('/api/positions', fillsRouter);
 app.route('/api/positions', lotsRouter);
 app.route('/api/positions', transferLinksRouter);
 app.route('/api/positions', positionImagesRouter);
+app.route('/api/positions', optionLifecycleRouter);
 app.route('/api/performance', performance);
 app.route('/api/symbols', symbolsRouter);
 app.route('/api/tags', tagsRouter);
@@ -192,16 +183,11 @@ app.onError(errorHandler);
 // post-migrations and before `serve()`. Defined here (not invoked at module
 // load) so test harnesses can import `app` without side-effects.
 //
-// - `Decimal.set` mutates global decimal.js config. decimal.js v10 reads
-//   config per-call rather than caching it on construction, so any
-//   `new Decimal(...)` instances created before this call still observe the
-//   pinned `ROUND_HALF_UP` rounding mode and 20-digit precision when they
-//   participate in arithmetic. This means we never need a module-top-level
-//   `new Decimal(...)` to "lock in" the config.
-// - `replaceCloseHook` (not `registerCloseHook`) keeps `bootstrap()`
-//   idempotent: calling it twice — e.g., from a test harness re-init —
-//   overwrites the existing entry rather than throwing
-//   `HookAlreadyRegisteredError`.
+// - `initLedgerRuntime` (design C11) pins the global `Decimal` config and
+//   co-registers the three ledger hooks; it is the same function the
+//   `tradr positions expire` CLI calls on its own, since that command never
+//   runs the rest of this bootstrap. It is idempotent (via `replace*Hook`),
+//   so calling it twice — e.g. from a test harness re-init — just overwrites.
 //
 // Advisor startup ordering (Task 28, design §Bootstrap order):
 //   prelude
@@ -215,20 +201,7 @@ app.onError(errorHandler);
 // misconfigured key fails the deploy before paying migration cost.
 export async function bootstrap(): Promise<void> {
   // --- prelude ---
-  Decimal.set({ rounding: Decimal.ROUND_HALF_UP, precision: 20 });
-  replaceCloseHook('ledger', insertPositionCloseLedgerEntries);
-  // Reverse hook, co-registered with the close hook (Req 7.5/7.8). The
-  // co-registration invariant below is the state-machine guard that replaces the
-  // dropped `ledger_position_pnl_unique_idx` (task 26) — every close hook MUST
-  // have a same-named reverse hook or bootstrap throws.
-  replaceReverseHook('ledger', reversePositionCloseLedgerEntries);
-  // Fill hook (Req 9): posts the realized-P&L delta on every fill mutation, so a
-  // partial exit moves the balance immediately instead of waiting for the
-  // position to go flat. Co-registered with the other two — the invariant below
-  // requires all three, because partial P&L posted by the fill hook must be
-  // reversible on reopen.
-  replaceFillHook('ledger', postFillLedgerEntries);
-  assertLedgerHooksCoRegistered();
+  initLedgerRuntime();
   initDashboardCache();
   initChangelogCache();
   initStockQuoteCache();

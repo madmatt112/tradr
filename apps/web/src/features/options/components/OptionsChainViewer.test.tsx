@@ -57,12 +57,11 @@ afterEach(() => {
 });
 
 describe('OptionsChainViewer on an instance that withdrew the advisor', () => {
-  it('renders nothing — no card, no input, no settings CTA', () => {
+  it('still renders the chain — it no longer depends on the advisor (AC 7.4, 7.6)', () => {
     posture.advisorEnabled = false;
     useOptionsChainMock.mockReturnValue({ isLoading: false, isError: false, data: undefined });
-    const { container } = renderWithClient(<OptionsChainViewer />);
-    expect(container.innerHTML).toBe('');
-    expect(useOptionsChainMock).not.toHaveBeenCalled();
+    renderWithClient(<OptionsChainViewer />);
+    expect(screen.getByLabelText('Symbol')).toBeTruthy();
   });
 });
 
@@ -74,7 +73,7 @@ describe('OptionsChainViewer', () => {
     expect(screen.queryByText('Loading chain…')).toBeNull();
   });
 
-  it('shows the no-key empty-state CTA to Settings (REQ-12.2)', async () => {
+  it('shows the no-key empty-state CTA to the market-data settings section (AC 7.6)', async () => {
     useOptionsChainMock.mockReturnValue({
       isLoading: false,
       isError: false,
@@ -86,7 +85,7 @@ describe('OptionsChainViewer', () => {
       expect(screen.getByText(/Connect an Unusual Whales key/i)).toBeTruthy();
     });
     const cta = screen.getByRole('link', { name: /Go to Settings/i });
-    expect(cta.getAttribute('href')).toBe('/settings/advisor');
+    expect(cta.getAttribute('href')).toBe('/settings/market-data');
   });
 
   it('renders a contract table on success', async () => {

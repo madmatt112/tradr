@@ -63,8 +63,19 @@ function surfaceCodedPreviewError(err: unknown): never {
  *       `composed` (separate underlying / expiry / strike / call-put columns,
  *       with a declared `expiryFormat`), or `descriptor` (preset-only,
  *       Tradervue's Option column) — and every option position is staged and
- *       stored as the compact OCC symbol (e.g. `NVDA260321C120`). Assignment,
- *       exercise and expiration rows and non-100 multipliers are refused per
+ *       stored as the compact OCC symbol (e.g. `NVDA260321C120`). Non-100
+ *       multipliers are refused per row.
+ *
+ *       Under an `execution` rowShape, an assignment (`A`) or exercise
+ *       (`EX`/`AEX`/`MEX`) code proposes a lifecycle event instead of
+ *       refusing: `events[]` names each event's row, outcome, contract,
+ *       quantity and target (a same-file open position or an existing open
+ *       leg in the account). A row whose event matches no target is a located
+ *       error with `nonBlocking: true` — it does not import an event, but the
+ *       rest of the file still can. A re-import that matches a settlement
+ *       already recorded for the leg proposes no event and instead warns
+ *       (`lifecycle_already_settled`). An expiration code (`EP`/`GEA`), and
+ *       every lifecycle code under any other rowShape, is still refused per
  *       row.
  *     tags: [CSV Import]
  *     requestBody:
@@ -98,13 +109,20 @@ function surfaceCodedPreviewError(err: unknown): never {
  *       200:
  *         description: >
  *           `{ token, summary, positions, errors, warnings, timezone,
- *           committable, requiresDuplicateAffirmation, groupProposals }`. `token`
- *           is consumed by the commit endpoint. A file-level `rows_skipped`
- *           warning reports rows dropped by `mapping.rowFilter`. `groupProposals`
- *           is an array of `{ id, legRefs, label, basis }` — each a proposed
- *           multi-leg group, pre-selected; pass its `id` in the commit's
- *           `declinedProposalIds` to import it ungrouped instead. The order id
- *           that seeded a proposal is never included.
+ *           committable, requiresDuplicateAffirmation, groupProposals, events }`.
+ *           `token` is consumed by the commit endpoint. A file-level
+ *           `rows_skipped` warning reports rows dropped by `mapping.rowFilter`.
+ *           `groupProposals` is an array of `{ id, legRefs, label, basis }` —
+ *           each a proposed multi-leg group, pre-selected; pass its `id` in
+ *           the commit's `declinedProposalIds` to import it ungrouped
+ *           instead. The order id that seeded a proposal is never included.
+ *           `events` is an array of `{ rowNumber, outcome, symbol, quantity,
+ *           settledAt, fees, target }` — each a proposed lifecycle-event
+ *           settlement; `target.kind` is `segment` (its `segmentRef` indexes
+ *           `positions`) or `open_leg` (its `positionId` names an existing
+ *           position). `committable` is true as long as every error is
+ *           `nonBlocking` — a lifecycle event with no target no longer blocks
+ *           the rest of the file.
  *       400: { description: 'Malformed upload, request part, or CSV (e.g. CSV_NOT_UTF8, CSV_IMPORT_REQUEST_TOO_LARGE, CSV_NO_ROWS).' }
  *       413: { description: 'File over CSV_IMPORT_MAX_FILE_BYTES (PAYLOAD_TOO_LARGE), too many rows (CSV_IMPORT_TOO_MANY_ROWS), or staged result too large (CSV_IMPORT_RESULT_TOO_LARGE).' }
  *       409: { description: 'An import is already in progress for this user (CSV_IMPORT_IN_PROGRESS).' }
