@@ -101,9 +101,12 @@ export function PositionDetailView({ positionId }: Props) {
 
   // Reopen (R13): closed positions whose openedAt is still the current trading
   // day in the account's timezone. Server is authoritative and 409s a prior-day
-  // reopen; this only governs whether the button is offered.
+  // reopen; this only governs whether the button is offered. design C10: a row
+  // touched by a settlement is never offered Reopen (AC 4.8) — unsettle first.
   const canReopen =
-    isClosed && isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date());
+    isClosed &&
+    isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date()) &&
+    (position.settlements ?? []).length === 0;
 
   // design C10: Settle is offered on the detail header for any open option leg.
   const canSettle = isOpen && position.assetType === 'option';

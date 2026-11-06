@@ -1,10 +1,14 @@
 import { Link } from '@tanstack/react-router';
+import { useState } from 'react';
 
 import type { PositionSettlementDetail } from '@tradr/shared';
 
 import { Numeric } from '@/components/Numeric';
+import { Button } from '@/components/ui/button';
 
 import { buildTimeline, type TimelineEntry, type TimelineSource } from '../utils/timeline';
+
+import { UnsettleDialog } from './UnsettleDialog';
 
 interface Props {
   position: TimelineSource & { id: string };
@@ -62,9 +66,11 @@ function entryKey(entry: TimelineEntry): string {
 function TimelineEntryRow({
   entry,
   viewedPositionId,
+  onUnsettle,
 }: {
   entry: TimelineEntry;
   viewedPositionId: string;
+  onUnsettle: (settlement: PositionSettlementDetail) => void;
 }) {
   switch (entry.kind) {
     case 'fill':
@@ -93,6 +99,15 @@ function TimelineEntryRow({
               <PositionLink positionId={id}>view position</PositionLink>
             </span>
           ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-2 cursor-pointer"
+            onClick={() => onUnsettle(entry.settlement)}
+          >
+            Unsettle
+          </Button>
         </span>
       );
     }
@@ -138,18 +153,37 @@ function TimelineEntryRow({
  */
 export function PositionTimeline({ position }: Props) {
   const entries = buildTimeline(position);
+  const [unsettleTarget, setUnsettleTarget] = useState<PositionSettlementDetail | null>(null);
 
   if (entries.length === 0) {
     return <p className="text-sm text-muted-foreground">No history yet</p>;
   }
 
   return (
-    <ol className="space-y-2 text-sm">
-      {entries.map((entry) => (
-        <li key={entryKey(entry)}>
-          <TimelineEntryRow entry={entry} viewedPositionId={position.id} />
-        </li>
-      ))}
-    </ol>
+    <>
+      <ol className="space-y-2 text-sm">
+        {entries.map((entry) => (
+          <li key={entryKey(entry)}>
+            <TimelineEntryRow
+              entry={entry}
+              viewedPositionId={position.id}
+              onUnsettle={setUnsettleTarget}
+            />
+          </li>
+        ))}
+      </ol>
+      {/* Mounted only while a target is picked — same reasoning as
+          SettleLegDialog (C10) — so this file's own bare-render suite never
+          trips useUnsettleLeg's hook behind a missing QueryClientProvider. */}
+      {unsettleTarget && (
+        <UnsettleDialog
+          settlement={unsettleTarget}
+          open
+          onOpenChange={(open) => {
+            if (!open) setUnsettleTarget(null);
+          }}
+        />
+      )}
+    </>
   );
 }
