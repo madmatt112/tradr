@@ -209,9 +209,67 @@ Two rules apply:
   reporting timezone has no say here.
 - **Add a fill before closing again.** A reopened position starts with nothing
   open, so a straight re-close would be a no-op. Tradr rejects it and says so.
+- **No reopen after a settlement.** Once an option leg carries a settlement,
+  Tradr refuses Reopen. Use **Unsettle** instead.
 
 Reopening reverses the realized P&L that the close posted. Closing again posts it
 afresh from the fills as they then stand.
+
+## Settle a leg
+
+Select **Settle** on an open option leg. The button is on the position page and
+on the row's `⋯` menu.
+
+Settlement is your choice. Tradr never settles a leg on its own — add the
+settlement yourself once you know how the leg ended.
+
+Choose one outcome:
+
+- **Worthless.** The option expired with no value. Tradr closes the full open
+  quantity at the expiry.
+- **Assigned.** You, as the option seller, were assigned the stock.
+- **Exercised.** You, as the option holder, exercised the option.
+
+For an assigned or exercised leg, set the date, the quantity (it defaults to all
+open units), and a fee. The Options Clearing Corporation automatically
+exercises any option that is in the money by $0.01 or more at its 17:30 ET
+cut-off, so a long option left open at expiry usually settles as exercised, not
+worthless.
+
+When a settlement closes or opens more than one stock row, Tradr asks you to
+order them. The order sets which row the settlement closes first.
+
+## Unsettle
+
+Select **Unsettle** next to a settled entry in the **Timeline**.
+
+Unsettle reverses the settlement. The leg returns to open, and the fills the
+settlement wrote are removed. If the settlement opened a stock row, that row is
+deleted too, along with its tags, screenshots and lots.
+
+## Roll a leg
+
+Select **Roll** on an open option leg's position page.
+
+Rolling closes the current leg and opens a new contract in a single step. Enter
+the new contract, a quantity (it defaults to the leg's open units), a close
+price and an open price, a fee for each side, and the date.
+
+## Entry Greeks
+
+Select **Capture Greeks** on an open option leg's position page to record the
+Greeks the leg was entered with.
+
+Enter Black-Scholes inputs by hand — volatility, spot, rate, and an optional
+dividend yield. With an Unusual Whales key configured, you can instead pull the
+Greeks straight from the chain for the contract. See [Options
+tools](/user-guide/options-tools/#options-chain) for the settings section the
+key lives under. Tradr does not solve for implied volatility; it only takes the
+Black-Scholes inputs you give it.
+
+The settlement, roll and entry-Greeks figures are your own journal record, not
+tax advice. Confirm how a settlement or roll is taxed with your broker's own
+documents or a tax professional.
 
 ## Edit or remove a fill
 
