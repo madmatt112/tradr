@@ -36,6 +36,7 @@ import { decodeOptionContract } from '../utils/optionContract';
 import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
 import { BreakevenBadge } from './BreakevenBadge';
+import { EntryGreeksDialog } from './EntryGreeksDialog';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
 import { LinkLegsDialog } from './LinkLegsDialog';
@@ -44,6 +45,7 @@ import { PositionEditDialog } from './PositionEditDialog';
 import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
 import { PositionTimeline } from './PositionTimeline';
+import { RollLegDialog } from './RollLegDialog';
 import { SettleLegDialog } from './SettleLegDialog';
 
 interface Props {
@@ -64,6 +66,8 @@ export function PositionDetailView({ positionId }: Props) {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [settleOpen, setSettleOpen] = useState(false);
+  const [rollOpen, setRollOpen] = useState(false);
+  const [greeksOpen, setGreeksOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -108,8 +112,9 @@ export function PositionDetailView({ positionId }: Props) {
     isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date()) &&
     (position.settlements ?? []).length === 0;
 
-  // design C10: Settle is offered on the detail header for any open option leg.
-  const canSettle = isOpen && position.assetType === 'option';
+  // design C10: Settle, Roll and Capture Greeks are offered on the detail
+  // header for any open option leg.
+  const isOpenOptionLeg = isOpen && position.assetType === 'option';
 
   // Determine account currency from the position (we need it for formatting)
   // The detail endpoint doesn't return accountCurrency, so use a fallback
@@ -218,9 +223,23 @@ export function PositionDetailView({ positionId }: Props) {
               {reopenPosition.isPending ? 'Reopening...' : 'Reopen'}
             </Button>
           )}
-          {canSettle && (
+          {isOpenOptionLeg && (
             <Button className="cursor-pointer" onClick={() => setSettleOpen(true)}>
               Settle
+            </Button>
+          )}
+          {isOpenOptionLeg && (
+            <Button variant="outline" className="cursor-pointer" onClick={() => setRollOpen(true)}>
+              Roll
+            </Button>
+          )}
+          {isOpenOptionLeg && (
+            <Button
+              variant="outline"
+              className="cursor-pointer"
+              onClick={() => setGreeksOpen(true)}
+            >
+              Capture Greeks
             </Button>
           )}
           {!isDraft && (
@@ -477,6 +496,13 @@ export function PositionDetailView({ positionId }: Props) {
           and link-legs dialogs above. */}
       {settleOpen && (
         <SettleLegDialog position={position} open={settleOpen} onOpenChange={setSettleOpen} />
+      )}
+
+      {/* Roll and entry-Greeks dialogs — mounted only while open, same
+          reasoning as the dialogs above (design C10). */}
+      {rollOpen && <RollLegDialog position={position} open={rollOpen} onOpenChange={setRollOpen} />}
+      {greeksOpen && (
+        <EntryGreeksDialog position={position} open={greeksOpen} onOpenChange={setGreeksOpen} />
       )}
 
       {/* Delete Confirmation */}
