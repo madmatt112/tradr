@@ -144,6 +144,33 @@ describe('PositionDetail — Reopen button (R13 same-day)', () => {
     expect(mutate).toHaveBeenCalledTimes(1);
     expect(mutate).toHaveBeenCalledWith({});
   });
+
+  // design C10 "canReopen: on detail it also needs an empty settlements
+  // list; the server stays authoritative" — AC 4.8 "WHEN a row is touched
+  // by a settlement THEN reopen SHALL be refused ... whatever the same-day
+  // guard says."
+  it('hides Reopen for a closed position opened today once a settlement has touched it (AC 4.8)', () => {
+    mockDetail({
+      status: 'closed',
+      accountTimezone: 'UTC',
+      openedAt: `${TODAY_UTC}T09:00:00.000Z`,
+      settlements: [
+        {
+          settlementId: 'settlement-1',
+          outcome: 'assigned',
+          premium: 120,
+          quantity: 1,
+          settledAt: `${TODAY_UTC}T10:00:00.000Z`,
+          createdAt: `${TODAY_UTC}T10:00:00.000Z`,
+          role: 'leg',
+          legPositionId: '00000000-0000-4000-a000-000000000001',
+          stockPositionIds: [],
+        },
+      ],
+    });
+    renderDetail();
+    expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
+  });
 });
 
 describe('PositionDetail — delete confirmation copy', () => {
