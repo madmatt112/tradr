@@ -43,6 +43,7 @@ import { PastExpiryChip } from './PastExpiryChip';
 import { PositionEditDialog } from './PositionEditDialog';
 import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
+import { PositionTimeline } from './PositionTimeline';
 import { SettleLegDialog } from './SettleLegDialog';
 
 interface Props {
@@ -429,6 +430,13 @@ export function PositionDetailView({ positionId }: Props) {
           positionId={positionId}
           positionStatus={position.status}
         />
+      </div>
+
+      {/* Timeline — one date-ordered history of fills, settlements, rolls and
+          entry Greeks (design C10, D17; Requirement 8.1). */}
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">Timeline</h2>
+        <PositionTimeline position={position} />
       </div>
 
       {/* Edit Dialog */}
