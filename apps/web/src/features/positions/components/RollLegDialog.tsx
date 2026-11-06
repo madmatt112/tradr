@@ -82,12 +82,18 @@ export function RollLegDialog({ position, open, onOpenChange }: Props) {
       return;
     }
 
+    const rolledAtDate = new Date(date);
+    if (!date || isNaN(rolledAtDate.getTime())) {
+      setContractErrors({ form: 'Date is required' });
+      return;
+    }
+
     const payload: RollLegInput = {
       newSymbol: encoded.value,
       quantity,
       closePrice,
       openPrice,
-      rolledAt: new Date(date).toISOString(),
+      rolledAt: rolledAtDate.toISOString(),
     };
     if (closeFees) payload.closeFees = closeFees;
     if (openFees) payload.openFees = openFees;
@@ -184,6 +190,7 @@ export function RollLegDialog({ position, open, onOpenChange }: Props) {
                 type="datetime-local"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
+                required
               />
             </div>
           </div>
