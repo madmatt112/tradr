@@ -81,10 +81,17 @@ function orderRolls(rows: RollRow[]): RollRow[] {
 export async function getRollChain(
   db: Database,
   positionId: string,
-): Promise<{ legs: Array<{ positionId: string }>; netCredit: string }> {
+): Promise<{
+  legs: Array<{ positionId: string; symbol: string; rolledAt: string }>;
+  netCredit: string;
+}> {
   const chainId = await findChainIdForLeg(db, positionId);
 
+  // The edge that brought each leg into the chain: the leg before a roll
+  // reads its own `rolledAt` as the edge that carried it out; the chain's
+  // first from-leg has no incoming edge, so it reads its own open instead.
   let legIds: string[];
+  const rolledAtByLegId = new Map<string, Date>();
   if (chainId === null) {
     legIds = [positionId];
   } else {
@@ -94,14 +101,20 @@ export async function getRollChain(
       .where(eq(positionRolls.chainId, chainId));
     const ordered = orderRolls(rollRows);
     legIds = [ordered[0]!.fromPositionId, ...ordered.map((r) => r.toPositionId)];
+    for (const roll of ordered) rolledAtByLegId.set(roll.fromPositionId, roll.rolledAt);
   }
 
-  const [legRow] = await db
-    .select({ side: positions.side })
+  const legRows = await db
+    .select({
+      id: positions.id,
+      symbol: positions.symbol,
+      side: positions.side,
+      openedAt: positions.openedAt,
+    })
     .from(positions)
-    .where(inArray(positions.id, legIds))
-    .limit(1);
-  const shortMultiplier = legRow?.side === 'short' ? 1 : -1;
+    .where(inArray(positions.id, legIds));
+  const legById = new Map(legRows.map((r) => [r.id, r]));
+  const shortMultiplier = legRows[0]?.side === 'short' ? 1 : -1;
 
   // The settlement's own leg-exit fill, for an assigned or exercised
   // settlement on one of these legs (design D8). Joining `fills` and
@@ -136,7 +149,15 @@ export async function getRollChain(
   }
 
   return {
-    legs: legIds.map((id) => ({ positionId: id })),
+    legs: legIds.map((id) => {
+      const leg = legById.get(id);
+      const rolledAt = rolledAtByLegId.get(id) ?? leg?.openedAt ?? null;
+      return {
+        positionId: id,
+        symbol: leg?.symbol ?? '',
+        rolledAt: rolledAt ? rolledAt.toISOString() : '',
+      };
+    }),
     netCredit: netCredit.toFixed(2),
   };
 }
