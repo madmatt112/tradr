@@ -70,7 +70,7 @@ describe('SettleLegDialog — no default outcome (AC 2.2)', () => {
     for (const name of ['Worthless', 'Assigned']) {
       expect(screen.getByRole('button', { name }).getAttribute('aria-pressed')).not.toBe('true');
     }
-    expect(screen.getByRole('button', { name: 'Settle' })).toBeDisabled();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Settle' }).disabled).toBe(true);
   });
 });
 

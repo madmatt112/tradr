@@ -43,6 +43,7 @@ import { PastExpiryChip } from './PastExpiryChip';
 import { PositionEditDialog } from './PositionEditDialog';
 import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
+import { SettleLegDialog } from './SettleLegDialog';
 
 interface Props {
   positionId: string;
@@ -61,6 +62,7 @@ export function PositionDetailView({ positionId }: Props) {
   const [fillDialogOpen, setFillDialogOpen] = useState(false);
   const [tagsOpen, setTagsOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [settleOpen, setSettleOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -101,6 +103,9 @@ export function PositionDetailView({ positionId }: Props) {
   // reopen; this only governs whether the button is offered.
   const canReopen =
     isClosed && isOpenedTodayInAccountTz(position.openedAt, position.accountTimezone, new Date());
+
+  // design C10: Settle is offered on the detail header for any open option leg.
+  const canSettle = isOpen && position.assetType === 'option';
 
   // Determine account currency from the position (we need it for formatting)
   // The detail endpoint doesn't return accountCurrency, so use a fallback
@@ -207,6 +212,11 @@ export function PositionDetailView({ positionId }: Props) {
               disabled={reopenPosition.isPending}
             >
               {reopenPosition.isPending ? 'Reopening...' : 'Reopen'}
+            </Button>
+          )}
+          {canSettle && (
+            <Button className="cursor-pointer" onClick={() => setSettleOpen(true)}>
+              Settle
             </Button>
           )}
           {!isDraft && (
@@ -450,6 +460,12 @@ export function PositionDetailView({ positionId }: Props) {
           open={linkOpen}
           onOpenChange={setLinkOpen}
         />
+      )}
+
+      {/* Settle dialog — mounted only while open, same reasoning as the tags
+          and link-legs dialogs above. */}
+      {settleOpen && (
+        <SettleLegDialog position={position} open={settleOpen} onOpenChange={setSettleOpen} />
       )}
 
       {/* Delete Confirmation */}
