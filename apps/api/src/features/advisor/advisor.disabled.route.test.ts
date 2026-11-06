@@ -2,8 +2,8 @@
 // instance. The gate sits on the router after auth and before every route, so
 // the contract is: anonymous callers still get 401 (the gate is not an
 // unauthenticated probe), and every authenticated call under /api/advisor —
-// the smoke endpoint, the options-chain viewer, keys, personas, conversations —
-// answers 403 ADVISOR_DISABLED. Reads config live, so a direct mutation flips
+// the smoke endpoint, personas, conversations — answers 403 ADVISOR_DISABLED.
+// Reads config live, so a direct mutation flips
 // it with no restart, exactly as config.test.ts does for DISABLE_REGISTRATION.
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -77,8 +77,6 @@ describe('DISABLE_ADVISOR', () => {
     // The smoke endpoint proves the gate precedes every route, not a subset.
     for (const path of [
       '/api/advisor/_health',
-      '/api/advisor/options-chain?symbol=SPY',
-      '/api/advisor/market-data-key',
       '/api/advisor/conversations',
       '/api/advisor/personas',
     ]) {
