@@ -117,15 +117,25 @@
 import { randomUUID } from 'node:crypto';
 
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import app from '@/app';
 import { db } from '@/db';
 import { ibkrFlexConnections } from '@/db/schema';
 import { config } from '@/lib/config';
-import { decrypt, ENCRYPTION_KEY_VERSION_CURRENT } from '@/lib/encryption';
+import {
+  decrypt,
+  ENCRYPTION_KEY_VERSION_CURRENT,
+  loadEncryptionKeyMaterial,
+} from '@/lib/encryption';
 
 import { recordFetch } from './ibkr.query';
+
+// The route drives encrypt()/decrypt() outside bootstrap() — same precedent as
+// auth.test.ts:136-140 and the advisor suites.
+beforeAll(() => {
+  loadEncryptionKeyMaterial();
+});
 
 let testCounter = 0;
 const testRunId = Date.now();

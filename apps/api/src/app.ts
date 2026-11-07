@@ -28,6 +28,7 @@ import { dashboardRoute } from '@/features/dashboard/dashboard.route';
 import { initDashboardCache } from '@/features/dashboard/dashboard.service';
 import expensesRouter from '@/features/expenses/expenses.route';
 import health from '@/features/health/health.route';
+import ibkrRouter from '@/features/ibkr/ibkr.route';
 import optionsRouter from '@/features/options/options.route';
 import performance from '@/features/performance/performance.route';
 import fillsRouter from '@/features/positions/fills.route';
@@ -151,6 +152,9 @@ app.route('/api/csv-import', csvImport);
 // and its /export, /import/preview and /import handlers own the base (design C9).
 app.route('/api/account-data', accountDataRouter);
 app.route('/api/dashboard', dashboardRoute);
+// IBKR Flex connections (design C2): save, read and remove, outside the
+// advisor router so they work regardless of DISABLE_ADVISOR (Req 6.5).
+app.route('/api/ibkr', ibkrRouter);
 app.route('/api/options', optionsRouter);
 app.route('/api/positions', positions);
 app.route('/api/position-groups', positionGroupsRouter);

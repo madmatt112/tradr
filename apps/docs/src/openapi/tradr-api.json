@@ -3394,6 +3394,106 @@
         ]
       }
     },
+    "/api/ibkr/connections": {
+      "get": {
+        "description": "Masked status only: accountId, a last-4-char token hint, and the last-fetch time and the report's trade-date span. Never the token or the query id.\n",
+        "responses": {
+          "200": {
+            "description": "Array of { accountId, tokenHintTail, lastFetchedAt, lastPeriodStart, lastPeriodEnd }."
+          }
+        },
+        "summary": "List the authenticated user's IBKR Flex connections.",
+        "tags": [
+          "IBKR"
+        ]
+      }
+    },
+    "/api/ibkr/connections/{accountId}": {
+      "delete": {
+        "description": "Hard-deletes the stored connection.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No connection for this account, or owned by another user."
+          }
+        },
+        "summary": "Remove the IBKR Flex connection for an account.",
+        "tags": [
+          "IBKR"
+        ]
+      },
+      "put": {
+        "description": "Encrypts the token and query id at rest; only the ciphertext, the key version and the token's last four characters are stored. Makes no call to IBKR. A second save replaces the first and clears the last-fetch record. Rate limited to 10 saves per user per hour.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "queryId": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "token": {
+                    "maxLength": 512,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token",
+                  "queryId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ accountId, tokenHintTail, lastFetchedAt, lastPeriodStart, lastPeriodEnd }."
+          },
+          "400": {
+            "description": "Validation error (blank token or query id)."
+          },
+          "404": {
+            "description": "Unknown account, or owned by another user."
+          },
+          "429": {
+            "description": "Save rate limit reached (10 / hour)."
+          }
+        },
+        "summary": "Save (or replace) the IBKR Flex connection for an account.",
+        "tags": [
+          "IBKR"
+        ]
+      }
+    },
     "/api/ledger/{accountId}": {
       "get": {
         "description": "Authed. The ledger is the cash record for one account: deposits, withdrawals, and the cash effect of each fill, newest first. `runningBalanceAtFirstRow` is the balance as at the first row on this page, so a client can reconstruct the running balance down the page without fetching the whole history.\n",
