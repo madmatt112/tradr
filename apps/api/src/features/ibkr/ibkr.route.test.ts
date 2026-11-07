@@ -113,6 +113,40 @@
  *   removing it would route an unauthenticated request straight to the
  *   handler (crashing on an unset `userId` rather than 401), which this
  *   test would catch.
+ *
+ * The task-11 cases below drive `POST /api/csv-import/flex-fetch` (design
+ * C6) — no route exists at that path yet (Red-first). Every outbound IBKR
+ * call is a stub on `globalThis.fetch`, since the route passes no `deps` to
+ * `fetchAndPreview`.
+ *
+ * - Req 4.4: a third fetch inside a minute is refused before any IBKR call.
+ *   Pre-condition: a connection saved for an owned account.
+ *   Test: three sequential `POST /api/csv-import/flex-fetch` with the same
+ *   `accountId`.
+ *   Observable result: the first two answer 200; the third answers 429 and
+ *   the `fetch` spy's call count is unchanged from after the second.
+ *   Source: requirements.md Req 4 AC 4; design C6's limiter (max 2 / 60s).
+ *
+ * - NFR Security: the flex-fetch route sits behind authMiddleware.
+ *   Pre-condition: no session cookie.
+ *   Test: `POST /api/csv-import/flex-fetch` with a random `accountId`.
+ *   Observable result: 401.
+ *   Source: requirements.md Non-Functional Requirements → Security.
+ *   RED-IMPOSSIBLE today, same cause as Req 1/5.7's note above: the bare
+ *   `/api`-mounted `calculatorPreferencesRouter.use(authMiddleware)` 401s
+ *   ANY unauthenticated request to ANY unmatched `/api/*` path, so
+ *   `POST /api/csv-import/flex-fetch` 401s before the route exists, with a
+ *   byte-identical body. Kept as the same kind of regression guard: once
+ *   C6's own authMiddleware exists, removing it would route an
+ *   unauthenticated request into the handler instead of 401ing it, which
+ *   this test would catch.
+ *
+ * - Req 6.5: the fetch works with the advisor disabled.
+ *   Pre-condition: `config.DISABLE_ADVISOR = true`; a connection saved for
+ *   an owned account.
+ *   Test: `POST /api/csv-import/flex-fetch` with that `accountId`.
+ *   Observable result: 200 with a string `token` in the body.
+ *   Source: requirements.md Req 6 AC 5.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -522,4 +556,116 @@ describe('authMiddleware gates every route (NFR Security)', () => {
     const deleteRes = await unauthedRequest('DELETE', `/api/ibkr/connections/${randomAccountId}`);
     expect(deleteRes.status).toBe(401);
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/csv-import/flex-fetch (task 11, design C6). Stubs globalThis.fetch
+// — the route calls fetchAndPreview with no `deps`, so the only outbound-call
+// seam reachable from HTTP is the global one (flex.client.test.ts and
+// ibkr.service.test.ts exercise fetchFlexReport/fetchAndPreview's own `deps`
+// seam instead).
+// ---------------------------------------------------------------------------
+
+function flexFetchStreamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+function flexFetchHttpResponse(bytes: Uint8Array): Response {
+  return { ok: true, status: 200, body: flexFetchStreamOf(bytes) } as unknown as Response;
+}
+
+function flexFetchEnvelope(referenceCode: string): Response {
+  return flexFetchHttpResponse(
+    new TextEncoder().encode(
+      `<FlexStatementResponse timestamp="now"><Status>Success</Status><ReferenceCode>${referenceCode}</ReferenceCode></FlexStatementResponse>`,
+    ),
+  );
+}
+
+function flexFetchReportCsv(): string {
+  return [
+    'ClientAccountID,Symbol,AssetClass,Buy/Sell,Quantity,TradePrice,IBCommission,Multiplier,DateTime,Notes/Codes',
+    'U1234567,AAPL,STK,BUY,100,121.50,-1.00,1,"2026-01-05;09:30:00",',
+    'U1234567,AAPL,STK,SELL,-100,123.10,-1.00,1,"2026-01-05;15:55:00",',
+  ].join('\n');
+}
+
+function stubGlobalFlexFetch() {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: unknown) => {
+    const href = String(url);
+    if (href.includes('SendRequest')) return flexFetchEnvelope('REF-ROUTE');
+    return flexFetchHttpResponse(new TextEncoder().encode(flexFetchReportCsv()));
+  });
+}
+
+describe('POST /api/csv-import/flex-fetch — no session (NFR Security)', () => {
+  it('answers 401 with no session', async () => {
+    const res = await unauthedRequest('POST', '/api/csv-import/flex-fetch', {
+      accountId: randomUUID(),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('POST /api/csv-import/flex-fetch — per-user rate limit (Req 4.4)', () => {
+  it('answers 429 on the third fetch within a minute, with no outbound call', async () => {
+    const { cookie } = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    await authedRequest('PUT', `/api/ibkr/connections/${accountId}`, cookie, {
+      token: 'rate-limit-fetch-token',
+      queryId: 'rate-limit-fetch-query',
+    });
+
+    const fetchSpy = stubGlobalFlexFetch();
+    try {
+      const first = await authedRequest('POST', '/api/csv-import/flex-fetch', cookie, {
+        accountId,
+      });
+      expect(first.status).toBe(200);
+      const second = await authedRequest('POST', '/api/csv-import/flex-fetch', cookie, {
+        accountId,
+      });
+      expect(second.status).toBe(200);
+      const callsAfterTwo = fetchSpy.mock.calls.length;
+
+      const third = await authedRequest('POST', '/api/csv-import/flex-fetch', cookie, {
+        accountId,
+      });
+      expect(third.status).toBe(429);
+      expect(fetchSpy.mock.calls.length).toBe(callsAfterTwo);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  }, 20000);
+});
+
+describe('POST /api/csv-import/flex-fetch — works regardless of DISABLE_ADVISOR (Req 6.5)', () => {
+  afterEach(() => {
+    config.DISABLE_ADVISOR = false;
+  });
+
+  it('still returns a preview token with the advisor disabled', async () => {
+    config.DISABLE_ADVISOR = true;
+    const { cookie } = await registerAndGetCookie();
+    const accountId = await createAccount(cookie);
+    await authedRequest('PUT', `/api/ibkr/connections/${accountId}`, cookie, {
+      token: 'disable-advisor-fetch-token',
+      queryId: 'disable-advisor-fetch-query',
+    });
+
+    const fetchSpy = stubGlobalFlexFetch();
+    try {
+      const res = await authedRequest('POST', '/api/csv-import/flex-fetch', cookie, { accountId });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(typeof body.token).toBe('string');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  }, 15000);
 });
