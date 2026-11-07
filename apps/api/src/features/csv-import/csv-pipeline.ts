@@ -49,6 +49,12 @@ export interface PipelineResult {
   events: LifecycleEvent[];
 }
 
+/** Fetched-only options for {@link runPipeline} (design C7); unset preserves the upload path byte-for-byte (Req 6.8). */
+export interface PipelineOptions {
+  /** Threaded to {@link resolveContracts}'s `nonBlockingExpiry` (TD5). */
+  nonBlockingExpiry?: boolean;
+}
+
 /**
  * Run the pure preview pipeline (design Component 5): mapping shape → map +
  * transform → exclude mapping-errored rows → normalize → contract resolution →
@@ -60,6 +66,7 @@ export function runPipeline(
   parsed: ParsedCsv,
   request: CsvPreviewRequest,
   accountCurrency: string,
+  options?: PipelineOptions,
 ): PipelineResult {
   const mapping = request.mapping;
   const errors: LocatedError[] = [];
@@ -146,6 +153,7 @@ export function runPipeline(
     numberFormat: request.numberFormat,
     columns: mapping.columns,
     rowShape: mapping.rowShape,
+    nonBlockingExpiry: options?.nonBlockingExpiry,
   });
   errors.push(...resolved.errors);
   warnings.push(...resolved.warnings);

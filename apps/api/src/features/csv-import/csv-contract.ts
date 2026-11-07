@@ -43,6 +43,14 @@ export interface ContractOptions {
    * undefined shape keep refusing every lifecycle code, same as before.
    */
   rowShape?: RowShape;
+  /**
+   * Fetched-only (design C7): when set, an `unsupported` lifecycle code
+   * (`EP`/`GEA`) marks its refusal `nonBlocking: true` instead of blocking the
+   * whole file — the row still imports nothing, but the contract stays open
+   * until settled by hand (TD5). Unset, the upload path is byte-for-byte
+   * unchanged (Req 6.8).
+   */
+  nonBlockingExpiry?: boolean;
 }
 
 /** Result of {@link resolveContracts}: surviving rows plus located diagnostics. */
@@ -153,11 +161,28 @@ export function resolveContracts(rows: NormalizedRow[], opts: ContractOptions): 
       const classified = classifyEventCode(values.eventCode);
       if (classified !== undefined) {
         if (classified === 'unsupported' || opts.rowShape !== 'execution') {
-          push(
-            'eventCode',
-            'OPTION_EVENT_NOT_SUPPORTED',
-            `Row ${sourceRow} carries a ${EVENT_KIND[classified]} event ("${values.eventCode}") and cannot be imported until option lifecycle events are supported; close or remove the contract by hand.`,
-          );
+          // Fetched-only (design C7, TD5): an `unsupported` code's refusal is
+          // non-blocking under the option, with a message naming the hold-open
+          // behaviour instead of the generic refusal. `push` sets no flag, so
+          // this is the one error constructed directly rather than through it.
+          if (classified === 'unsupported' && opts.nonBlockingExpiry) {
+            const error: LocatedError = {
+              rowNumber: sourceRow,
+              tradrField: 'eventCode',
+              code: 'OPTION_EVENT_NOT_SUPPORTED',
+              message: `Row ${sourceRow} carries a ${EVENT_KIND[classified]} event ("${values.eventCode}") and imports nothing; the contract stays open until settled by hand.`,
+              nonBlocking: true,
+            };
+            const column = opts.columns.eventCode;
+            if (column !== undefined) error.csvColumn = column;
+            rowErrors.push(error);
+          } else {
+            push(
+              'eventCode',
+              'OPTION_EVENT_NOT_SUPPORTED',
+              `Row ${sourceRow} carries a ${EVENT_KIND[classified]} event ("${values.eventCode}") and cannot be imported until option lifecycle events are supported; close or remove the contract by hand.`,
+            );
+          }
         } else {
           lifecycleOutcome = classified;
         }

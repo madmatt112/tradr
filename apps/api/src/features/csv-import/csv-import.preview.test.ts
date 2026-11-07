@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, it, expect } from 'vitest';
 
-import { CSV_IMPORT_PRESETS } from '@tradr/shared';
+import { CSV_IMPORT_PRESETS, type CsvPreviewRequest } from '@tradr/shared';
 import { readCsvImportSample } from '@tradr/shared/node/csv-import-samples';
 
 import app from '@/app';
@@ -72,7 +72,10 @@ async function createAccount(cookie: string, currency = 'USD'): Promise<string> 
 }
 
 /** A minimal valid execution-shape request (matches the service-test mapping). */
-function execRequest(accountId: string, mappingOverride?: Record<string, string>) {
+function execRequest(
+  accountId: string,
+  mappingOverride?: Record<string, string>,
+): CsvPreviewRequest {
   return {
     accountId,
     rowShape: 'execution',
