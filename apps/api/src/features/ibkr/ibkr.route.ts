@@ -1,14 +1,14 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 
-import { IbkrConnectionSaveSchema } from '@tradr/shared';
+import { FlexFetchRequestSchema, IbkrConnectionSaveSchema } from '@tradr/shared';
 
 import { db } from '@/db';
 import { validate } from '@/lib/validation';
 import { authMiddleware } from '@/middleware/auth.middleware';
 import { createRateLimiter } from '@/middleware/rate-limit.middleware';
 
-import { getConnections, removeConnection, saveConnection } from './ibkr.service';
+import { fetchAndPreview, getConnections, removeConnection, saveConnection } from './ibkr.service';
 
 type AuthEnv = { Variables: { userId: string; isAdmin: boolean } };
 
@@ -113,3 +113,67 @@ ibkrRouter.delete('/connections/:accountId', validate('param', AccountParamSchem
 });
 
 export default ibkrRouter;
+
+// ---------------------------------------------------------------------------
+// POST /api/csv-import/flex-fetch (design C6, Req 2) — mounted on the
+// csv-import base in app.ts, directly after the csv-import mount, so the
+// raised proxy read timeout applies (design D4, NFR Performance).
+// ---------------------------------------------------------------------------
+
+export const flexFetchRouter = new Hono<AuthEnv>();
+
+flexFetchRouter.use(authMiddleware);
+
+// Per-user fetch limiter (design C6): 2 fetches per 60s, ahead of the
+// handler, so a 429 calls no IBKR endpoint (Req 4.4).
+const flexFetchRateLimit = createRateLimiter({
+  name: 'ibkr-flex-fetch',
+  max: 2,
+  windowMs: 60 * 1000,
+  keyGenerator: (c) => c.get('userId'),
+  fallbackMax: 2,
+});
+
+/**
+ * @swagger
+ * /api/csv-import/flex-fetch:
+ *   post:
+ *     summary: Fetch the account's IBKR Flex report and preview it.
+ *     description: >
+ *       Decrypts the account's saved connection, fetches the latest Flex
+ *       report over the IBKR Flex Web Service, and previews it through the
+ *       same pipeline as an uploaded CSV. Returns a single-use `token` the
+ *       client passes to `/api/csv-import/commit`. Rate limited to 2 fetches
+ *       per user per 60 seconds; a refusal there makes no outbound call.
+ *     tags: [IBKR]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [accountId]
+ *             properties:
+ *               accountId: { type: string, format: uuid }
+ *     responses:
+ *       200: { description: 'A `CsvPreviewResponse`, as returned by /api/csv-import/preview.' }
+ *       400: { description: 'IBKR_FLEX_TOKEN_REJECTED or IBKR_FLEX_QUERY_REJECTED — replace the credential in Settings.' }
+ *       404: { description: 'No connection for this account, or owned by another user (NOT_FOUND).' }
+ *       409: { description: 'IBKR_CONNECTION_UNREADABLE, or a csv-import refusal: CSV_IMPORT_IN_PROGRESS, CSV_IMPORT_SUPERSEDED, CSV_IMPORT_EXPIRED, CSV_IMPORT_BLOCKED, CSV_IMPORT_DUPLICATES_UNCONFIRMED.' }
+ *       403: { description: 'A plan-tier refusal: TIER_LIMIT_CSV_IMPORTS, TIER_ACCOUNT_NOT_WRITABLE, or TIER_LIMIT_POSITIONS.' }
+ *       413: { description: 'PAYLOAD_TOO_LARGE — the report exceeds the import byte cap.' }
+ *       422: { description: 'IBKR_FLEX_NO_TRADES (zero rows), IBKR_FLEX_ACCOUNT_UNPROVEN, or IBKR_FLEX_FORMAT_UNSUPPORTED.' }
+ *       429: { description: 'RATE_LIMITED (this limiter) or IBKR_FLEX_RATE_LIMITED (IBKR itself).' }
+ *       503: { description: 'IBKR_FLEX_UNAVAILABLE or IBKR_FLEX_NOT_READY.' }
+ */
+flexFetchRouter.post(
+  '/flex-fetch',
+  flexFetchRateLimit,
+  validate('json', FlexFetchRequestSchema),
+  async (c) => {
+    const userId = c.get('userId');
+    const { accountId } = c.req.valid('json');
+    const preview = await fetchAndPreview(db, userId, accountId);
+    return c.json(preview, 200);
+  },
+);
