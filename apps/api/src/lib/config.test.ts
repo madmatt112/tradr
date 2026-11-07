@@ -342,6 +342,31 @@ describe('envSchema.CHANGELOG_GITHUB_BASE_URL', () => {
   });
 });
 
+describe('envSchema.IBKR_FLEX_BASE_URL', () => {
+  it('defaults to the IBKR host when unset', () => {
+    const parsed = envSchema.parse(baseEnv);
+    expect(parsed.IBKR_FLEX_BASE_URL).toBe('https://ndcdyn.interactivebrokers.com');
+  });
+
+  it('treats an empty string as unset (default, never a boot crash)', () => {
+    const parsed = envSchema.parse({ ...baseEnv, IBKR_FLEX_BASE_URL: '' });
+    expect(parsed.IBKR_FLEX_BASE_URL).toBe('https://ndcdyn.interactivebrokers.com');
+  });
+
+  it('accepts http://localhost:9999 (the stub seam)', () => {
+    const parsed = envSchema.parse({
+      ...baseEnv,
+      IBKR_FLEX_BASE_URL: 'http://localhost:9999',
+    });
+    expect(parsed.IBKR_FLEX_BASE_URL).toBe('http://localhost:9999');
+  });
+
+  it('rejects a non-URL', () => {
+    const result = envSchema.safeParse({ ...baseEnv, IBKR_FLEX_BASE_URL: 'not a url' });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('envSchema.POSTHOG_HOST', () => {
   it('defaults when unset', () => {
     const parsed = envSchema.parse(baseEnv);
