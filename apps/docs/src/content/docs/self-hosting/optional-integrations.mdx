@@ -146,6 +146,25 @@ local model's id normally is not — the adapter applies conservative fallbacks:
 The app shows no "conversation-only" label today, so these limits are not called
 out in the UI — this page is the reference for them.
 
+## Interactive Brokers Flex import
+
+Fetching an Interactive Brokers Flex report (**Settings → IBKR**, then the
+**Fetch my Flex report** button on the import page) needs no configuration —
+it works the same on a fresh clone as every other feature on this page.
+
+A user stores a Flex Web Service token and query id, not an IBKR login. The
+token is **read-only and revocable**: it cannot place trades, and the user
+revokes it from their own IBKR account at any time, independent of Tradr.
+Tradr stores it AES-256-GCM-encrypted (`ENCRYPTION_KEY`) and calls IBKR only
+when the user presses the fetch button — no background job polls IBKR.
+
+```
+# IBKR_FLEX_BASE_URL=https://ndcdyn.interactivebrokers.com   # test/E2E seam; leave unset in production
+```
+
+`IBKR_FLEX_BASE_URL` only overrides the host for test stubs; the default is
+IBKR's own Flex Web Service.
+
 ## Cross-container settings to keep in sync
 
 A few limits live in different containers and are **hand-synced** — the compose

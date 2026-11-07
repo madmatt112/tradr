@@ -9,14 +9,18 @@ preview the result, and commit.
 
 ## What Tradr connects to
 
-Tradr imports from a **file you export from your broker**. It does not hold your
-broker credentials and it does not place orders.
+Tradr imports trades in two ways: upload a **file you export from your
+broker**, or, for Interactive Brokers, store a Flex Web Service token and let
+Tradr fetch the report for you. Either way, Tradr never holds your broker
+login and never places orders.
 
-There is **no direct broker connection today** — no Interactive Brokers link, no
-live price feed, no OAuth to any brokerage. Tradr ships broker-specific column
-presets so a familiar export maps in one click, but the transport is always a
-file you supply. A direct read-only IBKR connection is planned; until it ships,
-CSV is the only import path, and this page will say so.
+The Interactive Brokers connection uses a **Flex token**, not your IBKR
+username and password. A Flex token is read-only and you revoke it from your
+IBKR account whenever you choose. Tradr stores it encrypted and calls IBKR
+only when you press the fetch button; no background job polls IBKR. See
+[Fetch from Interactive Brokers automatically](#fetch-from-interactive-brokers-automatically)
+below. For every other broker, CSV upload is the only import path, and this
+page will say so.
 
 ## Before you start
 
@@ -133,24 +137,39 @@ Export the **Trades** section of your report only.
 
 Tradr reads the assignment and exercise codes in the `Notes/Codes` column —
 `A`, `EX`, `AEX` and `MEX` — and imports each as a settlement on the option
-leg. It refuses the `EP` and `GEA` codes; close or remove those contracts by
-hand. Tradr does not detect an expiration from the report, so a contract that
-expired worthless stays open until you settle it by hand.
+leg. An **uploaded** file holding the `EP` or `GEA` code is blocked from
+commit until you close or remove those contracts and re-export; a **fetched**
+report only drops that one row and imports the rest, so close or remove the
+same contracts by hand afterward. Tradr does not detect an expiration from the
+report, so a contract that expired worthless stays open until you settle it by
+hand, on either path.
 
 A contract with no closing row stays open, the same as a stock position.
 
 ### Interactive Brokers Flex Query
 
-Build a **Trades** Flex Query for the Interactive Brokers preset. Include these
-fields:
+Build one **Activity Flex Query** with a **Trades** section for the
+Interactive Brokers preset, covering one IBKR account. Set the output
+**Format** to CSV, turn **Include Header and Trailer Records** off, turn
+**Include Section Code and Line Descriptor** off, and turn **Include Column
+Headers** on, so the file holds one Trades section and nothing else. Include
+these fields:
 
-`Symbol`, `AssetClass`, `Buy/Sell`, `Quantity`, `TradePrice`, `IBCommission`,
-`DateTime`, `Multiplier`, and `Notes/Codes`.
+`ClientAccountID`, `Symbol`, `AssetClass`, `Buy/Sell`, `Quantity`,
+`TradePrice`, `IBCommission`, `DateTime`, `Multiplier`, and `Notes/Codes`.
+
+`ClientAccountID` is your IBKR account number. Tradr reads it to confirm the
+report covers exactly one IBKR account, and refuses the report if the column
+is missing or carries more than one value. A query covering more than one
+IBKR account is not supported.
 
 Set the **Date format** to ISO date and time.
 
 The preset reads signed values. A negative quantity is a sale. A negative
 commission is a cost. Tradr stores the size either way.
+
+Tradr imports stocks and options only. A row for another asset class blocks
+the preview.
 
 To map the contract with separate columns instead of the OCC symbol, also
 include `UnderlyingSymbol`, `Strike`, `Expiry`, and `Put/Call`. Then switch the
@@ -186,6 +205,59 @@ the third Friday of that month.
 
 This derived date can differ from the broker's OCC expiration date. So the same
 contract imported from an OCC symbol may not match as a duplicate.
+
+## Fetch from Interactive Brokers automatically
+
+Instead of exporting and uploading a Flex Query by hand, store it once and let
+Tradr fetch it on demand.
+
+### Set up the connection
+
+1. Open **Settings → IBKR**.
+2. On the card for the Tradr account you want to connect, enter the token and
+   query id of the Flex Query described above.
+3. Select **Save**.
+
+A Flex token is read-only and revocable — it is not your IBKR username and
+password. Tradr stores it encrypted and shows only its last four characters
+back to you. Saving makes no call to IBKR; the first fetch is what proves the
+token and query id work. Saving again replaces the stored values; a Tradr
+account holds at most one connection at a time.
+
+### Fetch a report
+
+Once a connection exists, **Step 2 — Upload the file** also shows a **Fetch my
+Flex report** button for that account. Select it instead of choosing a file.
+Tradr calls IBKR only when you press this button — nothing runs on a
+schedule — and builds the same preview a file upload builds. Continue from
+Step 4 below.
+
+### Limits specific to fetching
+
+- **A fetch always adds trades; it never merges them.** Fetching the same
+  period twice gives you the trades twice unless you confirm the duplicate
+  warning, the same as uploading the same file twice.
+- **A fetch gates any overlap that an upload only warns about.** If a fetched
+  report shares even one fill with trades already in your journal, Tradr
+  requires you to confirm before it commits. Uploading a file with the same
+  overlap only shows a warning and lets you commit without confirming.
+- **A connection does not know which IBKR account its query points at.** If
+  you repoint a saved query to a different IBKR account, future fetches mix
+  that account's trades silently into the same Tradr account. Use a separate
+  connection, pointed at a separate query, for each IBKR account you want kept
+  apart.
+- **A close whose matching open trade falls before the report's period opens
+  a new position** instead of closing the existing one — set your Flex
+  Query's date range to cover the opening trade of every position you fetch.
+- **An expired option contract is not detected.** It stays open until you
+  settle it by hand, on either path.
+
+### Remove a connection
+
+Select **Remove** on the account's card in **Settings → IBKR**. Tradr deletes
+its copy of the token immediately, but it cannot revoke the token at IBKR for
+you — revoke it from your IBKR account too. Deleting the Tradr account the
+connection is tied to removes the connection the same way.
 
 ## Step 4 — Read the preview
 
