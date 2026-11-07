@@ -482,3 +482,54 @@ describe('resolveContracts — stock rows', () => {
     expect(result.errors).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveContracts — nonBlockingExpiry option (task 4, design C7, Req 3.4)
+//
+// Contract block:
+// | Criterion                                                            | Pre-condition                                              | Call (seam)                                                   | Observable result                                                               | Source |
+// |-----------------------------------------------------------------------|-------------------------------------------------------------|------------------------------------------------------------------|-------------------------------------------------------------------------------------|---------|
+// | EP/GEA carry nonBlocking:true only under the option (Req 3.4)         | option row, eventCode EP or GEA                              | resolveContracts(rows, { ...opts, nonBlockingExpiry: true })      | OPTION_EVENT_NOT_SUPPORTED has nonBlocking:true with the option, falsy without it   | design.md C7; requirements.md 3.4 |
+// | A multiplier error on the same row stays blocking (Req 3.4)           | option row, multiplier 10 AND eventCode EP, option set       | resolveContracts(rows, { ...opts, nonBlockingExpiry: true })      | OPTION_MULTIPLIER_UNSUPPORTED has no nonBlocking; the EP error still carries it     | design.md C7 "Any other error on the same row still blocks" |
+// | A non-"unsupported" code (assigned) never gets the flag (Req 3.4)     | option row, eventCode A, option set, no execution rowShape    | resolveContracts(rows, { ...opts, nonBlockingExpiry: true })      | OPTION_EVENT_NOT_SUPPORTED has no nonBlocking (only classified === 'unsupported' qualifies) | design.md C7 "only when classified === 'unsupported'" |
+// ---------------------------------------------------------------------------
+
+describe('resolveContracts — nonBlockingExpiry option (Req 3.4, design C7)', () => {
+  it('EP and GEA rows carry nonBlocking:true only when nonBlockingExpiry is set', () => {
+    for (const code of ['EP', 'GEA']) {
+      const withoutOption = resolveContracts(
+        [row({ symbol: 'AAPL260320C250', assetType: 'option', eventCode: code })],
+        opts('occ-symbol'),
+      );
+      const withoutErr = findError(withoutOption.errors, 'OPTION_EVENT_NOT_SUPPORTED');
+      expect(withoutErr.nonBlocking).toBeFalsy();
+
+      const withOption = resolveContracts(
+        [row({ symbol: 'AAPL260320C250', assetType: 'option', eventCode: code })],
+        { ...opts('occ-symbol'), nonBlockingExpiry: true },
+      );
+      const withErr = findError(withOption.errors, 'OPTION_EVENT_NOT_SUPPORTED');
+      expect(withErr.nonBlocking).toBe(true);
+    }
+  });
+
+  it('a multiplier error on the same row stays blocking even when the EP error is non-blocking', () => {
+    const result = resolveContracts(
+      [row({ symbol: 'AAPL260320C250', assetType: 'option', multiplier: '10', eventCode: 'EP' })],
+      { ...opts('occ-symbol'), nonBlockingExpiry: true },
+    );
+    const multiplierErr = findError(result.errors, 'OPTION_MULTIPLIER_UNSUPPORTED');
+    expect(multiplierErr.nonBlocking).toBeFalsy();
+    const eventErr = findError(result.errors, 'OPTION_EVENT_NOT_SUPPORTED');
+    expect(eventErr.nonBlocking).toBe(true);
+  });
+
+  it('does not set nonBlocking for an assigned (A) code, since it never classifies as "unsupported"', () => {
+    const result = resolveContracts(
+      [row({ symbol: 'AAPL260320C250', assetType: 'option', eventCode: 'A' })],
+      { ...opts('occ-symbol'), nonBlockingExpiry: true },
+    );
+    const err = findError(result.errors, 'OPTION_EVENT_NOT_SUPPORTED');
+    expect(err.nonBlocking).toBeFalsy();
+  });
+});
