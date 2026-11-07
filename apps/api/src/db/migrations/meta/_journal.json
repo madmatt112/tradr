@@ -309,6 +309,13 @@
       "when": 1793889260804,
       "tag": "0043_option_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794066128147,
+      "tag": "0044_ibkr_flex_connections",
+      "breakpoints": true
     }
   ]
 }

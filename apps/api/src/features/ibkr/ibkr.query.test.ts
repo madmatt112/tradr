@@ -83,7 +83,7 @@ async function seedUser(): Promise<string> {
 async function seedAccount(userId: string): Promise<string> {
   const [account] = await db
     .insert(accounts)
-    .values({ userId, name: 'Acct', currency: 'USD' })
+    .values({ userId, name: `Acct-${randomUUID()}`, currency: 'USD' })
     .returning();
   return account!.id;
 }

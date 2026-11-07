@@ -72,6 +72,9 @@ export const EXCLUDED_TABLES = [
   'user_backup_codes',
   'login_challenges',
   'login_lockouts',
+  // IBKR Flex connections: the encrypted token/query-id envelope is a credential
+  // and is never exported (Req 5.3).
+  'ibkr_flex_connections',
 ] as const;
 
 export type ExportedTable = (typeof EXPORTED_TABLES)[number];
