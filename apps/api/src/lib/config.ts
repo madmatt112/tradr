@@ -410,6 +410,16 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.string().url().default('https://www.sec.gov/files/company_tickers_exchange.json'),
   ),
+  // IBKR Flex Web Service base URL — test/E2E seam (wire-check.md W1). Carries
+  // a `.url()` validator, so it needs the empty-tolerant preprocess ('' →
+  // undefined) + `.default(…)` (the CHANGELOG_GITHUB_BASE_URL idiom): a bare
+  // compose `${IBKR_FLEX_BASE_URL:-}` yields '' which `.url()` would reject.
+  // No scheme check here — the client enforces that at call time (design D12).
+  // Leave unset in production; an out-of-process E2E points it at a local stub.
+  IBKR_FLEX_BASE_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().url().default('https://ndcdyn.interactivebrokers.com'),
+  ),
   // ─── Prometheus metrics exposition (REQ-1) ───────────────────────────────
   // Default OFF — the surface is absent, not broken, when unconfigured. The
   // SKIP_POST_MIGRATIONS / FEATURE_GATING idiom above — NOT z.coerce.boolean(),
