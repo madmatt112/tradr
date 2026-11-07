@@ -3,6 +3,7 @@ import {
   Bot,
   CircleQuestionMark,
   Database,
+  Landmark,
   LineChart,
   ListChecks,
   Settings as SettingsIcon,
@@ -43,6 +44,10 @@ const SETTINGS_TABS = [
   // reason as Tags/Data/Rules, and never filtered by `visibleTabs` — it is the
   // one settings surface that survives the Advisor tab's disappearance.
   { id: 'market-data', label: 'Market data', icon: LineChart, route: '/settings/market-data' },
+  // Manage the per-account IBKR Flex connection used to import trades (design
+  // C10). Appended after Market data (never inserted), and never filtered by
+  // `visibleTabs` — it does not depend on the advisor.
+  { id: 'ibkr', label: 'IBKR', icon: Landmark, route: '/settings/ibkr' },
 ] as const;
 
 /**

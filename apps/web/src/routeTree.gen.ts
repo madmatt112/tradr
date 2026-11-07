@@ -34,6 +34,7 @@ import { Route as AuthSettingsTagsRouteImport } from './routes/_auth.settings.ta
 import { Route as AuthSettingsRulesRouteImport } from './routes/_auth.settings.rules'
 import { Route as AuthSettingsProfileRouteImport } from './routes/_auth.settings.profile'
 import { Route as AuthSettingsMarketDataRouteImport } from './routes/_auth.settings.market-data'
+import { Route as AuthSettingsIbkrRouteImport } from './routes/_auth.settings.ibkr'
 import { Route as AuthSettingsHelpRouteImport } from './routes/_auth.settings.help'
 import { Route as AuthSettingsDataRouteImport } from './routes/_auth.settings.data'
 import { Route as AuthSettingsBillingRouteImport } from './routes/_auth.settings.billing'
@@ -171,6 +172,11 @@ const AuthSettingsMarketDataRoute = AuthSettingsMarketDataRouteImport.update({
   path: '/market-data',
   getParentRoute: () => AuthSettingsRoute,
 } as any)
+const AuthSettingsIbkrRoute = AuthSettingsIbkrRouteImport.update({
+  id: '/ibkr',
+  path: '/ibkr',
+  getParentRoute: () => AuthSettingsRoute,
+} as any)
 const AuthSettingsHelpRoute = AuthSettingsHelpRouteImport.update({
   id: '/help',
   path: '/help',
@@ -263,6 +269,7 @@ export interface FileRoutesByFullPath {
   '/settings/billing': typeof AuthSettingsBillingRoute
   '/settings/data': typeof AuthSettingsDataRoute
   '/settings/help': typeof AuthSettingsHelpRoute
+  '/settings/ibkr': typeof AuthSettingsIbkrRoute
   '/settings/market-data': typeof AuthSettingsMarketDataRoute
   '/settings/profile': typeof AuthSettingsProfileRoute
   '/settings/rules': typeof AuthSettingsRulesRoute
@@ -301,6 +308,7 @@ export interface FileRoutesByTo {
   '/settings/billing': typeof AuthSettingsBillingRoute
   '/settings/data': typeof AuthSettingsDataRoute
   '/settings/help': typeof AuthSettingsHelpRoute
+  '/settings/ibkr': typeof AuthSettingsIbkrRoute
   '/settings/market-data': typeof AuthSettingsMarketDataRoute
   '/settings/profile': typeof AuthSettingsProfileRoute
   '/settings/rules': typeof AuthSettingsRulesRoute
@@ -341,6 +349,7 @@ export interface FileRoutesById {
   '/_auth/settings/billing': typeof AuthSettingsBillingRoute
   '/_auth/settings/data': typeof AuthSettingsDataRoute
   '/_auth/settings/help': typeof AuthSettingsHelpRoute
+  '/_auth/settings/ibkr': typeof AuthSettingsIbkrRoute
   '/_auth/settings/market-data': typeof AuthSettingsMarketDataRoute
   '/_auth/settings/profile': typeof AuthSettingsProfileRoute
   '/_auth/settings/rules': typeof AuthSettingsRulesRoute
@@ -381,6 +390,7 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/settings/data'
     | '/settings/help'
+    | '/settings/ibkr'
     | '/settings/market-data'
     | '/settings/profile'
     | '/settings/rules'
@@ -419,6 +429,7 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/settings/data'
     | '/settings/help'
+    | '/settings/ibkr'
     | '/settings/market-data'
     | '/settings/profile'
     | '/settings/rules'
@@ -458,6 +469,7 @@ export interface FileRouteTypes {
     | '/_auth/settings/billing'
     | '/_auth/settings/data'
     | '/_auth/settings/help'
+    | '/_auth/settings/ibkr'
     | '/_auth/settings/market-data'
     | '/_auth/settings/profile'
     | '/_auth/settings/rules'
@@ -655,6 +667,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthSettingsMarketDataRouteImport
       parentRoute: typeof AuthSettingsRoute
     }
+    '/_auth/settings/ibkr': {
+      id: '/_auth/settings/ibkr'
+      path: '/ibkr'
+      fullPath: '/settings/ibkr'
+      preLoaderRoute: typeof AuthSettingsIbkrRouteImport
+      parentRoute: typeof AuthSettingsRoute
+    }
     '/_auth/settings/help': {
       id: '/_auth/settings/help'
       path: '/help'
@@ -764,6 +783,7 @@ interface AuthSettingsRouteChildren {
   AuthSettingsBillingRoute: typeof AuthSettingsBillingRoute
   AuthSettingsDataRoute: typeof AuthSettingsDataRoute
   AuthSettingsHelpRoute: typeof AuthSettingsHelpRoute
+  AuthSettingsIbkrRoute: typeof AuthSettingsIbkrRoute
   AuthSettingsMarketDataRoute: typeof AuthSettingsMarketDataRoute
   AuthSettingsProfileRoute: typeof AuthSettingsProfileRoute
   AuthSettingsRulesRoute: typeof AuthSettingsRulesRoute
@@ -776,6 +796,7 @@ const AuthSettingsRouteChildren: AuthSettingsRouteChildren = {
   AuthSettingsBillingRoute: AuthSettingsBillingRoute,
   AuthSettingsDataRoute: AuthSettingsDataRoute,
   AuthSettingsHelpRoute: AuthSettingsHelpRoute,
+  AuthSettingsIbkrRoute: AuthSettingsIbkrRoute,
   AuthSettingsMarketDataRoute: AuthSettingsMarketDataRoute,
   AuthSettingsProfileRoute: AuthSettingsProfileRoute,
   AuthSettingsRulesRoute: AuthSettingsRulesRoute,
