@@ -28,6 +28,7 @@ import {
   externalApiKeys,
   feeSchedules,
   fills,
+  ibkrFlexConnections,
   ledgerEntries,
   positionGroups,
   positionImages,
@@ -561,6 +562,36 @@ describe('executeDeletion — cascade', () => {
     expect(
       await db.select().from(positionGroups).where(eq(positionGroups.userId, user.id)),
     ).toHaveLength(0);
+  });
+
+  // The FK walk above finds `ibkr_flex_connections` as a child of `users` but
+  // seeds no row there, so the generic assertion never actually exercises this
+  // table's cascade — this test seeds one directly so the assertion is real.
+  //
+  // Contract:
+  // - Pre-condition: a connection row exists, keyed to the user and an owned
+  //   account.
+  // - Test: `executeDeletion({ userId: user.id, initiator: 'self' })`.
+  // - Observable result: zero `ibkr_flex_connections` rows remain for the
+  //   user.
+  // - Source of expected value: requirements.md Req 5 AC 5 ("the FK cascade
+  //   SHALL remove every connection that user holds").
+  it('removes every connection the user holds (Req 5.5)', async () => {
+    const user = await seedUser();
+    const graph = await seedAllUserData(user.id);
+    await db.insert(ibkrFlexConnections).values({
+      userId: user.id,
+      accountId: graph.accountId,
+      encryptedToken: 'enc-token-ciphertext',
+      encryptedQueryId: 'enc-query-ciphertext',
+      keyVersion: 1,
+      tokenHintTail: '1234',
+    });
+    expect(await countWhere('ibkr_flex_connections', 'user_id', user.id)).toBe(1);
+
+    await executeDeletion({ userId: user.id, initiator: 'self' });
+
+    expect(await countWhere('ibkr_flex_connections', 'user_id', user.id)).toBe(0);
   });
 
   it('answers 404 on a second run and leaves exactly one tombstone', async () => {
