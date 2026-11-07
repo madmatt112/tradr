@@ -45,6 +45,14 @@ vi.mock('../hooks/useCsvCommit', () => ({
   useCsvCommit: () => commitState.current,
 }));
 
+// ImportPage now also calls useIbkrConnections (task 13) — this suite has no
+// QueryClientProvider, so the real hook would throw. `[]` holds no connection
+// for any account, so the Flex fetch button never renders here and no
+// existing assertion changes.
+vi.mock('@/features/ibkr/hooks/useIbkrConnections', () => ({
+  useIbkrConnections: () => ({ data: [] }),
+}));
+
 // Stub the shadcn Select primitive as a native <select> (Radix fights jsdom).
 vi.mock('@/components/ui/select', () => ({
   Select: ({
