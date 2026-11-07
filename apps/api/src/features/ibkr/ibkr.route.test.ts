@@ -129,17 +129,24 @@
  *
  * - NFR Security: the flex-fetch route sits behind authMiddleware.
  *   Pre-condition: no session cookie.
- *   Test: `POST /api/csv-import/flex-fetch` with a random `accountId`.
- *   Observable result: 401.
+ *   Test: `POST /api/csv-import/flex-fetch` with a random `accountId`
+ *   through the full app, and again with `flexFetchRouter` mounted alone
+ *   (no sibling router in the request path).
+ *   Observable result: 401, both times.
  *   Source: requirements.md Non-Functional Requirements → Security.
  *   RED-IMPOSSIBLE today, same cause as Req 1/5.7's note above: the bare
  *   `/api`-mounted `calculatorPreferencesRouter.use(authMiddleware)` 401s
  *   ANY unauthenticated request to ANY unmatched `/api/*` path, so
  *   `POST /api/csv-import/flex-fetch` 401s before the route exists, with a
- *   byte-identical body. Kept as the same kind of regression guard: once
- *   C6's own authMiddleware exists, removing it would route an
- *   unauthenticated request into the handler instead of 401ing it, which
- *   this test would catch.
+ *   byte-identical body. Kept as a regression guard, but NOT the guard for
+ *   C6's own authMiddleware: `csvImport.use(authMiddleware)`
+ *   (csv-import.route.ts) is mounted on the same `/api/csv-import` base
+ *   ahead of `flexFetchRouter`, so it 401s this path byte-identically even
+ *   with `flexFetchRouter.use(authMiddleware)` removed (task-11 review,
+ *   reviewId 6b6921a7). The isolated case drives the exported
+ *   `flexFetchRouter` with no sibling router in the mix, so only its own
+ *   middleware can produce the 401 — proven to fail (500) when that line is
+ *   removed.
  *
  * - Req 6.5: the fetch works with the advisor disabled.
  *   Pre-condition: `config.DISABLE_ADVISOR = true`; a connection saved for
@@ -151,6 +158,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { eq } from 'drizzle-orm';
+import { Hono } from 'hono';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import app from '@/app';
@@ -162,8 +170,10 @@ import {
   ENCRYPTION_KEY_VERSION_CURRENT,
   loadEncryptionKeyMaterial,
 } from '@/lib/encryption';
+import { errorHandler } from '@/middleware/error.middleware';
 
 import { recordFetch } from './ibkr.query';
+import { flexFetchRouter } from './ibkr.route';
 
 // The route drives encrypt()/decrypt() outside bootstrap() — same precedent as
 // auth.test.ts:136-140 and the advisor suites.
@@ -607,6 +617,29 @@ describe('POST /api/csv-import/flex-fetch — no session (NFR Security)', () => 
   it('answers 401 with no session', async () => {
     const res = await unauthedRequest('POST', '/api/csv-import/flex-fetch', {
       accountId: randomUUID(),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  // The assertion above also 401s from the sibling csv-import router's own
+  // blanket `.use(authMiddleware)` (csv-import.route.ts), which is mounted on
+  // the same `/api/csv-import` base ahead of `flexFetchRouter` in app.ts — it
+  // would still 401 byte-identically even if `flexFetchRouter.use(authMiddleware)`
+  // were removed, so it cannot catch that regression (task-11 review,
+  // reviewId 6b6921a7). This drives the exported `flexFetchRouter` alone, with
+  // no sibling router in the mix, so only its own middleware can produce 401.
+  it('401s with no session when the router is driven in isolation', async () => {
+    const isolated = new Hono();
+    isolated.onError(errorHandler);
+    isolated.route('/', flexFetchRouter);
+
+    const res = await isolated.request('/flex-fetch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-For': uniqueIp(),
+      },
+      body: JSON.stringify({ accountId: randomUUID() }),
     });
     expect(res.status).toBe(401);
   });

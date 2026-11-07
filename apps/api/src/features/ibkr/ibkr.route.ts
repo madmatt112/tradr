@@ -160,7 +160,6 @@ const flexFetchRateLimit = createRateLimiter({
  *       400: { description: 'IBKR_FLEX_TOKEN_REJECTED or IBKR_FLEX_QUERY_REJECTED — replace the credential in Settings.' }
  *       404: { description: 'No connection for this account, or owned by another user (NOT_FOUND).' }
  *       409: { description: 'IBKR_CONNECTION_UNREADABLE, or a csv-import refusal: CSV_IMPORT_IN_PROGRESS, CSV_IMPORT_SUPERSEDED, CSV_IMPORT_EXPIRED, CSV_IMPORT_BLOCKED, CSV_IMPORT_DUPLICATES_UNCONFIRMED.' }
- *       403: { description: 'A plan-tier refusal: TIER_LIMIT_CSV_IMPORTS, TIER_ACCOUNT_NOT_WRITABLE, or TIER_LIMIT_POSITIONS.' }
  *       413: { description: 'PAYLOAD_TOO_LARGE — the report exceeds the import byte cap.' }
  *       422: { description: 'IBKR_FLEX_NO_TRADES (zero rows), IBKR_FLEX_ACCOUNT_UNPROVEN, or IBKR_FLEX_FORMAT_UNSUPPORTED.' }
  *       429: { description: 'RATE_LIMITED (this limiter) or IBKR_FLEX_RATE_LIMITED (IBKR itself).' }

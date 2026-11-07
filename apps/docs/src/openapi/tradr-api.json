@@ -2416,9 +2416,6 @@
           "400": {
             "description": "IBKR_FLEX_TOKEN_REJECTED or IBKR_FLEX_QUERY_REJECTED — replace the credential in Settings."
           },
-          "403": {
-            "description": "A plan-tier refusal: TIER_LIMIT_CSV_IMPORTS, TIER_ACCOUNT_NOT_WRITABLE, or TIER_LIMIT_POSITIONS."
-          },
           "404": {
             "description": "No connection for this account, or owned by another user (NOT_FOUND)."
           },
