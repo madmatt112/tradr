@@ -269,6 +269,12 @@ async function resolveLifecycleEvents(
   return resolved;
 }
 
+/** Fetched-only options for {@link previewImport} (design C7); unset preserves the upload path byte-for-byte (Req 6.8). */
+export interface PreviewImportOptions {
+  /** Set when the bytes came from the IBKR Flex fetch rather than an upload. */
+  source?: 'flex';
+}
+
 /**
  * Preview an import (design Component 6). Runs the full pure pipeline, validates
  * field- and invariant-level, scans for duplicates against the account's
@@ -282,7 +288,14 @@ export async function previewImport(
   accountId: string,
   fileBytes: Uint8Array,
   request: CsvPreviewRequest,
+  options?: PreviewImportOptions,
 ): Promise<CsvPreviewResponse> {
+  // Fetched-only (design C7, D3): `source: 'flex'` turns into `nonBlockingExpiry`
+  // for the pipeline's contract resolution and `gateAnyOverlap` for the
+  // duplicate scan; both default off, so an absent option leaves the upload
+  // path byte-for-byte unchanged (Req 6.8). `commitImport` and `StagedResult`
+  // never see this flag (D3).
+  const fromFlex = options?.source === 'flex';
   // Account ownership + currency (REQ-7) — read-only.
   const [account] = await findAccountById(db, accountId, userId);
   if (!account) throw new NotFoundError('Account', accountId);
@@ -330,7 +343,9 @@ export async function previewImport(
   // per-segment field validation + invariant dry-run + P&L. DB-free — the
   // conformance test runs this same code path. Placed after the two warnings
   // above so today's warning order is preserved.
-  const pipeline = runPipeline(parsed, request, account.currency);
+  const pipeline = runPipeline(parsed, request, account.currency, {
+    nonBlockingExpiry: fromFlex,
+  });
   errors.push(...pipeline.errors);
   warnings.push(...pipeline.warnings);
   const proposedPositions = pipeline.proposedPositions;
@@ -345,6 +360,7 @@ export async function previewImport(
       accountId,
       pipeline.segments,
       warnings,
+      fromFlex,
     );
   }
 
@@ -846,6 +862,9 @@ async function scanDuplicates(
   accountId: string,
   segments: Segment[],
   warnings: LocatedWarning[],
+  // Fetched-only (design C7): gate on any overlap, not just ≥90% (TD5). Unset
+  // preserves the upload path's `false` return exactly (Req 6.8).
+  gateAnyOverlap = false,
 ): Promise<boolean> {
   // Collect incoming fill keys + their date window.
   interface Incoming {
@@ -910,7 +929,7 @@ async function scanDuplicates(
       });
     }
   }
-  return false;
+  return gateAnyOverlap;
 }
 
 // ---------------------------------------------------------------------------

@@ -181,13 +181,15 @@ required.
 # WEB_BASE_URL=https://tradr.example.com   # your instance's public origin
 ```
 
-### Interactive Brokers (IBKR) — roadmap, not yet shipped
+### Interactive Brokers (IBKR) Flex import
 
-IBKR is a planned read-only integration (view positions, live prices, import
-positions). It is **not yet a shipped runtime integration** — there are currently
-**no `IBKR_*` settings** in `.env.example`, and CSV import is today's path for
-getting broker data in. See [Import trades from
-CSV](/user-guide/import-history/).
+A user can store an IBKR Flex Web Service token and query id (**Settings →
+IBKR**) and fetch their report with a button press, instead of exporting a
+CSV and uploading it by hand. The token is read-only and revocable at IBKR,
+not an IBKR login; Tradr stores it encrypted and calls IBKR only on that
+button press. No configuration is needed; `IBKR_FLEX_BASE_URL` in
+`.env.example` is a test seam only, left unset in production. See [Import
+trades from CSV](/user-guide/import-history/).
 
 ### Cross-container settings to keep in sync
 

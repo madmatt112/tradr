@@ -69,6 +69,19 @@ the privacy-posture notes in `.env.example` for exactly what is (and is not)
 sent, and [analytics.md](analytics.md) for the PostHog event catalogue and
 privacy design.
 
+### Broker import — Interactive Brokers Flex Web Service
+
+| Service               | Endpoint host                   | Enabled by                                                            |
+| --------------------- | -------------------------------- | ---------------------------------------------------------------------- |
+| IBKR Flex Web Service | `ndcdyn.interactivebrokers.com` | Per-user Flex token + query id, stored encrypted (settings, not env) |
+
+A user stores a Flex token and query id — read-only and revocable at IBKR,
+not an IBKR login — and Tradr fetches that user's report only when they press
+the fetch button on the import page; no scheduler or background job calls
+IBKR. The token and query id are stored encrypted, same posture as the
+Unusual Whales key above. `IBKR_FLEX_BASE_URL` only overrides the host for
+test stubs.
+
 ### Hosted-platform capabilities (self-hosters leave unset)
 
 | Service                    | Purpose                                    | Enabled by                              |
@@ -95,6 +108,7 @@ instance connects out to:
 
 - `api.anthropic.com`, `api.openai.com` — LLM calls (opt-in, `DISABLE_ADVISOR=false`)
 - `api.unusualwhales.com` — Unusual Whales market data (same opt-in)
+- `ndcdyn.interactivebrokers.com` (or configured `IBKR_FLEX_BASE_URL`) — IBKR Flex report fetch, per-user, button-press only
 - `api.stripe.com` — wallet purchases
 - `api.github.com` — changelog releases feed
 - `us.i.posthog.com` (or configured host) — PostHog analytics, backend + frontend
@@ -105,9 +119,6 @@ Inbound: Stripe webhooks.
 
 ## Planned, not yet built
 
-- **Interactive Brokers (IBKR)** — read-only broker connection for positions
-  and live prices (`ibkr-integration` spec, deferred mid-redesign). Today only
-  CSV-import presets mention IBKR; there is no runtime integration.
 - **Transactional email** — explicitly a future spec. There is **no email
   sending anywhere in the codebase**. Password recovery deliberately does not
   depend on it: self-host uses the `tradr reset-password` CLI; hosted is

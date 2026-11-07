@@ -1,11 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, it, expect } from 'vitest';
 
-import { CSV_IMPORT_PRESETS } from '@tradr/shared';
+import { CSV_IMPORT_PRESETS, type CsvPreviewRequest } from '@tradr/shared';
 import { readCsvImportSample } from '@tradr/shared/node/csv-import-samples';
 
 import app from '@/app';
+import { db } from '@/db';
+import { accounts, users } from '@/db/schema';
 import { config } from '@/lib/config';
 
+import { commitImport, previewImport } from './csv-import.service';
 import { readBodyCapped } from './csv-import.upload';
 
 // ---------------------------------------------------------------------------
@@ -65,7 +72,10 @@ async function createAccount(cookie: string, currency = 'USD'): Promise<string> 
 }
 
 /** A minimal valid execution-shape request (matches the service-test mapping). */
-function execRequest(accountId: string, mappingOverride?: Record<string, string>) {
+function execRequest(
+  accountId: string,
+  mappingOverride?: Record<string, string>,
+): CsvPreviewRequest {
   return {
     accountId,
     rowShape: 'execution',
@@ -707,5 +717,148 @@ describe('POST /api/csv-import/preview — group proposals (AC 8.8, 8.11)', () =
     const body = await res.json();
     expect(body.groupProposals).toHaveLength(1);
     expect(JSON.stringify(body)).not.toContain(GROUP_ORDER_ID);
+  });
+});
+
+// ===========================================================================
+// Source signal into staging (task 4, design C7, Req 2.4 / 3.3 / 3.4) — calls
+// `previewImport` directly (not through the HTTP route) so the fifth `options`
+// argument design C7 adds can be exercised ahead of any route wiring.
+//
+// Contract block:
+// | Criterion                                                                 | Pre-condition                                                              | Call (seam)                                                              | Observable result                                                                     | Source |
+// |------------------------------------------------------------------------------|-------------------------------------------------------------------------------|------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|---------|
+// | Req 2.4 — fetch and upload propose identical positions/fills                 | the ibkr-flex-lifecycle.csv fixture (A, EX, EP rows), interactive-brokers preset | previewImport(db, userId, accountId, bytes, request) vs ...{ source: 'flex' } | `positions` (fills included) deep-equal between the two calls                              | requirements.md 2.4; design.md C7 |
+// | Req 3.4 — an EP row blocks upload but leaves a flagged preview committable   | same fixture, same preset                                                   | previewImport(...) vs previewImport(..., { source: 'flex' })                 | upload: committable false, EP error has no nonBlocking; flex: committable true, EP error nonBlocking:true | requirements.md 3.4; design.md C7 |
+// | Req 3.3 — sub-90% overlap sets requiresDuplicateAffirmation only with the flag, keeping partial_duplicate warnings either way | one committed round-trip seeded, then a 2/6-fill overlap re-import          | previewImport(...) vs previewImport(..., { source: 'flex' })                 | upload: requiresDuplicateAffirmation false; flex: true; both keep a partial_duplicate warning | requirements.md 3.3; design.md C7 |
+// | Req 3.3 — zero overlap leaves requiresDuplicateAffirmation false even with the flag | a fresh account with no existing fills                                      | previewImport(..., { source: 'flex' })                                       | requiresDuplicateAffirmation false (the matched === 0 return stays false)                  | design.md C7 "The matched === 0 return stays false" |
+// ===========================================================================
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const IBKR_FLEX_LIFECYCLE_CSV = readFileSync(
+  join(__dirname, '../../../../../e2e/tests/fixtures/csv-import/ibkr-flex-lifecycle.csv'),
+  'utf8',
+);
+
+function bytes(csv: string): Uint8Array {
+  return new TextEncoder().encode(csv);
+}
+
+async function seedAccount(currency = 'USD') {
+  const [user] = await db
+    .insert(users)
+    .values({ email: uniqueEmail(), passwordHash: 'x'.repeat(60) })
+    .returning();
+  const [account] = await db
+    .insert(accounts)
+    .values({ userId: user!.id, name: 'Flex Signal Account', currency })
+    .returning();
+  return { userId: user!.id, accountId: account!.id };
+}
+
+describe('previewImport — source signal into staging (task 4, design C7)', () => {
+  it('fetch (source: flex) and upload propose identical positions/fills; an EP row blocks upload but leaves a flagged flex preview committable (Req 2.4, 3.4)', async () => {
+    const { userId, accountId } = await seedAccount();
+    const request = presetRequest(accountId, 'interactive-brokers');
+
+    const uploaded = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(IBKR_FLEX_LIFECYCLE_CSV),
+      request,
+    );
+    const fetched = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(IBKR_FLEX_LIFECYCLE_CSV),
+      request,
+      { source: 'flex' },
+    );
+
+    // Req 2.4 — positions/fills are source-blind; only the error's nonBlocking
+    // flag and committable classification differ (Req 3.4, asserted below).
+    expect(fetched.positions).toEqual(uploaded.positions);
+    expect(fetched.summary.positions).toBe(uploaded.summary.positions);
+    expect(fetched.summary.fills).toBe(uploaded.summary.fills);
+
+    // Req 3.4 — the EP row's refusal blocks the upload path...
+    expect(uploaded.committable).toBe(false);
+    const uploadedEpError = uploaded.errors.find((e) => e.code === 'OPTION_EVENT_NOT_SUPPORTED');
+    expect(uploadedEpError).toBeDefined();
+    expect(uploadedEpError?.nonBlocking).toBeFalsy();
+
+    // ...but a flagged flex preview stays committable: the row still imports
+    // nothing (it is dropped either way), only the gate changes.
+    expect(fetched.committable).toBe(true);
+    const fetchedEpError = fetched.errors.find((e) => e.code === 'OPTION_EVENT_NOT_SUPPORTED');
+    expect(fetchedEpError).toBeDefined();
+    expect(fetchedEpError?.nonBlocking).toBe(true);
+  });
+
+  it('sets requiresDuplicateAffirmation for a sub-90% overlap only under source: flex, keeping partial_duplicate warnings either way, while a fresh account with no overlap stays false even with the flag (Req 3.3)', async () => {
+    const { userId, accountId } = await seedAccount();
+
+    // Seed one matching round-trip in the account (2 fills on 01-01/01-02).
+    const seedCsv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL,STOCK,BUY,100,10,2026-01-01,1',
+      'AAPL,STOCK,SELL,110,10,2026-01-02,1',
+    ].join('\n');
+    const seedPreview = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(seedCsv),
+      execRequest(accountId),
+    );
+    await commitImport(db, userId, seedPreview.token, false, { isAdmin: false });
+
+    // Re-import a file whose first two fills match the seed but with 4 extra
+    // non-matching fills → overlap 2/6 ≈ 33% (< 90%): warnings, not a hard block.
+    const overlapCsv = [
+      'Symbol,Type,Side,Price,Quantity,Date,Fees',
+      'AAPL,STOCK,BUY,100,10,2026-01-01,1', // matches seed
+      'AAPL,STOCK,SELL,110,10,2026-01-02,1', // matches seed
+      'MSFT,STOCK,BUY,50,5,2026-01-03,0',
+      'MSFT,STOCK,SELL,60,5,2026-01-04,0',
+      'TSLA,STOCK,BUY,200,3,2026-01-05,0',
+      'TSLA,STOCK,SELL,210,3,2026-01-06,0',
+    ].join('\n');
+
+    const uploaded = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(overlapCsv),
+      execRequest(accountId),
+    );
+    expect(uploaded.requiresDuplicateAffirmation).toBe(false);
+    expect(uploaded.warnings.some((w) => w.kind === 'partial_duplicate')).toBe(true);
+
+    const fetched = await previewImport(
+      db,
+      userId,
+      accountId,
+      bytes(overlapCsv),
+      execRequest(accountId),
+      { source: 'flex' },
+    );
+    expect(fetched.requiresDuplicateAffirmation).toBe(true);
+    expect(fetched.warnings.some((w) => w.kind === 'partial_duplicate')).toBe(true);
+
+    // A fresh account with nothing to match: the matched === 0 return stays
+    // false even with the flag.
+    const { userId: freshUserId, accountId: freshAccountId } = await seedAccount();
+    const noOverlap = await previewImport(
+      db,
+      freshUserId,
+      freshAccountId,
+      bytes(seedCsv),
+      execRequest(freshAccountId),
+      { source: 'flex' },
+    );
+    expect(noOverlap.requiresDuplicateAffirmation).toBe(false);
   });
 });

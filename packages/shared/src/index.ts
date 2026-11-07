@@ -146,6 +146,12 @@ export type {
   CsvCommitResponse,
   CsvPreset,
 } from './schemas/csv-import';
+export {
+  IbkrConnectionSaveSchema,
+  IbkrConnectionStatusSchema,
+  FlexFetchRequestSchema,
+} from './schemas/ibkr';
+export type { IbkrConnectionSave, IbkrConnectionStatus, FlexFetchRequest } from './schemas/ibkr';
 export * from './constants/currencies';
 export * from './constants/timezones';
 export * from './constants/expense-categories';

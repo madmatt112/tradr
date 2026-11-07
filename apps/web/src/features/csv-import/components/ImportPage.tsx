@@ -10,6 +10,8 @@ import { useAccounts } from '@/features/accounts/hooks/useAccounts';
 import { isAccountWritable } from '@/features/billing/tier-usage';
 import { UpgradeLink } from '@/features/billing/UpgradeLink';
 import { useTierState } from '@/features/billing/useTierState';
+import { FlexFetchButton } from '@/features/ibkr/components/FlexFetchButton';
+import { useIbkrConnections } from '@/features/ibkr/hooks/useIbkrConnections';
 import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { docsUrl } from '@/lib/docs';
 
@@ -35,6 +37,14 @@ function previewErrorMessage(err: unknown): string {
   const e = err as { error?: { message?: string }; message?: string };
   return e.error?.message ?? e.message ?? 'Preview failed. Please try again.';
 }
+
+function previewErrorCode(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const e = err as { error?: { code?: string }; code?: string };
+  return e.error?.code ?? e.code;
+}
+
+type PreviewOrigin = { kind: 'upload' } | { kind: 'flex'; accountId: string };
 
 const initialMapper = (): ColumnMapperValue => ({
   presetId: null,
@@ -66,11 +76,17 @@ export function ImportPage() {
   const [mapper, setMapper] = useState<ColumnMapperValue>(initialMapper);
   const [declinedProposalIds, setDeclinedProposalIds] = useState<string[]>([]);
   const [labelOverrides, setLabelOverrides] = useState<Record<string, string>>({});
+  const [previewOrigin, setPreviewOrigin] = useState<PreviewOrigin>({ kind: 'upload' });
 
   const preview = useCsvPreview();
   const { data: accounts } = useAccounts();
   const { data: tierState } = useTierState();
+  const { data: connections } = useIbkrConnections();
   const currencyCode = accounts?.find((a) => a.id === accountId)?.currency ?? 'USD';
+  // Req 6.1 — no button, control or hint with no account chosen, no
+  // connection for it, or while the connections query is still loading
+  // (`connections` is undefined in all three cases).
+  const connection = accountId ? connections?.find((c) => c.accountId === accountId) : undefined;
 
   // Preselect the user's default account while none is chosen — null is the
   // placeholder, never a choice, so a target the user picked is never
@@ -136,9 +152,32 @@ export function ImportPage() {
       dateFormat: mapper.dateFormat,
       numberFormat: mapper.numberFormat,
     };
+    setPreviewOrigin({ kind: 'upload' });
     setDeclinedProposalIds([]);
     setLabelOverrides({});
     preview.mutate({ file, request });
+  }
+
+  // Req 2.1-2.3 — the Flex fetch arm: clears `file` so step 3 (the mapper)
+  // stays hidden, and resets the declined/label state the same way
+  // `runPreview` does.
+  function runFetch(targetAccountId: string) {
+    setFile(null);
+    setPreviewOrigin({ kind: 'flex', accountId: targetAccountId });
+    setDeclinedProposalIds([]);
+    setLabelOverrides({});
+    preview.mutate({ flexAccountId: targetAccountId });
+  }
+
+  // Req 2.5 — Re-preview routes by the remembered origin: a flex-origin
+  // preview re-runs the fetch, an upload-origin one re-runs `runPreview`
+  // (which has no file to re-run with no file chosen).
+  function handleRePreview() {
+    if (previewOrigin.kind === 'flex') {
+      runFetch(previewOrigin.accountId);
+      return;
+    }
+    runPreview();
   }
 
   // A declined proposal imports as ungrouped positions (AC 8.8), so any label
@@ -237,7 +276,16 @@ export function ImportPage() {
           <CardDescription>The server parses and validates the file.</CardDescription>
         </CardHeader>
         <CardContent>
-          <FileUpload file={file} onChange={setFile} />
+          <div className="flex flex-wrap items-start gap-6">
+            <FileUpload file={file} onChange={setFile} />
+            {connection && (
+              <FlexFetchButton
+                connection={connection}
+                onFetch={() => runFetch(connection.accountId)}
+                isFetching={preview.isPending}
+              />
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -285,14 +333,22 @@ export function ImportPage() {
         </div>
       )}
 
-      {preview.isError && (
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <CardTitle className="text-base text-destructive">Preview failed</CardTitle>
-            <CardDescription>{previewErrorMessage(preview.error)}</CardDescription>
-          </CardHeader>
-        </Card>
-      )}
+      {preview.isError &&
+        (previewErrorCode(preview.error) === 'IBKR_FLEX_NO_TRADES' ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">No trades in this report</CardTitle>
+              <CardDescription>{previewErrorMessage(preview.error)}</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          <Card className="border-destructive/50">
+            <CardHeader>
+              <CardTitle className="text-base text-destructive">Preview failed</CardTitle>
+              <CardDescription>{previewErrorMessage(preview.error)}</CardDescription>
+            </CardHeader>
+          </Card>
+        ))}
 
       {preview.data && !preview.isPending && (
         <div className="space-y-6">
@@ -308,10 +364,18 @@ export function ImportPage() {
             onLabelChange={handleLabelChange}
           />
           <ProposedEvents events={preview.data.events} positions={preview.data.positions} />
+          {/* Req 2.11 — a fetched preview that cannot commit names both ways
+              out; the upload path's own blocked state renders inside
+              CommitPanel instead. */}
+          {previewOrigin.kind === 'flex' && !preview.data.committable && (
+            <p className="text-sm text-muted-foreground">
+              Change the Flex query and fetch again, or export from IBKR and upload it.
+            </p>
+          )}
           <CommitPanel
             key={preview.data.token}
             preview={preview.data}
-            onRePreview={runPreview}
+            onRePreview={handleRePreview}
             isRePreviewing={preview.isPending}
             declinedProposalIds={declinedProposalIds}
             labelOverrides={labelOverrides}

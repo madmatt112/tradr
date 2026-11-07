@@ -30,6 +30,30 @@ vi.mock('@/features/accounting/components/ExchangeRatesPage', () => ({
   ExchangeRatesPage: () => <div data-slot="exchange-rates" />,
 }));
 
+// The new IBKR tab's route renders one IbkrConnectionCard per Tradr account
+// (design C10); give it one account so the card actually mounts. Not under
+// test here — the per-account mapping and the card's own behaviour belong to
+// IbkrConnectionCard.test.tsx.
+vi.mock('@/features/accounts/hooks/useAccounts', () => ({
+  useAccounts: () => ({
+    data: [
+      {
+        id: '22222222-2222-2222-2222-222222222222',
+        userId: 'u1',
+        name: 'Main',
+        currency: 'USD',
+        timezone: 'UTC',
+        brokerageId: null,
+        brokerageName: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
 // The instance posture (GET /api/config), switchable per test: the Advisor tab
 // and the `/settings` default redirect both follow it.
 const posture = { advisorEnabled: true };
@@ -42,6 +66,7 @@ vi.mock('@/hooks/useRegistrationEnabled', () => ({
 import { Route as SettingsLayoutRoute } from '../_auth.settings';
 import { Route as AdvisorRoute } from '../_auth.settings.advisor';
 import { Route as MarketDataRoute } from '../_auth.settings.market-data';
+import { Route as IbkrRoute } from '../_auth.settings.ibkr';
 import { Route as ProfileRoute } from '../_auth.settings.profile';
 import { Route as AccountRoute } from '../_auth.settings.account';
 import { Route as HelpRoute } from '../_auth.settings.help';
@@ -55,6 +80,7 @@ import { Route as RulesRoute } from '../_auth.settings.rules';
 const layoutOpts = SettingsLayoutRoute.options as any;
 const advisorOpts = AdvisorRoute.options as any;
 const marketDataOpts = MarketDataRoute.options as any;
+const ibkrOpts = IbkrRoute.options as any;
 const profileOpts = ProfileRoute.options as any;
 const accountOpts = AccountRoute.options as any;
 const helpOpts = HelpRoute.options as any;
@@ -87,6 +113,13 @@ function buildRouter(initialPath: string) {
     getParentRoute: () => settingsLayout as any,
     path: '/market-data',
     component: marketDataOpts.component,
+  });
+  // Re-hosted so the layout's `<Link to="/settings/ibkr">` tab trigger has a
+  // matching route; the component only mounts if a test navigates here.
+  const ibkr = createRoute({
+    getParentRoute: () => settingsLayout as any,
+    path: '/ibkr',
+    component: ibkrOpts.component,
   });
   const profile = createRoute({
     getParentRoute: () => settingsLayout as any,
@@ -140,6 +173,7 @@ function buildRouter(initialPath: string) {
     settingsLayout.addChildren([
       advisor,
       marketData,
+      ibkr,
       billing,
       profile,
       account,
@@ -233,12 +267,36 @@ describe('Settings tabbed layout', () => {
     });
   });
 
+  // The IBKR tab is appended after Market data and, like it, never depends
+  // on the advisor (Req 1.9, 6.5): `visibleTabs()` filters neither out.
+  it('case 2e: the IBKR tab follows Market data, survives the advisor off, and /settings/ibkr renders a card (Req 1.9, 6.5)', async () => {
+    posture.advisorEnabled = false;
+    renderAt('/settings/ibkr');
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /IBKR/i })).toBeTruthy();
+    });
+    expect(screen.queryByRole('tab', { name: /Advisor/i })).toBeNull();
+
+    const tabNames = screen.getAllByRole('tab').map((t) => t.textContent ?? '');
+    const marketDataIndex = tabNames.findIndex((n) => /Market data/i.test(n));
+    const ibkrIndex = tabNames.findIndex((n) => /IBKR/i.test(n));
+    expect(marketDataIndex).toBeGreaterThanOrEqual(0);
+    expect(ibkrIndex).toBe(marketDataIndex + 1);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ibkr-connection-card')).toBeTruthy();
+    });
+  });
+
   // The key card moves to its own tab (REQ-7.5): the Advisor tab keeps only
   // the trade-data consent toggle it was left with.
   it('case 2d: the Advisor route no longer renders the market-data key card (AC 7.5)', async () => {
     renderAt('/settings/advisor');
     await waitFor(() => {
-      expect(screen.getByText('Manage provider keys and personas for the AI advisor.')).toBeTruthy();
+      expect(
+        screen.getByText('Manage provider keys and personas for the AI advisor.'),
+      ).toBeTruthy();
     });
     expect(screen.queryByTestId('market-data-key-card')).toBeNull();
   });

@@ -49,6 +49,9 @@ const quoteStubPort = Number(process.env.QUOTE_STUB_PORT ?? 4603);
 // OpenAI-shaped LLM stub (self-host-experience C8). 4604 is the PWA harness
 // (e2e/support/pwa-build-server.ts), so this defaults to 4605.
 const llmStubPort = Number(process.env.LLM_STUB_PORT ?? 4605);
+// IBKR Flex Web Service stub (ibkr-flex-import Task 14). 4605 is the LLM stub,
+// so this defaults to 4606.
+const flexStubPort = Number(process.env.FLEX_STUB_PORT ?? 4606);
 const webPort = new URL(baseURL).port || '5173';
 
 // Env forwarded to the booted API. Defaults are CI-safe; real secrets/DB come
@@ -113,6 +116,10 @@ const apiEnv: Record<string, string> = {
   // probe and the advisor stream both resolve to the stub — advisor-tools flow 3
   // runs deterministically with no live key. The stub serves under a `/v1` path.
   OPENAI_BASE_URL: `http://localhost:${llmStubPort}/v1`,
+  // IBKR Flex Web Service base URL (ibkr-flex-import Task 14) — set
+  // UNCONDITIONALLY to the local stub so no boot or fetch ever reaches the
+  // live ndcdyn.interactivebrokers.com host (wire-check.md W1).
+  IBKR_FLEX_BASE_URL: `http://localhost:${flexStubPort}`,
   // ─── Transactional email pass-through (transactional-email Task 17) ──────
   // Mailpit being reachable does NOT configure the API — these exports do.
   // Every default is '' (config.ts's empty-tolerant preprocess: all-empty ⇒
@@ -164,7 +171,8 @@ export default defineConfig({
     // test.use({ serviceWorkers: 'allow' }) (design D7, Requirement 9.3).
     serviceWorkers: 'block',
   },
-  // Boot the full stack: UW stub → GitHub stub → SEC stub → quote stub → API
+  // Boot the full stack: UW stub → GitHub stub → SEC stub → quote stub → LLM
+  // stub → Flex stub → API
   // (all upstream base URLs → stubs) → web dev server.
   // Skipped entirely when BASE_URL targets an external stack.
   webServer: manageStack
@@ -211,6 +219,16 @@ export default defineConfig({
           reuseExistingServer,
           timeout: 30_000,
           env: { LLM_STUB_PORT: String(llmStubPort) },
+        },
+        {
+          // IBKR Flex Web Service stub — the API's IBKR_FLEX_BASE_URL points
+          // here so flex-fetch SendRequest/GetStatement calls are deterministic
+          // and never hit the live IBKR host.
+          command: 'pnpm --filter @tradr/e2e exec tsx support/flex-stub-server.ts',
+          url: `http://localhost:${flexStubPort}/__health`,
+          reuseExistingServer,
+          timeout: 30_000,
+          env: { FLEX_STUB_PORT: String(flexStubPort) },
         },
         {
           command: 'pnpm --filter @tradr/api exec tsx src/index.ts',

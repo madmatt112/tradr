@@ -2387,6 +2387,60 @@
         ]
       }
     },
+    "/api/csv-import/flex-fetch": {
+      "post": {
+        "description": "Decrypts the account's saved connection, fetches the latest Flex report over the IBKR Flex Web Service, and previews it through the same pipeline as an uploaded CSV. Returns a single-use `token` the client passes to `/api/csv-import/commit`. Rate limited to 2 fetches per user per 60 seconds; a refusal there makes no outbound call.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "accountId": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "accountId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A `CsvPreviewResponse`, as returned by /api/csv-import/preview."
+          },
+          "400": {
+            "description": "IBKR_FLEX_TOKEN_REJECTED or IBKR_FLEX_QUERY_REJECTED — replace the credential in Settings."
+          },
+          "404": {
+            "description": "No connection for this account, or owned by another user (NOT_FOUND)."
+          },
+          "409": {
+            "description": "IBKR_CONNECTION_UNREADABLE, or a csv-import refusal: CSV_IMPORT_IN_PROGRESS, CSV_IMPORT_SUPERSEDED, CSV_IMPORT_EXPIRED, CSV_IMPORT_BLOCKED, CSV_IMPORT_DUPLICATES_UNCONFIRMED."
+          },
+          "413": {
+            "description": "PAYLOAD_TOO_LARGE — the report exceeds the import byte cap."
+          },
+          "422": {
+            "description": "IBKR_FLEX_NO_TRADES (zero rows), IBKR_FLEX_ACCOUNT_UNPROVEN, or IBKR_FLEX_FORMAT_UNSUPPORTED."
+          },
+          "429": {
+            "description": "RATE_LIMITED (this limiter) or IBKR_FLEX_RATE_LIMITED (IBKR itself)."
+          },
+          "503": {
+            "description": "IBKR_FLEX_UNAVAILABLE or IBKR_FLEX_NOT_READY."
+          }
+        },
+        "summary": "Fetch the account's IBKR Flex report and preview it.",
+        "tags": [
+          "IBKR"
+        ]
+      }
+    },
     "/api/csv-import/preview": {
       "post": {
         "description": "First call of the preview→commit handshake. Parses, maps, normalizes, segments, and dry-runs the uploaded CSV against the target account, returning the proposed positions/fills plus per-row/per-cell errors and warnings — and a single-use `token` the client passes to `/api/csv-import/commit`. No trade data is written; the only side effect is staging one preview row per user (a newer preview supersedes the prior one). The body is read with an actual-bytes byte cap (`CSV_IMPORT_MAX_FILE_BYTES`, default 10 MiB) — a deceptive `Content-Length` below the cap does not bypass it — so an oversized upload is rejected with 413. The multipart `request` part is itself capped (`CSV_IMPORT_MAX_REQUEST_BYTES`, default 64 KiB).\nOption rows are supported. The mapping declares a contract form — `occ-symbol` (the Symbol column carries an OCC contract symbol), `composed` (separate underlying / expiry / strike / call-put columns, with a declared `expiryFormat`), or `descriptor` (preset-only, Tradervue's Option column) — and every option position is staged and stored as the compact OCC symbol (e.g. `NVDA260321C120`). Non-100 multipliers are refused per row.\nUnder an `execution` rowShape, an assignment (`A`) or exercise (`EX`/`AEX`/`MEX`) code proposes a lifecycle event instead of refusing: `events[]` names each event's row, outcome, contract, quantity and target (a same-file open position or an existing open leg in the account). A row whose event matches no target is a located error with `nonBlocking: true` — it does not import an event, but the rest of the file still can. A re-import that matches a settlement already recorded for the leg proposes no event and instead warns (`lifecycle_already_settled`). An expiration code (`EP`/`GEA`), and every lifecycle code under any other rowShape, is still refused per row.\n",
@@ -3391,6 +3445,106 @@
         "summary": "Liveness probe (DB connectivity) plus the deployed version.",
         "tags": [
           "Platform"
+        ]
+      }
+    },
+    "/api/ibkr/connections": {
+      "get": {
+        "description": "Masked status only: accountId, a last-4-char token hint, and the last-fetch time and the report's trade-date span. Never the token or the query id.\n",
+        "responses": {
+          "200": {
+            "description": "Array of { accountId, tokenHintTail, lastFetchedAt, lastPeriodStart, lastPeriodEnd }."
+          }
+        },
+        "summary": "List the authenticated user's IBKR Flex connections.",
+        "tags": [
+          "IBKR"
+        ]
+      }
+    },
+    "/api/ibkr/connections/{accountId}": {
+      "delete": {
+        "description": "Hard-deletes the stored connection.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "No connection for this account, or owned by another user."
+          }
+        },
+        "summary": "Remove the IBKR Flex connection for an account.",
+        "tags": [
+          "IBKR"
+        ]
+      },
+      "put": {
+        "description": "Encrypts the token and query id at rest; only the ciphertext, the key version and the token's last four characters are stored. Makes no call to IBKR. A second save replaces the first and clears the last-fetch record. Rate limited to 10 saves per user per hour.\n",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "queryId": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "token": {
+                    "maxLength": 512,
+                    "minLength": 8,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "token",
+                  "queryId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{ accountId, tokenHintTail, lastFetchedAt, lastPeriodStart, lastPeriodEnd }."
+          },
+          "400": {
+            "description": "Validation error (blank token or query id)."
+          },
+          "404": {
+            "description": "Unknown account, or owned by another user."
+          },
+          "429": {
+            "description": "Save rate limit reached (10 / hour)."
+          }
+        },
+        "summary": "Save (or replace) the IBKR Flex connection for an account.",
+        "tags": [
+          "IBKR"
         ]
       }
     },

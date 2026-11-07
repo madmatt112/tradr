@@ -18,3 +18,4 @@ export * from './position-images.schema';
 export * from './account-deletion.schema';
 export * from './auth-security.schema';
 export * from './option-lifecycle.schema';
+export * from './ibkr.schema';

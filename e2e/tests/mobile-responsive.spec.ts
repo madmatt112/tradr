@@ -471,7 +471,7 @@ test.describe('mobile responsive routes', () => {
    * orientation=\"horizontal\""), so every tab sits in the list's own
    * `overflow-x-auto` scroll and the content below takes the full width, with
    * no page-level horizontal scroll. One case per covered tab — billing,
-   * profile, account, help, tags, data, rules, market data and advisor (the
+   * profile, account, help, tags, data, rules, market data, IBKR and advisor (the
    * e2e API boots with DISABLE_ADVISOR=false, so the advisor tab renders).
    * Each case navigates straight to the tab's route, confirms the `Tabs`
    * root's orientation, confirms the tab is active, waits for a heading
@@ -486,6 +486,7 @@ test.describe('mobile responsive routes', () => {
     { tabName: 'Data', route: '/settings/data', heading: 'Data' },
     { tabName: 'Rules', route: '/settings/rules', heading: 'Rules' },
     { tabName: 'Market data', route: '/settings/market-data', heading: 'Market data' },
+    { tabName: 'IBKR', route: '/settings/ibkr', heading: 'IBKR' },
     { tabName: 'Advisor', route: '/settings/advisor', heading: 'Advisor' },
   ] as const;
 
