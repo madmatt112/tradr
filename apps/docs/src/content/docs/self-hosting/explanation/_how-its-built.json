@@ -27,7 +27,7 @@
     }
   ],
   "testFilesTotal": 507,
-  "e2eSpecFiles": 41,
+  "e2eSpecFiles": 42,
   "migrations": 45,
   "ciJobs": [
     "checks",
