@@ -41,12 +41,17 @@ export {
   StockQuoteSchema,
   StockQuoteResponseSchema,
   StockQuoteConfigSchema,
+  QUOTE_BATCH_MAX,
+  StockQuoteOutcomeSchema,
+  StockQuoteBatchResponseSchema,
 } from './schemas/symbol';
 export type {
   SymbolSearchItem,
   SymbolSearchResponse,
   StockQuote,
   StockQuoteResponse,
+  StockQuoteOutcome,
+  StockQuoteBatchResponse,
 } from './schemas/symbol';
 export {
   GranularitySchema,
