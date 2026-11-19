@@ -11,13 +11,8 @@ import { buildTimeline, type TimelineEntry, type TimelineSource } from '../utils
 import { UnsettleDialog } from './UnsettleDialog';
 
 interface Props {
-  position: TimelineSource & { id: string };
+  position: TimelineSource & { id: string; accountCurrency: string };
 }
-
-// The detail endpoint carries no account currency (known limitation, same gap
-// PositionDetail.tsx works around); the timeline only ever shows USD-shaped
-// premium and net-credit figures, never a gain/loss one, so this is cosmetic.
-const CURRENCY = 'USD';
 
 function formatTimelineDate(iso: string | undefined): string {
   const time = iso === undefined ? NaN : Date.parse(iso);
@@ -66,10 +61,12 @@ function entryKey(entry: TimelineEntry): string {
 function TimelineEntryRow({
   entry,
   viewedPositionId,
+  accountCurrency,
   onUnsettle,
 }: {
   entry: TimelineEntry;
   viewedPositionId: string;
+  accountCurrency: string;
   onUnsettle: (settlement: PositionSettlementDetail) => void;
 }) {
   switch (entry.kind) {
@@ -90,7 +87,7 @@ function TimelineEntryRow({
           <Numeric
             value={entry.settlement.premium}
             kind="money"
-            currency={CURRENCY}
+            currency={accountCurrency}
             direction="none"
             className="inline"
           />
@@ -119,7 +116,7 @@ function TimelineEntryRow({
           <Numeric
             value={entry.rollChain.netCredit}
             kind="money"
-            currency={CURRENCY}
+            currency={accountCurrency}
             direction="none"
             className="inline"
           />
@@ -167,6 +164,7 @@ export function PositionTimeline({ position }: Props) {
             <TimelineEntryRow
               entry={entry}
               viewedPositionId={position.id}
+              accountCurrency={position.accountCurrency}
               onUnsettle={setUnsettleTarget}
             />
           </li>

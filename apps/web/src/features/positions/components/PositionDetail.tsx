@@ -2,6 +2,8 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { Tag } from 'lucide-react';
 import { useState } from 'react';
 
+import { computeUnrealised } from '@tradr/shared';
+
 import { DrawerToggle } from '@/components/layout/DrawerToggle';
 import { Numeric } from '@/components/Numeric';
 import {
@@ -23,6 +25,7 @@ import { CoachMark } from '@/features/onboarding/components/CoachMark';
 import { TagChipList } from '@/features/tags/components/TagChip';
 import { TagPicker } from '@/features/tags/components/TagPicker';
 import { ComplianceCard } from '@/features/trading-rules/components/ComplianceCard';
+import { oldestFetchedAt, useStockQuotes } from '@/hooks/useStockQuotes';
 import { formatCurrency } from '@/lib/format';
 
 import {
@@ -32,10 +35,12 @@ import {
   useClosePosition,
   useReopenPosition,
 } from '../hooks/usePosition';
+import { markReason } from '../utils/markToMarket';
 import { decodeOptionContract } from '../utils/optionContract';
 import { isOpenedTodayInAccountTz } from '../utils/reopenWindow';
 
 import { BreakevenBadge } from './BreakevenBadge';
+import { CostBasisOnly } from './CostBasisOnly';
 import { EntryGreeksDialog } from './EntryGreeksDialog';
 import { FillDialog } from './FillDialog';
 import { FillTable } from './FillTable';
@@ -45,6 +50,7 @@ import { PositionEditDialog } from './PositionEditDialog';
 import { PositionGroupPanel } from './PositionGroupPanel';
 import { PositionScreenshots } from './PositionScreenshots';
 import { PositionTimeline } from './PositionTimeline';
+import { QuoteStaleness } from './QuoteStaleness';
 import { RollLegDialog } from './RollLegDialog';
 import { SettleLegDialog } from './SettleLegDialog';
 
@@ -68,6 +74,21 @@ export function PositionDetailView({ positionId }: Props) {
   const [settleOpen, setSettleOpen] = useState(false);
   const [rollOpen, setRollOpen] = useState(false);
   const [greeksOpen, setGreeksOpen] = useState(false);
+
+  // design C12: called above the early returns, reading `position` as
+  // possibly undefined, so the hook order never changes between renders.
+  const markToMarketReason =
+    position && position.status === 'open'
+      ? markReason({
+          isGroup: false,
+          groupId: position.groupId ?? null,
+          assetType: position.assetType,
+          accountCurrency: position.accountCurrency,
+        })
+      : null;
+  const eligibleSymbol =
+    position && position.status === 'open' && markToMarketReason === null ? position.symbol : null;
+  const { configured, quote } = useStockQuotes(eligibleSymbol ? [eligibleSymbol] : []);
 
   if (isLoading) {
     return (
@@ -116,9 +137,24 @@ export function PositionDetailView({ positionId }: Props) {
   // header for any open option leg.
   const isOpenOptionLeg = isOpen && position.assetType === 'option';
 
-  // Determine account currency from the position (we need it for formatting)
-  // The detail endpoint doesn't return accountCurrency, so use a fallback
-  const currency = 'USD'; // The list endpoint has accountCurrency; detail doesn't. This is a known limitation.
+  const currency = position.accountCurrency;
+
+  // design C12: eligible, open position with no quote-provider-eligible
+  // reason to exclude it. `isOpen` is re-derived from `position.status` just
+  // above the hook call, since a closed/draft position is never eligible.
+  const isMarkable = isOpen && markToMarketReason === null;
+  const cell = configured && isMarkable ? quote(position.symbol) : null;
+  const unrealised =
+    cell && cell.state === 'price'
+      ? computeUnrealised({
+          side: position.side,
+          openQty: position.totalEntryQuantity - position.totalExitQuantity,
+          openCostBasis: position.openCostBasis,
+          lastPrice: cell.lastPrice,
+          currency: position.accountCurrency,
+        })
+      : null;
+  const numericState = cell?.state === 'loading' ? 'loading' : 'value';
 
   const hasManualFillFees = position.fills.some((f) => parseFloat(f.fees) > 0);
   // `brokerageFees` is the fee attributed to the realized portion whatever its
@@ -391,7 +427,74 @@ export function PositionDetailView({ positionId }: Props) {
             />
           </CardContent>
         </Card>
+        {/* Unrealised cards (design C12, Req 7.3/7.4): only while the quote
+            provider is configured and the position is open. An eligible
+            position gets Last Price, Unrealised P&L and Unrealised %; an
+            ineligible one (group/option/non-USD) gets a single card showing
+            why. A draft or closed position, or an unconfigured provider,
+            adds nothing (Req 7.5). */}
+        {configured && isOpen && isMarkable && (
+          <>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Last Price</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Numeric
+                  value={cell?.state === 'price' ? cell.lastPrice : null}
+                  kind="money"
+                  currency={currency}
+                  direction="none"
+                  state={numericState}
+                  className="text-lg font-semibold"
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Unrealised P&L</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Numeric
+                  value={unrealised ? unrealised.unrealisedPnl : null}
+                  kind="money"
+                  direction="auto"
+                  state={numericState}
+                  className="text-lg font-semibold"
+                />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Unrealised %</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Numeric
+                  value={unrealised ? unrealised.unrealisedPercent : null}
+                  kind="percent"
+                  precision={2}
+                  direction="auto"
+                  state={numericState}
+                  className="text-lg font-semibold"
+                />
+              </CardContent>
+            </Card>
+          </>
+        )}
+        {configured && isOpen && !isMarkable && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground">Unrealised P&L</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CostBasisOnly reason={markToMarketReason ?? ''} variant="inline" />
+            </CardContent>
+          </Card>
+        )}
       </div>
+      {configured && isOpen && isMarkable && (
+        <QuoteStaleness oldestFetchedAt={cell ? oldestFetchedAt([cell]) : null} />
+      )}
 
       {/* Double-fee warning */}
       {hasDoubleFeeRisk && (
@@ -458,7 +561,7 @@ export function PositionDetailView({ positionId }: Props) {
           entry Greeks (design C10, D17; Requirement 8.1). */}
       <div>
         <h2 className="mb-3 text-lg font-semibold">Timeline</h2>
-        <PositionTimeline position={position} />
+        <PositionTimeline position={{ ...position, accountCurrency: currency }} />
       </div>
 
       {/* Edit Dialog */}
