@@ -388,7 +388,12 @@ describe('OpenPositionsWidget — marked-to-market figures (Req 3.6, 4.5, 4.6, 5
 
     const { container, root } = mountWith(<OpenPositionsWidget />);
 
-    const cells = container.querySelectorAll('tbody tr [data-testid="numeric"]');
+    // The Quantity column also renders through Numeric and is unaffected by
+    // this task (Req 5.2) — drop it to isolate the three new mark-to-market
+    // cells, which are the ones this test asserts on.
+    const cells = Array.from(
+      container.querySelectorAll('tbody tr [data-testid="numeric"]'),
+    ).slice(1);
     expect(cells.length).toBe(3);
     cells.forEach((cell) => {
       expect(cell.textContent).toContain(EM_DASH);
