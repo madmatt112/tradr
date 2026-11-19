@@ -12,10 +12,13 @@
 // | A settlement entry links its stock row, and a stock row's entry links its leg (AC 8.1) | viewed from the leg: one settlement detail with `role: 'leg'`, `stockPositionIds: [STOCK_ID]`; viewed from the stock row: one settlement detail with `role: 'stock_exit'`, `legPositionId: LEG_ID` | render(&lt;PositionTimeline position={...} /&gt;), once per view | the leg's render carries a link to `/positions/STOCK_ID`; the stock row's render carries a link to `/positions/LEG_ID` | requirements.md AC 8.1; design.md Data Models "a leg's entry links its stock rows and a stock row's entry links the leg" |
 // | Chain legs link and the net credit shows | a rollChain with two legs (the viewed leg and another) and `netCredit: 500` | render(&lt;PositionTimeline position={...} /&gt;) | a link to the other leg's position id is present, and a figure containing "500" is rendered | task 25 Success ("chain legs link and net credit shows"); design.md C6 "Req 5.3's example gives 500" |
 // | A chain capture shows its capture date | entryGreeks with `source: 'chain'` and `capturedAt` in 2031, alongside a fill dated 2020 | render(&lt;PositionTimeline position={...} /&gt;) | the rendered output contains "2031" (the capture year), not just the fill's 2020 | design.md C7 "the timeline labels it by captured_at, not as entry-time Greeks"; task 25 Success |
+// | A EUR position's timeline figures format in EUR, not USD (Req 7.2, task 11, TD1) | a rollChain with netCredit 500 and `accountCurrency: 'EUR'` on the position | render(&lt;PositionTimeline position={...} /&gt;) | a rendered `[data-testid="numeric"]` contains `formatCurrency(500, 'EUR')` and none contains `formatCurrency(500, 'USD')` | design.md D15 "the position timeline also formats in the account currency"; tasks.md TD1; AC 7.2 |
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntryGreeksDetail, Fill, PositionSettlementDetail, RollChain } from '@tradr/shared';
+
+import { formatCurrency } from '@/lib/format';
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
@@ -24,8 +27,12 @@ vi.mock('@tanstack/react-router', () => ({
 
 import { PositionTimeline } from './PositionTimeline';
 
+// TD1 (tasks.md): the account currency rides PositionTimeline's own Props
+// (the `position` prop's shape), not `TimelineSource` — `buildTimeline`
+// never reads it, and the unit suite's source literals stay untouched.
 interface TimelinePosition {
   id: string;
+  accountCurrency: string;
   fills: Fill[];
   settlements?: PositionSettlementDetail[];
   rollChain?: RollChain;
@@ -50,6 +57,7 @@ function makeFill(overrides: Partial<Fill> = {}): Fill {
 function makePosition(overrides: Partial<TimelinePosition> = {}): TimelinePosition {
   return {
     id: 'pos-1',
+    accountCurrency: 'USD',
     fills: [],
     ...overrides,
   };
@@ -162,5 +170,38 @@ describe('PositionTimeline — chain-captured Greeks', () => {
     render(<PositionTimeline position={position} />);
 
     expect(screen.getByText(/2031/)).toBeTruthy();
+  });
+});
+
+describe("PositionTimeline — formats money figures in the position's account currency (Req 7.2, TD1)", () => {
+  it('renders the roll chain net credit in EUR, never USD', () => {
+    const LEG_A = 'leg-a-00000000';
+    const LEG_B = 'leg-b-00000000';
+
+    const position = makePosition({
+      id: LEG_A,
+      accountCurrency: 'EUR',
+      rollChain: {
+        legs: [
+          {
+            positionId: LEG_A,
+            symbol: 'AAPL  260117C00150000',
+            rolledAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            positionId: LEG_B,
+            symbol: 'AAPL  260221C00155000',
+            rolledAt: '2026-02-01T00:00:00.000Z',
+          },
+        ],
+        netCredit: 500,
+      },
+    });
+
+    render(<PositionTimeline position={position} />);
+
+    const numerics = screen.getAllByTestId('numeric');
+    expect(numerics.some((el) => el.textContent?.includes(formatCurrency(500, 'EUR')))).toBe(true);
+    expect(numerics.some((el) => el.textContent?.includes(formatCurrency(500, 'USD')))).toBe(false);
   });
 });
