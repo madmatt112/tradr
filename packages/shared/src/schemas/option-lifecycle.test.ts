@@ -85,6 +85,7 @@ const baseDetail = {
   closedAt: null,
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
+  accountCurrency: 'USD',
   accountTimezone: 'America/New_York',
   fills: [],
   avgEntryPrice: 2.5,
@@ -177,6 +178,25 @@ describe('PositionDetailSchema pastExpiryUnsettled (Req 1.1)', () => {
     if (result.success) {
       expect(result.data.pastExpiryUnsettled).toBe(true);
     }
+  });
+});
+
+// unrealised-pnl task 5 — accountCurrency on PositionDetailSchema (design
+// C12; requirements.md Req 7.1).
+//
+// Contract:
+//  1. "PositionDetailSchema refuses a body without accountCurrency" (task 5
+//     Success line). Pre: `baseDetail` minus its `accountCurrency` key.
+//     Call: PositionDetailSchema.safeParse. Observe: `success === false`.
+//     Source: task 5 Success line.
+// ---------------------------------------------------------------------------
+describe('PositionDetailSchema accountCurrency (Req 7.1)', () => {
+  it('refuses a detail body without accountCurrency', () => {
+    const withoutCurrency = Object.fromEntries(
+      Object.entries(baseDetail).filter(([key]) => key !== 'accountCurrency'),
+    );
+    const result = PositionDetailSchema.safeParse(withoutCurrency);
+    expect(result.success).toBe(false);
   });
 });
 
