@@ -613,6 +613,9 @@ export async function getPositionDetail(db: Database, id: string, userId: string
 
   const detail = {
     ...position,
+    // Account currency lets the client format money and gate quotes on the
+    // real currency (design C12, Req 7.1), without a second account fetch.
+    accountCurrency,
     // Account timezone defines the trading day the client uses to decide
     // whether a closed position may be reopened (R13 same-day rule). Surfaced
     // here so the frontend need not duplicate or guess the account's zone.

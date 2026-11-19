@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PositionDetail } from '@tradr/shared';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { useStockQuotes } from '@/hooks/useStockQuotes';
 
 import { usePosition, useReopenPosition } from '../hooks/usePosition';
 
@@ -32,6 +33,17 @@ vi.mock('./PositionEditDialog', () => ({ PositionEditDialog: () => null }));
 // file is about the reopen window.
 vi.mock('@/features/onboarding/components/CoachMark', () => ({ CoachMark: () => null }));
 
+// Task 11 calls useStockQuotes unconditionally above the early returns; this
+// file is about reopen/delete/open-close affordances, not the quote feed, so
+// no asserted value here changes.
+vi.mock('@/hooks/useStockQuotes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useStockQuotes')>();
+  return {
+    ...actual,
+    useStockQuotes: vi.fn(),
+  };
+});
+
 import { PositionDetailView } from './PositionDetail';
 
 // The disabled Open/Close affordances carry tooltips; __root.tsx provides the
@@ -57,6 +69,7 @@ function makeDetail(overrides: Partial<PositionDetail> = {}): PositionDetail {
     userId: '00000000-0000-4000-a000-000000000100',
     accountId: '00000000-0000-4000-a000-000000000010',
     accountTimezone: 'UTC',
+    accountCurrency: 'USD',
     symbol: 'AAPL',
     side: 'long',
     assetType: 'stock',
@@ -93,6 +106,13 @@ function mockDetail(overrides: Partial<PositionDetail> = {}) {
     isLoading: false,
   } as unknown as PositionResult);
 }
+
+beforeEach(() => {
+  vi.mocked(useStockQuotes).mockReturnValue({
+    configured: false,
+    quote: () => ({ state: 'absent' }),
+  });
+});
 
 afterEach(() => {
   cleanup();

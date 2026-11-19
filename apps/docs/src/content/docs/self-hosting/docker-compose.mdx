@@ -143,10 +143,12 @@ is documented inline in `.env.example`.
 ### Symbol search and delayed quotes
 
 Symbol autocomplete needs **no key** (it is backed by the public SEC ticker
-file); only the delayed last-price lookup needs one:
+file); only the delayed last-price lookup needs one, and that same key also
+powers unrealised P&L on open stock positions in USD accounts:
 
 ```
 STOCK_QUOTE_API_KEY=      # API Ninjas — enables the delayed last-price affordance
+                          # and unrealised P&L on open stock positions in USD accounts
 ```
 
 ### Analytics (PostHog)

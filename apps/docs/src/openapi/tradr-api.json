@@ -4687,7 +4687,7 @@
         ]
       },
       "get": {
-        "description": "Authed. Returns the position with its fills, computed P&L, and its `tags` array ordered by category then case-insensitive name. Carries a `compliance` object (live rule score: `finality`, `score`, `status` and one `entries` element per applicable enabled rule) only when the user holds at least one trading rule, and omits the field when they hold none. Carries a `group` object (the multi-leg group this position is a leg of, with its other legs) only when the position belongs to one, and omits the field for an ungrouped position. Carries `pastExpiryUnsettled: true` when the position is an open option leg past its expiry with open units, and omits the field otherwise. Carries `settlements` (every settlement record touching this row, each with a `role` of `leg`, `stock_exit` or `stock_opened`) only when the position has been touched by one; carries `rollChain` (the roll chain's legs in roll order, and `netCredit`) only when the leg has been rolled; carries `entryGreeks` (the captured entry Greeks, `rhoPerPct` nullable) only when a capture exists. All three are omitted otherwise.\n",
+        "description": "Authed. Returns the position with its fills, computed P&L, its `accountCurrency`, and its `tags` array ordered by category then case-insensitive name. Carries a `compliance` object (live rule score: `finality`, `score`, `status` and one `entries` element per applicable enabled rule) only when the user holds at least one trading rule, and omits the field when they hold none. Carries a `group` object (the multi-leg group this position is a leg of, with its other legs) only when the position belongs to one, and omits the field for an ungrouped position. Carries `pastExpiryUnsettled: true` when the position is an open option leg past its expiry with open units, and omits the field otherwise. Carries `settlements` (every settlement record touching this row, each with a `role` of `leg`, `stock_exit` or `stock_opened`) only when the position has been touched by one; carries `rollChain` (the roll chain's legs in roll order, and `netCredit`) only when the leg has been rolled; carries `entryGreeks` (the captured entry Greeks, `rhoPerPct` nullable) only when a capture exists. All three are omitted otherwise.\n",
         "parameters": [
           {
             "in": "path",
@@ -6155,6 +6155,42 @@
           }
         },
         "summary": "Whether the delayed-quote provider is configured.",
+        "tags": [
+          "Symbols"
+        ]
+      }
+    },
+    "/api/symbols/quotes": {
+      "get": {
+        "description": "Returns the platform-global provider's ~15-minute-delayed last price for each of `symbols`, a comma-separated list of up to 50 distinct tickers. With no provider key configured the response is `{ configured: false }` without calling the provider. With a key configured the response is `{ configured: true, quotes: StockQuoteOutcome[] }`, one outcome per distinct symbol in first-occurrence order — a per-symbol provider failure surfaces as an `unknown` or `unavailable` outcome, never a non-200 status. Shares the `/:symbol/quote` route's per-user rate limit (30 lookups per 60 s); one batch request counts as one hit. Requires an authenticated session.\n",
+        "parameters": [
+          {
+            "description": "Comma-separated list of up to 50 distinct tickers, each matching `^[A-Z.-]{1,16}$`.",
+            "in": "query",
+            "name": "symbols",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ configured: false } or { configured: true, quotes: StockQuoteOutcome[] }."
+          },
+          "400": {
+            "an invalid symbol": null,
+            "description": "Missing/empty list",
+            "or more than 50 distinct symbols (VALIDATION_ERROR).": null
+          },
+          "401": {
+            "description": "No authenticated session (UNAUTHORIZED)."
+          },
+          "429": {
+            "description": "Per-user quote rate limit reached (30 / 60 s)."
+          }
+        },
+        "summary": "Delayed spot last-price for many symbols at once.",
         "tags": [
           "Symbols"
         ]

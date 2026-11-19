@@ -354,6 +354,9 @@ export const PositionDetailSchema = z.object({
   closedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // Account currency — lets the client format money and gate quotes on the
+  // real currency without a second account fetch (design C12, Req 7.1).
+  accountCurrency: z.string(),
   // Account IANA timezone — defines the trading day for R13's same-day reopen
   // rule so the client can decide Reopen-button visibility without guessing.
   accountTimezone: z.string(),

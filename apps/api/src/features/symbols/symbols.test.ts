@@ -33,7 +33,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SymbolSearchResponseSchema } from '@tradr/shared';
+import { StockQuoteBatchResponseSchema, SymbolSearchResponseSchema } from '@tradr/shared';
 
 import { db } from '@/db';
 import { sessions, symbols, users } from '@/db/schema';
@@ -294,6 +294,181 @@ describe('GET /api/symbols/:symbol/quote', () => {
       expect(res.status).toBe(200);
     }
     const blocked = await req('GET', '/api/symbols/AAA/quote', { cookie });
+    expect(blocked.status).toBe(429);
+    expect(await errorCode(blocked)).toBe('RATE_LIMITED');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/symbols/quotes (batch) — task 4, design C3, Req 1.5/1.6/2.1-2.4/2.6/2.9/2.10/2.11
+// ---------------------------------------------------------------------------
+
+/** N distinct valid-charset symbols ([A-Z.-]{1,16}), never colliding with a stubLoader special case. */
+function makeDistinctSymbols(n: number): string[] {
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const out: string[] = [];
+  for (let i = 0; out.length < n; i++) {
+    const a = letters[Math.floor(i / letters.length) % letters.length];
+    const b = letters[i % letters.length];
+    out.push(`Z${a}${b}`);
+  }
+  return out;
+}
+
+describe('GET /api/symbols/quotes', () => {
+  const originalKey = config.STOCK_QUOTE_API_KEY;
+
+  beforeEach(() => {
+    initStockQuoteCache(stubLoader);
+  });
+  afterEach(() => {
+    config.STOCK_QUOTE_API_KEY = originalKey;
+  });
+
+  // Contract: pre — key unset, authenticated session. Call — GET .../quotes?symbols=AAPL.
+  // Observable — 200 { configured: false }, loader call count stays 0. Source — Req 1.5.
+  it('returns { configured: false } @200 and never calls the loader when the key is unset (Req 1.5)', async () => {
+    let calls = 0;
+    initStockQuoteCache((symbol) => {
+      calls++;
+      return stubLoader(symbol);
+    });
+    config.STOCK_QUOTE_API_KEY = undefined;
+    const { cookie } = await registerSession();
+
+    const res = await req('GET', '/api/symbols/quotes?symbols=AAPL', { cookie });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ configured: false });
+    expect(calls).toBe(0);
+  });
+
+  // Contract: pre — key set, authenticated session. Call — GET .../quotes?symbols=aapl,AAPL.
+  // Observable — 200 with exactly one AAPL outcome. Source — Req 2.2.
+  it('de-duplicates case-insensitively — "aapl,AAPL" returns one AAPL outcome (Req 2.2)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+
+    const res = await req('GET', '/api/symbols/quotes?symbols=aapl,AAPL', { cookie });
+
+    expect(res.status).toBe(200);
+    const body = StockQuoteBatchResponseSchema.parse(await res.json());
+    expect(body).toEqual({
+      configured: true,
+      quotes: [
+        { symbol: 'AAPL', status: 'ok', lastPrice: '123.45', fetchedAt: expect.any(String) },
+      ],
+    });
+  });
+
+  // Contract: pre — key set, authenticated session. Call — GET .../quotes (no symbols param).
+  // Observable — 400 VALIDATION_ERROR. Source — Req 2.3 (handler post-condition 1).
+  it('400 VALIDATION_ERROR on a missing/empty symbols list (Req 2.3)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+
+    const res = await req('GET', '/api/symbols/quotes', { cookie });
+
+    expect(res.status).toBe(400);
+    expect(await errorCode(res)).toBe('VALIDATION_ERROR');
+  });
+
+  // Contract: pre — key set, authenticated session. Call — GET .../quotes?symbols=AAPL,@@@.
+  // Observable — 400 VALIDATION_ERROR. Source — Req 2.4.
+  it('400 VALIDATION_ERROR when one symbol fails QuoteSymbolParamSchema (Req 2.4)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+
+    const res = await req('GET', `/api/symbols/quotes?symbols=AAPL,${encodeURIComponent('@@@')}`, {
+      cookie,
+    });
+
+    expect(res.status).toBe(400);
+    expect(await errorCode(res)).toBe('VALIDATION_ERROR');
+  });
+
+  // Contract: pre — key set, authenticated session. Call — GET .../quotes with 50 distinct symbols.
+  // Observable — 200 with 50 outcomes. Source — Req 2.3 ("at least 50 distinct symbols"), pins
+  // QUOTE_BATCH_MAX = 50's lower boundary.
+  it('accepts exactly QUOTE_BATCH_MAX (50) distinct symbols @200 (Req 2.3)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+    const symbols = makeDistinctSymbols(50);
+
+    const res = await req('GET', `/api/symbols/quotes?symbols=${symbols.join(',')}`, { cookie });
+
+    expect(res.status).toBe(200);
+    const body = StockQuoteBatchResponseSchema.parse(await res.json());
+    if (!body.configured) throw new Error('expected configured:true');
+    expect(body.quotes).toHaveLength(50);
+  });
+
+  // Contract: pre — key set, authenticated session. Call — GET .../quotes with 51 distinct symbols.
+  // Observable — 400 VALIDATION_ERROR. Source — Req 2.3, pins QUOTE_BATCH_MAX = 50's exact value:
+  // a silent raise or lower of the constant fails this boundary pair with the 50-symbol case above.
+  it('400 VALIDATION_ERROR for 51 distinct symbols — one more than QUOTE_BATCH_MAX (Req 2.3)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+    const symbols = makeDistinctSymbols(51);
+
+    const res = await req('GET', `/api/symbols/quotes?symbols=${symbols.join(',')}`, { cookie });
+
+    expect(res.status).toBe(400);
+    expect(await errorCode(res)).toBe('VALIDATION_ERROR');
+  });
+
+  // Contract: pre — key set, authenticated session, stubLoader special-cases NOPE/DOWN/BADKEY.
+  // Call — GET .../quotes?symbols=AAPL,NOPE,DOWN,BADKEY. Observable — 200 with ok, unknown,
+  // unavailable, unavailable in request order. Source — Req 2.5, 2.6.
+  it('maps ok/unknown/unavailable/unavailable for AAPL, NOPE, DOWN, BADKEY in one request @200 (Req 2.5, 2.6)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+
+    const res = await req('GET', '/api/symbols/quotes?symbols=AAPL,NOPE,DOWN,BADKEY', { cookie });
+
+    expect(res.status).toBe(200);
+    const body = StockQuoteBatchResponseSchema.parse(await res.json());
+    if (!body.configured) throw new Error('expected configured:true');
+    expect(body.quotes.map((q) => [q.symbol, q.status])).toEqual([
+      ['AAPL', 'ok'],
+      ['NOPE', 'unknown'],
+      ['DOWN', 'unavailable'],
+      ['BADKEY', 'unavailable'],
+    ]);
+  });
+
+  // Contract: pre — key set, authenticated session. Call — 30 GET .../quotes in the window, then
+  // one more. Observable — the 31st answers 429 RATE_LIMITED. Source — Req 2.9 (one batch request
+  // counts as one hit against the existing 30-per-60s stock-quote limiter).
+  it('enforces the per-user quote rate limit — 429 after 30 batch requests in the window (Req 2.9)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+
+    for (let i = 0; i < 30; i++) {
+      const res = await req('GET', '/api/symbols/quotes?symbols=AAA', { cookie });
+      expect(res.status).toBe(200);
+    }
+    const blocked = await req('GET', '/api/symbols/quotes?symbols=AAA', { cookie });
+    expect(blocked.status).toBe(429);
+    expect(await errorCode(blocked)).toBe('RATE_LIMITED');
+  });
+
+  // Contract: pre — key set, authenticated session. Call — 1 batch request + 29 single-symbol
+  // requests (30 total), then one more of either shape. Observable — the 31st answers 429.
+  // Source — Req 2.9, design D1 (the batch route shares the single-symbol route's limiter instance).
+  it('shares its rate-limit budget with the single-symbol route — one batch + 29 single hits trips 429 on the 31st (Req 2.9, design D1)', async () => {
+    config.STOCK_QUOTE_API_KEY = 'test-key';
+    const { cookie } = await registerSession();
+
+    const batch = await req('GET', '/api/symbols/quotes?symbols=AAA', { cookie });
+    expect(batch.status).toBe(200);
+
+    for (let i = 0; i < 29; i++) {
+      const res = await req('GET', '/api/symbols/AAA/quote', { cookie });
+      expect(res.status).toBe(200);
+    }
+
+    const blocked = await req('GET', '/api/symbols/quotes?symbols=AAA', { cookie });
     expect(blocked.status).toBe(429);
     expect(await errorCode(blocked)).toBe('RATE_LIMITED');
   });

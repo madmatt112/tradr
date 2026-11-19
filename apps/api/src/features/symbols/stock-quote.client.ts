@@ -13,7 +13,7 @@
 // (bare `process.env` is ESLint-banned here); the key is NEVER logged and
 // NEVER returned to the client; the base URL is not user-influenced (no SSRF).
 
-import type { StockQuote } from '@tradr/shared';
+import type { StockQuote, StockQuoteOutcome } from '@tradr/shared';
 
 import { config } from '@/lib/config';
 import { AppError, NotFoundError } from '@/lib/errors';
@@ -137,7 +137,7 @@ interface QuoteEntry {
  */
 export class StockQuoteCache {
   private entries = new Map<string, QuoteEntry>();
-  private inFlight = new Map<string, Promise<StockQuoteData>>();
+  private inFlight = new Map<string, Promise<QuoteEntry>>();
 
   constructor(
     private readonly loader: (symbol: string) => Promise<StockQuoteData>,
@@ -146,12 +146,17 @@ export class StockQuoteCache {
   ) {}
 
   async get(symbol: string): Promise<StockQuoteData> {
+    return (await this.getEntry(symbol)).snapshot;
+  }
+
+  /** Same cache as `get`, plus the entry's `fetchedAt` (design C1). */
+  async getEntry(symbol: string): Promise<QuoteEntry> {
     const now = Date.now();
     const entry = this.entries.get(symbol);
 
     // (1) Fresh hit — no provider call.
     if (entry && now - entry.fetchedAt < this.ttlMs) {
-      return entry.snapshot;
+      return entry;
     }
 
     // (2) A fetch for this symbol is already in flight — coalesce onto it
@@ -160,7 +165,7 @@ export class StockQuoteCache {
     if (existing) return existing;
 
     // (3) Start the fetch. `inFlight` is set synchronously before any await,
-    //     so two concurrent get()s can never both start one.
+    //     so two concurrent get()s/getEntry()s can never both start one.
     const promise = this.runFetch(symbol, entry);
     this.inFlight.set(symbol, promise);
     try {
@@ -170,18 +175,16 @@ export class StockQuoteCache {
     }
   }
 
-  private async runFetch(
-    symbol: string,
-    lastGood: QuoteEntry | undefined,
-  ): Promise<StockQuoteData> {
+  private async runFetch(symbol: string, lastGood: QuoteEntry | undefined): Promise<QuoteEntry> {
     try {
       const snapshot = await this.loader(symbol);
-      this.entries.set(symbol, { snapshot, fetchedAt: Date.now() });
-      return snapshot;
+      const entry: QuoteEntry = { snapshot, fetchedAt: Date.now() };
+      this.entries.set(symbol, entry);
+      return entry;
     } catch (err) {
-      // Stale-on-error: serve the last good snapshot if we have one, else
-      // surface the mapped provider error.
-      if (lastGood) return lastGood.snapshot;
+      // Stale-on-error: serve the last good entry (its original fetchedAt,
+      // not the request time) if we have one, else surface the mapped error.
+      if (lastGood) return lastGood;
       throw err;
     }
   }
@@ -237,4 +240,86 @@ function ensureCache(): StockQuoteCache {
  */
 export async function getStockQuote(symbol: string): Promise<StockQuoteData> {
   return ensureCache().get(symbol);
+}
+
+/** Module-level counterpart to `getStockQuote` that also exposes `fetchedAt` (design C1). */
+export async function getStockQuoteEntry(symbol: string): Promise<QuoteEntry> {
+  return ensureCache().getEntry(symbol);
+}
+
+// --- Batch resolver (design C2) ----------------------------------------
+
+/** Default fan-out limit for `getStockQuoteBatch` (design-pinned). */
+export const QUOTE_BATCH_CONCURRENCY = 8;
+/** Default wall-clock budget for `getStockQuoteBatch` (design-pinned). */
+export const QUOTE_BATCH_DEADLINE_MS = 12_000;
+
+/**
+ * Resolve many symbols at once, at most `concurrency` loader calls running
+ * together, within `deadlineMs`. One outcome per input symbol, in input
+ * order. Never throws for a provider failure (REQ-4.4, design C2): a
+ * `NotFoundError` maps to `unknown`, any other rejection to `unavailable`.
+ * Lookups still running at the deadline give `unavailable`; a lookup not yet
+ * started is never started, but one already running keeps going in the
+ * background and still fills the cache.
+ */
+export async function getStockQuoteBatch(
+  symbols: string[],
+  opts: { concurrency?: number; deadlineMs?: number } = {},
+): Promise<StockQuoteOutcome[]> {
+  const concurrency = opts.concurrency ?? QUOTE_BATCH_CONCURRENCY;
+  const deadlineMs = opts.deadlineMs ?? QUOTE_BATCH_DEADLINE_MS;
+
+  const results: StockQuoteOutcome[] = new Array(symbols.length);
+  if (symbols.length === 0) return results;
+
+  let pending = symbols.length;
+  let deadlineHit = false;
+  let nextIndex = 0;
+
+  return new Promise<StockQuoteOutcome[]>((resolve) => {
+    const timer = setTimeout(() => {
+      deadlineHit = true;
+      for (let i = 0; i < symbols.length; i++) {
+        if (!results[i]) {
+          results[i] = { symbol: symbols[i], status: 'unavailable' };
+          pending -= 1;
+        }
+      }
+      resolve(results);
+    }, deadlineMs);
+
+    const settle = (i: number, outcome: StockQuoteOutcome) => {
+      if (results[i]) return; // the deadline already settled this slot
+      results[i] = outcome;
+      pending -= 1;
+      if (pending === 0) {
+        clearTimeout(timer);
+        resolve(results);
+      }
+    };
+
+    const worker = async () => {
+      while (!deadlineHit) {
+        const i = nextIndex;
+        if (i >= symbols.length) return;
+        nextIndex += 1;
+        const symbol = symbols[i];
+        try {
+          const entry = await getStockQuoteEntry(symbol);
+          settle(i, {
+            symbol,
+            status: 'ok',
+            lastPrice: entry.snapshot.lastPrice,
+            fetchedAt: new Date(entry.fetchedAt).toISOString(),
+          });
+        } catch (err) {
+          settle(i, { symbol, status: err instanceof NotFoundError ? 'unknown' : 'unavailable' });
+        }
+      }
+    };
+
+    const workerCount = Math.min(concurrency, symbols.length);
+    for (let w = 0; w < workerCount; w++) void worker();
+  });
 }

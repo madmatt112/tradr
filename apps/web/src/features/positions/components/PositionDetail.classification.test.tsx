@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
+//
+// Task 11 (design C12) calls useStockQuotes unconditionally above the early
+// returns, so this file (which mounts bare, with no QueryClient) stubs it
+// not-configured — this suite is about the breakeven badge, not the quote
+// feed, and no asserted value here changes.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useStockQuotes } from '@/hooks/useStockQuotes';
 
 import { usePosition } from '../hooks/usePosition';
 
@@ -19,6 +26,14 @@ vi.mock('../hooks/usePosition', () => ({
   useClosePosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useReopenPosition: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
+
+vi.mock('@/hooks/useStockQuotes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useStockQuotes')>();
+  return {
+    ...actual,
+    useStockQuotes: vi.fn(),
+  };
+});
 
 vi.mock('./FillDialog', () => ({ FillDialog: () => null }));
 vi.mock('./FillTable', () => ({ FillTable: () => null }));
@@ -47,6 +62,13 @@ function unmount(container: HTMLElement, root: Root): void {
   container.remove();
 }
 
+beforeEach(() => {
+  vi.mocked(useStockQuotes).mockReturnValue({
+    configured: false,
+    quote: () => ({ state: 'absent' }),
+  });
+});
+
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -60,6 +82,7 @@ function mockDetail(classification: 'winning' | 'losing' | 'breakeven' | null) {
       userId: '00000000-0000-4000-a000-000000000100',
       accountId: '00000000-0000-4000-a000-000000000010',
       accountTimezone: 'America/New_York',
+      accountCurrency: 'USD',
       symbol: 'AAPL',
       side: 'long',
       assetType: 'stock',

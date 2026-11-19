@@ -34,6 +34,7 @@ function makePosition(overrides: Partial<PositionDetail> = {}): PositionDetail {
     id: '11111111-1111-4111-a111-111111111111',
     userId: '22222222-2222-4222-a222-222222222222',
     accountId: '33333333-3333-4333-a333-333333333333',
+    accountCurrency: 'USD',
     accountTimezone: 'America/New_York',
     symbol: 'AAPL',
     side: 'long',

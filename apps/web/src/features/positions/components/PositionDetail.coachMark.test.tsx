@@ -20,6 +20,7 @@ import type { OnboardingState, PositionDetail } from '@tradr/shared';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useOnboardingQuery, useOnboardingPatch } from '@/features/onboarding/hooks/useOnboarding';
+import { useStockQuotes } from '@/hooks/useStockQuotes';
 
 import { usePosition } from '../hooks/usePosition';
 
@@ -61,6 +62,17 @@ vi.mock('@/features/onboarding/hooks/useWalkthrough', () => ({
   useIsWalkthroughRunning: vi.fn(() => false),
 }));
 
+// Task 11 calls useStockQuotes unconditionally above the early returns; this
+// file is about the Fills coach mark, not the quote feed, so no asserted
+// value here changes.
+vi.mock('@/hooks/useStockQuotes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useStockQuotes')>();
+  return {
+    ...actual,
+    useStockQuotes: vi.fn(),
+  };
+});
+
 import { PositionDetailView } from './PositionDetail';
 
 const mockQuery = vi.mocked(useOnboardingQuery);
@@ -84,6 +96,7 @@ function makeDetail(overrides: Partial<PositionDetail> = {}): PositionDetail {
     userId: '00000000-0000-4000-a000-000000000100',
     accountId: '00000000-0000-4000-a000-000000000010',
     accountTimezone: 'UTC',
+    accountCurrency: 'USD',
     symbol: 'AAPL',
     side: 'long',
     assetType: 'stock',
@@ -130,6 +143,10 @@ beforeEach(() => {
   mockPatch.mockReturnValue({ mutate: vi.fn() } as unknown as ReturnType<
     typeof useOnboardingPatch
   >);
+  vi.mocked(useStockQuotes).mockReturnValue({
+    configured: false,
+    quote: () => ({ state: 'absent' }),
+  });
 });
 
 afterEach(() => {

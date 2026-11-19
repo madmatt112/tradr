@@ -41,12 +41,17 @@ export {
   StockQuoteSchema,
   StockQuoteResponseSchema,
   StockQuoteConfigSchema,
+  QUOTE_BATCH_MAX,
+  StockQuoteOutcomeSchema,
+  StockQuoteBatchResponseSchema,
 } from './schemas/symbol';
 export type {
   SymbolSearchItem,
   SymbolSearchResponse,
   StockQuote,
   StockQuoteResponse,
+  StockQuoteOutcome,
+  StockQuoteBatchResponse,
 } from './schemas/symbol';
 export {
   GranularitySchema,
@@ -160,6 +165,7 @@ export { CSV_IMPORT_PRESETS, mappingColumns } from './constants/csv-import-prese
 export * from './lib/occ';
 export * from './lib/strategy';
 export * from './lib/tax-lots';
+export * from './lib/unrealised';
 export * from './fees';
 export { calculateTrade } from './calculator';
 export {

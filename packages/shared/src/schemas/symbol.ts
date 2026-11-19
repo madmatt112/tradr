@@ -48,7 +48,25 @@ export const StockQuoteResponseSchema = z.union([
 
 export const StockQuoteConfigSchema = z.object({ stockQuoteConfigured: z.boolean() });
 
+export const QUOTE_BATCH_MAX = 50;
+export const StockQuoteOutcomeSchema = z.union([
+  z.object({
+    symbol: z.string(),
+    status: z.literal('ok'),
+    lastPrice: z.string(),
+    fetchedAt: z.string(),
+  }),
+  z.object({ symbol: z.string(), status: z.literal('unknown') }),
+  z.object({ symbol: z.string(), status: z.literal('unavailable') }),
+]);
+export const StockQuoteBatchResponseSchema = z.union([
+  z.object({ configured: z.literal(false) }),
+  z.object({ configured: z.literal(true), quotes: z.array(StockQuoteOutcomeSchema) }),
+]);
+
 export type SymbolSearchItem = z.infer<typeof SymbolSearchItemSchema>;
 export type SymbolSearchResponse = z.infer<typeof SymbolSearchResponseSchema>;
 export type StockQuote = z.infer<typeof StockQuoteSchema>;
 export type StockQuoteResponse = z.infer<typeof StockQuoteResponseSchema>;
+export type StockQuoteOutcome = z.infer<typeof StockQuoteOutcomeSchema>;
+export type StockQuoteBatchResponse = z.infer<typeof StockQuoteBatchResponseSchema>;

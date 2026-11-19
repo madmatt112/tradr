@@ -2106,3 +2106,41 @@ describe('positions — past-expiry-unsettled flag (option-lifecycle-events task
     expect(after).toEqual(before);
   });
 });
+
+// unrealised-pnl task 5 — accountCurrency on the position detail (design
+// C12; requirements.md Req 7.1). TD2: the currency check reads through a
+// EUR account, not just a USD one, because a USD value would also pass
+// against a hard-coded 'USD' fallback.
+//
+// Contract:
+//  1. "the detail of a position in a EUR account carries accountCurrency:
+//     'EUR'" (Req 7.1). Pre: a EUR account holding one position. Call:
+//     authedRequest('GET', `/api/positions/${id}`, cookie). Observe:
+//     detail.accountCurrency === 'EUR'. Source: requirements.md Req 7.1.
+//  2. "...and one in a USD account carries 'USD'" (Req 7.1). Pre: a USD
+//     account holding one position. Call: same as above. Observe:
+//     detail.accountCurrency === 'USD'. Source: requirements.md Req 7.1.
+// ---------------------------------------------------------------------------
+describe('positions — accountCurrency on detail (task 5, Req 7.1)', () => {
+  it("carries the EUR account's currency on a position's detail", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie, 'EUR Account', 'EUR');
+    const pos = await createTestPosition(cookie, account.id);
+
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect(res.status).toBe(200);
+    const detail = await res.json();
+    expect(detail.accountCurrency).toBe('EUR');
+  });
+
+  it("carries the USD account's currency on a position's detail", async () => {
+    const { cookie } = await registerAndGetCookie();
+    const account = await createTestAccount(cookie, 'USD Account', 'USD');
+    const pos = await createTestPosition(cookie, account.id);
+
+    const res = await authedRequest('GET', `/api/positions/${pos.id}`, cookie);
+    expect(res.status).toBe(200);
+    const detail = await res.json();
+    expect(detail.accountCurrency).toBe('USD');
+  });
+});
