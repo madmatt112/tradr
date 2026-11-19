@@ -10,13 +10,13 @@
 import type { Context } from 'hono';
 import type { ZodError } from 'zod';
 
-import { QuoteSymbolParamSchema, SymbolQuerySchema } from '@tradr/shared';
+import { QUOTE_BATCH_MAX, QuoteSymbolParamSchema, SymbolQuerySchema } from '@tradr/shared';
 
 import { db } from '@/db';
 import { isStockQuoteConfigured } from '@/lib/config';
 import { ValidationError } from '@/lib/errors';
 
-import { getStockQuote } from './stock-quote.client';
+import { getStockQuote, getStockQuoteBatch } from './stock-quote.client';
 import { searchSymbols, syncSymbolsIfStale } from './symbols.service';
 
 type AuthEnv = { Variables: { userId: string; isAdmin: boolean } };
@@ -68,6 +68,42 @@ export async function getQuoteHandler(c: Context<AuthEnv>) {
 
   const quote = await getStockQuote(symbol);
   return c.json({ configured: true, ...quote });
+}
+
+/**
+ * GET /quotes?symbols=AAPL,MSFT — batch delayed spot last-price (REQ-2, design C3).
+ *
+ * Handler post-conditions, in order: (1) missing/empty `symbols` is a 400; (2)
+ * each comma-separated part is validated with `QuoteSymbolParamSchema`, any
+ * failure is a 400; (3) the parts are de-duplicated in first-occurrence order,
+ * and more than `QUOTE_BATCH_MAX` distinct symbols is a 400; (4) with no
+ * provider key configured, returns `{ configured: false }` WITHOUT calling
+ * the batch resolver; (5) otherwise returns `{ configured: true, quotes }`.
+ */
+export async function getQuoteBatchHandler(c: Context<AuthEnv>) {
+  const raw = c.req.query('symbols');
+  if (!raw) throw new ValidationError('Validation failed', { symbols: 'Required' });
+
+  const distinct: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(',')) {
+    const parsed = QuoteSymbolParamSchema.safeParse({ symbol: part });
+    if (!parsed.success) throw toValidationError(parsed.error);
+    if (!seen.has(parsed.data.symbol)) {
+      seen.add(parsed.data.symbol);
+      distinct.push(parsed.data.symbol);
+    }
+  }
+
+  if (distinct.length > QUOTE_BATCH_MAX) {
+    throw new ValidationError('Validation failed', {
+      symbols: `At most ${QUOTE_BATCH_MAX} distinct symbols are allowed`,
+    });
+  }
+
+  if (!isStockQuoteConfigured()) return c.json({ configured: false });
+
+  return c.json({ configured: true, quotes: await getStockQuoteBatch(distinct) });
 }
 
 /**

@@ -13,6 +13,7 @@ import { authMiddleware } from '@/middleware/auth.middleware';
 import { createRateLimiter } from '@/middleware/rate-limit.middleware';
 
 import {
+  getQuoteBatchHandler,
   getQuoteHandler,
   quoteConfigHandler,
   refreshSymbolsHandler,
@@ -101,6 +102,36 @@ symbolsRouter.get('/search', searchSymbolsHandler);
  *       503: { description: Quote provider unavailable or rate-limited (QUOTE_PROVIDER_UNAVAILABLE). }
  */
 symbolsRouter.get('/:symbol/quote', perUserQuoteRateLimit, getQuoteHandler);
+
+/**
+ * @swagger
+ * /api/symbols/quotes:
+ *   get:
+ *     summary: Delayed spot last-price for many symbols at once.
+ *     description: >
+ *       Returns the platform-global provider's ~15-minute-delayed last price for each of
+ *       `symbols`, a comma-separated list of up to 50 distinct tickers. With no provider key
+ *       configured the response is `{ configured: false }` without calling the provider. With a
+ *       key configured the response is `{ configured: true, quotes: StockQuoteOutcome[] }`, one
+ *       outcome per distinct symbol in first-occurrence order — a per-symbol provider failure
+ *       surfaces as an `unknown` or `unavailable` outcome, never a non-200 status. Shares the
+ *       `/:symbol/quote` route's per-user rate limit (30 lookups per 60 s); one batch request
+ *       counts as one hit. Requires an authenticated session.
+ *     tags: [Symbols]
+ *     parameters:
+ *       - in: query
+ *         name: symbols
+ *         required: true
+ *         schema: { type: string }
+ *         description: Comma-separated list of up to 50 distinct tickers, each matching `^[A-Z.-]{1,16}$`.
+ *     responses:
+ *       200:
+ *         description: '{ configured: false } or { configured: true, quotes: StockQuoteOutcome[] }.'
+ *       400: { description: Missing/empty list, an invalid symbol, or more than 50 distinct symbols (VALIDATION_ERROR). }
+ *       401: { description: No authenticated session (UNAUTHORIZED). }
+ *       429: { description: Per-user quote rate limit reached (30 / 60 s). }
+ */
+symbolsRouter.get('/quotes', perUserQuoteRateLimit, getQuoteBatchHandler);
 
 /**
  * @swagger
