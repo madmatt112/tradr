@@ -164,8 +164,9 @@ positions.get('/', validate('query', ListQuerySchema), async (c) => {
  *   get:
  *     summary: Get a position's detail.
  *     description: >
- *       Authed. Returns the position with its fills, computed P&L, and its
- *       `tags` array ordered by category then case-insensitive name. Carries a
+ *       Authed. Returns the position with its fills, computed P&L, its
+ *       `accountCurrency`, and its `tags` array ordered by category then
+ *       case-insensitive name. Carries a
  *       `compliance` object (live rule score: `finality`, `score`, `status` and
  *       one `entries` element per applicable enabled rule) only when the user
  *       holds at least one trading rule, and omits the field when they hold none.
