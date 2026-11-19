@@ -3,8 +3,9 @@
 //
 // Enforces six things against the post-build artifact:
 //
-//   1. Total bundle gate (unchanged from pre-Task-47): the largest emitted
-//      JS chunk must be <= 500 KB gzipped.
+//   1. Total bundle gate: the largest emitted JS chunk must be <= the
+//      `totalBundle` budget in widget-budgets.json (508 KB gzipped; raised
+//      from 500 KB for the unrealised-P&L quote feature's eager code).
 //   2. Dashboard route initial chunk: <= 30 KB gzipped (entry components +
 //      registry shells + dnd-kit core + event-bus store + theme hook,
 //      EXCLUSIVE of lazy widget chunks).
@@ -58,7 +59,7 @@ function loadJson(p) {
 const budgets = loadJson(budgetsPath);
 const manifest = loadJson(manifestPath);
 
-// ---- 1. Total bundle gate (500 KB gzipped, largest JS chunk) ----
+// ---- 1. Total bundle gate (largest JS chunk; budget in widget-budgets.json) ----
 const allJsChunks = Object.values(manifest)
   .map((entry) => entry.file)
   .filter((f) => typeof f === 'string' && f.endsWith('.js'));
@@ -191,7 +192,7 @@ for (const chunk of entryChunks) {
 //
 // posthog-js (~60 KB) must only ever load via its own async chunk — it is
 // dynamically imported (Task 12) so the SDK stays out of the entry chunk. Gate
-// #1 (largest-chunk <= 500 KB) would happily pass a ~60 KB SDK riding inside the
+// #1 (largest-chunk <= 508 KB) would happily pass a ~60 KB SDK riding inside the
 // entry chunk, and gate #2 (dashboardEntry) is warn-only, so this property needs
 // its own enforcement. Like gate #4, the Vite manifest carries no per-chunk
 // module identity, so this is a content-marker scan of the entry chunk's source
@@ -234,7 +235,7 @@ for (const chunk of entryChunks) {
 // runs.
 //
 // This needs its own gate because nothing else catches it. Gate #1
-// (largest-chunk <= 500 KB) would happily pass a ~25 KB library riding inside
+// (largest-chunk <= 508 KB) would happily pass a ~25 KB library riding inside
 // the entry chunk, and gate #2 (dashboardEntry, the 30 KB budget that names
 // this exact property) is warn-only AND skipped — `src/routes/_auth.dashboard.tsx`
 // is not lazy-split, so it has no chunk of its own in the manifest and rides
