@@ -441,7 +441,7 @@ test.describe('mobile responsive routes', () => {
     // dashboard behind it) — proof the drawer never forces the page wide and
     // every tab's interactive targets are tappable.
     const tabCases = [
-      { name: 'Open Positions', settled: /Cost Basis only/ },
+      { name: 'Open Positions', settled: /Cost basis only, fees included\./ },
       { name: 'Quick Stats', settled: null },
       { name: 'Options Pricing', settled: /Inputs reset when you leave this tab/ },
       { name: 'Recently Created', settled: /Sorted by creation date/ },

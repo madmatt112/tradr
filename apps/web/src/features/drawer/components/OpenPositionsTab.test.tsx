@@ -1,4 +1,32 @@
 // @vitest-environment jsdom
+//
+// Task 10 (design C11) adds the mark-to-market third line to each eligible
+// single row, the configured/unconfigured note copy, the staleness line and
+// the "Cost basis only" reason for option, group and non-USD rows. These
+// tests also stub `useStockQuotes` (design C7), so the tab's own composition
+// of the hook, the C8 helpers and the C9 display parts is exercised without a
+// query client.
+//
+// Contract block — one row per success criterion this file adds, plus the
+// Requirement 6.4 regression guard carried from the pre-task-10 suite below
+// (lines 106-333 of that version), which keeps passing once `useStockQuotes`
+// is mocked `configured: false` by default.
+//
+// | Criterion | Pre-condition | Call (seam) | Observable result | Source of expected value |
+// |---|---|---|---|---|
+// | Not configured: note reads "Cost basis only, fees included." and no figure, reason or staleness text (Req 1.1, 1.4) | useStockQuotes → `configured: false`; one eligible stock USD row + one option USD row | mountWith(<OpenPositionsTab />) | the note paragraph's text is exactly "Cost basis only, fees included."; container text has no "Prices are delayed" and no "Delayed quotes cover stocks, not option contracts." | design C11 "not configured" bullet; AC 1.1, 1.4 |
+// | Configured: note reads "Cost basis includes entry fees." followed by the staleness line (Req 6.2) | configured: true; eligible row, quote → `{ state: 'price', fetchedAt }` | mountWith(<OpenPositionsTab />) | note text contains "Cost basis includes entry fees."; container text contains "Prices are delayed about 15 minutes; oldest as of" | design C11 bullet 3; AC 6.2 |
+// | Eligible row keeps average entry and cost basis and adds last price, unrealised P&L and percent for the Requirement 3.6 long example (Req 6.1) | configured: true; row openCostBasis 1001.00, quote → `{ state: 'price', lastPrice: '110.00' }` | mountWith(<OpenPositionsTab />) | the row's link text contains the formatted avg-entry and cost-basis figures plus '110.00', '99.00' and '9.89' | requirements.md AC 3.6 worked example 1; design C11 bullet 4; AC 6.1 |
+// | Absent quote cell renders the em-dash, never 0.00, for each of the three new figures (Req 4.5) | configured: true; eligible row, quote → `{ state: 'absent' }` | mountWith(<OpenPositionsTab />) | each of the row's three new `[data-testid="numeric"]` cells contains EM_DASH and none contains '0.00' | Numeric.tsx absent state; AC 4.5 |
+// | Loading quote cell renders the Numeric loading state (Req 4.6) | configured: true; eligible row, quote → `{ state: 'loading' }` | mountWith(<OpenPositionsTab />) | the row holds three `[data-testid="numeric-skeleton"]` elements | Numeric.tsx loading branch; AC 4.6 |
+// | An option row shows "Cost basis only" and its reason as visible link text, with no focusable element nested inside the link, and keeps its cost basis (Req 4.2, 4.7, 6.3) | configured: true; one row with assetType 'option' | mountWith(<OpenPositionsTab />) | the row's link text contains "Cost basis only", "Delayed quotes cover stocks, not option contracts." and the cost-basis figure; the link has no `[tabindex]` descendant | design C8 reason order bullet 2 / C11 bullet 5 / D13; AC 4.2, 4.7, 6.3 |
+// | A multi-leg group row shows "Cost basis only" and its reason as visible link text and keeps its cost basis (Req 4.3, 6.3) | configured: true; one group row | mountWith(<OpenPositionsTab />) | the row's link text contains "Cost basis only", "Multi-leg groups are not marked to market." and the cost-basis figure | design C8 reason order bullet 1; AC 4.3, 6.3 |
+// | A EUR row shows "Cost basis only" and the currency reason as visible link text and keeps its cost basis (Req 4.4, 6.3) | configured: true; one row with accountCurrency 'EUR' | mountWith(<OpenPositionsTab />) | the row's link text contains "Cost basis only", "Quotes are in USD; this account is in EUR" and the cost-basis figure | design C8 reason order bullet 3; AC 4.4, 6.3 |
+//
+// Requirement 9.4 (repointing the doc comment at lines 18-32) is prose, not
+// observable through the `mountWith` seam named by this task's Test: line;
+// it is not covered by a red test here and is flagged for the implementer
+// brief instead.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +37,8 @@ import {
 } from '@/features/positions/__fixtures__/position-fixtures';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
-import { formatCurrency } from '@/lib/format';
+import { type QuoteCell, useStockQuotes } from '@/hooks/useStockQuotes';
+import { EM_DASH, formatCurrency } from '@/lib/format';
 import { useDrawerStore } from '@/stores/drawer.store';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -65,6 +94,14 @@ vi.mock('@/hooks/useMediaQuery', () => ({
   useMediaQuery: vi.fn(() => false),
 }));
 
+vi.mock('@/hooks/useStockQuotes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useStockQuotes')>();
+  return {
+    ...actual,
+    useStockQuotes: vi.fn(),
+  };
+});
+
 import { OpenPositionsTab } from './OpenPositionsTab';
 
 // ---------------------------------------------------------------------------
@@ -88,10 +125,23 @@ function unmount(container: HTMLElement, root: Root): void {
   container.remove();
 }
 
+function notConfigured(): ReturnType<typeof useStockQuotes> {
+  return { configured: false, quote: () => ({ state: 'absent' }) };
+}
+
+function configuredWith(cell: QuoteCell): ReturnType<typeof useStockQuotes> {
+  return { configured: true, quote: () => cell };
+}
+
 beforeEach(() => {
   vi.mocked(usePositions).mockReset();
   vi.mocked(useMediaQuery).mockReset();
   vi.mocked(useMediaQuery).mockReturnValue(false);
+  // Req 6.4 regression guard default: the existing cases below never
+  // configure quotes, so the tab renders exactly as it did before task 10
+  // unless a test overrides this.
+  vi.mocked(useStockQuotes).mockReset();
+  vi.mocked(useStockQuotes).mockReturnValue(notConfigured());
   useDrawerStore.setState({ isOpen: false, activeTab: 'open-positions' });
 });
 
@@ -327,6 +377,278 @@ describe('OpenPositionsTab', () => {
 
     expect(links[0].textContent).toContain('Past expiry');
     expect(links[1].textContent).not.toContain('Past expiry');
+
+    unmount(container, root);
+  });
+});
+
+describe('OpenPositionsTab — not configured (Req 1.1, 1.4)', () => {
+  it('renders the new unconfigured note and adds no figure, reason or staleness text', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f1',
+        symbol: 'AAPL',
+        assetType: 'stock',
+        accountCurrency: 'USD',
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f2',
+        symbol: 'AAPL230120C00150000',
+        assetType: 'option',
+        accountCurrency: 'USD',
+        openedAt: '2026-05-24T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(notConfigured());
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    // The tab must call the quote feed hook (design C11 bullet 1) even while
+    // unconfigured — this fails on today's tab, which never imports
+    // useStockQuotes at all.
+    expect(useStockQuotes).toHaveBeenCalled();
+    const note = container.querySelector('p');
+    expect(note?.textContent).toBe('Cost basis only, fees included.');
+    expect(container.textContent).not.toContain('Prices are delayed');
+    expect(container.textContent).not.toContain(
+      'Delayed quotes cover stocks, not option contracts.',
+    );
+
+    unmount(container, root);
+  });
+});
+
+describe('OpenPositionsTab — configured note and staleness (Req 6.2)', () => {
+  it('reads "Cost basis includes entry fees." followed by the staleness line', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f3',
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'stock',
+        accountCurrency: 'USD',
+        totalEntryQuantity: 10,
+        totalExitQuantity: 0,
+        avgEntryPrice: 100,
+        openCostBasis: 1001.0,
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(
+      configuredWith({
+        state: 'price',
+        lastPrice: '110.00',
+        fetchedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    const note = container.querySelector('p');
+    expect(note?.textContent).toContain('Cost basis includes entry fees.');
+    expect(container.textContent).toContain('Prices are delayed about 15 minutes; oldest as of');
+
+    unmount(container, root);
+  });
+});
+
+describe('OpenPositionsTab — marked-to-market figures (Req 3.6, 4.5, 4.6, 6.1)', () => {
+  it('keeps average entry and cost basis and adds last price, unrealised P&L and percent for the Requirement 3.6 long example', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f4',
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'stock',
+        accountCurrency: 'USD',
+        totalEntryQuantity: 10,
+        totalExitQuantity: 0,
+        avgEntryPrice: 100,
+        openCostBasis: 1001.0,
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(
+      configuredWith({
+        state: 'price',
+        lastPrice: '110.00',
+        fetchedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    );
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    const link = container.querySelector('a');
+    const text = link?.textContent ?? '';
+    expect(text).toContain(formatCurrency(100, 'USD'));
+    expect(text).toContain(formatCurrency(1001.0, 'USD'));
+    expect(text).toContain('110.00');
+    expect(text).toContain('99.00');
+    expect(text).toContain('9.89');
+
+    unmount(container, root);
+  });
+
+  it('renders the em-dash, never 0.00, for an absent quote cell', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f5',
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'stock',
+        accountCurrency: 'USD',
+        totalEntryQuantity: 10,
+        totalExitQuantity: 0,
+        openCostBasis: 1001.0,
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(configuredWith({ state: 'absent' }));
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    // The avg-entry and cost-basis cells also render through Numeric and are
+    // unaffected by this task (Req 6.1) — drop them to isolate the three new
+    // mark-to-market cells, which are the ones this test asserts on.
+    const cells = Array.from(container.querySelectorAll('a [data-testid="numeric"]')).slice(2);
+    expect(cells.length).toBe(3);
+    cells.forEach((cell) => {
+      expect(cell.textContent).toContain(EM_DASH);
+      expect(cell.textContent).not.toContain('0.00');
+    });
+
+    unmount(container, root);
+  });
+
+  it('renders the Numeric loading state for a loading quote cell', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f6',
+        symbol: 'AAPL',
+        side: 'long',
+        assetType: 'stock',
+        accountCurrency: 'USD',
+        totalEntryQuantity: 10,
+        totalExitQuantity: 0,
+        openCostBasis: 1001.0,
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(configuredWith({ state: 'loading' }));
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    const skeletons = container.querySelectorAll('a [data-testid="numeric-skeleton"]');
+    expect(skeletons.length).toBe(3);
+
+    unmount(container, root);
+  });
+});
+
+describe('OpenPositionsTab — cost-basis-only rows (Req 4.2, 4.3, 4.4, 4.7, 6.3)', () => {
+  it('shows the option reason as visible link text, with no focusable element nested inside the link, and keeps the cost basis figure', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f7',
+        symbol: 'SPY230120P00400000',
+        assetType: 'option',
+        accountCurrency: 'USD',
+        openCostBasis: -4500,
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(configuredWith({ state: 'absent' }));
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    const link = container.querySelector('a');
+    expect(link?.textContent).toContain('Cost basis only');
+    expect(link?.textContent).toContain('Delayed quotes cover stocks, not option contracts.');
+    expect(link?.textContent).toContain(formatCurrency(4500, 'USD'));
+    expect(link?.querySelector('[tabindex]')).toBeNull();
+
+    unmount(container, root);
+  });
+
+  it('shows the group reason as visible link text and keeps the cost basis figure', () => {
+    const group = makePositionGroup({
+      label: 'BCS',
+      openCostBasis: -301.3,
+      accountCurrency: 'USD',
+      openedAt: '2026-05-26T10:00:00.000Z',
+    });
+    vi.mocked(usePositions).mockReturnValue({
+      data: [group],
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(configuredWith({ state: 'absent' }));
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    const link = container.querySelector('a');
+    expect(link?.textContent).toContain('Cost basis only');
+    expect(link?.textContent).toContain('Multi-leg groups are not marked to market.');
+    expect(link?.textContent).toContain(formatCurrency(301.3, 'USD'));
+
+    unmount(container, root);
+  });
+
+  it('shows the non-USD currency reason as visible link text and keeps the cost basis figure', () => {
+    const rows = [
+      makePosition({
+        id: '00000000-0000-4000-a000-0000000000f8',
+        symbol: 'SAP',
+        assetType: 'stock',
+        accountCurrency: 'EUR',
+        openCostBasis: 2000,
+        openedAt: '2026-05-25T10:00:00.000Z',
+      }),
+    ];
+    vi.mocked(usePositions).mockReturnValue({
+      data: rows,
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof usePositions>);
+    vi.mocked(useStockQuotes).mockReturnValue(configuredWith({ state: 'absent' }));
+
+    const { container, root } = mountWith(<OpenPositionsTab />);
+
+    const link = container.querySelector('a');
+    expect(link?.textContent).toContain('Cost basis only');
+    expect(link?.textContent).toContain('Quotes are in USD; this account is in EUR');
+    expect(link?.textContent).toContain(formatCurrency(2000, 'EUR'));
 
     unmount(container, root);
   });
